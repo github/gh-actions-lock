@@ -1,0 +1,12 @@
+# This workflow has comments that must be preserved
+name: ci
+# Trigger on push
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the code
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - run: go test ./...
