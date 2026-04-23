@@ -7,9 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,15 +53,13 @@ type ReachabilityResult struct {
 // Resolver resolves action refs to commit SHAs.
 type Resolver struct {
 	client            *api.GraphQLClient
+	restClient        *api.RESTClient
 	hostname          string
 	MaxRecursionDepth int
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
-	// CacheDir is the directory for bare git clones used in reachability checks.
-	// Defaults to ~/.actions-lockfile/cache.
-	CacheDir string
-	// checkReachFn overrides the default git-based reachability check (for tests).
+	// checkReachFn overrides the default REST-based reachability check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
 }
 
@@ -86,20 +81,19 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		return nil, err
 	}
 
-	homeDir, err := os.UserHomeDir()
+	restClient, err := api.NewRESTClient(opts)
 	if err != nil {
-		homeDir = os.TempDir()
+		return nil, err
 	}
-	cacheDir := filepath.Join(homeDir, ".actions-lockfile", "cache")
 
 	return &Resolver{
 		client:            client,
+		restClient:        restClient,
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		cache:             make(map[string]resolvedEntry),
 		latestRefCache:    make(map[string]string),
 		reachCache:        make(map[string]ReachabilityStatus),
-		CacheDir:          cacheDir,
 	}, nil
 }
 
@@ -119,21 +113,29 @@ func (r *Resolver) Hostname() string {
 	return r.hostname
 }
 
-// SetCheckReachabilityFunc overrides the default git-based reachability check.
+// SetCheckReachabilityFunc overrides the default REST-based reachability check.
 // Intended for tests.
 func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string) (ReachabilityStatus, string)) {
 	r.checkReachFn = fn
 }
+
+// isSHARef returns true if the ref looks like a full commit SHA (40 hex chars).
+var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 // CheckReachability verifies that a resolved SHA is on the lineage of the
 // given ref within the repository. This catches fork-network injection where
 // a SHA exists in GitHub's shared object store but is not actually part of
 // the canonical repository's history.
 //
-// Uses a bare blobless clone of the upstream repo and git merge-base:
-//   - exit 0 from merge-base --is-ancestor → Reachable
-//   - exit 1 → Unreachable (SHA not an ancestor of ref)
-//   - clone/fetch failure → Unknown
+// Uses the GitHub Compare API and checks merge_base identity:
+//   - merge_base == pinnedSHA → Reachable (SHA is a true ancestor of ref)
+//   - merge_base != pinnedSHA → Unreachable (fork/imposter commit)
+//   - 404 (no common ancestor or not found) → Unreachable
+//   - 403/429 (rate limit) or other error → Unknown
+//
+// When ref is itself a raw SHA (the "uses: owner/repo@SHA" anti-pattern),
+// the compare becomes {sha}...{sha} which trivially returns "identical" and
+// cannot detect fork commits. In this case, a warning is returned instead.
 func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityResult {
 	result := ReachabilityResult{
 		Owner: owner,
@@ -158,7 +160,15 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		return result
 	}
 
-	status, detail := r.gitReachabilityCheck(owner, repo, sha, ref)
+	// SHA-as-ref anti-pattern: compare/{sha}...{sha} is trivially identical
+	// and cannot detect fork commits. Warn the user.
+	if shaRefRE.MatchString(ref) {
+		result.Status = ReachabilityUnknown
+		result.Detail = "ref is a raw SHA — reachability cannot be verified; pin to a tag instead"
+		return result
+	}
+
+	status, detail := r.apiReachabilityCheck(owner, repo, sha, ref)
 	result.Status = status
 	result.Detail = detail
 	if result.Status != ReachabilityUnknown {
@@ -167,55 +177,45 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	return result
 }
 
-// ensureBareClone clones or fetches a bare blobless repo into the cache dir.
-func (r *Resolver) ensureBareClone(owner, repo string) (string, error) {
-	repoDir := filepath.Join(r.CacheDir, owner, repo+".git")
-	cloneURL := fmt.Sprintf("https://%s/%s/%s.git", r.hostname, owner, repo)
-
-	if _, err := os.Stat(filepath.Join(repoDir, "HEAD")); err == nil {
-		// Already cloned — fetch latest refs
-		cmd := exec.Command("git", "-C", repoDir, "fetch", "--quiet", "--tags", "--force")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git fetch failed: %s: %w", strings.TrimSpace(string(out)), err)
-		}
-		return repoDir, nil
-	}
-
-	if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
-		return "", err
-	}
-	cmd := exec.Command("git", "clone", "--filter=blob:none", "--bare", "--quiet", cloneURL, repoDir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git clone failed: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return repoDir, nil
+// compareResponse is the subset of the GitHub Compare API response we need.
+type compareResponse struct {
+	MergeBaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
+	Status string `json:"status"`
 }
 
-// gitReachabilityCheck uses a bare clone and merge-base --is-ancestor to verify
-// that sha is an ancestor of ref.
-func (r *Resolver) gitReachabilityCheck(owner, repo, sha, ref string) (ReachabilityStatus, string) {
-	repoDir, err := r.ensureBareClone(owner, repo)
+// apiReachabilityCheck uses the GitHub Compare API to verify that sha is an
+// ancestor of ref. The key insight: merge_base(ancestor, descendant) == ancestor.
+// If the merge_base is NOT the pinned SHA, the commit lives on the fork network.
+func (r *Resolver) apiReachabilityCheck(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s", owner, repo, sha, ref)
+
+	var resp compareResponse
+	err := r.restClient.Get(path, &resp)
 	if err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) {
+			switch {
+			case httpErr.StatusCode == http.StatusNotFound:
+				return Unreachable, "no common ancestor or commit not found"
+			case httpErr.StatusCode == http.StatusForbidden || httpErr.StatusCode == http.StatusTooManyRequests:
+				detail := fmt.Sprintf("rate limited (HTTP %d)", httpErr.StatusCode)
+				if reset := httpErr.Headers.Get("X-RateLimit-Reset"); reset != "" {
+					detail += "; resets at " + reset
+				}
+				return ReachabilityUnknown, detail
+			default:
+				return ReachabilityUnknown, fmt.Sprintf("API error (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+			}
+		}
 		return ReachabilityUnknown, err.Error()
 	}
 
-	cmd := exec.Command("git", "-C", repoDir, "merge-base", "--is-ancestor", sha, ref)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return Reachable, "ancestor of " + ref
+	if resp.MergeBaseCommit.SHA == sha {
+		return Reachable, "ancestor of " + ref + " (compare: " + resp.Status + ")"
 	}
-
-	// exit 1 = not ancestor, exit 128 = SHA unknown
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		switch exitErr.ExitCode() {
-		case 1:
-			return Unreachable, "commit is not an ancestor of " + ref
-		case 128:
-			return Unreachable, "commit not found in repository: " + strings.TrimSpace(string(out))
-		}
-	}
-	return ReachabilityUnknown, err.Error()
+	return Unreachable, fmt.Sprintf("merge base is %s, not the pinned SHA — likely a fork-network commit", resp.MergeBaseCommit.SHA[:12])
 }
 
 // CheckReachabilityAll runs reachability checks on a batch of dependencies,

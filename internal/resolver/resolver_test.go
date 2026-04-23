@@ -375,3 +375,109 @@ func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
 		t.Fatalf("expected 2 calls (deduped), got %d", calls)
 	}
 }
+
+func TestCheckReachability_SHAAsRef_ReturnsUnknown(t *testing.T) {
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+	}
+	sha := "abc123abc123abc123abc123abc123abc123abc1"
+	result := r.CheckReachability("actions", "checkout", sha, sha)
+	if result.Status != ReachabilityUnknown {
+		t.Fatalf("expected Unknown for SHA-as-ref, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "pin to a tag") {
+		t.Fatalf("expected detail to mention tag pinning, got %q", result.Detail)
+	}
+}
+
+func TestApiReachabilityCheck_Reachable(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": "abc123abc123abc123abc123abc123abc123abc1",
+			},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
+	}
+	reg.Verify(t)
+}
+
+func TestApiReachabilityCheck_Unreachable_ForkCommit(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "behind",
+			"merge_base_commit": map[string]any{
+				"sha": "different_sha_000000000000000000000000000",
+			},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "fork-network") {
+		t.Fatalf("expected detail to mention fork-network, got %q", result.Detail)
+	}
+	reg.Verify(t)
+}
+
+func TestApiReachabilityCheck_Unreachable_404(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(404),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable for 404, got %s (%s)", result.Status, result.Detail)
+	}
+	reg.Verify(t)
+}
+
+func TestApiReachabilityCheck_Unknown_RateLimit(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(429),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != ReachabilityUnknown {
+		t.Fatalf("expected Unknown for rate limit, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "rate limited") {
+		t.Fatalf("expected detail to mention rate limit, got %q", result.Detail)
+	}
+	reg.Verify(t)
+}
