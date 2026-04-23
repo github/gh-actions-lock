@@ -22,14 +22,9 @@ type pinOptions struct {
 	Actions         []string
 	AllowRefChanges bool
 	Write           bool
-	DryRun          bool
 	Diff            bool
 	Hostname        string
 	CommandPath     string
-}
-
-type tidyOptions struct {
-	WorkflowPaths []string
 }
 
 type checkOptions struct {
@@ -44,7 +39,6 @@ type upgradeOptions struct {
 	FromRef       string
 	Version       string
 	Write         bool
-	DryRun        bool
 	Diff          bool
 	Hostname      string
 }
@@ -92,14 +86,13 @@ func newRootCmd() *cobra.Command {
 
 			Local path actions (uses: ./path) are currently skipped.
 
-			Use the subcommands to verify, refresh, or tidy the lock state:
+			Use the subcommands to manage your workflow's dependencies:
 
-			  gh actions-pin          Preview lockfile changes without writing
-			  gh actions-pin --write  Apply the lockfile changes to disk
+			  gh actions-pin           Preview lockfile changes without writing
+			  gh actions-pin --write   Apply the lockfile changes to disk
 			  gh actions-pin check     Verify the lock section against live resolution
 			  gh actions-pin update    Refresh selected pinned dependencies
 			  gh actions-pin upgrade   Bump workflow refs and repin them
-			  gh actions-pin tidy      Remove stale entries and normalize ordering
 		`),
 		Example: heredoc.Doc(`
 			# Preview changes for all workflows in .github/workflows/
@@ -111,8 +104,8 @@ func newRootCmd() *cobra.Command {
 			# Intentionally bless direct workflow ref edits
 			$ gh actions-pin --write --allow-ref-changes
 
-			# Preview a specific workflow and show the dependency diff
-			$ gh actions-pin .github/workflows/ci.yml --diff
+			# Preview a specific workflow without the dependency diff
+			$ gh actions-pin .github/workflows/ci.yml --diff=false
 
 			# Check the current lock state
 			$ gh actions-pin check
@@ -126,16 +119,16 @@ func newRootCmd() *cobra.Command {
 	}
 
 	addPinFlags(cmd, opts, true)
+	cmd.Flags().BoolVar(&opts.AllowRefChanges, "allow-ref-changes", false, "Allow writing after direct workflow refs have changed since the last lock")
 	cmd.AddCommand(newCheckCmd())
 	cmd.AddCommand(newUpdateCmd())
 	cmd.AddCommand(newUpgradeCmd())
-	cmd.AddCommand(newTidyCmd())
 
 	return cmd
 }
 
 func newUpdateCmd() *cobra.Command {
-	opts := &pinOptions{Write: true, CommandPath: "gh actions-pin update"}
+	opts := &pinOptions{AllowRefChanges: true, CommandPath: "gh actions-pin update"}
 
 	cmd := &cobra.Command{
 		Use:   "update [<workflow-path>...]",
@@ -148,19 +141,21 @@ func newUpdateCmd() *cobra.Command {
 			re-resolving everything else. Existing pinned dependencies are preserved;
 			only the targeted actions are refreshed.
 
-			Unlike the top-level gh actions-pin command, update writes changes
-			immediately unless --dry-run is set. If the workflow's direct refs
-			have changed, use upgrade or pass --allow-ref-changes to acknowledge it.
+			By default, update previews changes with a diff. Pass --write to
+			apply the updated lockfile entries to disk.
 		`),
 		Example: heredoc.Doc(`
-			# Refresh all pinned dependencies
+			# Preview refreshed pinned dependencies
 			$ gh actions-pin update
 
+			# Apply the refreshed pins to disk
+			$ gh actions-pin update --write
+
 			# Refresh a single action across all workflows
-			$ gh actions-pin update --action actions/checkout
+			$ gh actions-pin update --action actions/checkout --write
 
 			# Refresh multiple actions in one batch
-			$ gh actions-pin update --action actions/checkout --action actions/setup-go
+			$ gh actions-pin update --action actions/checkout --action actions/setup-go --write
 		`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -170,7 +165,7 @@ func newUpdateCmd() *cobra.Command {
 		},
 	}
 
-	addPinFlags(cmd, opts, false)
+	addPinFlags(cmd, opts, true)
 	return cmd
 }
 
@@ -221,8 +216,7 @@ func newUpgradeCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.Actions, "action", nil, "Upgrade the specified `action` (owner/repo or owner/repo/path). Append @ref to target a specific version.")
 	cmd.Flags().StringVar(&opts.FromRef, "from", "", "Only upgrade actions currently on this `ref`")
 	cmd.Flags().StringVar(&opts.Version, "version", "", "Target `version`/ref for all selected actions; defaults to the latest stable tag")
-	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Resolve and preview without writing")
-	cmd.Flags().BoolVar(&opts.Diff, "diff", false, "Show the full dependency diff vs existing pins")
+	cmd.Flags().BoolVar(&opts.Diff, "diff", true, "Show the full dependency diff vs existing pins")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the upgraded refs and dependencies back to the workflow file")
 
@@ -274,42 +268,9 @@ func newCheckCmd() *cobra.Command {
 	return cmd
 }
 
-func newTidyCmd() *cobra.Command {
-	opts := &tidyOptions{}
-
-	return &cobra.Command{
-		Use:   "tidy [<workflow-path>...]",
-		Args:  cobra.ArbitraryArgs,
-		Short: "Remove stale lock entries and normalize ordering",
-		Long: heredoc.Doc(`
-			Prune stale entries from workflow dependencies: sections and rewrite them
-			in deterministic order.
-
-			This command does not re-resolve action refs. It only keeps entries that
-			are still referenced by the current workflow graph. Local path actions are
-			currently skipped.
-		`),
-		Example: heredoc.Doc(`
-			# Tidy all workflow lockfiles
-			$ gh actions-pin tidy
-
-			# Tidy a specific workflow
-			$ gh actions-pin tidy .github/workflows/ci.yml
-		`),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.WorkflowPaths = args
-			}
-			return runTidy(opts)
-		},
-	}
-}
-
 func addPinFlags(cmd *cobra.Command, opts *pinOptions, includeWrite bool) {
 	cmd.Flags().StringArrayVar(&opts.Actions, "action", nil, "Re-resolve only the specified `action` (owner/repo or owner/repo/path). Repeat to batch updates")
-	cmd.Flags().BoolVar(&opts.AllowRefChanges, "allow-ref-changes", false, "Allow writing after direct workflow refs have changed since the last lock")
-	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Resolve and preview without writing")
-	cmd.Flags().BoolVar(&opts.Diff, "diff", false, "Show the full dependency diff vs existing pins")
+	cmd.Flags().BoolVar(&opts.Diff, "diff", true, "Show the full dependency diff vs existing pins")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	if includeWrite {
 		cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the resolved dependencies back to the workflow file")
@@ -369,30 +330,6 @@ func runUpgrade(opts *upgradeOptions) error {
 			fmt.Fprintf(os.Stderr, "\n==> %s\n", workflowPath)
 		}
 		if err := upgradeOneFile(opts, workflowPath, r, targets); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %s\n", workflowPath, err)
-			hadError = true
-		}
-	}
-
-	if hadError {
-		return errSilent
-	}
-	return nil
-}
-
-func runTidy(opts *tidyOptions) error {
-	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
-	if err != nil {
-		return err
-	}
-	opts.WorkflowPaths = paths
-
-	var hadError bool
-	for _, workflowPath := range opts.WorkflowPaths {
-		if len(opts.WorkflowPaths) > 1 {
-			fmt.Fprintf(os.Stderr, "\n==> %s\n", workflowPath)
-		}
-		if err := tidyOneFile(workflowPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s: %s\n", workflowPath, err)
 			hadError = true
 		}
@@ -565,35 +502,29 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 
 	if len(opts.Actions) > 0 && len(existingDeps) > 0 {
 		deps = mergeTargetedDeps(existingDeps, deps, opts.Actions)
-	} else if len(existingDeps) > 0 && opts.Write && !opts.DryRun {
+	} else if len(existingDeps) > 0 && opts.Write {
 		if err := checkConsistency(existingDeps, deps, r.Hostname()); err != nil {
 			return err
 		}
 	}
 
-	if len(existingDeps) > 0 && opts.Write && !opts.DryRun {
+	if len(existingDeps) > 0 && opts.Write {
 		if err := checkDirectRefChanges(refs, existingDeps, opts.AllowRefChanges); err != nil {
 			return err
 		}
 	}
 
-	previewOnly := !opts.Write || opts.DryRun
-
 	if opts.Diff {
 		showDiff(r.Hostname(), existingDeps, deps)
 	}
 
-	if previewOnly {
+	if !opts.Write {
 		reviewHint := ""
 		if !opts.Diff {
-			reviewHint = buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", true, false)
+			reviewHint = buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", false)
 		}
-		applyHint := buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", false, opts.CommandPath == "gh actions-pin")
+		applyHint := buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", true)
 		fmt.Fprintln(os.Stderr, previewMessage(workflowPath, refs, existingDeps, deps, reviewHint, applyHint))
-
-		if opts.Write && opts.DryRun {
-			fmt.Fprintln(os.Stderr, "Dry run only; rerun without --dry-run to write changes.")
-		}
 		return nil
 	}
 
@@ -717,16 +648,13 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		showDiff(r.Hostname(), existingDeps, deps)
 	}
 
-	if !opts.Write || opts.DryRun {
+	if !opts.Write {
 		reviewHint := ""
 		if !opts.Diff {
-			reviewHint = buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, true, false)
+			reviewHint = buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, false)
 		}
-		applyHint := buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, false, true)
+		applyHint := buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, true)
 		fmt.Fprintln(os.Stderr, previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
-		if opts.Write && opts.DryRun {
-			fmt.Fprintln(os.Stderr, "Dry run only; rerun without --dry-run to write changes.")
-		}
 		return nil
 	}
 
@@ -828,57 +756,6 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 		fmt.Fprintf(os.Stderr, "%s valid\n", workflowPath)
 	}
 	return result, nil
-}
-
-func tidyOneFile(workflowPath string) error {
-	wf, err := lockfile.Load(workflowPath)
-	if err != nil {
-		return err
-	}
-
-	existingDeps, err := wf.ReadDependencies()
-	if err != nil {
-		return err
-	}
-	if len(existingDeps) == 0 {
-		return fmt.Errorf("no dependencies: section found -- run `gh actions-pin --write` first")
-	}
-
-	refs, _, warnings := wf.ExtractActionRefs()
-	for _, warning := range warnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
-	}
-
-	refKeys := make(map[string]struct{}, len(refs))
-	for _, ref := range refs {
-		refKeys[ref.FullName()+"@"+ref.Ref] = struct{}{}
-	}
-
-	tidied := make([]lockfile.Dependency, 0, len(existingDeps))
-	for _, dep := range existingDeps {
-		if _, ok := refKeys[dep.Key()]; ok {
-			tidied = append(tidied, dep)
-		}
-	}
-
-	output, err := wf.WriteDependencies(tidied)
-	if err != nil {
-		return fmt.Errorf("writing dependencies: %w", err)
-	}
-	if string(output) == string(wf.Content) {
-		fmt.Fprintf(os.Stderr, "%s already tidy\n", workflowPath)
-		return nil
-	}
-	if err := os.WriteFile(workflowPath, output, 0o644); err != nil {
-		return fmt.Errorf("writing file: %w", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "Tidied %d dependencies in %s", len(tidied), workflowPath)
-	if removed := len(existingDeps) - len(tidied); removed > 0 {
-		fmt.Fprintf(os.Stderr, " (removed %d stale)", removed)
-	}
-	fmt.Fprintln(os.Stderr)
-	return nil
 }
 
 func actionMatchesFilter(nwo, filter string) bool {
@@ -1322,7 +1199,7 @@ func shellQuote(arg string) string {
 	return arg
 }
 
-func buildCommandHint(base, workflowPath string, actions []string, fromRef, version string, diff, write bool) string {
+func buildCommandHint(base, workflowPath string, actions []string, fromRef, version string, write bool) string {
 	parts := []string{base}
 	for _, action := range actions {
 		parts = append(parts, "--action", shellQuote(action))
@@ -1332,9 +1209,6 @@ func buildCommandHint(base, workflowPath string, actions []string, fromRef, vers
 	}
 	if version != "" {
 		parts = append(parts, "--version", shellQuote(version))
-	}
-	if diff {
-		parts = append(parts, "--diff")
 	}
 	if write {
 		parts = append(parts, "--write")

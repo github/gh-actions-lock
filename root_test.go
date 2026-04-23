@@ -257,7 +257,6 @@ func TestBuildCommandHintIncludesUpgradeFlags(t *testing.T) {
 		"v5",
 		"v6",
 		true,
-		true,
 	)
 
 	for _, want := range []string{
@@ -265,7 +264,6 @@ func TestBuildCommandHintIncludesUpgradeFlags(t *testing.T) {
 		"--action actions/checkout",
 		"--from v5",
 		"--version v6",
-		"--diff",
 		"--write",
 		".github/workflows/test.yml",
 	} {

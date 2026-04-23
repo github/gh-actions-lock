@@ -156,7 +156,7 @@ jobs:
       - uses: actions/setup-go@v6
 `)
 
-	stdout, stderr, err := runCommandWithHTTP(t, reg, "--diff", workflowPath)
+	stdout, stderr, err := runCommandWithHTTP(t, reg, workflowPath)
 	require.NoError(t, err)
 	assert.Empty(t, stdout)
 	assert.Contains(t, stderr, "Resolving 2 action reference(s)...")
@@ -272,7 +272,7 @@ dependencies:
 `)
 
 	stdout, stderr, err := runCommandWithHTTP(t, reg,
-		"update", "--action", "github.com/actions/checkout", workflowPath,
+		"update", "--action", "github.com/actions/checkout", "--write", workflowPath,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, stdout)
@@ -283,38 +283,6 @@ dependencies:
 	got := string(content)
 	assert.Contains(t, got, "github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd")
 	assert.Contains(t, got, "github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c")
-}
-
-func TestTidyCommand_RemovesStaleEntries(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-  - github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
-`)
-
-	stdout, stderr, err := runCommandWithHTTP(t, reg, "tidy", workflowPath)
-	require.NoError(t, err)
-	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "Tidied 1 dependencies")
-	assert.Contains(t, stderr, "removed 1 stale")
-
-	content, readErr := os.ReadFile(workflowPath)
-	require.NoError(t, readErr)
-	got := string(content)
-	assert.Contains(t, got, "github.com/actions/checkout@v6")
-	assert.NotContains(t, got, "github.com/actions/setup-go@v6")
 }
 
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
