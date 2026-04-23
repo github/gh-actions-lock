@@ -131,6 +131,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
 	}
 
 	r.cache["owner/composite@v1"] = resolvedEntry{
@@ -173,6 +174,7 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
 	}
 
 	_, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
@@ -283,5 +285,188 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 	}
 	if deps[0].NWO != "owner/composite" && deps[1].NWO != "owner/composite" {
 		t.Fatalf("expected composite dep to be present, got %+v", deps)
+	}
+}
+
+func TestCheckReachability_Reachable(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/checkout/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "identical"}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_Ahead(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/checkout/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "ahead"}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable for ahead status, got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_Behind(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/checkout/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "behind"}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable for behind status (tag rolled back), got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_Diverged_Unreachable(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.REST("GET", `/repos/evil/repo/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "diverged"}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	result := r.CheckReachability("evil", "repo", "deadbeef", "v1")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable for diverged status, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "fork network") {
+		t.Fatalf("expected fork network detail, got %q", result.Detail)
+	}
+}
+
+func TestCheckReachability_404_Unreachable(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.REST("GET", `/repos/evil/repo/compare/`),
+		httpmock.StatusResponse(404),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	result := r.CheckReachability("evil", "repo", "deadbeef", "v1")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable for 404, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "not found") {
+		t.Fatalf("expected 'not found' detail, got %q", result.Detail)
+	}
+}
+
+func TestCheckReachability_ServerError_Unknown(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/checkout/compare/`),
+		httpmock.StatusResponse(500),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	if result.Status != ReachabilityUnknown {
+		t.Fatalf("expected Unknown for 500, got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_CachesResults(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// Only one stub — second call must hit cache
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/checkout/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "identical"}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	r1 := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	r2 := r.CheckReachability("actions", "checkout", "abc123", "v6")
+
+	if r1.Status != Reachable || r2.Status != Reachable {
+		t.Fatalf("expected both calls to return Reachable, got %s and %s", r1.Status, r2.Status)
+	}
+	if r2.Detail != "cached" {
+		t.Fatalf("expected second call to be cached, got detail %q", r2.Detail)
+	}
+}
+
+func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// Only one stub for checkout — dedup should prevent double-call
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/checkout/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "identical"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `/repos/actions/setup-go/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "ahead"}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport returned error: %v", err)
+	}
+
+	deps := []lockfile.Dependency{
+		{NWO: "actions/checkout", Ref: "v6", SHA: "aaa"},
+		{NWO: "actions/checkout", Ref: "v6", SHA: "aaa"}, // duplicate
+		{NWO: "actions/setup-go", Ref: "v6", SHA: "bbb"},
+	}
+
+	results := r.CheckReachabilityAll(deps)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 unique results, got %d: %+v", len(results), results)
 	}
 }

@@ -7,12 +7,27 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+)
+
+// ReachabilityStatus represents the result of a commit reachability check.
+type ReachabilityStatus string
+
+const (
+	// Reachable means the SHA is confirmed on the ref's lineage.
+	Reachable ReachabilityStatus = "reachable"
+	// Unreachable means the SHA is confirmed NOT on the ref's lineage
+	// (e.g. it exists only in a fork network).
+	Unreachable ReachabilityStatus = "unreachable"
+	// ReachabilityUnknown means the check could not be completed
+	// (timeout, rate limit, API error).
+	ReachabilityUnknown ReachabilityStatus = "unknown"
 )
 
 // DefaultMaxRecursionDepth matches the runner's composite action recursion limit.
@@ -26,13 +41,25 @@ type resolvedEntry struct {
 	actionYML string
 }
 
+// ReachabilityResult holds the outcome of a single reachability check.
+type ReachabilityResult struct {
+	Owner  string
+	Repo   string
+	Ref    string
+	SHA    string
+	Status ReachabilityStatus
+	Detail string // human-readable detail (e.g. compare status or error)
+}
+
 // Resolver resolves action refs to commit SHAs.
 type Resolver struct {
 	client            *api.GraphQLClient
+	restClient        *api.RESTClient
 	hostname          string
 	MaxRecursionDepth int
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
+	reachCache        map[string]ReachabilityStatus
 }
 
 // New creates a resolver using the authenticated gh context.
@@ -53,12 +80,19 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		return nil, err
 	}
 
+	restClient, err := api.NewRESTClient(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Resolver{
 		client:            client,
+		restClient:        restClient,
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		cache:             make(map[string]resolvedEntry),
 		latestRefCache:    make(map[string]string),
+		reachCache:        make(map[string]ReachabilityStatus),
 	}, nil
 }
 
@@ -76,6 +110,97 @@ func NewWithTransport(hostname string, transport http.RoundTripper) (*Resolver, 
 // Hostname returns the GitHub host the resolver is targeting.
 func (r *Resolver) Hostname() string {
 	return r.hostname
+}
+
+// CheckReachability verifies that a resolved SHA is on the lineage of the
+// given ref within the repository. This catches fork-network injection where
+// a SHA exists in GitHub's shared object store but is not actually part of
+// the canonical repository's history.
+//
+// Uses the compare endpoint: GET /repos/{owner}/{repo}/compare/{sha}...{ref}
+// - "identical" or "behind" or "ahead" → same lineage → Reachable
+// - "diverged" → different lineage → Unreachable
+// - 404 → SHA not in repo → Unreachable
+// - other errors → Unknown
+func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityResult {
+	result := ReachabilityResult{
+		Owner: owner,
+		Repo:  repo,
+		Ref:   ref,
+		SHA:   sha,
+	}
+
+	cacheKey := owner + "/" + repo + "/" + sha + "/" + ref
+	if status, ok := r.reachCache[cacheKey]; ok {
+		result.Status = status
+		result.Detail = "cached"
+		return result
+	}
+
+	escapedRef := url.PathEscape(ref)
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s", owner, repo, sha, escapedRef)
+
+	var compare struct {
+		Status string `json:"status"`
+	}
+	err := r.restClient.Get(path, &compare)
+	if err != nil {
+		// 404 means the SHA doesn't exist in this repository at all
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "Not Found") {
+			result.Status = Unreachable
+			result.Detail = "commit not found in repository"
+			r.reachCache[cacheKey] = Unreachable
+			return result
+		}
+		result.Status = ReachabilityUnknown
+		result.Detail = err.Error()
+		return result
+	}
+
+	switch compare.Status {
+	case "identical", "behind", "ahead":
+		// All mean the SHA is on the same lineage as the ref
+		result.Status = Reachable
+		result.Detail = compare.Status
+	case "diverged":
+		// SHA exists in the network but is NOT on the ref's lineage
+		result.Status = Unreachable
+		result.Detail = "commit exists in fork network but is not on ref lineage"
+	default:
+		result.Status = ReachabilityUnknown
+		result.Detail = fmt.Sprintf("unexpected compare status: %q", compare.Status)
+	}
+
+	if result.Status != ReachabilityUnknown {
+		r.reachCache[cacheKey] = result.Status
+	}
+	return result
+}
+
+// CheckReachabilityAll runs reachability checks on a batch of dependencies,
+// deduplicating by owner/repo/sha/ref.
+func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []ReachabilityResult {
+	var results []ReachabilityResult
+	seen := make(map[string]bool)
+
+	for _, dep := range deps {
+		parts := strings.SplitN(dep.NWO, "/", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		owner, repo := parts[0], parts[1]
+
+		key := dep.NWO + "/" + dep.SHA + "/" + dep.Ref
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		result := r.CheckReachability(owner, repo, dep.SHA, dep.Ref)
+		results = append(results, result)
+	}
+
+	return results
 }
 
 // LatestRef returns the highest stable tag for an action repository.
