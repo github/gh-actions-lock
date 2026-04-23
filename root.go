@@ -246,6 +246,7 @@ func newCheckCmd() *cobra.Command {
 			  MISSING       - uses: ref has no dependencies: entry
 			  STALE         - dependencies: entry is no longer discoverable
 			  SHA_MISMATCH  - uses: ref looks like a SHA but resolves elsewhere
+			  UNREACHABLE   - SHA is not on the ref's lineage (possible fork-network injection)
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows
@@ -527,6 +528,24 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 		return fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
 
+	// Reachability check on freshly resolved deps (warns, does not block)
+	reachResults := r.CheckReachabilityAll(deps)
+	for _, rr := range reachResults {
+		depID := rr.DepKey
+		if depID == "" {
+			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+		}
+		switch rr.Status {
+		case resolver.Unreachable:
+			fmt.Fprintf(os.Stderr, "warning: %s: SHA %s is NOT reachable from ref (%s)\n",
+				depID, rr.SHA[:12], rr.Detail)
+			fmt.Fprintf(os.Stderr, "  This may indicate a fork-network injection attack.\n")
+		case resolver.ReachabilityUnknown:
+			fmt.Fprintf(os.Stderr, "warning: %s: reachability check inconclusive (%s)\n",
+				depID, rr.Detail)
+		}
+	}
+
 	if len(opts.Actions) > 0 && len(existingDeps) > 0 {
 		deps = mergeTargetedDeps(existingDeps, deps, opts.Actions)
 	} else if len(existingDeps) > 0 && opts.Write {
@@ -783,6 +802,29 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 			Dependency: mismatch.Dep.Key(),
 			Details:    fmt.Sprintf("ref %s resolved to %s", mismatch.Dep.Ref, mismatch.ResolvedAs),
 		})
+	}
+
+	// Reachability: verify pinned SHAs are on the ref's lineage in the
+	// canonical repository, not injected from a fork network.
+	fmt.Fprintf(os.Stderr, "Checking commit reachability for %d dependency(ies)...\n", len(existingDeps))
+	reachResults := r.CheckReachabilityAll(existingDeps)
+	for _, rr := range reachResults {
+		depID := rr.DepKey
+		if depID == "" {
+			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+		}
+		switch rr.Status {
+		case resolver.Unreachable:
+			result.Valid = false
+			result.Errors = append(result.Errors, validationError{
+				Type:       "UNREACHABLE",
+				Dependency: depID,
+				Details:    fmt.Sprintf("SHA %s is not reachable from ref %s (%s)", rr.SHA[:12], rr.Ref, rr.Detail),
+			})
+		case resolver.ReachabilityUnknown:
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("%s: reachability check inconclusive (%s)", depID, rr.Detail))
+		}
 	}
 
 	if result.Valid {

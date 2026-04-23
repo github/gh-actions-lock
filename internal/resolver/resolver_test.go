@@ -131,6 +131,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
 	}
 
 	r.cache["owner/composite@v1"] = resolvedEntry{
@@ -173,6 +174,7 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
 	}
 
 	_, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
@@ -284,4 +286,198 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 	if deps[0].NWO != "owner/composite" && deps[1].NWO != "owner/composite" {
 		t.Fatalf("expected composite dep to be present, got %+v", deps)
 	}
+}
+
+func TestCheckReachability_Reachable(t *testing.T) {
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+			return Reachable, "ancestor of " + ref
+		},
+	}
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_Unreachable(t *testing.T) {
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+			return Unreachable, "commit is not an ancestor of " + ref
+		},
+	}
+	result := r.CheckReachability("evil", "repo", "deadbeef", "v1")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable, got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_Unknown(t *testing.T) {
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+			return ReachabilityUnknown, "clone failed"
+		},
+	}
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	if result.Status != ReachabilityUnknown {
+		t.Fatalf("expected Unknown, got %s (%s)", result.Status, result.Detail)
+	}
+}
+
+func TestCheckReachability_CachesResults(t *testing.T) {
+	calls := 0
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+			calls++
+			return Reachable, "ancestor of " + ref
+		},
+	}
+
+	r1 := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	r2 := r.CheckReachability("actions", "checkout", "abc123", "v6")
+
+	if r1.Status != Reachable || r2.Status != Reachable {
+		t.Fatalf("expected both calls to return Reachable, got %s and %s", r1.Status, r2.Status)
+	}
+	if r2.Detail != "cached" {
+		t.Fatalf("expected second call to be cached, got detail %q", r2.Detail)
+	}
+	if calls != 1 {
+		t.Fatalf("expected checkReachFn called once, got %d", calls)
+	}
+}
+
+func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
+	calls := 0
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+			calls++
+			return Reachable, "ancestor of " + ref
+		},
+	}
+
+	deps := []lockfile.Dependency{
+		{NWO: "actions/checkout", Ref: "v6", SHA: "aaa"},
+		{NWO: "actions/checkout", Ref: "v6", SHA: "aaa"}, // duplicate
+		{NWO: "actions/setup-go", Ref: "v6", SHA: "bbb"},
+	}
+
+	results := r.CheckReachabilityAll(deps)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 unique results, got %d: %+v", len(results), results)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (deduped), got %d", calls)
+	}
+}
+
+func TestCheckReachability_SHAAsRef_ReturnsUnknown(t *testing.T) {
+	r := &Resolver{
+		reachCache: map[string]ReachabilityStatus{},
+	}
+	sha := "abc123abc123abc123abc123abc123abc123abc1"
+	result := r.CheckReachability("actions", "checkout", sha, sha)
+	if result.Status != ReachabilityUnknown {
+		t.Fatalf("expected Unknown for SHA-as-ref, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "pin to a tag") {
+		t.Fatalf("expected detail to mention tag pinning, got %q", result.Detail)
+	}
+}
+
+func TestApiReachabilityCheck_Reachable(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": "abc123abc123abc123abc123abc123abc123abc1",
+			},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
+	}
+	reg.Verify(t)
+}
+
+func TestApiReachabilityCheck_Unreachable_ForkCommit(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "behind",
+			"merge_base_commit": map[string]any{
+				"sha": "different_sha_000000000000000000000000000",
+			},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "fork-network") {
+		t.Fatalf("expected detail to mention fork-network, got %q", result.Detail)
+	}
+	reg.Verify(t)
+}
+
+func TestApiReachabilityCheck_Unreachable_404(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(404),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != Unreachable {
+		t.Fatalf("expected Unreachable for 404, got %s (%s)", result.Status, result.Detail)
+	}
+	reg.Verify(t)
+}
+
+func TestApiReachabilityCheck_Unknown_RateLimit(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(429),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	if result.Status != ReachabilityUnknown {
+		t.Fatalf("expected Unknown for rate limit, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "rate limited") {
+		t.Fatalf("expected detail to mention rate limit, got %q", result.Detail)
+	}
+	reg.Verify(t)
 }

@@ -7,12 +7,27 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+)
+
+// ReachabilityStatus represents the result of a commit reachability check.
+type ReachabilityStatus string
+
+const (
+	// Reachable means the SHA is confirmed on the ref's lineage.
+	Reachable ReachabilityStatus = "reachable"
+	// Unreachable means the SHA is confirmed NOT on the ref's lineage
+	// (e.g. it exists only in a fork network).
+	Unreachable ReachabilityStatus = "unreachable"
+	// ReachabilityUnknown means the check could not be completed
+	// (timeout, rate limit, API error).
+	ReachabilityUnknown ReachabilityStatus = "unknown"
 )
 
 // DefaultMaxRecursionDepth matches the runner's composite action recursion limit.
@@ -26,13 +41,28 @@ type resolvedEntry struct {
 	actionYML string
 }
 
+// ReachabilityResult holds the outcome of a single reachability check.
+type ReachabilityResult struct {
+	Owner  string
+	Repo   string
+	Ref    string
+	SHA    string
+	DepKey string // full dependency key (e.g. "actions/cache/save@v4")
+	Status ReachabilityStatus
+	Detail string // human-readable detail (e.g. compare status or error)
+}
+
 // Resolver resolves action refs to commit SHAs.
 type Resolver struct {
 	client            *api.GraphQLClient
+	restClient        *api.RESTClient
 	hostname          string
 	MaxRecursionDepth int
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
+	reachCache        map[string]ReachabilityStatus
+	// checkReachFn overrides the default REST-based reachability check (for tests).
+	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
 }
 
 // New creates a resolver using the authenticated gh context.
@@ -53,12 +83,19 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		return nil, err
 	}
 
+	restClient, err := api.NewRESTClient(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Resolver{
 		client:            client,
+		restClient:        restClient,
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		cache:             make(map[string]resolvedEntry),
 		latestRefCache:    make(map[string]string),
+		reachCache:        make(map[string]ReachabilityStatus),
 	}, nil
 }
 
@@ -76,6 +113,139 @@ func NewWithTransport(hostname string, transport http.RoundTripper) (*Resolver, 
 // Hostname returns the GitHub host the resolver is targeting.
 func (r *Resolver) Hostname() string {
 	return r.hostname
+}
+
+// SetCheckReachabilityFunc overrides the default REST-based reachability check.
+// Intended for tests.
+func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string) (ReachabilityStatus, string)) {
+	r.checkReachFn = fn
+}
+
+// isSHARef returns true if the ref looks like a full commit SHA (40 hex chars).
+var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// CheckReachability verifies that a resolved SHA is on the lineage of the
+// given ref within the repository. This catches fork-network injection where
+// a SHA exists in GitHub's shared object store but is not actually part of
+// the canonical repository's history.
+//
+// Uses the GitHub Compare API and checks merge_base identity:
+//   - merge_base == pinnedSHA → Reachable (SHA is a true ancestor of ref)
+//   - merge_base != pinnedSHA → Unreachable (fork/imposter commit)
+//   - 404 (no common ancestor or not found) → Unreachable
+//   - 403/429 (rate limit) or other error → Unknown
+//
+// When ref is itself a raw SHA (the "uses: owner/repo@SHA" anti-pattern),
+// the compare becomes {sha}...{sha} which trivially returns "identical" and
+// cannot detect fork commits. In this case, a warning is returned instead.
+func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityResult {
+	result := ReachabilityResult{
+		Owner: owner,
+		Repo:  repo,
+		Ref:   ref,
+		SHA:   sha,
+	}
+
+	cacheKey := owner + "/" + repo + "/" + sha + "/" + ref
+	if status, ok := r.reachCache[cacheKey]; ok {
+		result.Status = status
+		result.Detail = "cached"
+		return result
+	}
+
+	// Allow tests to inject a fake implementation
+	if r.checkReachFn != nil {
+		result.Status, result.Detail = r.checkReachFn(owner, repo, sha, ref)
+		if result.Status != ReachabilityUnknown {
+			r.reachCache[cacheKey] = result.Status
+		}
+		return result
+	}
+
+	// SHA-as-ref anti-pattern: compare/{sha}...{sha} is trivially identical
+	// and cannot detect fork commits. Warn the user.
+	if shaRefRE.MatchString(ref) {
+		result.Status = ReachabilityUnknown
+		result.Detail = "ref is a raw SHA — reachability cannot be verified; pin to a tag instead"
+		return result
+	}
+
+	status, detail := r.apiReachabilityCheck(owner, repo, sha, ref)
+	result.Status = status
+	result.Detail = detail
+	if result.Status != ReachabilityUnknown {
+		r.reachCache[cacheKey] = result.Status
+	}
+	return result
+}
+
+// compareResponse is the subset of the GitHub Compare API response we need.
+type compareResponse struct {
+	MergeBaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
+	Status string `json:"status"`
+}
+
+// apiReachabilityCheck uses the GitHub Compare API to verify that sha is an
+// ancestor of ref. The key insight: merge_base(ancestor, descendant) == ancestor.
+// If the merge_base is NOT the pinned SHA, the commit lives on the fork network.
+func (r *Resolver) apiReachabilityCheck(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
+		owner, repo, url.PathEscape(sha), url.PathEscape(ref))
+
+	var resp compareResponse
+	err := r.restClient.Get(path, &resp)
+	if err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) {
+			switch {
+			case httpErr.StatusCode == http.StatusNotFound:
+				return Unreachable, "no common ancestor or commit not found"
+			case httpErr.StatusCode == http.StatusForbidden || httpErr.StatusCode == http.StatusTooManyRequests:
+				detail := fmt.Sprintf("rate limited (HTTP %d)", httpErr.StatusCode)
+				if reset := httpErr.Headers.Get("X-RateLimit-Reset"); reset != "" {
+					detail += "; resets at " + reset
+				}
+				return ReachabilityUnknown, detail
+			default:
+				return ReachabilityUnknown, fmt.Sprintf("API error (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+			}
+		}
+		return ReachabilityUnknown, err.Error()
+	}
+
+	if resp.MergeBaseCommit.SHA == sha {
+		return Reachable, "ancestor of " + ref + " (compare: " + resp.Status + ")"
+	}
+	return Unreachable, fmt.Sprintf("merge base is %s, not the pinned SHA — likely a fork-network commit", resp.MergeBaseCommit.SHA[:12])
+}
+
+// CheckReachabilityAll runs reachability checks on a batch of dependencies,
+// deduplicating by owner/repo/sha/ref.
+func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []ReachabilityResult {
+	var results []ReachabilityResult
+	seen := make(map[string]bool)
+
+	for _, dep := range deps {
+		parts := strings.SplitN(dep.NWO, "/", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		owner, repo := parts[0], parts[1]
+
+		key := dep.NWO + "/" + dep.SHA + "/" + dep.Ref
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		result := r.CheckReachability(owner, repo, dep.SHA, dep.Ref)
+		result.DepKey = dep.Key()
+		results = append(results, result)
+	}
+
+	return results
 }
 
 // LatestRef returns the highest stable tag for an action repository.

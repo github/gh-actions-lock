@@ -147,6 +147,31 @@ func GraphQLQuery(body string, cb func(query string, variables map[string]any)) 
 	}
 }
 
+// REST matches a request by method and URL path pattern (regex).
+func REST(method, pathPattern string) Matcher {
+	re := regexp.MustCompile(pathPattern)
+
+	return func(req *http.Request) bool {
+		if !strings.EqualFold(req.Method, method) {
+			return false
+		}
+		return re.MatchString(req.URL.Path)
+	}
+}
+
+// StatusResponse returns a response with the given status code and empty body.
+func StatusResponse(code int) Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: code,
+			Header:     http.Header{},
+			Body:       io.NopCloser(bytes.NewBuffer(nil)),
+			Request:    req,
+			Status:     fmt.Sprintf("%d", code),
+		}, nil
+	}
+}
+
 func decodeJSONBody(req *http.Request, dest any) error {
 	b, err := readBody(req)
 	if err != nil {
