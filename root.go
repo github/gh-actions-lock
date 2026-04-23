@@ -531,14 +531,18 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 	// Reachability check on freshly resolved deps (warns, does not block)
 	reachResults := r.CheckReachabilityAll(deps)
 	for _, rr := range reachResults {
+		depID := rr.DepKey
+		if depID == "" {
+			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+		}
 		switch rr.Status {
 		case resolver.Unreachable:
-			fmt.Fprintf(os.Stderr, "warning: %s/%s@%s: SHA %s is NOT reachable from ref (%s)\n",
-				rr.Owner, rr.Repo, rr.Ref, rr.SHA[:12], rr.Detail)
+			fmt.Fprintf(os.Stderr, "warning: %s: SHA %s is NOT reachable from ref (%s)\n",
+				depID, rr.SHA[:12], rr.Detail)
 			fmt.Fprintf(os.Stderr, "  This may indicate a fork-network injection attack.\n")
 		case resolver.ReachabilityUnknown:
-			fmt.Fprintf(os.Stderr, "warning: %s/%s@%s: reachability check inconclusive (%s)\n",
-				rr.Owner, rr.Repo, rr.Ref, rr.Detail)
+			fmt.Fprintf(os.Stderr, "warning: %s: reachability check inconclusive (%s)\n",
+				depID, rr.Detail)
 		}
 	}
 
@@ -805,17 +809,21 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 	fmt.Fprintf(os.Stderr, "Checking commit reachability for %d dependency(ies)...\n", len(existingDeps))
 	reachResults := r.CheckReachabilityAll(existingDeps)
 	for _, rr := range reachResults {
+		depID := rr.DepKey
+		if depID == "" {
+			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+		}
 		switch rr.Status {
 		case resolver.Unreachable:
 			result.Valid = false
 			result.Errors = append(result.Errors, validationError{
 				Type:       "UNREACHABLE",
-				Dependency: fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref),
+				Dependency: depID,
 				Details:    fmt.Sprintf("SHA %s is not reachable from ref %s (%s)", rr.SHA[:12], rr.Ref, rr.Detail),
 			})
 		case resolver.ReachabilityUnknown:
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("%s/%s@%s: reachability check inconclusive (%s)", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
+				fmt.Sprintf("%s: reachability check inconclusive (%s)", depID, rr.Detail))
 		}
 	}
 

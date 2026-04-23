@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ type ReachabilityResult struct {
 	Repo   string
 	Ref    string
 	SHA    string
+	DepKey string // full dependency key (e.g. "actions/cache/save@v4")
 	Status ReachabilityStatus
 	Detail string // human-readable detail (e.g. compare status or error)
 }
@@ -189,7 +191,8 @@ type compareResponse struct {
 // ancestor of ref. The key insight: merge_base(ancestor, descendant) == ancestor.
 // If the merge_base is NOT the pinned SHA, the commit lives on the fork network.
 func (r *Resolver) apiReachabilityCheck(owner, repo, sha, ref string) (ReachabilityStatus, string) {
-	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s", owner, repo, sha, ref)
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
+		owner, repo, url.PathEscape(sha), url.PathEscape(ref))
 
 	var resp compareResponse
 	err := r.restClient.Get(path, &resp)
@@ -238,6 +241,7 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 		seen[key] = true
 
 		result := r.CheckReachability(owner, repo, dep.SHA, dep.Ref)
+		result.DepKey = dep.Key()
 		results = append(results, result)
 	}
 
