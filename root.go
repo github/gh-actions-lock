@@ -15,6 +15,8 @@ import (
 )
 
 var errSilent = errors.New("silent error")
+var errNoDeps = errors.New("no dependencies: section found")
+var errNoActions = errors.New("no action references found")
 var newResolver = resolver.New
 
 type pinOptions struct {
@@ -360,6 +362,19 @@ func runCheck(opts *checkOptions) error {
 		}
 		result, err := validateOneFile(workflowPath, r)
 		if err != nil {
+			if errors.Is(err, errNoActions) {
+				// Workflow has only run: steps, no actions to pin — skip silently.
+				continue
+			}
+			if errors.Is(err, errNoDeps) {
+				if opts.JSONFields != "" {
+					aggregate.Warnings = append(aggregate.Warnings,
+						fmt.Sprintf("%s: not yet pinned (run `gh actions-pin --write` first)", workflowPath))
+				} else {
+					fmt.Fprintf(os.Stderr, "skipping %s: not yet pinned (run `gh actions-pin --write` first)\n", workflowPath)
+				}
+				continue
+			}
 			aggregate.Valid = false
 			aggregate.Errors = append(aggregate.Errors, validationError{
 				Type:       "ERROR",
@@ -389,6 +404,18 @@ func runCheck(opts *checkOptions) error {
 			fmt.Fprintf(os.Stderr, "All %d workflow(s) valid\n", len(opts.WorkflowPaths))
 		}
 		return nil
+	}
+
+	// Print errors and warnings in human-readable mode.
+	// Skip ERROR entries — those were already printed inline when validateOneFile returned an error.
+	for _, e := range aggregate.Errors {
+		if e.Type == "ERROR" {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "error: [%s] %s: %s\n", e.Type, e.Dependency, e.Details)
+	}
+	for _, w := range aggregate.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
 	return errSilent
@@ -684,7 +711,13 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 		return nil, err
 	}
 	if len(existingDeps) == 0 {
-		return nil, fmt.Errorf("no dependencies: section found -- run `gh actions-pin --write` first")
+		// Check if the workflow even has action references.
+		// Run-only workflows (no uses: directives) need no pinning.
+		refs, _, _ := wf.ExtractActionRefs()
+		if len(refs) == 0 {
+			return nil, errNoActions
+		}
+		return nil, errNoDeps
 	}
 
 	refs, _, parseWarnings := wf.ExtractActionRefs()
