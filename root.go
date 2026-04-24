@@ -11,6 +11,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +19,7 @@ var errSilent = errors.New("silent error")
 var errNoDeps = errors.New("no dependencies: section found")
 var errNoActions = errors.New("no action references found")
 var newResolver = resolver.New
+var output = ui.New()
 
 type pinOptions struct {
 	WorkflowPaths   []string
@@ -296,10 +298,10 @@ func runPin(opts *pinOptions) error {
 	var hadError bool
 	for _, workflowPath := range opts.WorkflowPaths {
 		if len(opts.WorkflowPaths) > 1 {
-			fmt.Fprintf(os.Stderr, "\n==> %s\n", workflowPath)
+			output.Header("%s", workflowPath)
 		}
 		if err := pinOneFile(opts, workflowPath, r); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %s\n", workflowPath, err)
+			output.Error("%s: %s", workflowPath, err)
 			hadError = true
 		}
 	}
@@ -330,10 +332,10 @@ func runUpgrade(opts *upgradeOptions) error {
 	var hadError bool
 	for _, workflowPath := range opts.WorkflowPaths {
 		if len(opts.WorkflowPaths) > 1 {
-			fmt.Fprintf(os.Stderr, "\n==> %s\n", workflowPath)
+			output.Header("%s", workflowPath)
 		}
 		if err := upgradeOneFile(opts, workflowPath, r, targets); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %s\n", workflowPath, err)
+			output.Error("%s: %s", workflowPath, err)
 			hadError = true
 		}
 	}
@@ -359,7 +361,7 @@ func runCheck(opts *checkOptions) error {
 	aggregate := &validationResult{Valid: true}
 	for _, workflowPath := range opts.WorkflowPaths {
 		if len(opts.WorkflowPaths) > 1 && opts.JSONFields == "" {
-			fmt.Fprintf(os.Stderr, "\n==> %s\n", workflowPath)
+			output.Header("%s", workflowPath)
 		}
 		result, err := validateOneFile(workflowPath, r)
 		if err != nil {
@@ -372,7 +374,7 @@ func runCheck(opts *checkOptions) error {
 					aggregate.Warnings = append(aggregate.Warnings,
 						fmt.Sprintf("%s: not yet pinned (run `gh actions-pin --write` first)", workflowPath))
 				} else {
-					fmt.Fprintf(os.Stderr, "skipping %s: not yet pinned (run `gh actions-pin --write` first)\n", workflowPath)
+					output.Skip("%s: not yet pinned (run `gh actions-pin --write` first)", workflowPath)
 				}
 				continue
 			}
@@ -383,7 +385,7 @@ func runCheck(opts *checkOptions) error {
 				Details:    err.Error(),
 			})
 			if opts.JSONFields == "" {
-				fmt.Fprintf(os.Stderr, "error: %s: %s\n", workflowPath, err)
+				output.Error("%s: %s", workflowPath, err)
 			}
 			continue
 		}
@@ -399,10 +401,8 @@ func runCheck(opts *checkOptions) error {
 	}
 
 	if aggregate.Valid {
-		if len(opts.WorkflowPaths) == 1 {
-			fmt.Fprintln(os.Stderr, "valid")
-		} else {
-			fmt.Fprintf(os.Stderr, "All %d workflow(s) valid\n", len(opts.WorkflowPaths))
+		if len(opts.WorkflowPaths) > 1 {
+			output.Success("All %d workflow(s) valid", len(opts.WorkflowPaths))
 		}
 		return nil
 	}
@@ -413,10 +413,10 @@ func runCheck(opts *checkOptions) error {
 		if e.Type == "ERROR" {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "error: [%s] %s: %s\n", e.Type, e.Dependency, e.Details)
+		output.Error("[%s] %s: %s", e.Type, e.Dependency, e.Details)
 	}
 	for _, w := range aggregate.Warnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		output.Warning("%s", w)
 	}
 
 	return errSilent
@@ -487,11 +487,11 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 
 	refs, _, warnings := wf.ExtractActionRefs()
 	for _, warning := range warnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+		output.Warning("%s", warning)
 	}
 
 	if len(refs) == 0 {
-		fmt.Fprintf(os.Stderr, "No repository action references found in %s\n", workflowPath)
+		output.Skip("No repository action references found in %s", workflowPath)
 		return nil
 	}
 
@@ -503,15 +503,15 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 			}
 		}
 		if len(filtered) == 0 {
-			fmt.Fprintf(os.Stderr, "No references to %s found in %s\n", strings.Join(opts.Actions, ", "), workflowPath)
+			output.Skip("No references to %s found in %s", strings.Join(opts.Actions, ", "), workflowPath)
 			return nil
 		}
 		refs = filtered
 	}
 
-	fmt.Fprintf(os.Stderr, "Resolving %d action reference(s)...\n", len(refs))
+	output.Info("Resolving %d action reference(s)...", len(refs))
 	for _, ref := range refs {
-		fmt.Fprintf(os.Stderr, "  %s@%s\n", ref.FullName(), ref.Ref)
+		output.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
 	deps, err := r.ResolveAllRecursive(refs)
@@ -520,10 +520,10 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 	}
 
 	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
-		fmt.Fprintln(os.Stderr, "error: action ref(s) look like commit SHAs but resolved to different OIDs:")
+		output.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
-			fmt.Fprintf(os.Stderr, "  %s: ref %s resolved to %s\n", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
-			fmt.Fprintln(os.Stderr, "    This ref may be a deceptive branch or tag name masquerading as a commit hash.")
+			output.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
+			output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 		}
 		return fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
@@ -537,12 +537,10 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 		}
 		switch rr.Status {
 		case resolver.Unreachable:
-			fmt.Fprintf(os.Stderr, "warning: %s: SHA %s is NOT reachable from ref (%s)\n",
-				depID, rr.SHA[:12], rr.Detail)
-			fmt.Fprintf(os.Stderr, "  This may indicate a fork-network injection attack.\n")
+			output.Warning("%s: SHA %s is NOT reachable from ref (%s)", depID, rr.SHA[:12], rr.Detail)
+			output.Hint("This may indicate a fork-network injection attack.")
 		case resolver.ReachabilityUnknown:
-			fmt.Fprintf(os.Stderr, "warning: %s: reachability check inconclusive (%s)\n",
-				depID, rr.Detail)
+			output.Warning("%s: reachability check inconclusive (%s)", depID, rr.Detail)
 		}
 	}
 
@@ -570,21 +568,21 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 			reviewHint = buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", false)
 		}
 		applyHint := buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", true)
-		fmt.Fprintln(os.Stderr, previewMessage(workflowPath, refs, existingDeps, deps, reviewHint, applyHint))
+		output.Info("%s", previewMessage(workflowPath, refs, existingDeps, deps, reviewHint, applyHint))
 		return nil
 	}
 
-	output, err := wf.WriteDependencies(deps)
+	written, err := wf.WriteDependencies(deps)
 	if err != nil {
 		return fmt.Errorf("writing dependencies: %w", err)
 	}
-	if err := os.WriteFile(workflowPath, output, 0o644); err != nil {
+	if err := os.WriteFile(workflowPath, written, 0o644); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Pinned %d dependencies in %s\n", len(deps), workflowPath)
+	output.Success("Pinned %d dependencies in %s", len(deps), workflowPath)
 	for _, dep := range deps {
-		fmt.Fprintf(os.Stderr, "  %s\n", dep.String())
+		output.Detail("%s", dep.String())
 	}
 	return nil
 }
@@ -602,11 +600,11 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 
 	refs, _, warnings := wf.ExtractActionRefs()
 	for _, warning := range warnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+		output.Warning("%s", warning)
 	}
 
 	if len(refs) == 0 {
-		fmt.Fprintf(os.Stderr, "No repository action references found in %s\n", workflowPath)
+		output.Skip("No repository action references found in %s", workflowPath)
 		return nil
 	}
 
@@ -614,7 +612,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 	var matched []lockfile.ActionRef
 	seenPlans := make(map[string]struct{})
 
-	fmt.Fprintln(os.Stderr, "Planning upgrade(s)...")
+	output.Info("Planning upgrade(s)...")
 	for _, ref := range refs {
 		target, ok := matchingUpgradeTarget(ref, targets)
 		if !ok {
@@ -642,9 +640,9 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		}
 		seenPlans[planKey] = struct{}{}
 		if ref.Ref == targetRef {
-			fmt.Fprintf(os.Stderr, "  %s already at %s\n", ref.FullName(), targetRef)
+			output.Detail("%s already at %s", ref.FullName(), targetRef)
 		} else {
-			fmt.Fprintf(os.Stderr, "  %s: %s -> %s\n", ref.FullName(), ref.Ref, targetRef)
+			output.Detail("%s: %s -> %s", ref.FullName(), ref.Ref, targetRef)
 		}
 	}
 
@@ -653,7 +651,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		for _, target := range targets {
 			names = append(names, target.Match)
 		}
-		fmt.Fprintf(os.Stderr, "No references to %s found in %s\n", strings.Join(names, ", "), workflowPath)
+		output.Skip("No references to %s found in %s", strings.Join(names, ", "), workflowPath)
 		return nil
 	}
 
@@ -668,12 +666,12 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 
 	upgradedRefs, _, upgradedWarnings := upgradedWF.ExtractActionRefs()
 	for _, warning := range upgradedWarnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+		output.Warning("%s", warning)
 	}
 
-	fmt.Fprintf(os.Stderr, "Resolving %d action reference(s)...\n", len(upgradedRefs))
+	output.Info("Resolving %d action reference(s)...", len(upgradedRefs))
 	for _, ref := range upgradedRefs {
-		fmt.Fprintf(os.Stderr, "  %s@%s\n", ref.FullName(), ref.Ref)
+		output.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
 	deps, err := r.ResolveAllRecursive(upgradedRefs)
@@ -682,10 +680,10 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 	}
 
 	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
-		fmt.Fprintln(os.Stderr, "error: action ref(s) look like commit SHAs but resolved to different OIDs:")
+		output.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
-			fmt.Fprintf(os.Stderr, "  %s: ref %s resolved to %s\n", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
-			fmt.Fprintln(os.Stderr, "    This ref may be a deceptive branch or tag name masquerading as a commit hash.")
+			output.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
+			output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 		}
 		return fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
@@ -700,21 +698,21 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 			reviewHint = buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, false)
 		}
 		applyHint := buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, true)
-		fmt.Fprintln(os.Stderr, previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
+		output.Info("%s", previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
 		return nil
 	}
 
-	output, err := upgradedWF.WriteDependencies(deps)
+	written, err := upgradedWF.WriteDependencies(deps)
 	if err != nil {
 		return fmt.Errorf("writing dependencies: %w", err)
 	}
-	if err := os.WriteFile(workflowPath, output, 0o644); err != nil {
+	if err := os.WriteFile(workflowPath, written, 0o644); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Upgraded and pinned %d dependencies in %s\n", len(deps), workflowPath)
+	output.Success("Upgraded and pinned %d dependencies in %s", len(deps), workflowPath)
 	for _, dep := range deps {
-		fmt.Fprintf(os.Stderr, "  %s\n", dep.String())
+		output.Detail("%s", dep.String())
 	}
 	return nil
 }
@@ -763,7 +761,7 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Re-resolving %d action reference(s)...\n", len(refs))
+	output.Info("Re-resolving %d action reference(s)...", len(refs))
 	liveDeps, err := r.ResolveAllRecursive(refs)
 	if err != nil {
 		return nil, fmt.Errorf("resolving actions: %w", err)
@@ -806,7 +804,7 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 
 	// Reachability: verify pinned SHAs are on the ref's lineage in the
 	// canonical repository, not injected from a fork network.
-	fmt.Fprintf(os.Stderr, "Checking commit reachability for %d dependency(ies)...\n", len(existingDeps))
+	output.Info("Checking commit reachability for %d dependency(ies)...", len(existingDeps))
 	reachResults := r.CheckReachabilityAll(existingDeps)
 	for _, rr := range reachResults {
 		depID := rr.DepKey
@@ -828,7 +826,7 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 	}
 
 	if result.Valid {
-		fmt.Fprintf(os.Stderr, "%s valid\n", workflowPath)
+		output.Success("%s valid", workflowPath)
 	}
 	return result, nil
 }
@@ -896,10 +894,10 @@ func checkConsistency(existingDeps, newDeps []lockfile.Dependency, hostname stri
 		}
 	}
 	if len(shaChanges) > 0 {
-		fmt.Fprintln(os.Stderr, "error: SHA changed for pinned dependencies (tag may have been force-pushed):")
+		output.Error("SHA changed for pinned dependencies (tag may have been force-pushed):")
 		for _, change := range shaChanges {
-			fmt.Fprintf(os.Stderr, "  %s: %s -> %s\n", change.dep.Key(), change.oldSHA, change.dep.SHA)
-			fmt.Fprintf(os.Stderr, "    compare: https://%s/%s/compare/%s...%s\n", hostname, change.dep.NWO, change.oldSHA, change.dep.SHA)
+			output.Detail("%s: %s -> %s", change.dep.Key(), change.oldSHA, change.dep.SHA)
+			output.Detail("  compare: https://%s/%s/compare/%s...%s", hostname, change.dep.NWO, change.oldSHA, change.dep.SHA)
 		}
 		return fmt.Errorf("%d dependency SHA(s) changed since last pin", len(shaChanges))
 	}
@@ -919,23 +917,23 @@ func checkDirectRefChanges(refs []lockfile.ActionRef, existingDeps []lockfile.De
 		return nil
 	}
 
-	fmt.Fprintln(os.Stderr, "error: direct workflow action refs changed; refusing to bless them with --write:")
+	output.Error("direct workflow action refs changed; refusing to bless them with --write:")
 	for _, change := range changes {
 		switch {
 		case change.OldRef != "" && change.NewRef != "":
-			fmt.Fprintf(os.Stderr, "  %s: %s -> %s\n", change.Name, change.OldRef, change.NewRef)
+			output.Detail("%s: %s -> %s", change.Name, change.OldRef, change.NewRef)
 		case change.NewRef != "":
-			fmt.Fprintf(os.Stderr, "  %s: new direct ref %s\n", change.Name, change.NewRef)
+			output.Detail("%s: new direct ref %s", change.Name, change.NewRef)
 		default:
-			fmt.Fprintf(os.Stderr, "  %s: direct ref changed\n", change.Name)
+			output.Detail("%s: direct ref changed", change.Name)
 		}
 	}
 
 	first := changes[0]
 	if first.OldRef != "" && first.NewRef != "" {
-		fmt.Fprintf(os.Stderr, "hint: use `gh actions-pin upgrade --action %s --from %s --version %s --write`\n", first.Name, first.OldRef, first.NewRef)
+		output.Hint("use `gh actions-pin upgrade --action %s --from %s --version %s --write`", first.Name, first.OldRef, first.NewRef)
 	} else if first.NewRef != "" {
-		fmt.Fprintf(os.Stderr, "hint: rerun with `--allow-ref-changes` if adding %s@%s is intentional\n", first.Name, first.NewRef)
+		output.Hint("rerun with `--allow-ref-changes` if adding %s@%s is intentional", first.Name, first.NewRef)
 	}
 
 	return fmt.Errorf("direct workflow refs changed since the last lock")
@@ -1041,10 +1039,10 @@ func showDiff(hostname string, old, new []lockfile.Dependency) {
 
 	for _, dep := range new {
 		if oldDep, ok := oldMap[dep.Key()]; ok && !strings.EqualFold(oldDep.SHA, dep.SHA) {
-			fmt.Fprintf(os.Stderr, "  ~ %s\n", dep.Key())
-			fmt.Fprintf(os.Stderr, "    - sha1-%s\n", oldDep.SHA)
-			fmt.Fprintf(os.Stderr, "    + sha1-%s\n", dep.SHA)
-			fmt.Fprintf(os.Stderr, "    compare: https://%s/%s/compare/%s...%s\n", hostname, dep.NWO, oldDep.SHA, dep.SHA)
+			output.Infof("  %s %s\n", output.Yellow("~"), dep.Key())
+			output.Infof("    %s sha1-%s\n", output.Red("-"), oldDep.SHA)
+			output.Infof("    %s sha1-%s\n", output.Green("+"), dep.SHA)
+			output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, dep.NWO, oldDep.SHA, dep.SHA)
 			handledOld[oldDep.Key()] = true
 			handledNew[dep.Key()] = true
 		} else if ok {
@@ -1068,13 +1066,13 @@ func showDiff(hostname string, old, new []lockfile.Dependency) {
 		}
 
 		if replacement != nil {
-			fmt.Fprintf(os.Stderr, "  ~ %s\n", dep.NWO)
-			fmt.Fprintf(os.Stderr, "    - %s\n", replacement.String())
-			fmt.Fprintf(os.Stderr, "    + %s\n", dep.String())
+			output.Infof("  %s %s\n", output.Yellow("~"), dep.NWO)
+			output.Infof("    %s %s\n", output.Red("-"), replacement.String())
+			output.Infof("    %s %s\n", output.Green("+"), dep.String())
 			if !strings.EqualFold(replacement.SHA, dep.SHA) {
-				fmt.Fprintf(os.Stderr, "    compare: https://%s/%s/compare/%s...%s\n", hostname, dep.NWO, replacement.SHA, dep.SHA)
+				output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, dep.NWO, replacement.SHA, dep.SHA)
 			} else {
-				fmt.Fprintf(os.Stderr, "    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
+				output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
 			}
 			handledOld[replacement.Key()] = true
 			handledNew[dep.Key()] = true
@@ -1085,8 +1083,8 @@ func showDiff(hostname string, old, new []lockfile.Dependency) {
 		if handledNew[dep.Key()] {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "  + %s\n", dep.String())
-		fmt.Fprintf(os.Stderr, "    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
+		output.Infof("  %s %s\n", output.Green("+"), dep.String())
+		output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
 	}
 
 	for _, dep := range old {
@@ -1094,7 +1092,7 @@ func showDiff(hostname string, old, new []lockfile.Dependency) {
 			continue
 		}
 		if _, ok := newMap[dep.Key()]; !ok {
-			fmt.Fprintf(os.Stderr, "  - %s\n", dep.String())
+			output.Infof("  %s %s\n", output.Red("-"), dep.String())
 		}
 	}
 
@@ -1105,7 +1103,7 @@ func showDiff(hostname string, old, new []lockfile.Dependency) {
 		}
 	}
 	if unchanged > 0 {
-		fmt.Fprintf(os.Stderr, "  %d unchanged\n", unchanged)
+		output.Infof("  %s\n", output.Dim(fmt.Sprintf("%d unchanged", unchanged)))
 	}
 }
 

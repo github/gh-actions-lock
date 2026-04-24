@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/ui"
 )
 
 func TestPreviewMessageForNewPins(t *testing.T) {
@@ -125,9 +126,12 @@ func TestShowDiffIncludesCommitLinks(t *testing.T) {
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
+	oldOutput := output
+	output = ui.NewPlain(w)
 	showDiff("github.com", oldDeps, newDeps)
 	_ = w.Close()
 	os.Stderr = oldStderr
+	output = oldOutput
 
 	out, err := io.ReadAll(r)
 	if err != nil {
@@ -156,9 +160,12 @@ func TestShowDiffIncludesCompareLinkForRefReplacement(t *testing.T) {
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
+	oldOutput := output
+	output = ui.NewPlain(w)
 	showDiff("github.com", oldDeps, newDeps)
 	_ = w.Close()
 	os.Stderr = oldStderr
+	output = oldOutput
 
 	out, err := io.ReadAll(r)
 	if err != nil {

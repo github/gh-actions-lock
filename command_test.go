@@ -12,6 +12,7 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -197,7 +198,7 @@ dependencies:
 	assert.True(t, errors.Is(err, errSilent))
 	assert.Empty(t, stdout)
 	assert.Contains(t, stderr, "refusing to bless them with --write")
-	assert.Contains(t, stderr, "hint: use `gh actions-pin upgrade --action actions/checkout --from v5 --version v6 --write`")
+	assert.Contains(t, stderr, "use `gh actions-pin upgrade --action actions/checkout --from v5 --version v6 --write`")
 
 	content, readErr := os.ReadFile(workflowPath)
 	require.NoError(t, readErr)
@@ -363,6 +364,10 @@ func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func
 
 	os.Stdout = stdoutW
 	os.Stderr = stderrW
+
+	oldOutput := output
+	output = ui.NewPlain(stderrW)
+	defer func() { output = oldOutput }()
 
 	cmd := newRootCmd()
 	cmd.SetArgs(args)
