@@ -540,7 +540,7 @@ func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) err
 			output.Warning("%s: SHA %s is NOT reachable from ref (%s)", depID, rr.SHA[:12], rr.Detail)
 			output.Hint("This may indicate a fork-network injection attack.")
 		case resolver.ReachabilityUnknown:
-			output.Warning("%s: reachability check inconclusive (%s)", depID, rr.Detail)
+			output.Warning("%s: %s", depID, rr.Detail)
 		}
 	}
 
@@ -821,7 +821,7 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 			})
 		case resolver.ReachabilityUnknown:
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("%s: reachability check inconclusive (%s)", depID, rr.Detail))
+				fmt.Sprintf("%s: %s", depID, rr.Detail))
 		}
 	}
 

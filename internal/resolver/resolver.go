@@ -166,7 +166,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	// and cannot detect fork commits. Warn the user.
 	if shaRefRE.MatchString(ref) {
 		result.Status = ReachabilityUnknown
-		result.Detail = "ref is a raw SHA — reachability cannot be verified; pin to a tag instead"
+		result.Detail = "pinned to a bare SHA without a tag ref — unable to verify commit origin, which weakens supply-chain security; pin to a tag (e.g. v1.2.3) so lineage can be validated"
 		return result
 	}
 

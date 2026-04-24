@@ -554,7 +554,7 @@ dependencies:
 	assert.True(t, payload.Valid, "valid should be true when reachability is unknown")
 	assert.Empty(t, payload.Errors)
 	assert.NotEmpty(t, payload.Warnings, "should have a reachability warning")
-	assert.Contains(t, payload.Warnings[0], "reachability check inconclusive")
+	assert.Contains(t, payload.Warnings[0], "clone failed")
 }
 
 // TestCheck_Reachable verifies the happy path: pinned SHA matches live
