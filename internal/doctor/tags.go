@@ -63,6 +63,121 @@ func parseSemver(tag string) (semver, bool) {
 func (s semver) MajorTag() string { return fmt.Sprintf("%s%d", s.Prefix, s.Major) }
 func (s semver) MinorTag() string { return fmt.Sprintf("%s%d.%d", s.Prefix, s.Major, s.Minor) }
 
+// IsFullSemver returns true if the version has all three components (major.minor.patch)
+// and no pre-release suffix. Tags like "v4" or "v4.2" return false.
+func (s semver) IsFullSemver() bool {
+	return s.Rest == "" && s.Raw != s.MajorTag() && s.Raw != s.MinorTag()
+}
+
+// IsMutableVersionTag returns true if ref looks like a mutable version tag
+// (major-only like "v4" or minor-only like "v4.2") that should be narrowed
+// to a specific patch version for pinning.
+func IsMutableVersionTag(ref string) bool {
+	sv, ok := parseSemver(ref)
+	if !ok {
+		return false
+	}
+	return !sv.IsFullSemver()
+}
+
+// IsNarrowedVersion returns true if narrowed is a more specific patch version
+// of mutable. For example: mutable="v4", narrowed="v4.1.0" → true.
+// mutable="v4.2", narrowed="v4.2.1" → true. mutable="v4", narrowed="v5.0.0" → false.
+func IsNarrowedVersion(mutable, narrowed string) bool {
+	mv, mOK := parseSemver(mutable)
+	nv, nOK := parseSemver(narrowed)
+	if !mOK || !nOK {
+		return false
+	}
+	if !nv.IsFullSemver() {
+		return false
+	}
+	// Major must match.
+	if mv.Major != nv.Major {
+		return false
+	}
+	// If mutable specifies minor (e.g. "v4.2"), narrowed minor must match.
+	if mutable != mv.MajorTag() && mv.Minor != nv.Minor {
+		return false
+	}
+	return true
+}
+
+// BestPatchTagForSHA returns the highest full-semver patch tag pointing at the
+// given SHA, or "" if none exists. This is used to narrow mutable version refs
+// (like "v4") to a specific patch version (like "v4.2.1") when pinning.
+func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error) {
+	matching, err := tl.TagsForSHA(owner, repo, sha)
+	if err != nil {
+		return "", err
+	}
+
+	var best semver
+	bestFound := false
+	for _, t := range matching {
+		if t.IsMajor {
+			continue
+		}
+		sv, ok := parseSemver(t.Name)
+		if !ok || !sv.IsFullSemver() {
+			continue
+		}
+		if !bestFound || sv.Major > best.Major ||
+			(sv.Major == best.Major && sv.Minor > best.Minor) ||
+			(sv.Major == best.Major && sv.Minor == best.Minor && sv.Patch > best.Patch) {
+			best = sv
+			bestFound = true
+		}
+	}
+
+	if !bestFound {
+		return "", nil
+	}
+	return best.Raw, nil
+}
+
+// UniquePatchTagForRef returns the sole full-semver patch tag that matches the
+// given ref's family, or "" if the choice is ambiguous (0 or 2+ candidates).
+// For "v9" it only considers v9.x.y tags; for "v4.2" only v4.2.x tags.
+// This is used for auto-pinning: if there's exactly one obvious patch tag,
+// we can pin without prompting.
+func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string, error) {
+	refSV, refOK := parseSemver(ref)
+	if !refOK {
+		return "", nil
+	}
+
+	matching, err := tl.TagsForSHA(owner, repo, sha)
+	if err != nil {
+		return "", err
+	}
+
+	var candidates []semver
+	for _, t := range matching {
+		if t.IsMajor {
+			continue
+		}
+		sv, ok := parseSemver(t.Name)
+		if !ok || !sv.IsFullSemver() {
+			continue
+		}
+		// Must be in the same family as the original ref.
+		if sv.Major != refSV.Major {
+			continue
+		}
+		// If original ref specifies minor (e.g. "v4.2"), patch must match that minor.
+		if ref != refSV.MajorTag() && sv.Minor != refSV.Minor {
+			continue
+		}
+		candidates = append(candidates, sv)
+	}
+
+	if len(candidates) != 1 {
+		return "", nil
+	}
+	return candidates[0].Raw, nil
+}
+
 // IsUpgrade returns true if moving from currentRef to latestRef is a real
 // version upgrade. Returns false for noops where the current ref is already
 // at or more specific than the latest (e.g. v4.0.0 → v4, v3.1.1 → v3).
@@ -112,6 +227,17 @@ func IsUpgrade(currentRef, latestRef string) bool {
 type RepoInfo struct {
 	DefaultBranch string // e.g. "main"
 	Visibility    string // "public", "private", or "internal"
+	PushedAt      string // ISO 8601 timestamp of last push
+}
+
+// VisibilityLabel returns a human-readable label for display in prompts.
+func (ri RepoInfo) VisibilityLabel() string {
+	switch ri.Visibility {
+	case "private", "internal":
+		return "🏠 internal"
+	default:
+		return "public"
+	}
 }
 
 // IsInternal returns true for private or internal repos — those where
@@ -193,6 +319,21 @@ func (tl *TagLister) ListTags(owner, repo string) ([]TagInfo, error) {
 
 	tl.cache[key] = tags
 	return tags, nil
+}
+
+// LookupTag returns the TagInfo for a specific tag name, or nil if not found.
+// Uses the cached tag list from ListTags.
+func (tl *TagLister) LookupTag(owner, repo, tagName string) *TagInfo {
+	all, err := tl.ListTags(owner, repo)
+	if err != nil {
+		return nil
+	}
+	for i := range all {
+		if all[i].Name == tagName {
+			return &all[i]
+		}
+	}
+	return nil
 }
 
 // TagsForSHA returns all tags whose commit SHA matches the given SHA.
@@ -602,6 +743,7 @@ func (tl *TagLister) GetRepoInfo(owner, repo string) (*RepoInfo, error) {
 	var result struct {
 		DefaultBranch string `json:"default_branch"`
 		Visibility    string `json:"visibility"`
+		PushedAt      string `json:"pushed_at"`
 	}
 	if err := tl.client.Get(path, &result); err != nil {
 		return nil, err
@@ -610,6 +752,7 @@ func (tl *TagLister) GetRepoInfo(owner, repo string) (*RepoInfo, error) {
 	info := &RepoInfo{
 		DefaultBranch: result.DefaultBranch,
 		Visibility:    result.Visibility,
+		PushedAt:      result.PushedAt,
 	}
 	tl.repoCache[key] = info
 	return info, nil

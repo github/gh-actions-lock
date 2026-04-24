@@ -193,12 +193,20 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 		if !strings.EqualFold(existing.SHA, live.SHA) {
 			liveCopy := live
+			parts := strings.SplitN(existing.NWO, "/", 3)
+			var compareHint string
+			if len(parts) >= 2 {
+				compareHint = fmt.Sprintf(
+					"\n  → Compare: https://github.com/%s/%s/compare/%s...%s\n  → Releases: https://github.com/%s/%s/releases\n  → If unexpected, reach out to the action maintainer",
+					parts[0], parts[1], existing.SHA, live.SHA,
+					parts[0], parts[1])
+			}
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
 				Category:     CategoryTampered,
 				Severity:     SeverityError,
 				Dependency:   &existing,
-				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s", existing.SHA[:12], live.SHA[:12]),
+				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s%s", existing.SHA[:12], live.SHA[:12], compareHint),
 				Remediation:  fmt.Sprintf("update to %s with `gh actions-pin upgrade`", liveCopy.SHA[:12]),
 			})
 		}

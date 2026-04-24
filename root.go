@@ -48,9 +48,11 @@ type upgradeTarget struct {
 }
 
 type validationError struct {
-	Type       string `json:"type"`
-	Dependency string `json:"dependency"`
-	Details    string `json:"details"`
+	Type        string `json:"type"`
+	Dependency  string `json:"dependency"`
+	Details     string `json:"details"`
+	CompareURL  string `json:"compare_url,omitempty"`
+	ReleasesURL string `json:"releases_url,omitempty"`
 }
 
 type validationWarning struct {
@@ -584,16 +586,18 @@ func runCheck(opts *checkOptions) error {
 		return err
 	}
 
-	// Open a log file for verbose per-file output.
+	// For a single workflow, show verbose output inline (no log file).
+	// For multiple workflows, write verbose output to a temp log file.
+	singleFile := len(opts.WorkflowPaths) == 1
 	var logFile *os.File
-	if opts.JSONFields == "" {
+	if opts.JSONFields == "" && !singleFile {
 		logFile, err = os.CreateTemp("", "gh-actions-pin-check-*.log")
 		if err != nil {
 			return fmt.Errorf("creating log file: %w", err)
 		}
 		defer logFile.Close()
 	}
-	logOutput := ui.NewPlain(os.Stderr) // fallback; overwritten below
+	logOutput := ui.NewPlain(os.Stderr) // inline for single file or fallback
 	if logFile != nil {
 		logOutput = ui.NewPlain(logFile)
 	}
@@ -602,7 +606,7 @@ func runCheck(opts *checkOptions) error {
 	aggregate := &validationResult{Valid: true}
 	var skipped, valid, failed int
 
-	if opts.JSONFields == "" {
+	if opts.JSONFields == "" && !singleFile {
 		output.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
@@ -669,6 +673,18 @@ func runCheck(opts *checkOptions) error {
 			failed, checked,
 			ui.Pluralize(checked, "workflow", "workflows"),
 			strings.Join(parts, ", "))
+
+		// Show each error inline so users don't have to dig through the log.
+		for _, e := range aggregate.Errors {
+			label := output.Dim("[" + e.Type + "]")
+			output.Detail("  %s %s: %s", label, e.Dependency, e.Details)
+			if e.CompareURL != "" {
+				output.Detail("    → Compare: %s", e.CompareURL)
+			}
+			if e.ReleasesURL != "" {
+				output.Detail("    → Releases: %s", e.ReleasesURL)
+			}
+		}
 	}
 	if len(aggregate.Warnings) > 0 {
 		// Group warnings by key (same dependency+details) and collect workflow files.
@@ -936,23 +952,72 @@ func validateOneFile(workflowPath string, r *resolver.Resolver, log *ui.UI) (*va
 		liveByKey[dep.Key()] = dep
 	}
 
+	// Build a secondary index by NWO so we can match transitive deps whose
+	// lockfile ref differs from the live-resolved ref. Common cases:
+	//   - Narrowed: lockfile has v4.1.0, live has v4
+	//   - SHA-pinned composite: lockfile has v4.1.0, live has 59d894... (bare SHA)
+	liveByNWO := make(map[string][]lockfile.Dependency)
+	for _, dep := range liveDeps {
+		liveByNWO[dep.NWO] = append(liveByNWO[dep.NWO], dep)
+	}
+
 	for _, existing := range existingDeps {
 		live, ok := liveByKey[existing.Key()]
 		if !ok {
-			result.Valid = false
-			result.Errors = append(result.Errors, validationError{
-				Type:       "STALE",
-				Dependency: existing.Key(),
-				Details:    "in dependencies: but not discoverable from workflow uses: refs",
-			})
-			continue
+			// Try to match by NWO: same repo, same SHA = same transitive dep
+			// regardless of whether the ref is a tag, branch, or bare SHA.
+			if candidates, has := liveByNWO[existing.NWO]; has {
+				for _, cand := range candidates {
+					if strings.EqualFold(cand.SHA, existing.SHA) {
+						live = cand
+						ok = true
+						break
+					}
+					if doctor.IsNarrowedVersion(cand.Ref, existing.Ref) {
+						live = cand
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok {
+				// Not a direct ref and not a recognizable transitive dep.
+				// Check if this NWO is a direct workflow action — if not,
+				// it's a transitive dep that the upstream composite changed.
+				if !directNWOs[existing.NWO] {
+					result.Warnings = append(result.Warnings, validationWarning{
+						Dependency:   existing.Key(),
+						Details:      "transitive dependency no longer discovered from upstream composite action",
+						WorkflowPath: workflowPath,
+						Transitive:   true,
+					})
+				} else {
+					result.Valid = false
+					result.Errors = append(result.Errors, validationError{
+						Type:       "STALE",
+						Dependency: existing.Key(),
+						Details:    "in dependencies: but not discoverable from workflow uses: refs",
+					})
+				}
+				continue
+			}
 		}
 		if !strings.EqualFold(existing.SHA, live.SHA) {
 			result.Valid = false
+			// Build enrichment URLs for TAMPERED findings.
+			parts := strings.SplitN(existing.NWO, "/", 3)
+			var compareURL, releasesURL string
+			if len(parts) >= 2 {
+				baseURL := fmt.Sprintf("https://%s/%s/%s", r.Hostname(), parts[0], parts[1])
+				compareURL = fmt.Sprintf("%s/compare/%s...%s", baseURL, existing.SHA, live.SHA)
+				releasesURL = baseURL + "/releases"
+			}
 			result.Errors = append(result.Errors, validationError{
-				Type:       "TAMPERED",
-				Dependency: existing.Key(),
-				Details:    fmt.Sprintf("expected %s but live resolution is %s", existing.SHA, live.SHA),
+				Type:        "TAMPERED",
+				Dependency:  existing.Key(),
+				Details:     fmt.Sprintf("expected %s but live resolution is %s", existing.SHA, live.SHA),
+				CompareURL:  compareURL,
+				ReleasesURL: releasesURL,
 			})
 		}
 	}
@@ -1001,6 +1066,15 @@ func validateOneFile(workflowPath string, r *resolver.Resolver, log *ui.UI) (*va
 	// Log errors/warnings to the file.
 	for _, e := range result.Errors {
 		log.Error("[%s] %s: %s", e.Type, e.Dependency, e.Details)
+		if e.CompareURL != "" {
+			log.Detail("  → Compare: %s", e.CompareURL)
+		}
+		if e.ReleasesURL != "" {
+			log.Detail("  → Releases: %s", e.ReleasesURL)
+		}
+		if e.Type == "TAMPERED" {
+			log.Detail("  → If unexpected, reach out to the action maintainer")
+		}
 	}
 	for _, w := range result.Warnings {
 		log.Warning("%s", w.String())

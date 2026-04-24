@@ -85,26 +85,17 @@ func (rem *Remediator) recallChoice(dep *lockfile.Dependency) (string, bool) {
 	return tag, ok
 }
 
-// offerApplyAll checks if this dep appears in more workflows and asks whether
-// to apply the same choice everywhere. Returns true if user wants all files.
+// offerApplyAll checks if this dep appears in more workflows and auto-applies
+// the same choice everywhere. No prompt needed — same dep, same tag, just do it.
 func (rem *Remediator) offerApplyAll(dep *lockfile.Dependency, tag string) {
 	key := rem.choiceKey(dep)
 	rem.remaining[key]--
 	others := rem.remaining[key]
-	if others <= 0 || !rem.prompter.IsInteractive() {
+	if others <= 0 {
 		return
 	}
 
-	ok, err := rem.prompter.Confirm(
-		fmt.Sprintf("Apply %s to all %d remaining %s too?",
-			tag, others, ui.Pluralize(others, "file", "files")),
-		true,
-	)
-	if err != nil || !ok {
-		return
-	}
-	rem.output.Success("Will apply %s@%s → %s to %d remaining %s",
-		dep.NWO, dep.SHA[:12], tag, others, ui.Pluralize(others, "file", "files"))
+	rem.output.Detail("  ↳ applying %s to %d remaining %s", tag, others, ui.Pluralize(others, "file", "files"))
 	rem.recordChoice(dep, tag)
 }
 
@@ -154,6 +145,15 @@ func (rem *Remediator) repoNWO(f Finding) string {
 		return f.ActionRef.Owner + "/" + f.ActionRef.Repo
 	}
 	return ""
+}
+
+// pinPromptTitle returns the Select prompt title annotated with repo visibility.
+func (rem *Remediator) pinPromptTitle(nwo, owner, repo string) string {
+	title := fmt.Sprintf("Pin %s to which tag?", nwo)
+	if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
+		title += fmt.Sprintf("  (%s)", info.VisibilityLabel())
+	}
+	return title
 }
 
 func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
@@ -233,23 +233,135 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		return rem.applyPin(wr)
 	}
 
-	// Show preview with resolved SHAs, then confirm.
-	if err := rem.showPreview(wr); err != nil {
-		return err
+	// Resolve all refs to show the SHAs they'll pin to.
+	resolved, _ := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
+	shaByKey := make(map[string]string)
+	for _, dep := range resolved {
+		shaByKey[dep.Key()] = dep.SHA
 	}
-	ok, err := rem.prompter.Confirm("Apply these changes?", true)
-	if err != nil {
-		if errors.Is(err, ErrAborted) {
-			return ErrAborted
+
+	// Review each action one at a time. Auto-apply prior choices and internal
+	// actions silently; prompt for each external action.
+	var approved []lockfile.ActionRef
+	for _, ref := range wr.ActionRefs {
+		key := ref.FullName() + "@" + ref.Ref
+
+		// Prior choice — auto-apply without prompting.
+		if rem.approvedRefs[refKey(ref)] {
+			sha := shaByKey[key]
+			rem.output.Detail("  %s → %s  %s", key, sha[:12], rem.output.Dim("↩ prior choice"))
+			approved = append(approved, ref)
+			continue
 		}
+
+		// Internal (same-owner) action — auto-apply without prompting.
+		if rem.isSameOwner(ref.Owner) {
+			sha := shaByKey[key]
+			label := ""
+			if info, err := rem.tagLister.GetRepoInfo(ref.Owner, ref.Repo); err == nil {
+				label = info.VisibilityLabel()
+				if ref.Ref == info.DefaultBranch {
+					label += " · default branch"
+				}
+				if age := FormatTagAge(info.PushedAt); age != "" {
+					label += " · last push " + age
+				}
+			}
+			rem.output.Detail("  %s → %s  %s", key, sha[:12], rem.output.Dim(label))
+			approved = append(approved, ref)
+			continue
+		}
+
+		// External action — auto-pin when there's a clear default, prompt otherwise.
+		sha, ok := shaByKey[key]
+		if !ok {
+			rem.output.Detail("  %s  (could not resolve)", key)
+			continue
+		}
+
+		displayTag := ref.Ref
+		autoPin := false
+
+		// Case 1: Already a full semver tag (v4.3.1) — good default, verify it's a real tag.
+		if sv, svOK := parseSemver(ref.Ref); svOK && sv.IsFullSemver() {
+			if rem.tagLister.LookupTag(ref.Owner, ref.Repo, ref.Ref) != nil {
+				autoPin = true
+			}
+		}
+
+		// Case 2: Mutable tag (v4, v4.2) — auto-pin if there's exactly one matching patch tag.
+		if !autoPin && IsMutableVersionTag(ref.Ref) {
+			if uniqueTag, err := rem.tagLister.UniquePatchTagForRef(ref.Owner, ref.Repo, sha, ref.Ref); err == nil && uniqueTag != "" {
+				displayTag = uniqueTag
+				autoPin = true
+			}
+		}
+
+		if autoPin {
+			tagURL := fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", ref.Owner, ref.Repo, displayTag)
+			tagLink := rem.output.Dim(rem.output.Hyperlink("release", tagURL))
+			if ti := rem.tagLister.LookupTag(ref.Owner, ref.Repo, displayTag); ti != nil && ti.IsImmutable {
+				tagLink = rem.output.Dim("🔒 " + rem.output.Hyperlink("immutable release", tagURL))
+			}
+			// Show verifiable SHA match: tag resolves to the same commit.
+			commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", ref.Owner, ref.Repo, sha)
+			shaLabel := rem.output.Hyperlink(sha[:12], commitURL)
+			if displayTag != ref.Ref {
+				rem.output.Detail("    %s → %s → %s  %s", key, displayTag, shaLabel, tagLink)
+			} else {
+				rem.output.Detail("    %s → %s  %s", key, shaLabel, tagLink)
+			}
+			// Record both original and narrowed ref for cascade.
+			rem.approvedRefs[refKey(ref)] = true
+			if displayTag != ref.Ref {
+				narrowedRef := ref
+				narrowedRef.Ref = displayTag
+				rem.approvedRefs[refKey(narrowedRef)] = true
+			}
+			approved = append(approved, ref)
+			continue
+		}
+
+		// Ambiguous case — prompt the user.
+		narrowHint := ""
+		if IsMutableVersionTag(ref.Ref) {
+			if patchTag, err := rem.tagLister.BestPatchTagForSHA(ref.Owner, ref.Repo, sha); err == nil && patchTag != "" {
+				narrowHint = fmt.Sprintf(" → %s", patchTag)
+				displayTag = patchTag
+			}
+		}
+
+		tagLink := ""
+		tagURL := fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", ref.Owner, ref.Repo, displayTag)
+		if ti := rem.tagLister.LookupTag(ref.Owner, ref.Repo, displayTag); ti != nil && ti.IsImmutable {
+			tagLink = "  " + rem.output.Dim("🔒 "+rem.output.Hyperlink("immutable release", tagURL))
+		} else {
+			tagLink = "  " + rem.output.Dim(rem.output.Hyperlink("release", tagURL))
+		}
+
+		rem.output.Detail("  %s%s → %s%s", key, narrowHint, sha[:12], tagLink)
+
+		ok, err := rem.prompter.Confirm(fmt.Sprintf("Pin %s?", ref.FullName()+"@"+displayTag), true)
+		if err != nil {
+			if errors.Is(err, ErrAborted) {
+				return ErrAborted
+			}
+			continue
+		}
+		if ok {
+			approved = append(approved, ref)
+		} else {
+			rem.output.Skip("skipped %s", ref.FullName())
+		}
+	}
+
+	if len(approved) == 0 {
 		rem.Skipped++
 		return nil
 	}
-	if !ok {
-		rem.Skipped++
-		return nil
-	}
-	rem.markRefsApproved(wr.ActionRefs)
+
+	wr.ActionRefs = approved
+	rem.markRefsApproved(approved)
 	return rem.applyPin(wr)
 }
 
@@ -413,6 +525,33 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 		return nil
 	}
 
+	// Smart default: for external repos, if exactly one full-semver tag points
+	// at this SHA, auto-pick it. Internal repos always prompt — release patterns
+	// vary (some follow tags, others follow main).
+	if len(suggestions) > 0 && !rem.isSameOwner(owner) {
+		var fullSemverTags []TagSuggestion
+		for _, s := range suggestions {
+			sv, ok := parseSemver(s.Tag.Name)
+			if ok && sv.IsFullSemver() {
+				fullSemverTags = append(fullSemverTags, s)
+			}
+		}
+		if len(fullSemverTags) == 1 {
+			tag := fullSemverTags[0].Tag
+			tagURL := TagURL(owner, repo, tag.Name)
+			tagLink := rem.output.Dim(rem.output.Hyperlink("release", tagURL))
+			if tag.IsImmutable {
+				tagLink = rem.output.Dim("🔒 " + rem.output.Hyperlink("immutable release", tagURL))
+			}
+			// Show verifiable SHA match: tag points at the same commit.
+			commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
+			shaLabel := rem.output.Hyperlink(dep.SHA[:12], commitURL)
+			rem.output.Detail("  ↳ auto-pinning to %s (%s)  %s", tag.Name, shaLabel, tagLink)
+			rem.recordChoice(dep, tag.Name)
+			return rem.applySHAToTag(wr, dep, owner, repo, tag.Name)
+		}
+	}
+
 	// If we found tags for this SHA, present smart suggestions.
 	if len(suggestions) > 0 {
 		return rem.handleSHAWithSuggestions(wr, finding, suggestions, owner, repo)
@@ -428,6 +567,16 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 	// Build picker — full semver first (recommended), then major tags.
 	options := make([]string, 0, len(suggestions)+3)
 	reordered := reorderSuggestions(suggestions)
+	// For external repos, drop major-only tags — we always pin to patch versions.
+	if !rem.isSameOwner(owner) {
+		var filtered []TagSuggestion
+		for _, s := range reordered {
+			if !s.Tag.IsMajor {
+				filtered = append(filtered, s)
+			}
+		}
+		reordered = filtered
+	}
 	for i, s := range reordered {
 		// Make only the tag name a clickable link.
 		tagURL := TagURL(owner, repo, s.Tag.Name)
@@ -457,6 +606,9 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
 			branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, info.DefaultBranch)
 			label := rem.output.Hyperlink(info.DefaultBranch, branchURL) + "  (default branch)"
+			if age := FormatTagAge(info.PushedAt); age != "" {
+				label += "  last push " + age
+			}
 			options = append(options, label)
 			defaultBranchIdx = len(options) - 1
 		}
@@ -466,7 +618,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 	options = append(options, "Skip this action")
 
 	idx, err := rem.prompter.Select(
-		fmt.Sprintf("Pin %s to which tag?", dep.NWO),
+		rem.pinPromptTitle(dep.NWO, owner, repo),
 		options,
 	)
 	if err != nil {
@@ -555,6 +707,9 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
 			branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, info.DefaultBranch)
 			label := rem.output.Hyperlink(info.DefaultBranch, branchURL) + "  (default branch)"
+			if age := FormatTagAge(info.PushedAt); age != "" {
+				label += "  last push " + age
+			}
 			options = append(options, label)
 			defaultBranchIdx = len(options) - 1
 		}
@@ -564,7 +719,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 	options = append(options, "Skip this action")
 
 	idx, err := rem.prompter.Select(
-		fmt.Sprintf("Pick a tag to pin %s/%s to:", owner, repo),
+		rem.pinPromptTitle(owner+"/"+repo, owner, repo),
 		options,
 	)
 	if err != nil {
@@ -658,6 +813,49 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
 
+	// Narrow mutable version tags (v4, v4.2) to specific patch tags (v4.2.1)
+	// so that TAMPERED signals are meaningful — patch tags should never move.
+	rewrites := make(map[string]string)
+	for i := range deps {
+		dep := &deps[i]
+		if !IsMutableVersionTag(dep.Ref) {
+			continue
+		}
+		// Skip internal actions pinned to default branch.
+		if rem.isSameOwner(strings.SplitN(dep.NWO, "/", 3)[0]) {
+			continue
+		}
+		parts := strings.SplitN(dep.NWO, "/", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		patchTag, err := rem.tagLister.BestPatchTagForSHA(parts[0], parts[1], dep.SHA)
+		if err != nil || patchTag == "" {
+			continue
+		}
+		oldUses := dep.NWO + "@" + dep.Ref
+		newUses := dep.NWO + "@" + patchTag
+		rewrites[oldUses] = newUses
+		rem.output.Detail("  %s → %s (pinning to patch version)", dep.Ref, patchTag)
+		dep.Ref = patchTag
+	}
+
+	// If we have rewrites, update the uses: lines in the workflow first.
+	if len(rewrites) > 0 {
+		content, _, err := wf.RewriteActionRefs(rewrites)
+		if err != nil {
+			return fmt.Errorf("rewriting refs to patch versions: %w", err)
+		}
+		if err := os.WriteFile(wr.Path, content, 0o644); err != nil {
+			return fmt.Errorf("writing file: %w", err)
+		}
+		// Re-load after rewrite so WriteDependencies sees the updated content.
+		wf, err = lockfile.Load(wr.Path)
+		if err != nil {
+			return err
+		}
+	}
+
 	written, err := wf.WriteDependencies(deps)
 	if err != nil {
 		return fmt.Errorf("writing dependencies: %w", err)
@@ -743,31 +941,6 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 
 	rem.output.Success("Updated %s to latest resolution", dep.Key())
 	rem.Fixed++
-	return nil
-}
-
-func (rem *Remediator) showPreview(wr WorkflowReport) error {
-	rem.output.Info("Actions that will be pinned:")
-
-	// Resolve all refs to show the SHAs they'll pin to.
-	resolved, _ := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
-	shaByKey := make(map[string]string)
-	for _, dep := range resolved {
-		shaByKey[dep.Key()] = dep.SHA
-	}
-
-	for _, ref := range wr.ActionRefs {
-		key := ref.FullName() + "@" + ref.Ref
-		suffix := ""
-		if rem.approvedRefs[refKey(ref)] {
-			suffix = "  " + rem.output.Dim("↩ prior choice")
-		}
-		if sha, ok := shaByKey[key]; ok {
-			rem.output.Detail("  %s → %s%s", key, sha[:12], suffix)
-		} else {
-			rem.output.Detail("  %s%s", key, suffix)
-		}
-	}
 	return nil
 }
 

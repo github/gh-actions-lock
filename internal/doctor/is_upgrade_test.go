@@ -33,3 +33,27 @@ fmt.Printf("✓ %-20s → %-30s  upgrade=%v\n", tc.current, tc.latest, got)
 }
 }
 }
+
+func TestIsNarrowedVersion(t *testing.T) {
+	cases := []struct {
+		mutable, narrowed string
+		want              bool
+	}{
+		{"v4", "v4.1.0", true},
+		{"v4", "v4.0.0", true},
+		{"v4.2", "v4.2.1", true},
+		{"v4.2", "v4.2.0", true},
+		{"v4", "v5.0.0", false},     // different major
+		{"v4.2", "v4.3.0", false},   // different minor
+		{"v4.1.0", "v4.1.0", true},  // identity (full semver is its own narrowing)
+		{"v4", "v4", false},         // mutable→mutable, not narrowed
+		{"main", "v4.1.0", false},   // non-version
+		{"v4", "v4.1.0-beta", false}, // pre-release
+	}
+	for _, tc := range cases {
+		got := IsNarrowedVersion(tc.mutable, tc.narrowed)
+		if got != tc.want {
+			t.Errorf("IsNarrowedVersion(%q, %q) = %v, want %v", tc.mutable, tc.narrowed, got, tc.want)
+		}
+	}
+}
