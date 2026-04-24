@@ -48,11 +48,12 @@ type upgradeTarget struct {
 }
 
 type validationError struct {
-	Type        string `json:"type"`
-	Dependency  string `json:"dependency"`
-	Details     string `json:"details"`
-	CompareURL  string `json:"compare_url,omitempty"`
-	ReleasesURL string `json:"releases_url,omitempty"`
+	Type              string `json:"type"`
+	Dependency        string `json:"dependency"`
+	Details           string `json:"details"`
+	CompareURL        string `json:"compare_url,omitempty"`
+	ReleasesURL       string `json:"releases_url,omitempty"`
+	UnreachableDetail string `json:"unreachable_detail,omitempty"`
 }
 
 type validationWarning struct {
@@ -659,10 +660,67 @@ func runCheck(opts *checkOptions) error {
 	if aggregate.Valid && checked > 0 {
 		output.Success("All %d %s valid", checked, ui.Pluralize(checked, "workflow", "workflows"))
 	} else if checked > 0 {
-		typeCounts := map[string]int{}
-		for _, e := range aggregate.Errors {
-			typeCounts[e.Type]++
+		// Group errors by dependency so we can merge related findings
+		// (e.g. TAMPERED + UNREACHABLE for the same dep).
+		type depFindings struct {
+			dep    string
+			errors []validationError
 		}
+		var depOrder []string
+		depMap := map[string]*depFindings{}
+		for _, e := range aggregate.Errors {
+			if df, ok := depMap[e.Dependency]; ok {
+				df.errors = append(df.errors, e)
+			} else {
+				depOrder = append(depOrder, e.Dependency)
+				depMap[e.Dependency] = &depFindings{dep: e.Dependency, errors: []validationError{e}}
+			}
+		}
+
+		// Merge TAMPERED+UNREACHABLE: when both exist for a dep, fold
+		// the unreachable detail into the tampered entry.
+		typeCounts := map[string]int{}
+		for _, dep := range depOrder {
+			df := depMap[dep]
+			hasTampered := false
+			for _, e := range df.errors {
+				if e.Type == "TAMPERED" {
+					hasTampered = true
+					break
+				}
+			}
+			if hasTampered {
+				// Absorb UNREACHABLE into TAMPERED — keep unreachable
+				// detail as supplementary info but don't double-count.
+				var merged []validationError
+				var unreachableDetail string
+				for _, e := range df.errors {
+					if e.Type == "UNREACHABLE" && hasTampered {
+						unreachableDetail = e.Details
+						continue
+					}
+					if e.Type == "TAMPERED" && unreachableDetail == "" {
+						// Haven't seen UNREACHABLE yet; scan ahead.
+						for _, e2 := range df.errors {
+							if e2.Type == "UNREACHABLE" {
+								unreachableDetail = e2.Details
+								break
+							}
+						}
+					}
+					me := e
+					if me.Type == "TAMPERED" && unreachableDetail != "" {
+						me.UnreachableDetail = unreachableDetail
+					}
+					merged = append(merged, me)
+				}
+				df.errors = merged
+			}
+			for _, e := range df.errors {
+				typeCounts[e.Type]++
+			}
+		}
+
 		parts := []string{}
 		for _, t := range []string{"TAMPERED", "MISSING", "STALE", "SHA_MISMATCH", "UNREACHABLE", "ERROR"} {
 			if n, ok := typeCounts[t]; ok {
@@ -673,18 +731,29 @@ func runCheck(opts *checkOptions) error {
 			failed, checked,
 			ui.Pluralize(checked, "workflow", "workflows"),
 			strings.Join(parts, ", "))
+		fmt.Fprintln(os.Stderr)
 
-		// Show each error inline so users don't have to dig through the log.
-		for _, e := range aggregate.Errors {
-			label := output.Dim("[" + e.Type + "]")
-			output.Detail("  %s %s: %s", label, e.Dependency, e.Details)
-			if e.CompareURL != "" {
-				output.Detail("    → Compare: %s", e.CompareURL)
+		// Show grouped errors with doctor-style formatting.
+		for i, dep := range depOrder {
+			df := depMap[dep]
+			for _, e := range df.errors {
+				fmt.Fprintf(os.Stderr, "  ! %s %s\n", output.Dim(e.Type), e.Dependency)
+				fmt.Fprintf(os.Stderr, "    %s\n", e.Details)
+				if e.UnreachableDetail != "" {
+					fmt.Fprintf(os.Stderr, "    %s\n", e.UnreachableDetail)
+				}
+				if e.CompareURL != "" {
+					fmt.Fprintf(os.Stderr, "    → %s\n", output.Dim(e.CompareURL))
+				}
+				if e.ReleasesURL != "" {
+					fmt.Fprintf(os.Stderr, "    → %s\n", output.Dim(e.ReleasesURL))
+				}
 			}
-			if e.ReleasesURL != "" {
-				output.Detail("    → Releases: %s", e.ReleasesURL)
+			if i < len(depOrder)-1 {
+				fmt.Fprintln(os.Stderr)
 			}
 		}
+		fmt.Fprintln(os.Stderr)
 	}
 	if len(aggregate.Warnings) > 0 {
 		// Group warnings by key (same dependency+details) and collect workflow files.
@@ -711,9 +780,27 @@ func runCheck(opts *checkOptions) error {
 		}
 		for _, key := range order {
 			g := groups[key]
-			output.Warning("%s", g.warning.String())
+			w := g.warning
+			if w.Transitive {
+				// Extract owner/repo from dep key for a cleaner message.
+				nwo := w.Dependency
+				if idx := strings.Index(nwo, "@"); idx > 0 {
+					nwo = nwo[:idx]
+				}
+				// Strip sub-path from NWO (e.g. owner/repo/subpath → owner/repo).
+				nwoParts := strings.SplitN(nwo, "/", 3)
+				repoNWO := nwo
+				if len(nwoParts) >= 2 {
+					repoNWO = nwoParts[0] + "/" + nwoParts[1]
+				}
+				output.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", w.Dependency)
+				output.Detail("  ↳ this comes from a composite action's internal dependency")
+				output.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", output.Bold(repoNWO))
+			} else {
+				output.Warning("%s", w.String())
+			}
 			for _, f := range g.files {
-				output.Detail("in %s", f)
+				output.Detail("  in %s", f)
 			}
 		}
 	}

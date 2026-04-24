@@ -478,7 +478,7 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 }
 
 var (
-	reDepsSectionWithComment = regexp.MustCompile(`(?m)^\n?# Automatically generated and managed by:.*\ndependencies:\n(?:  - .*\n)*`)
+	reDepsSectionWithComment = regexp.MustCompile(`(?m)^\n?# Automatically generated and managed by[^\n]*\ndependencies:\n(?:  - .*\n)*`)
 	reDepsSectionBare        = regexp.MustCompile(`(?m)^dependencies:\n(?:  - .*\n)*`)
 )
 
