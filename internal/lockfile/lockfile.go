@@ -361,7 +361,6 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 			if !seenLocal[value] {
 				seenLocal[value] = true
 				localPaths = append(localPaths, value)
-				warnings = append(warnings, fmt.Sprintf("skipping unsupported local path action: %s", value))
 			}
 			return
 		}
@@ -425,7 +424,7 @@ func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
 	})
 
 	var sb strings.Builder
-	sb.WriteString("\n# Automatically generated and managed by: `gh actions-pin --write <workflow-path>`\n")
+	sb.WriteString("\n# Automatically generated and managed by gh-actions-pin\n")
 	sb.WriteString("dependencies:\n")
 	for _, dep := range deps {
 		sb.WriteString("  - " + dep.String() + "\n")

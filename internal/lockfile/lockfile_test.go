@@ -147,9 +147,8 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	assert.Len(t, localPaths, 1)
 	assert.Equal(t, "./local-action", localPaths[0])
 
-	assert.Len(t, warnings, 2)
-	assert.Contains(t, warnings[0], "local path action")
-	assert.Contains(t, warnings[1], "expression-based")
+	assert.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "expression-based")
 }
 
 func TestReadDependencies(t *testing.T) {
@@ -191,7 +190,7 @@ func TestWriteDependencies(t *testing.T) {
 	assert.Contains(t, s, "dependencies:")
 	assert.Contains(t, s, "github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683")
 	assert.Contains(t, s, "github.com/actions/setup-go@v5:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5")
-	assert.Contains(t, s, "# Automatically generated and managed by:")
+	assert.Contains(t, s, "# Automatically generated and managed by gh-actions-pin")
 }
 
 func TestWriteDependenciesRoundTrip(t *testing.T) {

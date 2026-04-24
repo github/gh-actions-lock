@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/repository"
+	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
@@ -20,16 +23,6 @@ var errNoDeps = errors.New("no dependencies: section found")
 var errNoActions = errors.New("no action references found")
 var newResolver = resolver.New
 var output = ui.New()
-
-type pinOptions struct {
-	WorkflowPaths   []string
-	Actions         []string
-	AllowRefChanges bool
-	Write           bool
-	Diff            bool
-	Hostname        string
-	CommandPath     string
-}
 
 type checkOptions struct {
 	WorkflowPaths []string
@@ -45,6 +38,7 @@ type upgradeOptions struct {
 	Write         bool
 	Diff          bool
 	Hostname      string
+	Prompter      doctor.Prompter
 }
 
 type upgradeTarget struct {
@@ -59,117 +53,84 @@ type validationError struct {
 	Details    string `json:"details"`
 }
 
+type validationWarning struct {
+	Dependency   string `json:"dependency"`
+	Details      string `json:"details"`
+	WorkflowPath string `json:"workflow_path,omitempty"`
+	Transitive   bool   `json:"transitive,omitempty"`
+}
+
+// warningKey returns a grouping key (same dependency+details = same warning).
+func (w validationWarning) warningKey() string {
+	return w.Dependency + "\x00" + w.Details
+}
+
+func (w validationWarning) String() string {
+	s := fmt.Sprintf("%s: %s", w.Dependency, w.Details)
+	if w.Transitive {
+		s += " (transitive dependency)"
+	}
+	return s
+}
+
 type validationResult struct {
-	Valid    bool              `json:"valid"`
-	Errors   []validationError `json:"errors"`
-	Warnings []string          `json:"warnings"`
+	Valid    bool                `json:"valid"`
+	Errors  []validationError   `json:"errors"`
+	Warnings []validationWarning `json:"warnings"`
 }
 
 func newRootCmd() *cobra.Command {
-	opts := &pinOptions{CommandPath: "gh actions-pin"}
+	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
 		Use:           "actions-pin [<workflow-path>...]",
 		Args:          cobra.ArbitraryArgs,
-		Short:         "Preview and manage GitHub Actions workflow dependencies",
+		Short:         "Verify pinned GitHub Actions workflow dependencies",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: heredoc.Doc(`
-			Resolve workflow action references to their current commit SHAs and preview
-			the resulting lockfile changes.
+			Re-resolve all action dependencies in workflow files and compare them
+			against the pinned SHAs in the dependencies: section.
 
-			With no arguments, the extension discovers all workflows under
-			.github/workflows/ and processes them in one pass. Pass --write to apply
-			the changes and write a deterministic dependencies: section back into each
-			workflow file.
+			With no arguments, the extension discovers and validates all workflows
+			under .github/workflows/.
 
-			If the workflow's direct action refs have changed since the last lock,
-			the write path refuses to bless those edits by default. Use
-			gh actions-pin upgrade for intentional version bumps, or pass
-			--allow-ref-changes to explicitly acknowledge the drift.
+			Use subcommands to manage your workflow's dependencies:
 
-			Local path actions (uses: ./path) are currently skipped.
-
-			Use the subcommands to manage your workflow's dependencies:
-
-			  gh actions-pin           Preview lockfile changes without writing
-			  gh actions-pin --write   Apply the lockfile changes to disk
-			  gh actions-pin check     Verify the lock section against live resolution
-			  gh actions-pin update    Refresh selected pinned dependencies
-			  gh actions-pin upgrade   Bump workflow refs and repin them
+			  gh actions-pin             Verify the lock section against live resolution
+			  gh actions-pin upgrade     Bump action refs and repin them
+			  gh actions-pin doctor      Interactively diagnose and fix pinning issues
 		`),
 		Example: heredoc.Doc(`
-			# Preview changes for all workflows in .github/workflows/
+			# Verify all workflows
 			$ gh actions-pin
 
-			# Write the resolved lockfile changes to disk
-			$ gh actions-pin --write
+			# Verify a specific workflow
+			$ gh actions-pin .github/workflows/ci.yml
 
-			# Intentionally bless direct workflow ref edits
-			$ gh actions-pin --write --allow-ref-changes
+			# Output JSON for CI
+			$ gh actions-pin --json valid,errors
 
-			# Preview a specific workflow without the dependency diff
-			$ gh actions-pin .github/workflows/ci.yml --diff=false
+			# Interactively pin and fix all workflows
+			$ gh actions-pin doctor
 
-			# Check the current lock state
-			$ gh actions-pin check
+			# Upgrade a specific action
+			$ gh actions-pin upgrade --action actions/checkout --write
 		`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
-			return runPin(opts)
+			return runCheck(opts)
 		},
 	}
 
-	addPinFlags(cmd, opts, true)
-	cmd.Flags().BoolVar(&opts.AllowRefChanges, "allow-ref-changes", false, "Allow writing after direct workflow refs have changed since the last lock")
+	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings)")
+	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.AddCommand(newCheckCmd())
-	cmd.AddCommand(newUpdateCmd())
 	cmd.AddCommand(newUpgradeCmd())
+	cmd.AddCommand(newDoctorCmd())
 
-	return cmd
-}
-
-func newUpdateCmd() *cobra.Command {
-	opts := &pinOptions{AllowRefChanges: true, CommandPath: "gh actions-pin update"}
-
-	cmd := &cobra.Command{
-		Use:   "update [<workflow-path>...]",
-		Args:  cobra.ArbitraryArgs,
-		Short: "Refresh pinned workflow dependencies",
-		Long: heredoc.Doc(`
-			Refresh the pinned dependency SHAs for workflow files.
-
-			Use --action one or more times to update selected actions without
-			re-resolving everything else. Existing pinned dependencies are preserved;
-			only the targeted actions are refreshed.
-
-			By default, update previews changes with a diff. Pass --write to
-			apply the updated lockfile entries to disk.
-		`),
-		Example: heredoc.Doc(`
-			# Preview refreshed pinned dependencies
-			$ gh actions-pin update
-
-			# Apply the refreshed pins to disk
-			$ gh actions-pin update --write
-
-			# Refresh a single action across all workflows
-			$ gh actions-pin update --action actions/checkout --write
-
-			# Refresh multiple actions in one batch
-			$ gh actions-pin update --action actions/checkout --action actions/setup-go --write
-		`),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.WorkflowPaths = args
-			}
-			return runPin(opts)
-		},
-	}
-
-	addPinFlags(cmd, opts, true)
 	return cmd
 }
 
@@ -184,16 +145,24 @@ func newUpgradeCmd() *cobra.Command {
 			Upgrade selected workflow actions to a newer ref and then recompute the
 			inline dependencies: lock section.
 
-			Pass --action to target one or more actions. By default, each selected
-			action is upgraded to its latest stable tag. Use --version to force a
-			specific target ref for all selected actions, or specify it inline as
-			owner/repo@ref. Use --from to limit upgrades to actions currently on a
-			specific ref.
+			With no flags, runs interactively: scans all workflows, shows which
+			actions have newer versions available, and lets you pick which to
+			upgrade. Release page links are shown so you can review changelogs
+			before confirming.
 
-			This command previews the resulting change by default. Pass --write to
-			apply the workflow ref edits and the updated lockfile entries.
+			Pass --action to target specific actions non-interactively. By default,
+			each selected action is upgraded to its latest stable tag. Use --version
+			to force a specific target ref for all selected actions, or specify it
+			inline as owner/repo@ref. Use --from to limit upgrades to actions
+			currently on a specific ref.
+
+			In non-interactive mode, pass --write to apply changes. In interactive
+			mode, you'll be prompted to confirm.
 		`),
 		Example: heredoc.Doc(`
+			# Interactive: pick which actions to upgrade
+			$ gh actions-pin upgrade
+
 			# Preview upgrading checkout to the latest stable tag
 			$ gh actions-pin upgrade --action actions/checkout
 
@@ -212,6 +181,15 @@ func newUpgradeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
+			}
+			p := doctor.NewHuhPrompter()
+			opts.Prompter = p
+			if len(opts.Actions) == 0 {
+				// Interactive mode — must be a TTY.
+				if !p.IsInteractive() {
+					return fmt.Errorf("--action is required in non-interactive mode\n\n  gh actions-pin upgrade --action actions/checkout --write")
+				}
+				return runUpgradeInteractive(opts)
 			}
 			return runUpgrade(opts)
 		},
@@ -273,45 +251,6 @@ func newCheckCmd() *cobra.Command {
 	return cmd
 }
 
-func addPinFlags(cmd *cobra.Command, opts *pinOptions, includeWrite bool) {
-	cmd.Flags().StringArrayVar(&opts.Actions, "action", nil, "Re-resolve only the specified `action` (owner/repo or owner/repo/path). Repeat to batch updates")
-	cmd.Flags().BoolVar(&opts.Diff, "diff", true, "Show the full dependency diff vs existing pins")
-	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	if includeWrite {
-		cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the resolved dependencies back to the workflow file")
-	}
-}
-
-func runPin(opts *pinOptions) error {
-	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
-	if err != nil {
-		return err
-	}
-	opts.WorkflowPaths = paths
-	opts.Actions = normalizeActionFilters(opts.Actions)
-
-	r, err := newResolver(resolveHostname(opts.Hostname))
-	if err != nil {
-		return err
-	}
-
-	var hadError bool
-	for _, workflowPath := range opts.WorkflowPaths {
-		if len(opts.WorkflowPaths) > 1 {
-			output.Header("%s", workflowPath)
-		}
-		if err := pinOneFile(opts, workflowPath, r); err != nil {
-			output.Error("%s: %s", workflowPath, err)
-			hadError = true
-		}
-	}
-
-	if hadError {
-		return errSilent
-	}
-	return nil
-}
-
 func runUpgrade(opts *upgradeOptions) error {
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
@@ -346,6 +285,293 @@ func runUpgrade(opts *upgradeOptions) error {
 	return nil
 }
 
+// upgradeCandidate represents an action that can be upgraded.
+type upgradeCandidate struct {
+	NWO         string   // e.g. "actions/checkout"
+	CurrentRefs []string // deduplicated current refs across workflows (e.g. ["v5", "v4"])
+	LatestRef   string   // latest available tag (or default branch for re-resolve)
+	Files       []string // workflow files containing this action
+	ReResolve   bool     // true if this is a default-branch re-resolve (no ref change, just repin SHA)
+}
+
+func runUpgradeInteractive(opts *upgradeOptions) error {
+	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
+	if err != nil {
+		return err
+	}
+
+	// Detect current repo owner for same-owner (internal) action filtering.
+	var repoOwner string
+	if currentRepo, err := repository.Current(); err == nil {
+		repoOwner = currentRepo.Owner
+	}
+
+	// TagLister for cooldown-aware, paginated tag resolution.
+	hostname := resolveHostname(opts.Hostname)
+	restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
+	if err != nil {
+		return err
+	}
+	tagLister := doctor.NewTagLister(restClient)
+
+	// Phase 1: Scan all workflows and collect unique direct action NWOs.
+	output.StartProgress(fmt.Sprintf("Scanning %d %s", len(paths), ui.Pluralize(len(paths), "workflow", "workflows")))
+
+	type actionOccurrence struct {
+		refs     map[string]bool
+		files    map[string]bool
+		internal bool // same-owner action
+	}
+	occurrences := make(map[string]*actionOccurrence) // keyed by NWO
+	var nwoOrder []string
+	// Collect current pinned SHAs from lockfile deps for re-resolve staleness check.
+	// Key: "owner/repo@ref" → SHA
+	pinnedSHAs := make(map[string]string)
+
+	for _, workflowPath := range paths {
+		wf, err := lockfile.Load(workflowPath)
+		if err != nil {
+			continue
+		}
+		refs, _, _ := wf.ExtractActionRefs()
+		for _, ref := range refs {
+			nwo := ref.NWO()
+			isInternal := repoOwner != "" && strings.EqualFold(ref.Owner, repoOwner)
+			occ, ok := occurrences[nwo]
+			if !ok {
+				occ = &actionOccurrence{
+					refs:     make(map[string]bool),
+					files:    make(map[string]bool),
+					internal: isInternal,
+				}
+				occurrences[nwo] = occ
+				nwoOrder = append(nwoOrder, nwo)
+			}
+			occ.refs[ref.Ref] = true
+			occ.files[workflowPath] = true
+		}
+
+		// Read lockfile dependencies for pinned SHAs.
+		deps, _ := wf.ReadDependencies()
+		for _, dep := range deps {
+			// Normalize dep NWO to owner/repo (strip sub-path like /save).
+			depNWO := dep.NWO
+			if parts := strings.SplitN(depNWO, "/", 3); len(parts) == 3 {
+				depNWO = parts[0] + "/" + parts[1]
+			}
+			pinnedSHAs[depNWO+"@"+dep.Ref] = dep.SHA
+		}
+	}
+
+	output.StopProgress()
+
+	if len(occurrences) == 0 {
+		output.Success("No action references found")
+		return nil
+	}
+
+	// Phase 2: Resolve latest tags (cooldown-aware) and find upgradable actions.
+	output.StartProgress(fmt.Sprintf("Checking latest versions for %d %s",
+		len(occurrences), ui.Pluralize(len(occurrences), "action", "actions")))
+
+	var candidates []upgradeCandidate
+	for _, nwo := range nwoOrder {
+		occ := occurrences[nwo]
+		parts := strings.SplitN(nwo, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		currentRefs := make([]string, 0, len(occ.refs))
+		for ref := range occ.refs {
+			currentRefs = append(currentRefs, ref)
+		}
+		sort.Strings(currentRefs)
+
+		files := make([]string, 0, len(occ.files))
+		for f := range occ.files {
+			files = append(files, f)
+		}
+		sort.Strings(files)
+
+		if occ.internal {
+			// Internal (same-owner) actions: offer to re-resolve default-branch
+			// refs. Version-tagged internal actions get normal upgrade treatment.
+			info, err := tagLister.GetRepoInfo(parts[0], parts[1])
+			if err != nil {
+				continue
+			}
+
+			hasDefaultBranch := false
+			hasVersionRef := false
+			for ref := range occ.refs {
+				if ref == info.DefaultBranch {
+					hasDefaultBranch = true
+				}
+				if doctor.LooksLikeVersion(ref) {
+					hasVersionRef = true
+				}
+			}
+
+			if hasDefaultBranch {
+				// Only offer re-resolve if the branch HEAD has moved since last pin.
+				currentSHA := pinnedSHAs[nwo+"@"+info.DefaultBranch]
+				headSHA, err := tagLister.BranchHeadSHA(parts[0], parts[1], info.DefaultBranch)
+				if err == nil && (currentSHA == "" || !strings.EqualFold(currentSHA, headSHA)) {
+					candidates = append(candidates, upgradeCandidate{
+						NWO:         nwo,
+						CurrentRefs: currentRefs,
+						LatestRef:   info.DefaultBranch,
+						Files:       files,
+						ReResolve:   true,
+					})
+				}
+			}
+			if hasVersionRef {
+				// Version-tagged internal action — check for tag upgrade like external.
+				latest, err := tagLister.LatestStableTag(parts[0], parts[1])
+				if err != nil || latest == "" {
+					continue
+				}
+				hasUpgrade := false
+				for ref := range occ.refs {
+					if doctor.LooksLikeVersion(ref) && doctor.IsUpgrade(ref, latest) {
+						hasUpgrade = true
+						break
+					}
+				}
+				if hasUpgrade {
+					var versionRefs []string
+					for _, ref := range currentRefs {
+						if doctor.LooksLikeVersion(ref) {
+							versionRefs = append(versionRefs, ref)
+						}
+					}
+					candidates = append(candidates, upgradeCandidate{
+						NWO:         nwo,
+						CurrentRefs: versionRefs,
+						LatestRef:   latest,
+						Files:       files,
+					})
+				}
+			}
+			continue
+		}
+
+		// External actions: resolve latest stable tag.
+		latest, err := tagLister.LatestStableTag(parts[0], parts[1])
+		if err != nil {
+			output.StopProgress()
+			output.Warning("%s: %s", nwo, err)
+			output.StartProgress("Checking latest versions")
+			continue
+		}
+		if latest == "" {
+			continue // no suitable tags
+		}
+
+		// Filter noops via semver-aware comparison.
+		hasUpgrade := false
+		for ref := range occ.refs {
+			if doctor.IsUpgrade(ref, latest) {
+				hasUpgrade = true
+				break
+			}
+		}
+		if !hasUpgrade {
+			continue
+		}
+
+		candidates = append(candidates, upgradeCandidate{
+			NWO:         nwo,
+			CurrentRefs: currentRefs,
+			LatestRef:   latest,
+			Files:       files,
+		})
+	}
+
+	output.StopProgress()
+
+	if len(candidates) == 0 {
+		output.Success("All actions are already at their latest versions")
+		return nil
+	}
+
+	// Phase 3: Present multi-select.
+	menuOptions := make([]string, len(candidates))
+	for i, c := range candidates {
+		if c.ReResolve {
+			menuOptions[i] = fmt.Sprintf("%s: re-resolve @%s (repin to latest commit)  (%d %s)",
+				c.NWO, c.LatestRef,
+				len(c.Files), ui.Pluralize(len(c.Files), "file", "files"))
+		} else {
+			current := strings.Join(c.CurrentRefs, ", ")
+			menuOptions[i] = fmt.Sprintf("%s: %s → %s  (%d %s)",
+				c.NWO, current, c.LatestRef,
+				len(c.Files), ui.Pluralize(len(c.Files), "file", "files"))
+		}
+	}
+
+	selected, err := opts.Prompter.MultiSelect("Select actions to upgrade", menuOptions)
+	if err != nil {
+		if errors.Is(err, doctor.ErrAborted) {
+			return nil
+		}
+		return err
+	}
+	if len(selected) == 0 {
+		output.Info("Nothing selected")
+		return nil
+	}
+
+	// Phase 4: Show the plan with release links.
+	fmt.Fprintln(os.Stderr)
+	output.Header("Upgrade plan")
+	for _, idx := range selected {
+		c := candidates[idx]
+		if c.ReResolve {
+			output.Info("%s: re-resolve @%s to latest commit", c.NWO, c.LatestRef)
+		} else {
+			current := strings.Join(c.CurrentRefs, ", ")
+			output.Info("%s: %s → %s", c.NWO, current, c.LatestRef)
+			output.Detail("Release notes: https://github.com/%s/releases", c.NWO)
+		}
+		for _, f := range c.Files {
+			output.Detail("in %s", f)
+		}
+	}
+	fmt.Fprintln(os.Stderr)
+
+	// Phase 5: Confirm.
+	apply, err := opts.Prompter.Confirm("Apply these upgrades?", false)
+	if err != nil {
+		if errors.Is(err, doctor.ErrAborted) {
+			return nil
+		}
+		return err
+	}
+	if !apply {
+		output.Info("Upgrade cancelled")
+		return nil
+	}
+
+	// Phase 6: Apply. Build --action list and delegate to the existing upgrade path.
+	var actions []string
+	for _, idx := range selected {
+		c := candidates[idx]
+		actions = append(actions, c.NWO+"@"+c.LatestRef)
+	}
+
+	applyOpts := &upgradeOptions{
+		WorkflowPaths: paths,
+		Actions:       actions,
+		Write:         true,
+		Diff:          false,
+		Hostname:      opts.Hostname,
+	}
+	return runUpgrade(applyOpts)
+}
+
 func runCheck(opts *checkOptions) error {
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
@@ -358,68 +584,131 @@ func runCheck(opts *checkOptions) error {
 		return err
 	}
 
-	aggregate := &validationResult{Valid: true}
-	for _, workflowPath := range opts.WorkflowPaths {
-		if len(opts.WorkflowPaths) > 1 && opts.JSONFields == "" {
-			output.Header("%s", workflowPath)
+	// Open a log file for verbose per-file output.
+	var logFile *os.File
+	if opts.JSONFields == "" {
+		logFile, err = os.CreateTemp("", "gh-actions-pin-check-*.log")
+		if err != nil {
+			return fmt.Errorf("creating log file: %w", err)
 		}
-		result, err := validateOneFile(workflowPath, r)
+		defer logFile.Close()
+	}
+	logOutput := ui.NewPlain(os.Stderr) // fallback; overwritten below
+	if logFile != nil {
+		logOutput = ui.NewPlain(logFile)
+	}
+
+	total := len(opts.WorkflowPaths)
+	aggregate := &validationResult{Valid: true}
+	var skipped, valid, failed int
+
+	if opts.JSONFields == "" {
+		output.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
+	}
+
+	for _, workflowPath := range opts.WorkflowPaths {
+		logOutput.Header("%s", workflowPath)
+
+		result, err := validateOneFile(workflowPath, r, logOutput)
 		if err != nil {
 			if errors.Is(err, errNoActions) {
-				// Workflow has only run: steps, no actions to pin — skip silently.
 				continue
 			}
 			if errors.Is(err, errNoDeps) {
-				if opts.JSONFields != "" {
-					aggregate.Warnings = append(aggregate.Warnings,
-						fmt.Sprintf("%s: not yet pinned (run `gh actions-pin --write` first)", workflowPath))
-				} else {
-					output.Skip("%s: not yet pinned (run `gh actions-pin --write` first)", workflowPath)
+				skipped++
+				w := validationWarning{
+					Details:      "not yet pinned (run `gh actions-pin doctor` to fix)",
+					WorkflowPath: workflowPath,
 				}
+				aggregate.Warnings = append(aggregate.Warnings, w)
+				logOutput.Warning("%s", w.String())
 				continue
 			}
+			failed++
 			aggregate.Valid = false
 			aggregate.Errors = append(aggregate.Errors, validationError{
 				Type:       "ERROR",
 				Dependency: workflowPath,
 				Details:    err.Error(),
 			})
-			if opts.JSONFields == "" {
-				output.Error("%s: %s", workflowPath, err)
-			}
+			logOutput.Error("%s: %s", workflowPath, err)
 			continue
 		}
 		if !result.Valid {
+			failed++
 			aggregate.Valid = false
+		} else {
+			valid++
 		}
 		aggregate.Errors = append(aggregate.Errors, result.Errors...)
 		aggregate.Warnings = append(aggregate.Warnings, result.Warnings...)
 	}
 
+	output.StopProgress()
+
 	if opts.JSONFields != "" {
 		return writeValidationJSON(aggregate, opts.JSONFields)
 	}
 
-	if aggregate.Valid {
-		if len(opts.WorkflowPaths) > 1 {
-			output.Success("All %d workflow(s) valid", len(opts.WorkflowPaths))
+	// Summary.
+	checked := valid + failed
+	if aggregate.Valid && checked > 0 {
+		output.Success("All %d %s valid", checked, ui.Pluralize(checked, "workflow", "workflows"))
+	} else if checked > 0 {
+		typeCounts := map[string]int{}
+		for _, e := range aggregate.Errors {
+			typeCounts[e.Type]++
 		}
-		return nil
+		parts := []string{}
+		for _, t := range []string{"TAMPERED", "MISSING", "STALE", "SHA_MISMATCH", "UNREACHABLE", "ERROR"} {
+			if n, ok := typeCounts[t]; ok {
+				parts = append(parts, fmt.Sprintf("%d %s", n, strings.ToLower(t)))
+			}
+		}
+		output.Error("%d of %d %s failed: %s",
+			failed, checked,
+			ui.Pluralize(checked, "workflow", "workflows"),
+			strings.Join(parts, ", "))
+	}
+	if len(aggregate.Warnings) > 0 {
+		// Group warnings by key (same dependency+details) and collect workflow files.
+		type groupedWarning struct {
+			warning validationWarning
+			files   []string
+		}
+		var order []string
+		groups := map[string]*groupedWarning{}
+		for _, w := range aggregate.Warnings {
+			key := w.warningKey()
+			if g, ok := groups[key]; ok {
+				if w.WorkflowPath != "" {
+					g.files = append(g.files, w.WorkflowPath)
+				}
+			} else {
+				order = append(order, key)
+				g := &groupedWarning{warning: w}
+				if w.WorkflowPath != "" {
+					g.files = []string{w.WorkflowPath}
+				}
+				groups[key] = g
+			}
+		}
+		for _, key := range order {
+			g := groups[key]
+			output.Warning("%s", g.warning.String())
+			for _, f := range g.files {
+				output.Detail("in %s", f)
+			}
+		}
+	}
+	if logFile != nil {
+		output.Hint("Full log: %s", logFile.Name())
 	}
 
-	// Print errors and warnings in human-readable mode.
-	// Skip ERROR entries — those were already printed inline when validateOneFile returned an error.
-	for _, e := range aggregate.Errors {
-		if e.Type == "ERROR" {
-			continue
-		}
-		output.Error("[%s] %s: %s", e.Type, e.Dependency, e.Details)
+	if !aggregate.Valid {
+		return errSilent
 	}
-	for _, w := range aggregate.Warnings {
-		output.Warning("%s", w)
-	}
-
-	return errSilent
+	return nil
 }
 
 func discoverWorkflowPaths(existing []string) ([]string, error) {
@@ -437,29 +726,6 @@ func discoverWorkflowPaths(existing []string) ([]string, error) {
 	return paths, nil
 }
 
-func normalizeActionFilters(filters []string) []string {
-	if len(filters) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(filters))
-	seen := map[string]struct{}{}
-	for _, filter := range filters {
-		filter = strings.TrimSpace(filter)
-		filter = strings.TrimPrefix(filter, "github.com/")
-		filter = strings.TrimSuffix(filter, "@")
-		if filter == "" {
-			continue
-		}
-		if _, ok := seen[filter]; ok {
-			continue
-		}
-		seen[filter] = struct{}{}
-		out = append(out, filter)
-	}
-	return out
-}
-
 func resolveHostname(override string) string {
 	if override != "" {
 		return override
@@ -472,119 +738,6 @@ func resolveHostname(override string) string {
 		return repo.Host
 	}
 	return "github.com"
-}
-
-func pinOneFile(opts *pinOptions, workflowPath string, r *resolver.Resolver) error {
-	wf, err := lockfile.Load(workflowPath)
-	if err != nil {
-		return err
-	}
-
-	existingDeps, err := wf.ReadDependencies()
-	if err != nil {
-		return err
-	}
-
-	refs, _, warnings := wf.ExtractActionRefs()
-	for _, warning := range warnings {
-		output.Warning("%s", warning)
-	}
-
-	if len(refs) == 0 {
-		output.Skip("No repository action references found in %s", workflowPath)
-		return nil
-	}
-
-	if len(opts.Actions) > 0 {
-		var filtered []lockfile.ActionRef
-		for _, ref := range refs {
-			if actionMatchesAnyFilter(ref.FullName(), opts.Actions) {
-				filtered = append(filtered, ref)
-			}
-		}
-		if len(filtered) == 0 {
-			output.Skip("No references to %s found in %s", strings.Join(opts.Actions, ", "), workflowPath)
-			return nil
-		}
-		refs = filtered
-	}
-
-	output.Info("Resolving %d action reference(s)...", len(refs))
-	for _, ref := range refs {
-		output.Detail("%s@%s", ref.FullName(), ref.Ref)
-	}
-
-	deps, err := r.ResolveAllRecursive(refs)
-	if err != nil {
-		return fmt.Errorf("resolving actions: %w", err)
-	}
-
-	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
-		output.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
-		for _, mismatch := range mismatches {
-			output.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
-			output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
-		}
-		return fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
-	}
-
-	// Reachability check on freshly resolved deps (warns, does not block)
-	reachResults := r.CheckReachabilityAll(deps)
-	for _, rr := range reachResults {
-		depID := rr.DepKey
-		if depID == "" {
-			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
-		}
-		switch rr.Status {
-		case resolver.Unreachable:
-			output.Warning("%s: SHA %s is NOT reachable from ref (%s)", depID, rr.SHA[:12], rr.Detail)
-			output.Hint("This may indicate a fork-network injection attack.")
-		case resolver.ReachabilityUnknown:
-			output.Warning("%s: %s", depID, rr.Detail)
-		}
-	}
-
-	if len(opts.Actions) > 0 && len(existingDeps) > 0 {
-		deps = mergeTargetedDeps(existingDeps, deps, opts.Actions)
-	} else if len(existingDeps) > 0 && opts.Write {
-		if err := checkConsistency(existingDeps, deps, r.Hostname()); err != nil {
-			return err
-		}
-	}
-
-	if len(existingDeps) > 0 && opts.Write {
-		if err := checkDirectRefChanges(refs, existingDeps, opts.AllowRefChanges); err != nil {
-			return err
-		}
-	}
-
-	if opts.Diff {
-		showDiff(r.Hostname(), existingDeps, deps)
-	}
-
-	if !opts.Write {
-		reviewHint := ""
-		if !opts.Diff {
-			reviewHint = buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", false)
-		}
-		applyHint := buildCommandHint(opts.CommandPath, workflowPath, opts.Actions, "", "", true)
-		output.Info("%s", previewMessage(workflowPath, refs, existingDeps, deps, reviewHint, applyHint))
-		return nil
-	}
-
-	written, err := wf.WriteDependencies(deps)
-	if err != nil {
-		return fmt.Errorf("writing dependencies: %w", err)
-	}
-	if err := os.WriteFile(workflowPath, written, 0o644); err != nil {
-		return fmt.Errorf("writing file: %w", err)
-	}
-
-	output.Success("Pinned %d dependencies in %s", len(deps), workflowPath)
-	for _, dep := range deps {
-		output.Detail("%s", dep.String())
-	}
-	return nil
 }
 
 func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) error {
@@ -717,7 +870,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 	return nil
 }
 
-func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResult, error) {
+func validateOneFile(workflowPath string, r *resolver.Resolver, log *ui.UI) (*validationResult, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -739,9 +892,20 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 
 	refs, _, parseWarnings := wf.ExtractActionRefs()
 
+	// Build set of direct action NWOs (from workflow uses: lines).
+	directNWOs := make(map[string]bool)
+	for _, ref := range refs {
+		directNWOs[ref.FullName()] = true
+	}
+
 	result := &validationResult{
-		Valid:    true,
-		Warnings: parseWarnings,
+		Valid: true,
+	}
+	for _, pw := range parseWarnings {
+		result.Warnings = append(result.Warnings, validationWarning{
+			Details:      pw,
+			WorkflowPath: workflowPath,
+		})
 	}
 
 	depsByKey := make(map[string]lockfile.Dependency)
@@ -761,7 +925,7 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 		}
 	}
 
-	output.Info("Re-resolving %d action reference(s)...", len(refs))
+	log.Info("Re-resolving %d action reference(s)...", len(refs))
 	liveDeps, err := r.ResolveAllRecursive(refs)
 	if err != nil {
 		return nil, fmt.Errorf("resolving actions: %w", err)
@@ -804,7 +968,7 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 
 	// Reachability: verify pinned SHAs are on the ref's lineage in the
 	// canonical repository, not injected from a fork network.
-	output.Info("Checking commit reachability for %d dependency(ies)...", len(existingDeps))
+	log.Info("Checking commit reachability for %d dependency(ies)...", len(existingDeps))
 	reachResults := r.CheckReachabilityAll(existingDeps)
 	for _, rr := range reachResults {
 		depID := rr.DepKey
@@ -820,14 +984,28 @@ func validateOneFile(workflowPath string, r *resolver.Resolver) (*validationResu
 				Details:    fmt.Sprintf("SHA %s is not reachable from ref %s (%s)", rr.SHA[:12], rr.Ref, rr.Detail),
 			})
 		case resolver.ReachabilityUnknown:
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("%s: %s", depID, rr.Detail))
+			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
+			result.Warnings = append(result.Warnings, validationWarning{
+				Dependency:   depID,
+				Details:      rr.Detail,
+				WorkflowPath: workflowPath,
+				Transitive:   isTransitive,
+			})
 		}
 	}
 
 	if result.Valid {
-		output.Success("%s valid", workflowPath)
+		log.Success("%s valid", workflowPath)
 	}
+
+	// Log errors/warnings to the file.
+	for _, e := range result.Errors {
+		log.Error("[%s] %s: %s", e.Type, e.Dependency, e.Details)
+	}
+	for _, w := range result.Warnings {
+		log.Warning("%s", w.String())
+	}
+
 	return result, nil
 }
 
@@ -838,189 +1016,6 @@ func actionMatchesFilter(nwo, filter string) bool {
 	return strings.HasPrefix(nwo, filter+"/")
 }
 
-func actionMatchesAnyFilter(nwo string, filters []string) bool {
-	for _, filter := range filters {
-		if actionMatchesFilter(nwo, filter) {
-			return true
-		}
-	}
-	return false
-}
-
-func mergeTargetedDeps(existing, fresh []lockfile.Dependency, actions []string) []lockfile.Dependency {
-	freshByKey := make(map[string]lockfile.Dependency)
-	for _, dep := range fresh {
-		freshByKey[dep.Key()] = dep
-	}
-
-	seen := make(map[string]bool)
-	var merged []lockfile.Dependency
-
-	for _, dep := range existing {
-		if actionMatchesAnyFilter(dep.NWO, actions) {
-			if freshDep, ok := freshByKey[dep.Key()]; ok {
-				merged = append(merged, freshDep)
-				seen[dep.Key()] = true
-			}
-		} else {
-			merged = append(merged, dep)
-			seen[dep.Key()] = true
-		}
-	}
-
-	for _, dep := range fresh {
-		if !seen[dep.Key()] {
-			merged = append(merged, dep)
-		}
-	}
-
-	return merged
-}
-
-func checkConsistency(existingDeps, newDeps []lockfile.Dependency, hostname string) error {
-	oldByKey := make(map[string]lockfile.Dependency)
-	for _, dep := range existingDeps {
-		oldByKey[dep.Key()] = dep
-	}
-
-	type shaChange struct {
-		dep    lockfile.Dependency
-		oldSHA string
-	}
-	var shaChanges []shaChange
-	for _, dep := range newDeps {
-		if old, ok := oldByKey[dep.Key()]; ok && !strings.EqualFold(old.SHA, dep.SHA) {
-			shaChanges = append(shaChanges, shaChange{dep: dep, oldSHA: old.SHA})
-		}
-	}
-	if len(shaChanges) > 0 {
-		output.Error("SHA changed for pinned dependencies (tag may have been force-pushed):")
-		for _, change := range shaChanges {
-			output.Detail("%s: %s -> %s", change.dep.Key(), change.oldSHA, change.dep.SHA)
-			output.Detail("  compare: https://%s/%s/compare/%s...%s", hostname, change.dep.NWO, change.oldSHA, change.dep.SHA)
-		}
-		return fmt.Errorf("%d dependency SHA(s) changed since last pin", len(shaChanges))
-	}
-
-	return nil
-}
-
-type directRefChange struct {
-	Name   string
-	OldRef string
-	NewRef string
-}
-
-func checkDirectRefChanges(refs []lockfile.ActionRef, existingDeps []lockfile.Dependency, allow bool) error {
-	changes := detectDirectRefChanges(refs, existingDeps)
-	if allow || len(changes) == 0 {
-		return nil
-	}
-
-	output.Error("direct workflow action refs changed; refusing to bless them with --write:")
-	for _, change := range changes {
-		switch {
-		case change.OldRef != "" && change.NewRef != "":
-			output.Detail("%s: %s -> %s", change.Name, change.OldRef, change.NewRef)
-		case change.NewRef != "":
-			output.Detail("%s: new direct ref %s", change.Name, change.NewRef)
-		default:
-			output.Detail("%s: direct ref changed", change.Name)
-		}
-	}
-
-	first := changes[0]
-	if first.OldRef != "" && first.NewRef != "" {
-		output.Hint("use `gh actions-pin upgrade --action %s --from %s --version %s --write`", first.Name, first.OldRef, first.NewRef)
-	} else if first.NewRef != "" {
-		output.Hint("rerun with `--allow-ref-changes` if adding %s@%s is intentional", first.Name, first.NewRef)
-	}
-
-	return fmt.Errorf("direct workflow refs changed since the last lock")
-}
-
-func detectDirectRefChanges(refs []lockfile.ActionRef, existingDeps []lockfile.Dependency) []directRefChange {
-	oldByNWO := make(map[string][]lockfile.Dependency)
-	currentRefsByNWO := make(map[string][]string)
-	for _, dep := range existingDeps {
-		oldByNWO[dep.NWO] = append(oldByNWO[dep.NWO], dep)
-	}
-	for _, ref := range refs {
-		currentRefsByNWO[ref.FullName()] = append(currentRefsByNWO[ref.FullName()], ref.Ref)
-	}
-
-	matchedCurrent := make([]bool, len(refs))
-	usedOld := make(map[string]map[int]bool)
-
-	for i, ref := range refs {
-		nwo := ref.FullName()
-		for j, dep := range oldByNWO[nwo] {
-			if dep.Ref != ref.Ref {
-				continue
-			}
-			if usedOld[nwo] == nil {
-				usedOld[nwo] = make(map[int]bool)
-			}
-			if usedOld[nwo][j] {
-				continue
-			}
-			usedOld[nwo][j] = true
-			matchedCurrent[i] = true
-			break
-		}
-	}
-
-	var changes []directRefChange
-	for i, ref := range refs {
-		if matchedCurrent[i] {
-			continue
-		}
-
-		nwo := ref.FullName()
-		foundOld := false
-		for j, dep := range oldByNWO[nwo] {
-			if usedOld[nwo] != nil && usedOld[nwo][j] {
-				continue
-			}
-			if usedOld[nwo] == nil {
-				usedOld[nwo] = make(map[int]bool)
-			}
-			usedOld[nwo][j] = true
-			changes = append(changes, directRefChange{
-				Name:   nwo,
-				OldRef: dep.Ref,
-				NewRef: ref.Ref,
-			})
-			foundOld = true
-			break
-		}
-		if !foundOld {
-			changes = append(changes, directRefChange{
-				Name:   nwo,
-				NewRef: ref.Ref,
-			})
-		}
-	}
-
-	for nwo, deps := range oldByNWO {
-		currentRefs := currentRefsByNWO[nwo]
-		if len(currentRefs) == 0 {
-			continue
-		}
-		for j, dep := range deps {
-			if usedOld[nwo] != nil && usedOld[nwo][j] {
-				continue
-			}
-			changes = append(changes, directRefChange{
-				Name:   nwo,
-				OldRef: dep.Ref,
-				NewRef: currentRefs[0],
-			})
-		}
-	}
-
-	return changes
-}
 
 func showDiff(hostname string, old, new []lockfile.Dependency) {
 	oldMap := make(map[string]lockfile.Dependency)
@@ -1151,7 +1146,7 @@ func previewMessage(workflowPath string, refs []lockfile.ActionRef, old, new []l
 		lines = append(lines, fmt.Sprintf("  unchanged: %d", unchanged))
 	}
 	if len(old) > 0 && stats.directAdded+stats.directChanged+stats.directRemoved > 0 {
-		lines = append(lines, "  Direct ref changes need `upgrade` or `--allow-ref-changes` when writing.")
+		lines = append(lines, "  Direct ref changes need `gh actions-pin upgrade --action <action>`.")
 	}
 	if reviewHint != "" {
 		lines = append(lines, "  Review with: "+reviewHint)
@@ -1387,4 +1382,199 @@ func writeValidationJSON(result *validationResult, fieldsCSV string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(payload)
+}
+
+type doctorOptions struct {
+	Hostname      string
+	NoInteractive bool
+	Write         bool
+	JSONFields    string
+}
+
+func newDoctorCmd() *cobra.Command {
+	opts := &doctorOptions{}
+
+	cmd := &cobra.Command{
+		Use:   "doctor [<workflow-path>...]",
+		Args:  cobra.ArbitraryArgs,
+		Short: "Diagnose and interactively fix pinning issues",
+		Long: heredoc.Doc(`
+			Scan workflow files for pinning issues and walk through fixes
+			interactively. Doctor diagnoses:
+
+			  • Unpinned workflows (action refs without a dependencies: section)
+			  • SHA-as-ref anti-pattern (bare SHA pins that weaken security)
+			  • Stale pins (SHA no longer matches live ref resolution)
+			  • Unreachable commits (possible fork-network injection)
+
+			By default, doctor auto-discovers workflows in .github/workflows/
+			and presents interactive prompts for each issue. Use --no-interactive
+			for report-only mode, or --write to auto-fix safe issues (unpinned
+			workflows only).
+		`),
+		Example: heredoc.Doc(`
+			# Interactive diagnosis and repair
+			$ gh actions-pin doctor
+
+			# Report-only mode (no prompts, no changes)
+			$ gh actions-pin doctor --no-interactive
+
+			# Auto-pin unpinned workflows without prompting
+			$ gh actions-pin doctor --write
+
+			# Diagnose a specific workflow
+			$ gh actions-pin doctor .github/workflows/ci.yml
+
+			# JSON output for automation
+			$ gh actions-pin doctor --json findings
+		`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDoctor(opts, args)
+		},
+	}
+
+	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
+	cmd.Flags().BoolVar(&opts.Write, "write", false, "Auto-apply safe fixes (unpinned workflows only)")
+	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname (default: auto-detect)")
+	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output as JSON (fields: findings)")
+
+	return cmd
+}
+
+func runDoctor(opts *doctorOptions, paths []string) error {
+	hostname := resolveHostname(opts.Hostname)
+	r, err := newResolver(hostname)
+	if err != nil {
+		return err
+	}
+
+	// Discover or validate workflow paths.
+	workflowPaths, err := doctor.ResolveWorkflowPaths(paths)
+	if err != nil {
+		return err
+	}
+
+	output.StartProgress(fmt.Sprintf("Scanning %d %s", len(workflowPaths), ui.Pluralize(len(workflowPaths), "workflow", "workflows")))
+
+	// Phase 1: Diagnose.
+	report := doctor.Diagnose(workflowPaths, r)
+
+	output.StopProgress()
+
+	// Print summary.
+	actionable := report.WorkflowsNeedingAttention()
+	runOnlyCount := 0
+	for _, wr := range report.Workflows {
+		if len(wr.Findings) == 1 && wr.Findings[0].Category == doctor.CategoryRunOnly {
+			runOnlyCount++
+		}
+	}
+	validWorkflows := len(report.Workflows) - len(actionable) - runOnlyCount
+	if validWorkflows > 0 {
+		output.Success("%d %s fully pinned and valid", validWorkflows, ui.Pluralize(validWorkflows, "workflow", "workflows"))
+	}
+	if len(actionable) > 0 {
+		output.Warning("%d %s need attention", len(actionable), ui.Pluralize(len(actionable), "workflow", "workflows"))
+	}
+	if runOnlyCount > 0 {
+		output.Skip("%d %s have no action dependencies", runOnlyCount, ui.Pluralize(runOnlyCount, "workflow", "workflows"))
+	}
+	fmt.Fprintln(os.Stderr)
+
+	// JSON mode: output findings and exit.
+	if opts.JSONFields != "" {
+		return writeDoctorJSON(report)
+	}
+
+	// Phase 2: Remediate.
+	if len(actionable) == 0 {
+		return nil
+	}
+
+	// Create REST client for tag listing.
+	restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
+	if err != nil {
+		return fmt.Errorf("creating REST client: %w", err)
+	}
+
+	var prompter doctor.Prompter
+	if opts.NoInteractive {
+		prompter = &doctor.NoopPrompter{}
+	} else {
+		prompter = doctor.NewHuhPrompter()
+	}
+
+	// Detect current repo owner for same-owner action detection.
+	var repoOwner string
+	if currentRepo, err := repository.Current(); err == nil {
+		repoOwner = currentRepo.Owner
+	}
+
+	rem := doctor.NewRemediator(prompter, r, restClient, output, doctor.RemediateOptions{
+		Write:       opts.Write,
+		Interactive: !opts.NoInteractive && prompter.IsInteractive(),
+		RepoOwner:   repoOwner,
+	})
+
+	if err := rem.Remediate(report); err != nil {
+		if errors.Is(err, doctor.ErrAborted) {
+			fmt.Fprintln(os.Stderr)
+			output.Info("Interrupted — no further changes applied")
+			return nil
+		}
+		return err
+	}
+
+	// Phase 3: Summary.
+	fmt.Fprintln(os.Stderr)
+	if rem.Fixed > 0 {
+		output.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
+	}
+	if rem.Skipped > 0 {
+		output.Skip("%d %s skipped", rem.Skipped, ui.Pluralize(rem.Skipped, "issue", "issues"))
+	}
+	if rem.Alerted > 0 {
+		output.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
+	}
+
+	if rem.Alerted > 0 {
+		return errSilent
+	}
+	return nil
+}
+
+func writeDoctorJSON(report *doctor.Report) error {
+	type jsonFinding struct {
+		Workflow    string `json:"workflow"`
+		Category   string `json:"category"`
+		Severity   string `json:"severity"`
+		Dependency string `json:"dependency,omitempty"`
+		Detail     string `json:"detail"`
+		Remediation string `json:"remediation,omitempty"`
+	}
+
+	var findings []jsonFinding
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			jf := jsonFinding{
+				Workflow:    f.WorkflowPath,
+				Category:    string(f.Category),
+				Severity:    string(f.Severity),
+				Detail:      f.Detail,
+				Remediation: f.Remediation,
+			}
+			if f.Dependency != nil {
+				jf.Dependency = f.Dependency.Key()
+			} else if f.ActionRef != nil {
+				jf.Dependency = f.ActionRef.FullName() + "@" + f.ActionRef.Ref
+			}
+			findings = append(findings, jf)
+		}
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]interface{}{
+		"findings": findings,
+	})
 }

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
+	"github.com/briandowns/spinner"
 	"github.com/muesli/termenv"
 	"golang.org/x/term"
 )
@@ -26,6 +28,7 @@ type UI struct {
 	w       io.Writer
 	output  *termenv.Output
 	noColor bool
+	spinner *spinner.Spinner
 }
 
 // New creates a UI that writes to stderr with color auto-detected from the
@@ -164,4 +167,58 @@ func (u *UI) Cyan(s string) string {
 		return s
 	}
 	return u.output.String(s).Foreground(u.output.Color("6")).String()
+}
+
+// Hyperlink returns text as a clickable OSC 8 hyperlink when the terminal
+// supports it, otherwise returns text as-is. Most modern terminals (iTerm2,
+// WezTerm, kitty, GNOME Terminal, Windows Terminal) support this.
+func (u *UI) Hyperlink(text, url string) string {
+	if u.noColor {
+		return text
+	}
+	return u.output.Hyperlink(url, text)
+}
+
+// IsTTY returns true if the output is a terminal.
+func (u *UI) IsTTY() bool {
+	return !u.noColor
+}
+
+// StartProgress starts an animated spinner with the given label on stderr.
+// On non-TTY outputs, prints a static label instead. Matches gh CLI's Primer
+// progress indicator: braille dots, 120ms, cyan.
+func (u *UI) StartProgress(label string) {
+	if u.noColor {
+		if label != "" {
+			fmt.Fprintf(u.w, "%s...\n", label)
+		}
+		return
+	}
+	sp := spinner.New(spinner.CharSets[11], 120*time.Millisecond,
+		spinner.WithWriter(u.w),
+		spinner.WithColor("fgCyan"),
+	)
+	if label != "" {
+		sp.Prefix = label + " "
+	}
+	u.spinner = sp
+	sp.Start()
+}
+
+// StopProgress stops the spinner. Safe to call if no spinner is active.
+func (u *UI) StopProgress() {
+	if u.spinner != nil {
+		u.spinner.Stop()
+		u.spinner = nil
+		// Clear the spinner line.
+		fmt.Fprintf(u.w, "\r\033[2K")
+	}
+}
+
+// Pluralize returns singular when n==1, plural otherwise.
+func Pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
 }

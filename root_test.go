@@ -109,7 +109,7 @@ func TestPreviewMessageTreatsManualRefEditsAsDirectChanges(t *testing.T) {
 	if !strings.Contains(msg, "direct: 1 changed") {
 		t.Fatalf("expected manual ref edit to count as a direct change:\n%s", msg)
 	}
-	if !strings.Contains(msg, "Direct ref changes need `upgrade` or `--allow-ref-changes` when writing.") {
+	if !strings.Contains(msg, "Direct ref changes need `gh actions-pin upgrade --action <action>`.") {
 		t.Fatalf("expected preview guidance for direct ref changes:\n%s", msg)
 	}
 }
@@ -182,70 +182,6 @@ func TestShowDiffIncludesCompareLinkForRefReplacement(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("showDiff output missing %q:\n%s", want, got)
 		}
-	}
-}
-
-func TestCheckConsistencyAllowsStaleEntriesFromManualRefEdits(t *testing.T) {
-	oldDeps := []lockfile.Dependency{
-		{NWO: "actions/checkout", Ref: "v6", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-	}
-	newDeps := []lockfile.Dependency{
-		{NWO: "actions/checkout", Ref: "v5", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-	}
-
-	if err := checkConsistency(oldDeps, newDeps, "github.com"); err != nil {
-		t.Fatalf("expected manual ref edits to be allowed, got error: %v", err)
-	}
-}
-
-func TestDetectDirectRefChangesSupportsSelectiveUpgrade(t *testing.T) {
-	refs := []lockfile.ActionRef{
-		{Owner: "actions", Repo: "checkout", Ref: "v4"},
-		{Owner: "actions", Repo: "checkout", Ref: "v6"},
-	}
-	existing := []lockfile.Dependency{
-		{NWO: "actions/checkout", Ref: "v4", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-		{NWO: "actions/checkout", Ref: "v5", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-	}
-
-	changes := detectDirectRefChanges(refs, existing)
-	if len(changes) != 1 {
-		t.Fatalf("expected one direct ref change, got %+v", changes)
-	}
-	if changes[0].Name != "actions/checkout" || changes[0].OldRef != "v5" || changes[0].NewRef != "v6" {
-		t.Fatalf("unexpected direct ref change: %+v", changes[0])
-	}
-}
-
-func TestDetectDirectRefChangesFlagsLeftoverOldRefs(t *testing.T) {
-	refs := []lockfile.ActionRef{
-		{Owner: "actions", Repo: "checkout", Ref: "v6"},
-	}
-	existing := []lockfile.Dependency{
-		{NWO: "actions/checkout", Ref: "v5", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-		{NWO: "actions/checkout", Ref: "v6", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-	}
-
-	changes := detectDirectRefChanges(refs, existing)
-	if len(changes) != 1 {
-		t.Fatalf("expected one leftover direct ref change, got %+v", changes)
-	}
-	if changes[0].OldRef != "v5" || changes[0].NewRef != "v6" {
-		t.Fatalf("unexpected leftover direct ref change: %+v", changes[0])
-	}
-}
-
-func TestCheckDirectRefChangesRejectsSilentBlessing(t *testing.T) {
-	refs := []lockfile.ActionRef{
-		{Owner: "actions", Repo: "checkout", Ref: "v6"},
-	}
-	existing := []lockfile.Dependency{
-		{NWO: "actions/checkout", Ref: "v5", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-	}
-
-	err := checkDirectRefChanges(refs, existing, false)
-	if err == nil || !strings.Contains(err.Error(), "direct workflow refs changed") {
-		t.Fatalf("expected direct ref change to be rejected, got %v", err)
 	}
 }
 
