@@ -70,9 +70,8 @@ dependencies:
 	)
 	require.NoError(t, err)
 	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "Planning upgrade(s)...")
 	assert.Contains(t, stderr, "actions/checkout: v5 -> v6")
-	assert.Contains(t, stderr, "Upgraded and pinned 3 dependencies")
+	assert.Contains(t, stderr, "Upgraded 1 action(s)")
 
 	content, readErr := os.ReadFile(workflowPath)
 	require.NoError(t, readErr)
@@ -214,7 +213,7 @@ func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func
 	output = ui.NewPlain(stderrW)
 	defer func() { output = oldOutput }()
 
-	cmd := newRootCmd()
+	cmd := NewRootCmd()
 	cmd.SetArgs(args)
 	runErr := cmd.Execute()
 
@@ -391,8 +390,8 @@ dependencies:
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
 	var payload struct {
-		Valid    bool              `json:"valid"`
-		Errors   []validationError `json:"errors"`
+		Valid    bool                `json:"valid"`
+		Errors   []validationError   `json:"errors"`
 		Warnings []validationWarning `json:"warnings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))

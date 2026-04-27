@@ -40,7 +40,7 @@ func (p *HuhPrompter) IsInteractive() bool {
 }
 
 func (p *HuhPrompter) Confirm(message string, defaultVal bool) (bool, error) {
-	var result bool
+	result := defaultVal
 	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
@@ -173,7 +173,11 @@ func (p *TestPrompter) MultiSelect(message string, options []string) ([]int, err
 // NoopPrompter always returns defaults — used in non-interactive mode.
 type NoopPrompter struct{}
 
-func (p *NoopPrompter) IsInteractive() bool                                           { return false }
-func (p *NoopPrompter) Confirm(message string, defaultVal bool) (bool, error)          { return defaultVal, nil }
-func (p *NoopPrompter) Select(message string, options []string) (int, error)           { return -1, fmt.Errorf("non-interactive") }
-func (p *NoopPrompter) MultiSelect(message string, options []string) ([]int, error)    { return nil, fmt.Errorf("non-interactive") }
+func (p *NoopPrompter) IsInteractive() bool                                   { return false }
+func (p *NoopPrompter) Confirm(message string, defaultVal bool) (bool, error) { return defaultVal, nil }
+func (p *NoopPrompter) Select(message string, options []string) (int, error) {
+	return -1, fmt.Errorf("non-interactive")
+}
+func (p *NoopPrompter) MultiSelect(message string, options []string) ([]int, error) {
+	return nil, fmt.Errorf("non-interactive")
+}

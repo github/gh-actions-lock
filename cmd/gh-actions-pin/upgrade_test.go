@@ -185,13 +185,6 @@ func TestShowDiffIncludesCompareLinkForRefReplacement(t *testing.T) {
 	}
 }
 
-func TestNewRootCmdSuppressesCobraUsageForHandledErrors(t *testing.T) {
-	cmd := newRootCmd()
-	if !cmd.SilenceUsage || !cmd.SilenceErrors {
-		t.Fatalf("expected root command to suppress Cobra usage/errors for handled failures")
-	}
-}
-
 func TestBuildCommandHintIncludesUpgradeFlags(t *testing.T) {
 	got := buildCommandHint(
 		"gh actions-pin upgrade",

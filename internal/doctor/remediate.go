@@ -178,6 +178,11 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 				return err
 			}
 
+		case CategoryRefChanged:
+			if err := rem.handleRefChanged(wr, finding); err != nil {
+				return err
+			}
+
 		case CategoryTampered:
 			rem.output.Error("%s: %s", finding.Dependency.Key(), finding.Detail)
 			rem.output.Hint("Ref has moved — investigate before updating. Use `gh actions-pin upgrade` manually.")
@@ -203,7 +208,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	}
 
 	if !rem.prompter.IsInteractive() {
-		rem.output.Hint("run `gh actions-pin doctor %s`", wr.Path)
+		rem.output.Hint("run `gh actions-pin check %s`", wr.Path)
 		rem.Skipped++
 		return nil
 	}
@@ -463,9 +468,36 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 		return nil
 	}
 
+	// Smart default for internal (same-owner) repos: if the SHA already
+	// belongs to a tag, auto-pick it — no need to prompt. If no tag match,
+	// fall back to the default branch.
+	if rem.isSameOwner(owner) {
+		// Prefer a tag that directly points at this SHA.
+		for _, s := range suggestions {
+			if s.Preferred {
+				tag := s.Tag
+				tagURL := TagURL(owner, repo, tag.Name)
+				tagLink := rem.output.Dim(rem.output.Hyperlink("tag", tagURL))
+				commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
+				shaLabel := rem.output.Hyperlink(dep.SHA[:12], commitURL)
+				rem.output.Detail("  ↳ already installed to %s (%s)  %s", tag.Name, shaLabel, tagLink)
+				nwo := owner + "/" + repo
+				rem.internalRefChoices[nwo] = tag.Name
+				rem.recordChoice(dep, tag.Name)
+				return rem.applySHAToTag(wr, dep, owner, repo, tag.Name)
+			}
+		}
+		// No tag match — use default branch.
+		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
+			rem.output.Detail("  ↳ using %s (default branch) for %s/%s", info.DefaultBranch, owner, repo)
+			nwo := owner + "/" + repo
+			rem.internalRefChoices[nwo] = info.DefaultBranch
+			return rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch)
+		}
+	}
+
 	// Smart default: for external repos, if exactly one full-semver tag points
-	// at this SHA, auto-pick it. Internal repos always prompt — release patterns
-	// vary (some follow tags, others follow main).
+	// at this SHA, auto-pick it.
 	if len(suggestions) > 0 && !rem.isSameOwner(owner) {
 		var fullSemverTags []TagSuggestion
 		for _, s := range suggestions {
@@ -495,7 +527,13 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 		return rem.handleSHAWithSuggestions(wr, finding, suggestions, owner, repo)
 	}
 
-	// No tag matches this SHA — fall back to the full tag picker.
+	// No tag matches this SHA — this is an unreleased commit. Be loud.
+	noTagCommitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
+	shaLink := rem.output.Hyperlink(dep.SHA[:12], noTagCommitURL)
+	releasesURL := fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)
+	releasesLink := rem.output.Hyperlink("releases", releasesURL)
+	rem.output.Error("  commit %s does not belong to any release — you are running unreleased code", shaLink)
+	rem.output.Detail("  ↳ pin to a tagged release instead: %s", releasesLink)
 	return rem.handleSHATagPicker(wr, finding, owner, repo)
 }
 
@@ -520,7 +558,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 		tagURL := TagURL(owner, repo, s.Tag.Name)
 		label := rem.output.Hyperlink(s.Tag.Name, tagURL)
 		if s.Preferred {
-			label += "  📦 installed"
+			label += "  📌 current"
 		}
 		if !rem.isSameOwner(owner) {
 			if s.Tag.IsImmutable {
@@ -624,7 +662,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 		tagURL := TagURL(owner, repo, pt.Tag.Name)
 		label := rem.output.Hyperlink(pt.Tag.Name, tagURL)
 		if pt.Installed {
-			label += "  📦 installed"
+			label += "  📌 current"
 		}
 		if !rem.isSameOwner(owner) {
 			if pt.Tag.IsImmutable {
@@ -705,8 +743,12 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 	return nil
 }
 
-func (rem *Remediator) handleStale(wr WorkflowReport, finding Finding) error {
+func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) error {
 	dep := finding.Dependency
+	newRef := ""
+	if finding.ActionRef != nil {
+		newRef = finding.ActionRef.Ref
+	}
 	rem.output.Warning("%s: %s", dep.Key(), finding.Detail)
 
 	if !rem.prompter.IsInteractive() {
@@ -716,13 +758,12 @@ func (rem *Remediator) handleStale(wr WorkflowReport, finding Finding) error {
 	}
 
 	if rem.opts.Write {
-		rem.output.Skip("%s: stale upgrade requires confirmation", dep.Key())
-		rem.Skipped++
-		return nil
+		// Batch mode: auto-apply ref changes — user clearly intended the change.
+		return rem.applyReResolve(wr, dep)
 	}
 
-	ok, err := rem.prompter.Confirm(
-		fmt.Sprintf("Update %s to latest resolution?", dep.Key()), true)
+	prompt := fmt.Sprintf("Re-pin %s to %s?", dep.NWO, newRef)
+	ok, err := rem.prompter.Confirm(prompt, true)
 	if err != nil {
 		if errors.Is(err, ErrAborted) {
 			return ErrAborted
@@ -735,7 +776,14 @@ func (rem *Remediator) handleStale(wr WorkflowReport, finding Finding) error {
 		return nil
 	}
 
-	// Re-resolve and rewrite.
+	return rem.applyReResolve(wr, dep)
+}
+
+func (rem *Remediator) handleStale(wr WorkflowReport, finding Finding) error {
+	dep := finding.Dependency
+	rem.output.Detail("%s: no longer in workflow — cleaning up", dep.Key())
+
+	// Auto-clean: re-resolve rewrites the lockfile without orphaned deps.
 	return rem.applyReResolve(wr, dep)
 }
 

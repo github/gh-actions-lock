@@ -8,17 +8,22 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type checkOptions struct {
 	WorkflowPaths []string
 	JSONFields    string
 	Hostname      string
+	NoInteractive bool
+	Write         bool
 }
 
 type validationError struct {
@@ -50,10 +55,29 @@ func (w validationWarning) String() string {
 	return s
 }
 
+type jsonDependency struct {
+	NWO      string `json:"nwo"`
+	Ref      string `json:"ref"`
+	SHA      string `json:"sha"`
+	HashAlgo string `json:"hash_algo,omitempty"`
+	File     string `json:"file"`
+	Direct   bool   `json:"direct"`
+}
+
 type validationResult struct {
-	Valid    bool                `json:"valid"`
-	Errors  []validationError   `json:"errors"`
-	Warnings []validationWarning `json:"warnings"`
+	Valid        bool                `json:"valid"`
+	Errors       []validationError   `json:"errors"`
+	Warnings     []validationWarning `json:"warnings"`
+	Dependencies []jsonDependency    `json:"dependencies,omitempty"`
+	Workflows    []jsonWorkflow      `json:"workflows,omitempty"`
+}
+
+type jsonWorkflow struct {
+	Path         string              `json:"path"`
+	Valid        bool                `json:"valid"`
+	Dependencies []jsonDependency    `json:"dependencies,omitempty"`
+	Errors       []validationError   `json:"errors"`
+	Warnings     []validationWarning `json:"warnings"`
 }
 
 func newCheckCmd() *cobra.Command {
@@ -72,6 +96,10 @@ func newCheckCmd() *cobra.Command {
 			under .github/workflows/.
 			Local path actions (uses: ./path) are currently skipped.
 
+			When run interactively (TTY, not CI), check will offer to fix issues
+			it finds. Use --no-interactive to suppress prompts, or --write to
+			auto-apply safe fixes without prompting.
+
 			Detects:
 			  TAMPERED      - SHA does not match live resolution
 			  MISSING       - uses: ref has no dependencies: entry
@@ -88,6 +116,15 @@ func newCheckCmd() *cobra.Command {
 
 			# Output JSON for CI
 			$ gh actions-pin check --json valid,errors
+
+			# Auto-pin unpinned workflows without prompting
+			$ gh actions-pin check --write
+
+			# Report-only mode (no prompts, no changes)
+			$ gh actions-pin check --no-interactive
+
+			# JSON diagnostic findings
+			$ gh actions-pin check --json findings
 		`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -97,8 +134,10 @@ func newCheckCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings)")
+	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
+	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
+	cmd.Flags().BoolVar(&opts.Write, "write", false, "Auto-apply safe fixes (unpinned workflows only)")
 	return cmd
 }
 
@@ -133,6 +172,7 @@ func runCheck(opts *checkOptions) error {
 	total := len(opts.WorkflowPaths)
 	aggregate := &validationResult{Valid: true}
 	var skipped, valid, failed int
+	var remediationPaths []string // files that need doctor attention
 
 	if opts.JSONFields == "" && !singleFile {
 		output.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
@@ -148,20 +188,34 @@ func runCheck(opts *checkOptions) error {
 			}
 			if errors.Is(err, errNoDeps) {
 				skipped++
+				remediationPaths = append(remediationPaths, workflowPath)
 				w := validationWarning{
-					Details:      "not yet pinned (run `gh actions-pin doctor` to fix)",
+					Details:      "not yet pinned (run `gh actions-pin` interactively to fix)",
 					WorkflowPath: workflowPath,
 				}
 				aggregate.Warnings = append(aggregate.Warnings, w)
+				aggregate.Workflows = append(aggregate.Workflows, jsonWorkflow{
+					Path:     workflowPath,
+					Valid:    true,
+					Warnings: []validationWarning{w},
+					Errors:   []validationError{},
+				})
 				logOutput.Warning("%s", w.String())
 				continue
 			}
 			failed++
 			aggregate.Valid = false
-			aggregate.Errors = append(aggregate.Errors, validationError{
+			ve := validationError{
 				Type:       "ERROR",
 				Dependency: workflowPath,
 				Details:    err.Error(),
+			}
+			aggregate.Errors = append(aggregate.Errors, ve)
+			aggregate.Workflows = append(aggregate.Workflows, jsonWorkflow{
+				Path:     workflowPath,
+				Valid:    false,
+				Errors:   []validationError{ve},
+				Warnings: []validationWarning{},
 			})
 			logOutput.Error("%s: %s", workflowPath, err)
 			continue
@@ -169,11 +223,24 @@ func runCheck(opts *checkOptions) error {
 		if !result.Valid {
 			failed++
 			aggregate.Valid = false
+			remediationPaths = append(remediationPaths, workflowPath)
 		} else {
 			valid++
+			// Pinned but has warnings (e.g., SHA-as-ref) — still needs remediation.
+			if len(result.Warnings) > 0 {
+				remediationPaths = append(remediationPaths, workflowPath)
+			}
 		}
 		aggregate.Errors = append(aggregate.Errors, result.Errors...)
 		aggregate.Warnings = append(aggregate.Warnings, result.Warnings...)
+		aggregate.Dependencies = append(aggregate.Dependencies, result.Dependencies...)
+		aggregate.Workflows = append(aggregate.Workflows, jsonWorkflow{
+			Path:         workflowPath,
+			Valid:        result.Valid,
+			Dependencies: result.Dependencies,
+			Errors:       result.Errors,
+			Warnings:     result.Warnings,
+		})
 	}
 
 	output.StopProgress()
@@ -249,7 +316,7 @@ func runCheck(opts *checkOptions) error {
 		}
 
 		parts := []string{}
-		for _, t := range []string{"TAMPERED", "MISSING", "STALE", "SHA_MISMATCH", "UNREACHABLE", "ERROR"} {
+		for _, t := range []string{"TAMPERED", "REF_CHANGED", "MISSING", "STALE", "SHA_MISMATCH", "UNREACHABLE", "ERROR"} {
 			if n, ok := typeCounts[t]; ok {
 				parts = append(parts, fmt.Sprintf("%d %s", n, strings.ToLower(t)))
 			}
@@ -282,6 +349,10 @@ func runCheck(opts *checkOptions) error {
 		}
 		fmt.Fprintln(os.Stderr)
 	}
+	// Determine if remediation will run (to suppress verbose unpinned listings).
+	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && isTerminal()
+	willRemediate := interactive || opts.Write
+
 	if len(aggregate.Warnings) > 0 {
 		// Group warnings by key (same dependency+details) and collect workflow files.
 		type groupedWarning struct {
@@ -290,7 +361,16 @@ func runCheck(opts *checkOptions) error {
 		}
 		var order []string
 		groups := map[string]*groupedWarning{}
+		var unpinnedFiles []string
 		for _, w := range aggregate.Warnings {
+			// When remediation will run, collect unpinned warnings
+			// for a one-line summary instead of listing every file.
+			if willRemediate && strings.Contains(w.Details, "not yet pinned") {
+				if w.WorkflowPath != "" {
+					unpinnedFiles = append(unpinnedFiles, w.WorkflowPath)
+				}
+				continue
+			}
 			key := w.warningKey()
 			if g, ok := groups[key]; ok {
 				if w.WorkflowPath != "" {
@@ -304,6 +384,10 @@ func runCheck(opts *checkOptions) error {
 				}
 				groups[key] = g
 			}
+		}
+		if len(unpinnedFiles) > 0 {
+			output.Warning("%d %s not yet pinned — will offer to fix below",
+				len(unpinnedFiles), ui.Pluralize(len(unpinnedFiles), "workflow", "workflows"))
 		}
 		for _, key := range order {
 			g := groups[key]
@@ -324,7 +408,19 @@ func runCheck(opts *checkOptions) error {
 				output.Detail("  ↳ this comes from a composite action's internal dependency")
 				output.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", output.Bold(repoNWO))
 			} else {
-				output.Warning("%s", w.String())
+				// Direct dependency pinned to bare SHA — be explicit about the risk.
+				nwo := w.Dependency
+				if idx := strings.Index(nwo, "@"); idx > 0 {
+					nwo = nwo[:idx]
+				}
+				nwoParts := strings.SplitN(nwo, "/", 3)
+				repoNWO := nwo
+				if len(nwoParts) >= 2 {
+					repoNWO = nwoParts[0] + "/" + nwoParts[1]
+				}
+				output.Warning("%s: pinned to a bare SHA without a tag ref — weakens supply-chain security", w.Dependency)
+				output.Detail("  ↳ cannot verify commit origin; pin to a tagged release instead")
+				output.Detail("  ↳ releases: https://github.com/%s/releases", repoNWO)
 			}
 			for _, f := range g.files {
 				output.Detail("  in %s", f)
@@ -333,6 +429,71 @@ func runCheck(opts *checkOptions) error {
 	}
 	if logFile != nil {
 		output.Hint("Full log: %s", logFile.Name())
+	}
+
+	// JSON mode for findings: run doctor.Diagnose and output findings JSON.
+	if opts.JSONFields == "findings" {
+		report := doctor.Diagnose(opts.WorkflowPaths, r)
+		return writeDoctorJSON(report)
+	}
+
+	if opts.JSONFields != "" {
+		// Other JSON fields already handled above; nothing more to do.
+		return nil
+	}
+
+	// Remediation tail: offer to fix issues when interactive.
+	if willRemediate && len(remediationPaths) > 0 {
+		output.StartProgress(fmt.Sprintf("Diagnosing %d %s for remediation",
+			len(remediationPaths), ui.Pluralize(len(remediationPaths), "workflow", "workflows")))
+		report := doctor.Diagnose(remediationPaths, r)
+		output.StopProgress()
+		actionable := report.WorkflowsNeedingAttention()
+		if len(actionable) > 0 {
+			hostname := resolveHostname(opts.Hostname)
+			restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
+			if err != nil {
+				return fmt.Errorf("creating REST client: %w", err)
+			}
+
+			var prompter doctor.Prompter
+			if !interactive {
+				prompter = &doctor.NoopPrompter{}
+			} else {
+				prompter = doctor.NewHuhPrompter()
+			}
+
+			var repoOwner string
+			if currentRepo, err := repository.Current(); err == nil {
+				repoOwner = currentRepo.Owner
+			}
+
+			rem := doctor.NewRemediator(prompter, r, restClient, output, doctor.RemediateOptions{
+				Write:       opts.Write,
+				Interactive: interactive,
+				RepoOwner:   repoOwner,
+			})
+
+			if err := rem.Remediate(report); err != nil {
+				if errors.Is(err, doctor.ErrAborted) {
+					fmt.Fprintln(os.Stderr)
+					output.Info("Interrupted — no further changes applied")
+					return nil
+				}
+				return err
+			}
+
+			fmt.Fprintln(os.Stderr)
+			if rem.Fixed > 0 {
+				output.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
+			}
+			if rem.Skipped > 0 {
+				output.Skip("%d %s skipped", rem.Skipped, ui.Pluralize(rem.Skipped, "issue", "issues"))
+			}
+			if rem.Alerted > 0 {
+				output.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
+			}
+		}
 	}
 
 	if !aggregate.Valid {
@@ -372,6 +533,19 @@ func validateOneFile(workflowPath string, r *resolver.Resolver, log *ui.UI) (*va
 	result := &validationResult{
 		Valid: true,
 	}
+
+	// Build dependency inventory for JSON output.
+	for _, dep := range existingDeps {
+		result.Dependencies = append(result.Dependencies, jsonDependency{
+			NWO:      dep.NWO,
+			Ref:      dep.Ref,
+			SHA:      dep.SHA,
+			HashAlgo: dep.HashAlgo,
+			File:     workflowPath,
+			Direct:   directNWOs[dep.NWO],
+		})
+	}
+
 	for _, pw := range parseWarnings {
 		result.Warnings = append(result.Warnings, validationWarning{
 			Details:      pw,
@@ -380,19 +554,32 @@ func validateOneFile(workflowPath string, r *resolver.Resolver, log *ui.UI) (*va
 	}
 
 	depsByKey := make(map[string]lockfile.Dependency)
+	depsByNWO := make(map[string]lockfile.Dependency)
 	for _, dep := range existingDeps {
 		depsByKey[dep.Key()] = dep
+		depsByNWO[dep.NWO] = dep
 	}
 
 	for _, ref := range refs {
 		key := ref.FullName() + "@" + ref.Ref
 		if _, ok := depsByKey[key]; !ok {
-			result.Valid = false
-			result.Errors = append(result.Errors, validationError{
-				Type:       "MISSING",
-				Dependency: key,
-				Details:    "used in workflow but not in dependencies: section",
-			})
+			nwo := ref.NWO()
+			if oldDep, found := depsByNWO[nwo]; found && oldDep.Ref != ref.Ref {
+				// Ref changed (e.g. v6.2.0 → v6) — report as ref change, not missing.
+				result.Valid = false
+				result.Errors = append(result.Errors, validationError{
+					Type:       "REF_CHANGED",
+					Dependency: key,
+					Details:    fmt.Sprintf("ref changed from %s to %s — re-pin to update", oldDep.Ref, ref.Ref),
+				})
+			} else {
+				result.Valid = false
+				result.Errors = append(result.Errors, validationError{
+					Type:       "MISSING",
+					Dependency: key,
+					Details:    "used in workflow but not in dependencies: section",
+				})
+			}
 		}
 	}
 
@@ -554,12 +741,56 @@ func writeValidationJSON(result *validationResult, fieldsCSV string) error {
 			payload[field] = result.Errors
 		case "warnings":
 			payload[field] = result.Warnings
+		case "dependencies":
+			payload[field] = result.Dependencies
+		case "workflows":
+			payload[field] = result.Workflows
 		default:
-			return fmt.Errorf("unknown JSON field %q (expected valid, errors, warnings)", field)
+			return fmt.Errorf("unknown JSON field %q (expected valid, errors, warnings, dependencies, workflows)", field)
 		}
 	}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(payload)
+}
+
+func isTerminal() bool {
+	return term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+func writeDoctorJSON(report *doctor.Report) error {
+	type jsonFinding struct {
+		Workflow    string `json:"workflow"`
+		Category    string `json:"category"`
+		Severity    string `json:"severity"`
+		Dependency  string `json:"dependency,omitempty"`
+		Detail      string `json:"detail"`
+		Remediation string `json:"remediation,omitempty"`
+	}
+
+	var findings []jsonFinding
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			jf := jsonFinding{
+				Workflow:    f.WorkflowPath,
+				Category:    string(f.Category),
+				Severity:    string(f.Severity),
+				Detail:      f.Detail,
+				Remediation: f.Remediation,
+			}
+			if f.Dependency != nil {
+				jf.Dependency = f.Dependency.Key()
+			} else if f.ActionRef != nil {
+				jf.Dependency = f.ActionRef.FullName() + "@" + f.ActionRef.Ref
+			}
+			findings = append(findings, jf)
+		}
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]interface{}{
+		"findings": findings,
+	})
 }

@@ -12,6 +12,8 @@ const (
 	CategorySHAAsRef Category = "sha_as_ref"
 	// CategoryStale means the pinned SHA no longer matches what the ref resolves to.
 	CategoryStale Category = "stale"
+	// CategoryRefChanged means the uses: ref was manually changed (e.g. v6.2.0 → v6).
+	CategoryRefChanged Category = "ref_changed"
 	// CategoryUnreachable means the pinned SHA is not reachable from its ref.
 	CategoryUnreachable Category = "unreachable"
 	// CategoryTampered means the ref was changed in the workflow but not in the lockfile.

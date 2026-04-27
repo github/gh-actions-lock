@@ -57,7 +57,7 @@ type TagLister struct {
 // Tags with a known release date younger than the threshold are excluded
 // from suggestions and curated picks.
 type CooldownConfig struct {
-	DefaultDays int            // global default (0 = no filtering)
+	DefaultDays   int            // global default (0 = no filtering)
 	RepoOverrides map[string]int // "owner/repo" → days override
 }
 
@@ -255,7 +255,7 @@ func LoadCooldownConfig() CooldownConfig {
 	}
 
 	var file struct {
-		CooldownDays int            `yaml:"cooldown_days"`
+		CooldownDays int `yaml:"cooldown_days"`
 		Repos        map[string]struct {
 			CooldownDays int `yaml:"cooldown_days"`
 		} `yaml:"repos"`

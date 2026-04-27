@@ -460,14 +460,19 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 
 		lineIndex := valueNode.Line - 1
 		if lineIndex >= 0 && lineIndex < len(lines) && strings.Contains(lines[lineIndex], oldValue) {
-			lines[lineIndex] = strings.Replace(lines[lineIndex], oldValue, newValue, 1)
+			// Replace the entire uses: value portion of the line (nukes stale comments).
+			if idx := strings.Index(lines[lineIndex], oldValue); idx >= 0 {
+				lines[lineIndex] = lines[lineIndex][:idx] + newValue
+			}
 			changed++
 			return
 		}
 
 		for i := range lines {
 			if strings.Contains(lines[i], oldValue) {
-				lines[i] = strings.Replace(lines[i], oldValue, newValue, 1)
+				if idx := strings.Index(lines[i], oldValue); idx >= 0 {
+					lines[i] = lines[i][:idx] + newValue
+				}
 				changed++
 				return
 			}

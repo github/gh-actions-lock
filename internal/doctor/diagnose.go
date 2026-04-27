@@ -2,8 +2,6 @@ package doctor
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -13,25 +11,6 @@ import (
 )
 
 var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
-
-// DiscoverWorkflows finds all workflow YAML files under .github/workflows/.
-func DiscoverWorkflows() ([]string, error) {
-	pattern := filepath.Join(".github", "workflows", "*.yml")
-	ymlFiles, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
-	}
-	yamlPattern := filepath.Join(".github", "workflows", "*.yaml")
-	yamlFiles, err := filepath.Glob(yamlPattern)
-	if err != nil {
-		return nil, err
-	}
-	all := append(ymlFiles, yamlFiles...)
-	if len(all) == 0 {
-		return nil, fmt.Errorf("no workflow files found in .github/workflows/")
-	}
-	return all, nil
-}
 
 // Diagnose scans a set of workflows and produces findings for each.
 // It performs no output — purely analytical.
@@ -111,7 +90,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				Category:     CategoryNotPinned,
 				Severity:     SeverityError,
 				Detail:       fmt.Sprintf("%d %s not pinned", len(tagRefs), ui.Pluralize(len(tagRefs), "action", "actions")),
-				Remediation:  "pin with `gh actions-pin doctor`",
+				Remediation:  "pin with `gh actions-pin`",
 			})
 		}
 
@@ -168,8 +147,10 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		depsByKey[dep.Key()] = dep
 	}
 	liveByKey := make(map[string]lockfile.Dependency)
+	liveByNWO := make(map[string]lockfile.Dependency)
 	for _, dep := range liveDeps {
 		liveByKey[dep.Key()] = dep
+		liveByNWO[dep.NWO] = dep
 	}
 
 	// Check each existing dep against live resolution.
@@ -181,13 +162,40 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 
 		live, ok := liveByKey[existing.Key()]
 		if !ok {
+			// Check if the same NWO exists with a different ref — that's a direct ref change.
+			if directNWOs[existing.NWO] {
+				if newDep, found := liveByNWO[existing.NWO]; found && newDep.Ref != existing.Ref {
+					newCopy := newDep
+					nwoParts := strings.SplitN(existing.NWO, "/", 3)
+					var refOwner, refRepo string
+					if len(nwoParts) >= 2 {
+						refOwner, refRepo = nwoParts[0], nwoParts[1]
+					}
+					wr.Findings = append(wr.Findings, Finding{
+						WorkflowPath: path,
+						Category:     CategoryRefChanged,
+						Severity:     SeverityWarning,
+						Dependency:   &existing,
+						ActionRef: &lockfile.ActionRef{
+							Owner: refOwner,
+							Repo:  refRepo,
+							Ref:   newCopy.Ref,
+						},
+						Detail:      fmt.Sprintf("ref changed from %s to %s in workflow — re-pin to update", existing.Ref, newCopy.Ref),
+						Remediation: "re-pin to match the new ref",
+					})
+					continue
+				}
+			}
+			// Dep is no longer in the workflow (removed action or changed transitive).
+			// Auto-clean via re-resolve.
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
 				Category:     CategoryStale,
-				Severity:     SeverityWarning,
+				Severity:     SeverityInfo,
 				Dependency:   &existing,
-				Detail:       "in dependencies: but no longer discoverable from workflow",
-				Remediation:  "re-pin or remove stale dependency",
+				Detail:       "no longer in workflow — will be cleaned up",
+				Remediation:  "re-resolve to remove orphaned dependency",
 			})
 			continue
 		}
@@ -212,10 +220,22 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 	}
 
+	// Build set of NWOs with ref-changed findings to avoid duplicate "not pinned" findings.
+	refChangedNWOs := make(map[string]bool)
+	for _, f := range wr.Findings {
+		if f.Category == CategoryRefChanged && f.Dependency != nil {
+			refChangedNWOs[f.Dependency.NWO] = true
+		}
+	}
+
 	// Check for missing deps (action in workflow but not pinned).
 	for _, ref := range refs {
 		key := ref.FullName() + "@" + ref.Ref
 		if _, ok := depsByKey[key]; !ok {
+			// Skip if this NWO already has a ref-changed finding.
+			if refChangedNWOs[ref.NWO()] {
+				continue
+			}
 			refCopy := ref
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
@@ -223,7 +243,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				Severity:     SeverityError,
 				ActionRef:    &refCopy,
 				Detail:       "used in workflow but not pinned",
-				Remediation:  "pin with `gh actions-pin doctor`",
+				Remediation:  "pin with `gh actions-pin`",
 			})
 		}
 	}
@@ -268,17 +288,4 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	return wr
 }
 
-// discoverWorkflowsFromDir discovers workflows from a directory.
-// If paths is empty, auto-discovers from .github/workflows/.
-func ResolveWorkflowPaths(paths []string) ([]string, error) {
-	if len(paths) > 0 {
-		// Validate that all paths exist.
-		for _, p := range paths {
-			if _, err := os.Stat(p); err != nil {
-				return nil, fmt.Errorf("workflow not found: %s", p)
-			}
-		}
-		return paths, nil
-	}
-	return DiscoverWorkflows()
-}
+

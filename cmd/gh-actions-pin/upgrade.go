@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,6 +26,7 @@ type upgradeOptions struct {
 	Write         bool
 	Diff          bool
 	Hostname      string
+	JSONFields    string
 	Prompter      doctor.Prompter
 }
 
@@ -32,6 +34,19 @@ type upgradeTarget struct {
 	Match      string
 	CurrentRef string
 	TargetRef  string
+}
+
+type jsonUpgradeChange struct {
+	NWO    string   `json:"nwo"`
+	OldRef string   `json:"old_ref"`
+	NewRef string   `json:"new_ref"`
+	OldSHA string   `json:"old_sha,omitempty"`
+	NewSHA string   `json:"new_sha,omitempty"`
+	Files  []string `json:"files"`
+}
+
+type jsonUpgradeResult struct {
+	Updated []jsonUpgradeChange `json:"updated"`
 }
 
 func newUpgradeCmd() *cobra.Command {
@@ -56,27 +71,27 @@ func newUpgradeCmd() *cobra.Command {
 			inline as owner/repo@ref. Use --from to limit upgrades to actions
 			currently on a specific ref.
 
-			In non-interactive mode, pass --write to apply changes. In interactive
-			mode, you'll be prompted to confirm.
+			In non-interactive mode, changes are applied by default. Pass
+			--write=false to preview only.
 		`),
 		Example: heredoc.Doc(`
 			# Interactive: pick which actions to upgrade
 			$ gh actions-pin upgrade
 
-			# Preview upgrading checkout to the latest stable tag
+			# Upgrade checkout to the latest stable tag
 			$ gh actions-pin upgrade --action actions/checkout
 
-			# Apply that upgrade to disk
-			$ gh actions-pin upgrade --action actions/checkout --write
-
 			# Upgrade to a specific version
-			$ gh actions-pin upgrade --action actions/checkout --version v5 --write
+			$ gh actions-pin upgrade --action actions/checkout --version v5
 
 			# Upgrade only checkout refs currently on v5 to v6
-			$ gh actions-pin upgrade --action actions/checkout --from v5 --version v6 --write
+			$ gh actions-pin upgrade --action actions/checkout --from v5 --version v6
 
 			# Use inline target refs for mixed upgrades
-			$ gh actions-pin upgrade --action actions/checkout@v6 --action actions/setup-go@v6 --write
+			$ gh actions-pin upgrade --action actions/checkout@v6 --action actions/setup-go@v6
+
+			# Preview without writing
+			$ gh actions-pin upgrade --action actions/checkout --write=false
 		`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -87,9 +102,13 @@ func newUpgradeCmd() *cobra.Command {
 			if len(opts.Actions) == 0 {
 				// Interactive mode — must be a TTY.
 				if !p.IsInteractive() {
-					return fmt.Errorf("--action is required in non-interactive mode\n\n  gh actions-pin upgrade --action actions/checkout --write")
+					return fmt.Errorf("--action is required in non-interactive mode\n\n  gh actions-pin upgrade --action actions/checkout")
 				}
 				return runUpgradeInteractive(opts)
+			}
+			// Non-interactive: write by default unless --write=false was explicit.
+			if !cmd.Flags().Changed("write") {
+				opts.Write = true
 			}
 			return runUpgrade(opts)
 		},
@@ -101,6 +120,7 @@ func newUpgradeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Diff, "diff", true, "Show the full dependency diff vs existing pins")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the upgraded refs and dependencies back to the workflow file")
+	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (updated)")
 
 	return cmd
 }
@@ -123,20 +143,34 @@ func runUpgrade(opts *upgradeOptions) error {
 	}
 
 	var hadError bool
+	var allChanges []jsonUpgradeChange
 	for _, workflowPath := range opts.WorkflowPaths {
-		if len(opts.WorkflowPaths) > 1 {
-			output.Header("%s", workflowPath)
-		}
-		if err := upgradeOneFile(opts, workflowPath, r, targets); err != nil {
+		changes, err := upgradeOneFile(opts, workflowPath, r, targets)
+		if err != nil {
 			output.Error("%s: %s", workflowPath, err)
 			hadError = true
 		}
+		allChanges = append(allChanges, changes...)
+	}
+
+	if opts.JSONFields != "" {
+		return writeUpgradeJSON(allChanges)
 	}
 
 	if hadError {
 		return errSilent
 	}
 	return nil
+}
+
+func writeUpgradeJSON(changes []jsonUpgradeChange) error {
+	result := jsonUpgradeResult{Updated: changes}
+	if result.Updated == nil {
+		result.Updated = []jsonUpgradeChange{}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
 }
 
 // upgradeCandidate represents an action that can be upgraded.
@@ -388,7 +422,7 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 		} else {
 			current := strings.Join(c.CurrentRefs, ", ")
 			output.Info("%s: %s → %s", c.NWO, current, c.LatestRef)
-			output.Detail("Release notes: https://github.com/%s/releases", c.NWO)
+			output.Detail("Release notes: https://github.com/%s/releases/tag/%s", c.NWO, c.LatestRef)
 		}
 		for _, f := range c.Files {
 			output.Detail("in %s", f)
@@ -426,15 +460,15 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 	return runUpgrade(applyOpts)
 }
 
-func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) error {
+func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	existingDeps, err := wf.ReadDependencies()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	refs, _, warnings := wf.ExtractActionRefs()
@@ -443,15 +477,14 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 	}
 
 	if len(refs) == 0 {
-		output.Skip("No repository action references found in %s", workflowPath)
-		return nil
+		return nil, nil
 	}
 
 	replacements := make(map[string]string)
 	var matched []lockfile.ActionRef
 	seenPlans := make(map[string]struct{})
 
-	output.Info("Planning upgrade(s)...")
+	var planLines []string
 	for _, ref := range refs {
 		target, ok := matchingUpgradeTarget(ref, targets)
 		if !ok {
@@ -465,7 +498,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		if targetRef == "" {
 			targetRef, err = r.LatestRef(ref.Owner, ref.Repo)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -479,28 +512,28 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		}
 		seenPlans[planKey] = struct{}{}
 		if ref.Ref == targetRef {
-			output.Detail("%s already at %s", ref.FullName(), targetRef)
+			planLines = append(planLines, fmt.Sprintf("%s already at %s", ref.FullName(), targetRef))
 		} else {
-			output.Detail("%s: %s -> %s", ref.FullName(), ref.Ref, targetRef)
+			planLines = append(planLines, fmt.Sprintf("%s: %s -> %s", ref.FullName(), ref.Ref, targetRef))
 		}
 	}
 
 	if len(matched) == 0 {
-		var names []string
-		for _, target := range targets {
-			names = append(names, target.Match)
-		}
-		output.Skip("No references to %s found in %s", strings.Join(names, ", "), workflowPath)
-		return nil
+		return nil, nil
+	}
+
+	output.Header("%s", workflowPath)
+	for _, line := range planLines {
+		output.Detail("%s", line)
 	}
 
 	updatedContent, _, err := wf.RewriteActionRefs(replacements)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	upgradedWF, err := lockfile.Parse(workflowPath, updatedContent)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	upgradedRefs, _, upgradedWarnings := upgradedWF.ExtractActionRefs()
@@ -515,7 +548,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 
 	deps, err := r.ResolveAllRecursive(upgradedRefs)
 	if err != nil {
-		return fmt.Errorf("resolving actions: %w", err)
+		return nil, fmt.Errorf("resolving actions: %w", err)
 	}
 
 	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
@@ -524,7 +557,40 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 			output.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
 			output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 		}
-		return fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
+		return nil, fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
+	}
+
+	// Preserve existing refs for unchanged deps. Re-resolution of transitive
+	// deps often returns a bare SHA as the ref (from the parent action.yml),
+	// losing the human-readable tag we already have in the lockfile.
+	oldByNWO := make(map[string]lockfile.Dependency)
+	for _, dep := range existingDeps {
+		oldByNWO[dep.NWO] = dep
+	}
+	for i, dep := range deps {
+		if old, ok := oldByNWO[dep.NWO]; ok && strings.EqualFold(old.SHA, dep.SHA) && old.Ref != dep.Ref {
+			deps[i].Ref = old.Ref
+		}
+	}
+
+	var changes []jsonUpgradeChange
+	seen := make(map[string]bool)
+	for _, dep := range deps {
+		if seen[dep.NWO] {
+			continue
+		}
+		seen[dep.NWO] = true
+		old := oldByNWO[dep.NWO]
+		if old.Ref != dep.Ref || old.SHA != dep.SHA {
+			changes = append(changes, jsonUpgradeChange{
+				NWO:    dep.NWO,
+				OldRef: old.Ref,
+				NewRef: dep.Ref,
+				OldSHA: old.SHA,
+				NewSHA: dep.SHA,
+				Files:  []string{workflowPath},
+			})
+		}
 	}
 
 	if opts.Diff {
@@ -538,22 +604,22 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		}
 		applyHint := buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, true)
 		output.Info("%s", previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
-		return nil
+		return changes, nil
 	}
 
 	written, err := upgradedWF.WriteDependencies(deps)
 	if err != nil {
-		return fmt.Errorf("writing dependencies: %w", err)
+		return nil, fmt.Errorf("writing dependencies: %w", err)
 	}
 	if err := os.WriteFile(workflowPath, written, 0o644); err != nil {
-		return fmt.Errorf("writing file: %w", err)
+		return nil, fmt.Errorf("writing file: %w", err)
 	}
 
-	output.Success("Upgraded and pinned %d dependencies in %s", len(deps), workflowPath)
-	for _, dep := range deps {
-		output.Detail("%s", dep.String())
+	output.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
+	for _, c := range changes {
+		output.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
 	}
-	return nil
+	return changes, nil
 }
 
 func actionMatchesFilter(nwo, filter string) bool {
@@ -562,7 +628,6 @@ func actionMatchesFilter(nwo, filter string) bool {
 	}
 	return strings.HasPrefix(nwo, filter+"/")
 }
-
 
 func showDiff(hostname string, old, new []lockfile.Dependency) {
 	oldMap := make(map[string]lockfile.Dependency)
