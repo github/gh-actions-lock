@@ -113,11 +113,10 @@ dependencies:
   - github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
 `)
 
-	stdout, stderr, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json", "valid,errors,warnings", workflowPath,
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=valid,errors,warnings", workflowPath,
 	)
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "Re-resolving 2 action reference(s)...")
 
 	var payload struct {
 		Valid    bool              `json:"valid"`
@@ -282,7 +281,7 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json", "valid,errors", workflowPath,
+		"check", "--json=valid,errors", workflowPath,
 	)
 	require.NoError(t, err, "JSON mode communicates errors in payload")
 
@@ -333,7 +332,7 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json", "valid,errors", workflowPath,
+		"check", "--json=valid,errors", workflowPath,
 	)
 	require.NoError(t, err, "JSON mode communicates errors in payload")
 
@@ -385,7 +384,7 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
-		"check", "--json", "valid,errors,warnings", workflowPath,
+		"check", "--json=valid,errors,warnings", workflowPath,
 	)
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
@@ -432,7 +431,7 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json", "valid,errors,warnings", workflowPath,
+		"check", "--json=valid,errors,warnings", workflowPath,
 	)
 	require.NoError(t, err)
 

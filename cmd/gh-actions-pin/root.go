@@ -14,8 +14,6 @@ import (
 )
 
 var errSilent = errors.New("silent error")
-var errNoDeps = errors.New("no dependencies: section found")
-var errNoActions = errors.New("no action references found")
 var newResolver = resolver.New
 var output = ui.New()
 
@@ -25,21 +23,30 @@ func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "actions-pin [<workflow-path>...]",
 		Args:          cobra.ArbitraryArgs,
-		Short:         "Verify pinned GitHub Actions workflow dependencies",
+		Short:         "Lock and verify GitHub Actions dependencies",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: heredoc.Doc(`
-Re-resolve all action dependencies in workflow files and compare them
-against the pinned SHAs in the dependencies: section.
+Lock and verify GitHub Actions dependencies to protect your workflows
+from supply chain attacks.
 
-With no arguments, the extension discovers and validates all workflows
-under .github/workflows/. When run interactively, it offers to fix
-issues it finds.
+Actions are resolved by mutable tags and branches at runtime. This
+extension pins every direct and transitive dependency to an immutable
+commit SHA in an inline dependencies: section, so changes are visible
+in pull request diffs and tampered or hijacked actions are caught
+before they run.
 
-Use subcommands to manage your workflow's dependencies:
+Scans all workflows under .github/workflows/ by default. When run
+interactively it offers to fix any issues it finds.
 
-  gh actions-pin             Verify the lock section, fix interactively
-  gh actions-pin upgrade     Bump action refs and repin them
+With --json, structured results go to stdout and progress to stderr:
+
+  gh actions-pin --json 2>/dev/null | jq .valid
+
+Commands:
+
+  gh actions-pin             Verify and fix the dependency lock
+  gh actions-pin upgrade     Bump action versions and re-lock
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows
@@ -48,14 +55,14 @@ $ gh actions-pin
 # Verify a specific workflow
 $ gh actions-pin .github/workflows/ci.yml
 
-# Output JSON for CI
-$ gh actions-pin --json valid,errors
+# Output JSON for CI integration
+$ gh actions-pin --json=valid,errors
 
-# Auto-pin unpinned workflows
-$ gh actions-pin --write
+# Auto-fix all issues without prompting
+$ gh actions-pin --accept-all
 
 # Upgrade a specific action
-$ gh actions-pin upgrade --action actions/checkout --write
+$ gh actions-pin upgrade --action actions/checkout
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -66,9 +73,10 @@ $ gh actions-pin upgrade --action actions/checkout --write
 	}
 
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
+	cmd.Flags().Lookup("json").NoOptDefVal = "valid,errors,warnings,dependencies,workflows"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
-	cmd.Flags().BoolVar(&opts.Write, "write", false, "Auto-apply safe fixes (unpinned workflows only)")
+	cmd.Flags().BoolVar(&opts.Write, "accept-all", false, "Auto-apply all safe fixes without prompting")
 	cmd.AddCommand(newCheckCmd())
 	cmd.AddCommand(newUpgradeCmd())
 
