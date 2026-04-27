@@ -192,6 +192,11 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			rem.output.Error("%s", finding.Detail)
 			rem.output.Hint("This may indicate a fork-network injection attack. Do not auto-fix.")
 			rem.Alerted++
+
+		case CategorySHAMismatch:
+			rem.output.Error("SHA_MISMATCH %s: %s", rem.depKey(finding), finding.Detail)
+			rem.output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
+			rem.Alerted++
 		}
 	}
 

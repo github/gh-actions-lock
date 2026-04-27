@@ -37,8 +37,9 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		return wr
 	}
 
-	refs, _, _ := wf.ExtractActionRefs()
+	refs, _, parseWarnings := wf.ExtractActionRefs()
 	wr.ActionRefs = refs
+	wr.ParseWarnings = parseWarnings
 
 	// No action refs → run-only workflow, nothing to do.
 	if len(refs) == 0 {
@@ -51,8 +52,20 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		return wr
 	}
 
-	existingDeps, err := wf.ReadDependencies()
-	if err != nil || len(existingDeps) == 0 {
+	existingDeps, depsErr := wf.ReadDependencies()
+	if depsErr != nil {
+		// Malformed dependencies: section — report as error, don't fold into "not pinned".
+		wr.Findings = append(wr.Findings, Finding{
+			WorkflowPath: path,
+			Category:     CategoryNotPinned,
+			Severity:     SeverityError,
+			Detail:       fmt.Sprintf("failed to read dependencies: %s", depsErr),
+			Remediation:  "fix or regenerate the dependencies: section with `gh actions-pin`",
+		})
+		return wr
+	}
+
+	if len(existingDeps) == 0 {
 		// No lockfile. Check if any action refs are already SHA-pinned —
 		// those should be SHAAsRef, not NotPinned.
 		var shaRefs, tagRefs []lockfile.ActionRef
@@ -64,7 +77,6 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			}
 		}
 
-		// Actions pinned to bare SHAs without a lockfile.
 		for _, ref := range shaRefs {
 			nwo := ref.NWO()
 			wr.Findings = append(wr.Findings, Finding{
@@ -83,7 +95,6 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			})
 		}
 
-		// Actions not pinned at all (tag/branch ref, no lockfile).
 		if len(tagRefs) > 0 {
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
@@ -95,21 +106,31 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 
 		if len(wr.Findings) == 0 {
-			// All refs are SHA-pinned, no tag refs — we already added SHAAsRef findings.
 			return wr
 		}
 	}
 	wr.Deps = existingDeps
 
-	// Check for SHA-as-ref anti-pattern in existing deps (direct only).
+	// Build direct NWO set from workflow uses: lines.
 	directNWOs := make(map[string]bool)
 	for _, ref := range refs {
 		directNWOs[ref.NWO()] = true
 	}
+
+	// Build dependency inventory with direct/transitive classification.
+	for _, dep := range existingDeps {
+		wr.Inventory = append(wr.Inventory, InventoryEntry{
+			Dep:    dep,
+			File:   path,
+			Direct: directNWOs[dep.NWO],
+		})
+	}
+
+	// Check for SHA-as-ref anti-pattern in existing deps (direct only).
 	for i := range existingDeps {
 		dep := &existingDeps[i]
 		if !directNWOs[dep.NWO] {
-			continue // transitive dep — user can't control it, skip
+			continue
 		}
 		if shaRefRE.MatchString(dep.Ref) {
 			parts := strings.SplitN(dep.NWO, "/", 3)
@@ -122,8 +143,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				Category:     CategorySHAAsRef,
 				Severity:     SeverityWarning,
 				Dependency:   dep,
-				Detail: fmt.Sprintf(
-					"pinned to a bare SHA without a tag ref — weakens supply-chain security"),
+				Detail:       "pinned to a bare SHA without a tag ref — weakens supply-chain security",
 				Remediation: fmt.Sprintf(
 					"pin to a tag instead: https://github.com/%s/%s/releases", owner, repo),
 			})
@@ -142,61 +162,101 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		return wr
 	}
 
+	// SHA_MISMATCH: detect refs that look like SHAs but resolve to different commits.
+	for _, mismatch := range lockfile.CheckSHARefMismatches(liveDeps) {
+		wr.Findings = append(wr.Findings, Finding{
+			WorkflowPath: path,
+			Category:     CategorySHAMismatch,
+			Severity:     SeverityError,
+			Dependency:   &mismatch.Dep,
+			Detail:       fmt.Sprintf("ref %s resolved to %s", mismatch.Dep.Ref, mismatch.ResolvedAs),
+		})
+	}
+
 	depsByKey := make(map[string]lockfile.Dependency)
 	for _, dep := range existingDeps {
 		depsByKey[dep.Key()] = dep
 	}
 	liveByKey := make(map[string]lockfile.Dependency)
-	liveByNWO := make(map[string]lockfile.Dependency)
+	// Multi-value NWO index for transitive fuzzy matching.
+	liveByNWO := make(map[string][]lockfile.Dependency)
 	for _, dep := range liveDeps {
 		liveByKey[dep.Key()] = dep
-		liveByNWO[dep.NWO] = dep
+		liveByNWO[dep.NWO] = append(liveByNWO[dep.NWO], dep)
 	}
 
 	// Check each existing dep against live resolution.
 	for _, existing := range existingDeps {
-		// Skip deps already flagged as SHA-as-ref.
 		if shaRefRE.MatchString(existing.Ref) {
 			continue
 		}
 
 		live, ok := liveByKey[existing.Key()]
 		if !ok {
-			// Check if the same NWO exists with a different ref — that's a direct ref change.
-			if directNWOs[existing.NWO] {
-				if newDep, found := liveByNWO[existing.NWO]; found && newDep.Ref != existing.Ref {
-					newCopy := newDep
-					nwoParts := strings.SplitN(existing.NWO, "/", 3)
-					var refOwner, refRepo string
-					if len(nwoParts) >= 2 {
-						refOwner, refRepo = nwoParts[0], nwoParts[1]
+			// Fuzzy match by NWO: same repo, same SHA or narrowed version.
+			if candidates, has := liveByNWO[existing.NWO]; has {
+				for _, cand := range candidates {
+					if strings.EqualFold(cand.SHA, existing.SHA) {
+						live = cand
+						ok = true
+						break
 					}
-					wr.Findings = append(wr.Findings, Finding{
-						WorkflowPath: path,
-						Category:     CategoryRefChanged,
-						Severity:     SeverityWarning,
-						Dependency:   &existing,
-						ActionRef: &lockfile.ActionRef{
-							Owner: refOwner,
-							Repo:  refRepo,
-							Ref:   newCopy.Ref,
-						},
-						Detail:      fmt.Sprintf("ref changed from %s to %s in workflow — re-pin to update", existing.Ref, newCopy.Ref),
-						Remediation: "re-pin to match the new ref",
-					})
-					continue
+					if IsNarrowedVersion(cand.Ref, existing.Ref) {
+						live = cand
+						ok = true
+						break
+					}
 				}
 			}
-			// Dep is no longer in the workflow (removed action or changed transitive).
-			// Auto-clean via re-resolve.
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategoryStale,
-				Severity:     SeverityInfo,
-				Dependency:   &existing,
-				Detail:       "no longer in workflow — will be cleaned up",
-				Remediation:  "re-resolve to remove orphaned dependency",
-			})
+		}
+		if !ok {
+			// Direct ref change?
+			if directNWOs[existing.NWO] {
+				if candidates, has := liveByNWO[existing.NWO]; has && len(candidates) > 0 {
+					newDep := candidates[0]
+					if newDep.Ref != existing.Ref {
+						nwoParts := strings.SplitN(existing.NWO, "/", 3)
+						var refOwner, refRepo string
+						if len(nwoParts) >= 2 {
+							refOwner, refRepo = nwoParts[0], nwoParts[1]
+						}
+						wr.Findings = append(wr.Findings, Finding{
+							WorkflowPath: path,
+							Category:     CategoryRefChanged,
+							Severity:     SeverityWarning,
+							Dependency:   &existing,
+							ActionRef: &lockfile.ActionRef{
+								Owner: refOwner,
+								Repo:  refRepo,
+								Ref:   newDep.Ref,
+							},
+							Detail:      fmt.Sprintf("ref changed from %s to %s in workflow — re-pin to update", existing.Ref, newDep.Ref),
+							Remediation: "re-pin to match the new ref",
+						})
+						continue
+					}
+				}
+			}
+			// Transitive dep no longer discovered, or stale direct dep.
+			if !directNWOs[existing.NWO] {
+				wr.Findings = append(wr.Findings, Finding{
+					WorkflowPath: path,
+					Category:     CategoryStale,
+					Severity:     SeverityInfo,
+					Dependency:   &existing,
+					Detail:       "transitive dependency no longer discovered from upstream composite action",
+					Remediation:  "re-resolve to clean up",
+				})
+			} else {
+				wr.Findings = append(wr.Findings, Finding{
+					WorkflowPath: path,
+					Category:     CategoryStale,
+					Severity:     SeverityInfo,
+					Dependency:   &existing,
+					Detail:       "no longer in workflow — will be cleaned up",
+					Remediation:  "re-resolve to remove orphaned dependency",
+				})
+			}
 			continue
 		}
 		if !strings.EqualFold(existing.SHA, live.SHA) {
@@ -232,7 +292,6 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	for _, ref := range refs {
 		key := ref.FullName() + "@" + ref.Ref
 		if _, ok := depsByKey[key]; !ok {
-			// Skip if this NWO already has a ref-changed finding.
 			if refChangedNWOs[ref.NWO()] {
 				continue
 			}
@@ -263,15 +322,32 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				Severity:     SeverityError,
 				Detail:       fmt.Sprintf("%s: SHA %s is NOT reachable from ref — possible fork injection", depID, rr.SHA[:12]),
 			})
+		case resolver.ReachabilityUnknown:
+			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
+			wr.Findings = append(wr.Findings, Finding{
+				WorkflowPath: path,
+				Category:     CategoryValid,
+				Severity:     SeverityWarning,
+				Detail:       rr.Detail,
+				Dependency: &lockfile.Dependency{
+					NWO: rr.Owner + "/" + rr.Repo,
+					Ref: rr.Ref,
+					SHA: rr.SHA,
+				},
+				Remediation: func() string {
+					if isTransitive {
+						return "transitive dependency pinned to a bare SHA — reachability cannot be verified"
+					}
+					return "reachability check inconclusive"
+				}(),
+			})
 		}
-		// ReachabilityUnknown for non-SHA-as-ref cases (e.g. API errors)
-		// are informational — already covered by SHA-as-ref findings if applicable.
 	}
 
 	// If no issues found, mark as valid.
 	hasIssues := false
 	for _, f := range wr.Findings {
-		if f.Category != CategoryValid && f.Category != CategoryRunOnly {
+		if f.Severity == SeverityError || (f.Category != CategoryValid && f.Category != CategoryRunOnly && f.Severity == SeverityWarning) {
 			hasIssues = true
 			break
 		}
@@ -287,5 +363,3 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 
 	return wr
 }
-
-

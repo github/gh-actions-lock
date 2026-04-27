@@ -16,6 +16,8 @@ const (
 	CategoryRefChanged Category = "ref_changed"
 	// CategoryUnreachable means the pinned SHA is not reachable from its ref.
 	CategoryUnreachable Category = "unreachable"
+	// CategorySHAMismatch means a ref looks like a SHA but resolves to a different commit.
+	CategorySHAMismatch Category = "sha_mismatch"
 	// CategoryTampered means the ref was changed in the workflow but not in the lockfile.
 	CategoryTampered Category = "tampered"
 	// CategoryValid means the dependency is pinned and verified.
@@ -52,6 +54,13 @@ type Finding struct {
 	Remediation string
 }
 
+// InventoryEntry describes a single dependency with context.
+type InventoryEntry struct {
+	Dep    lockfile.Dependency
+	File   string
+	Direct bool
+}
+
 // WorkflowReport aggregates all findings for a single workflow file.
 type WorkflowReport struct {
 	Path     string
@@ -60,13 +69,17 @@ type WorkflowReport struct {
 	ActionRefs []lockfile.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []lockfile.Dependency
+	// Inventory lists all dependencies with direct/transitive classification.
+	Inventory []InventoryEntry
+	// ParseWarnings from ExtractActionRefs (e.g. malformed uses: lines).
+	ParseWarnings []string
 }
 
 // NeedsAttention returns true if this workflow has any non-OK findings.
 func (r *WorkflowReport) NeedsAttention() bool {
 	for _, f := range r.Findings {
 		switch f.Category {
-		case CategoryValid, CategoryRunOnly:
+		case CategoryValid, CategoryRunOnly, CategorySHAMismatch:
 			continue
 		default:
 			return true
