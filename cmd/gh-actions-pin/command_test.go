@@ -114,19 +114,17 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,errors,warnings", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
 	var payload struct {
-		Valid    bool              `json:"valid"`
-		Errors   []validationError `json:"errors"`
-		Warnings []string          `json:"warnings"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
-	assert.Empty(t, payload.Errors)
-	assert.Empty(t, payload.Warnings)
+	assert.Empty(t, payload.Findings)
 }
 
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
@@ -281,23 +279,23 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json=valid,errors", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "JSON mode communicates errors in payload")
 
 	var payload struct {
-		Valid  bool              `json:"valid"`
-		Errors []validationError `json:"errors"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
 
-	errorTypes := map[string]bool{}
-	for _, e := range payload.Errors {
-		errorTypes[e.Type] = true
+	categories := map[string]bool{}
+	for _, f := range payload.Findings {
+		categories[f.Category] = true
 	}
-	assert.True(t, errorTypes["TAMPERED"], "should detect SHA changed: %+v", payload.Errors)
-	assert.True(t, errorTypes["UNREACHABLE"], "should detect unreachable commit: %+v", payload.Errors)
+	assert.True(t, categories["tampered"], "should detect SHA changed: %+v", payload.Findings)
+	assert.True(t, categories["unreachable"], "should detect unreachable commit: %+v", payload.Findings)
 }
 
 // TestCheck_UnreachableOnly verifies that when a pinned SHA matches live
@@ -332,24 +330,24 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json=valid,errors", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "JSON mode communicates errors in payload")
 
 	var payload struct {
-		Valid  bool              `json:"valid"`
-		Errors []validationError `json:"errors"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
 
 	hasUnreachable := false
-	for _, e := range payload.Errors {
-		if e.Type == "UNREACHABLE" {
+	for _, f := range payload.Findings {
+		if f.Category == "unreachable" {
 			hasUnreachable = true
 		}
 	}
-	assert.True(t, hasUnreachable, "should detect unreachable commit: %+v", payload.Errors)
+	assert.True(t, hasUnreachable, "should detect unreachable commit: %+v", payload.Findings)
 }
 
 // TestCheck_ReachabilityUnknown verifies that when the reachability check
@@ -384,20 +382,25 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
-		"check", "--json=valid,errors,warnings", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
 	var payload struct {
-		Valid    bool                `json:"valid"`
-		Errors   []validationError   `json:"errors"`
-		Warnings []validationWarning `json:"warnings"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid, "valid should be true when reachability is unknown")
-	assert.Empty(t, payload.Errors)
-	assert.NotEmpty(t, payload.Warnings, "should have a reachability warning")
-	assert.Contains(t, payload.Warnings[0].Details, "clone failed")
+
+	// Reachability unknown produces a CategoryValid finding with SeverityWarning.
+	hasWarning := false
+	for _, f := range payload.Findings {
+		if f.Severity == "warning" && strings.Contains(f.Detail, "clone failed") {
+			hasWarning = true
+		}
+	}
+	assert.True(t, hasWarning, "should have a reachability warning: %+v", payload.Findings)
 }
 
 // TestCheck_Reachable verifies the happy path: pinned SHA matches live
@@ -431,17 +434,15 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,errors,warnings", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
 	var payload struct {
-		Valid    bool              `json:"valid"`
-		Errors   []validationError `json:"errors"`
-		Warnings []string          `json:"warnings"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
-	assert.Empty(t, payload.Errors)
-	assert.Empty(t, payload.Warnings)
+	assert.Empty(t, payload.Findings)
 }
