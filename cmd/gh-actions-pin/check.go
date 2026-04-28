@@ -542,19 +542,16 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 		depKey := f.DepKey()
 		switch {
 		case f.Category == doctor.CategorySHAAsRef:
-			// Transitive deps — shown individually since remediation differs.
-			repoNWO := extractRepoNWO(depKey)
 			out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
-			printTransitiveContext(out, f.ParentNWO, wg.workflows, repoNWO)
+			printTransitiveContext(out, f.ParentNWO, wg.workflows)
 		case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
 			label := depKey
 			if label == "" {
 				label = f.WorkflowPath
 			}
 			if strings.Contains(f.Remediation, "transitive dependency") {
-				repoNWO := extractRepoNWO(label)
 				out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", label)
-				printTransitiveContext(out, f.ParentNWO, wg.workflows, repoNWO)
+				printTransitiveContext(out, f.ParentNWO, wg.workflows)
 			} else {
 				out.Warning("%s: %s", label, f.Detail)
 			}
@@ -563,7 +560,7 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 }
 
 // printTransitiveContext prints ↳ lines for a transitive dep finding.
-func printTransitiveContext(out *ui.UI, parentNWO string, workflows []string, repoNWO string) {
+func printTransitiveContext(out *ui.UI, parentNWO string, workflows []string) {
 	if parentNWO != "" {
 		out.Detail("  ↳ pulled in by %s", out.Bold(parentNWO))
 	} else {
@@ -572,7 +569,6 @@ func printTransitiveContext(out *ui.UI, parentNWO string, workflows []string, re
 	if len(workflows) > 0 {
 		out.Detail("  ↳ in %s", ui.Pluralize(len(workflows), "workflow", "workflows")+": "+formatWorkflowPaths(workflows))
 	}
-	out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
 }
 
 // formatWorkflowPaths formats a list of workflow paths for display.
@@ -581,17 +577,4 @@ func formatWorkflowPaths(paths []string) string {
 		return strings.Join(paths, ", ")
 	}
 	return strings.Join(paths[:3], ", ") + fmt.Sprintf(" (+%d more)", len(paths)-3)
-}
-
-// extractRepoNWO strips sub-path and ref from a dep key like "owner/repo/sub@ref".
-func extractRepoNWO(depKey string) string {
-	nwo := depKey
-	if idx := strings.Index(nwo, "@"); idx > 0 {
-		nwo = nwo[:idx]
-	}
-	parts := strings.SplitN(nwo, "/", 3)
-	if len(parts) >= 2 {
-		return parts[0] + "/" + parts[1]
-	}
-	return nwo
 }
