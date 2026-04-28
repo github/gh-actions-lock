@@ -1,5 +1,5 @@
-# Scenario: Action pinned to a bare SHA with no tag reference.
-# The tool detects this and presents a tag picker.
+# Scenario: Action uses a bare SHA instead of a tag ref.
+# The tool detects this and offers tag suggestions with semver ranking.
 name: SHA-as-ref demo
 on: push
 jobs:

@@ -8,6 +8,7 @@ Set Height 700
 Set Framerate 24
 Set PlaybackSpeed 1.5
 Set TypingSpeed 5ms
+Set Theme "GitHub Dark"
 
 # Scene: Action uses a bare SHA — tool detects and presents tag picker
 Type "# Action uses a bare SHA instead of a tag ref"

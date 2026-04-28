@@ -8,6 +8,7 @@ Set Height 700
 Set Framerate 24
 Set PlaybackSpeed 1.5
 Set TypingSpeed 5ms
+Set Theme "GitHub Dark"
 
 # Scene: Tag hijacked — tamper + unreachable warnings with guidance
 Type "# Checking a workflow where the tag was hijacked to a malicious commit"
