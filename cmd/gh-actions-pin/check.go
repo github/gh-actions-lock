@@ -484,22 +484,40 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 			len(unpinnedWorkflows),
 			ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
 	}
+	// Separate SHA_AS_REF warnings into direct (aggregate) and transitive (individual).
+	var bareSHADeps []string
+	var otherDetailWarnings []string
 	for _, key := range otherWarnings {
+		wg := warnMap[key]
+		f := wg.finding
+		if f.Category == doctor.CategorySHAAsRef {
+			isTransitive := f.Dependency != nil && f.ActionRef == nil
+			if isTransitive {
+				otherDetailWarnings = append(otherDetailWarnings, key)
+			} else {
+				bareSHADeps = append(bareSHADeps, key)
+			}
+		} else {
+			otherDetailWarnings = append(otherDetailWarnings, key)
+		}
+	}
+	if len(bareSHADeps) > 0 {
+		out.Warning("%d %s pinned to a bare SHA without a tag ref",
+			len(bareSHADeps),
+			ui.Pluralize(len(bareSHADeps), "action is", "actions are"))
+		out.Detail("  ↳ run `gh actions-pin upgrade` to pin to tagged releases")
+	}
+	for _, key := range otherDetailWarnings {
 		wg := warnMap[key]
 		f := wg.finding
 		depKey := f.DepKey()
 		switch {
 		case f.Category == doctor.CategorySHAAsRef:
-			isTransitive := f.Dependency != nil && f.ActionRef == nil
+			// Transitive deps — shown individually since remediation differs.
 			repoNWO := extractRepoNWO(depKey)
-			if isTransitive {
-				out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
-				out.Detail("  ↳ this comes from a composite action's internal dependency")
-				out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
-			} else {
-				out.Warning("%s: %s", depKey, f.Detail)
-				out.Detail("  ↳ releases: https://github.com/%s/releases", repoNWO)
-			}
+			out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
+			out.Detail("  ↳ this comes from a composite action's internal dependency")
+			out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
 		case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
 			out.Warning("%s: %s", depKey, f.Detail)
 		}
