@@ -27,16 +27,26 @@ type Prompter interface {
 
 // HuhPrompter implements Prompter using the huh library (same as gh CLI).
 type HuhPrompter struct {
-	out io.Writer
+	out        io.Writer
+	isTerminal func() bool
 }
 
 // NewHuhPrompter creates an interactive prompter that writes to stderr.
 func NewHuhPrompter() *HuhPrompter {
-	return &HuhPrompter{out: os.Stderr}
+	return &HuhPrompter{
+		out:        os.Stderr,
+		isTerminal: func() bool { return term.IsTerminal(int(os.Stderr.Fd())) },
+	}
+}
+
+// NewHuhPrompterWithWriter creates a prompter that writes to the given writer
+// and uses the provided function for TTY detection.
+func NewHuhPrompterWithWriter(w io.Writer, isTerminal func() bool) *HuhPrompter {
+	return &HuhPrompter{out: w, isTerminal: isTerminal}
 }
 
 func (p *HuhPrompter) IsInteractive() bool {
-	return term.IsTerminal(int(os.Stderr.Fd()))
+	return p.isTerminal()
 }
 
 func (p *HuhPrompter) Confirm(message string, defaultVal bool) (bool, error) {

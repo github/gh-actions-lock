@@ -165,7 +165,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if !interactive {
 			prompter = &doctor.NoopPrompter{}
 		} else {
-			prompter = doctor.NewHuhPrompter()
+			prompter = doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
 		}
 
 		var repoOwner string

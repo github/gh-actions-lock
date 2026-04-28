@@ -96,7 +96,7 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
-			p := doctor.NewHuhPrompter()
+			p := doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
 			opts.Prompter = p
 			if len(opts.Actions) == 0 {
 				// Interactive mode — must be a TTY.
