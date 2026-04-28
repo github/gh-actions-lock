@@ -362,8 +362,23 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 			}
 		}
 
-		// Merge TAMPERED+UNREACHABLE for same dep.
+		// Merge TAMPERED+UNREACHABLE for same dep; count categories.
 		catCounts := map[doctor.Category]int{}
+		// Separate NOT_PINNED-only deps from deps with other issues.
+		type catGroup struct {
+			category doctor.Category
+			files    []string
+			sample   doctor.Finding
+		}
+		type renderedDep struct {
+			dep           string
+			hasTampered   bool
+			unreachDetail string
+			catOrder      []doctor.Category
+			catMap        map[doctor.Category]*catGroup
+			notPinnedOnly bool
+		}
+		var rendered []renderedDep
 		for _, dep := range depOrder {
 			dg := depMap[dep]
 			hasTampered := false
@@ -377,7 +392,6 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 				}
 			}
 			if hasTampered && unreachableDetail != "" {
-				// Remove standalone unreachable, fold into tampered.
 				var merged []doctor.Finding
 				for _, f := range dg.findings {
 					if f.Category == doctor.CategoryUnreachable {
@@ -390,44 +404,67 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 			for _, f := range dg.findings {
 				catCounts[f.Category]++
 			}
-			// Deduplicate findings by category within each dep group.
-			// For repeated identical categories (e.g. NOT_PINNED across many workflows),
-			// show once with a count of affected files.
-			type catGroup struct {
-				category doctor.Category
-				files    []string
-				sample   doctor.Finding
-			}
-			var catOrder []doctor.Category
-			catMap := map[doctor.Category]*catGroup{}
+
+			var catOrd []doctor.Category
+			catM := map[doctor.Category]*catGroup{}
 			for _, f := range dg.findings {
-				if cg, ok := catMap[f.Category]; ok {
+				if cg, ok := catM[f.Category]; ok {
 					if f.WorkflowPath != "" {
 						cg.files = append(cg.files, f.WorkflowPath)
 					}
 				} else {
-					catOrder = append(catOrder, f.Category)
+					catOrd = append(catOrd, f.Category)
 					files := []string{}
 					if f.WorkflowPath != "" {
 						files = append(files, f.WorkflowPath)
 					}
-					catMap[f.Category] = &catGroup{category: f.Category, files: files, sample: f}
+					catM[f.Category] = &catGroup{category: f.Category, files: files, sample: f}
 				}
 			}
-			for _, cat := range catOrder {
-				cg := catMap[cat]
+
+			notPinnedOnly := len(catOrd) == 1 && catOrd[0] == doctor.CategoryNotPinned
+			rendered = append(rendered, renderedDep{
+				dep: dep, hasTampered: hasTampered, unreachDetail: unreachableDetail,
+				catOrder: catOrd, catMap: catM, notPinnedOnly: notPinnedOnly,
+			})
+		}
+
+		// Render: show non-NOT_PINNED deps in full, cap NOT_PINNED-only list.
+		const maxNotPinned = 10
+		notPinnedShown := 0
+		notPinnedTotal := 0
+		for _, rd := range rendered {
+			if rd.notPinnedOnly {
+				notPinnedTotal++
+			}
+		}
+		for _, rd := range rendered {
+			for _, cat := range rd.catOrder {
+				cg := rd.catMap[cat]
 				f := cg.sample
+
+				// Cap NOT_PINNED-only deps when there are many.
+				if cat == doctor.CategoryNotPinned && rd.notPinnedOnly && notPinnedTotal > maxNotPinned {
+					notPinnedShown++
+					if notPinnedShown > maxNotPinned {
+						continue
+					}
+				}
+
 				label := strings.ToUpper(string(cat))
 				if len(cg.files) > 1 {
 					out.Detail("! %s %s (%d %s)",
-						out.Dim(label), dep,
+						out.Dim(label), rd.dep,
 						len(cg.files), ui.Pluralize(len(cg.files), "file", "files"))
 				} else {
-					out.Detail("! %s %s", out.Dim(label), dep)
+					out.Detail("! %s %s", out.Dim(label), rd.dep)
 				}
-				out.Detail("  %s", f.Detail)
-				if hasTampered && unreachableDetail != "" && cat == doctor.CategoryTampered {
-					out.Detail("  %s", unreachableDetail)
+				// Skip redundant detail for NOT_PINNED — the label says it all.
+				if cat != doctor.CategoryNotPinned {
+					out.Detail("  %s", f.Detail)
+				}
+				if rd.hasTampered && rd.unreachDetail != "" && cat == doctor.CategoryTampered {
+					out.Detail("  %s", rd.unreachDetail)
 				}
 				if f.Dependency != nil && cat == doctor.CategoryTampered {
 					parts := strings.SplitN(f.Dependency.NWO, "/", 3)
@@ -437,6 +474,11 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 					}
 				}
 			}
+		}
+		if notPinnedTotal > maxNotPinned {
+			out.Detail("  ... and %d more unpinned %s",
+				notPinnedTotal-maxNotPinned,
+				ui.Pluralize(notPinnedTotal-maxNotPinned, "action", "actions"))
 		}
 
 		parts := []string{}
