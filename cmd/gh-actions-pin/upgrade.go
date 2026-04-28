@@ -559,37 +559,21 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		return nil, fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
 
-	// Preserve existing refs for unchanged deps. Re-resolution of transitive
-	// deps often returns a bare SHA as the ref (from the parent action.yml),
-	// losing the human-readable tag we already have in the lockfile.
-	oldByNWO := make(map[string]lockfile.Dependency)
-	for _, dep := range existingDeps {
-		oldByNWO[dep.NWO] = dep
-	}
-	for i, dep := range deps {
-		if old, ok := oldByNWO[dep.NWO]; ok && strings.EqualFold(old.SHA, dep.SHA) && old.Ref != dep.Ref {
-			deps[i].Ref = old.Ref
-		}
-	}
+	deps = lockfile.PreserveRefs(existingDeps, deps)
 
+	diff := lockfile.DiffDeps(existingDeps, deps)
 	var changes []jsonUpgradeChange
-	seen := make(map[string]bool)
-	for _, dep := range deps {
-		if seen[dep.NWO] {
-			continue
-		}
-		seen[dep.NWO] = true
-		old := oldByNWO[dep.NWO]
-		if old.Ref != dep.Ref || old.SHA != dep.SHA {
-			changes = append(changes, jsonUpgradeChange{
-				NWO:    dep.NWO,
-				OldRef: old.Ref,
-				NewRef: dep.Ref,
-				OldSHA: old.SHA,
-				NewSHA: dep.SHA,
-				Files:  []string{workflowPath},
-			})
-		}
+	for _, c := range diff.Changed {
+		changes = append(changes, jsonUpgradeChange{
+			NWO: c.New.NWO, OldRef: c.Old.Ref, NewRef: c.New.Ref,
+			OldSHA: c.Old.SHA, NewSHA: c.New.SHA, Files: []string{workflowPath},
+		})
+	}
+	for _, c := range diff.Rekeyed {
+		changes = append(changes, jsonUpgradeChange{
+			NWO: c.New.NWO, OldRef: c.Old.Ref, NewRef: c.New.Ref,
+			OldSHA: c.Old.SHA, NewSHA: c.New.SHA, Files: []string{workflowPath},
+		})
 	}
 
 	if opts.Diff {
@@ -629,87 +613,37 @@ func actionMatchesFilter(nwo, filter string) bool {
 }
 
 func showDiff(hostname string, old, new []lockfile.Dependency) {
-	oldMap := make(map[string]lockfile.Dependency)
-	oldByNWO := make(map[string][]lockfile.Dependency)
-	for _, dep := range old {
-		oldMap[dep.Key()] = dep
-		oldByNWO[dep.NWO] = append(oldByNWO[dep.NWO], dep)
-	}
-	newMap := make(map[string]lockfile.Dependency)
-	for _, dep := range new {
-		newMap[dep.Key()] = dep
+	diff := lockfile.DiffDeps(old, new)
+
+	for _, c := range diff.Changed {
+		output.Infof("  %s %s\n", output.Yellow("~"), c.New.Key())
+		output.Infof("    %s sha1-%s\n", output.Red("-"), c.Old.SHA)
+		output.Infof("    %s sha1-%s\n", output.Green("+"), c.New.SHA)
+		output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
 	}
 
-	handledOld := make(map[string]bool)
-	handledNew := make(map[string]bool)
-
-	for _, dep := range new {
-		if oldDep, ok := oldMap[dep.Key()]; ok && !strings.EqualFold(oldDep.SHA, dep.SHA) {
-			output.Infof("  %s %s\n", output.Yellow("~"), dep.Key())
-			output.Infof("    %s sha1-%s\n", output.Red("-"), oldDep.SHA)
-			output.Infof("    %s sha1-%s\n", output.Green("+"), dep.SHA)
-			output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, dep.NWO, oldDep.SHA, dep.SHA)
-			handledOld[oldDep.Key()] = true
-			handledNew[dep.Key()] = true
-		} else if ok {
-			handledOld[oldDep.Key()] = true
-			handledNew[dep.Key()] = true
+	for _, c := range diff.Rekeyed {
+		output.Infof("  %s %s\n", output.Yellow("~"), c.New.NWO)
+		output.Infof("    %s %s\n", output.Red("-"), c.Old.String())
+		output.Infof("    %s %s\n", output.Green("+"), c.New.String())
+		if !strings.EqualFold(c.Old.SHA, c.New.SHA) {
+			output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
+		} else {
+			output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, c.New.NWO, c.New.SHA)
 		}
 	}
 
-	for _, dep := range new {
-		if handledNew[dep.Key()] {
-			continue
-		}
-
-		var replacement *lockfile.Dependency
-		for _, oldDep := range oldByNWO[dep.NWO] {
-			if handledOld[oldDep.Key()] {
-				continue
-			}
-			replacement = &oldDep
-			break
-		}
-
-		if replacement != nil {
-			output.Infof("  %s %s\n", output.Yellow("~"), dep.NWO)
-			output.Infof("    %s %s\n", output.Red("-"), replacement.String())
-			output.Infof("    %s %s\n", output.Green("+"), dep.String())
-			if !strings.EqualFold(replacement.SHA, dep.SHA) {
-				output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, dep.NWO, replacement.SHA, dep.SHA)
-			} else {
-				output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
-			}
-			handledOld[replacement.Key()] = true
-			handledNew[dep.Key()] = true
-		}
-	}
-
-	for _, dep := range new {
-		if handledNew[dep.Key()] {
-			continue
-		}
+	for _, dep := range diff.Added {
 		output.Infof("  %s %s\n", output.Green("+"), dep.String())
 		output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
 	}
 
-	for _, dep := range old {
-		if handledOld[dep.Key()] {
-			continue
-		}
-		if _, ok := newMap[dep.Key()]; !ok {
-			output.Infof("  %s %s\n", output.Red("-"), dep.String())
-		}
+	for _, dep := range diff.Removed {
+		output.Infof("  %s %s\n", output.Red("-"), dep.String())
 	}
 
-	unchanged := 0
-	for _, dep := range new {
-		if oldDep, ok := oldMap[dep.Key()]; ok && strings.EqualFold(oldDep.SHA, dep.SHA) {
-			unchanged++
-		}
-	}
-	if unchanged > 0 {
-		output.Infof("  %s\n", output.Dim(fmt.Sprintf("%d unchanged", unchanged)))
+	if n := len(diff.Unchanged); n > 0 {
+		output.Infof("  %s\n", output.Dim(fmt.Sprintf("%d unchanged", n)))
 	}
 }
 
@@ -777,77 +711,46 @@ func summarizePreview(refs []lockfile.ActionRef, old, new []lockfile.Dependency)
 		directNames[ref.FullName()] = struct{}{}
 	}
 
-	oldMap := make(map[string]lockfile.Dependency, len(old))
-	oldByNWO := make(map[string][]lockfile.Dependency)
-	for _, dep := range old {
-		oldMap[dep.Key()] = dep
-		oldByNWO[dep.NWO] = append(oldByNWO[dep.NWO], dep)
+	isDirect := func(nwo string) bool {
+		_, ok := directNames[nwo]
+		return ok
 	}
 
-	newMap := make(map[string]lockfile.Dependency, len(new))
-	handledOld := make(map[string]bool)
-	handledNew := make(map[string]bool)
+	diff := lockfile.DiffDeps(old, new)
 
-	for _, dep := range new {
-		newMap[dep.Key()] = dep
-
-		_, direct := directNames[dep.NWO]
-		if oldDep, ok := oldMap[dep.Key()]; ok {
-			handledOld[oldDep.Key()] = true
-			handledNew[dep.Key()] = true
-			if !strings.EqualFold(oldDep.SHA, dep.SHA) {
-				if direct {
-					stats.directChanged++
-				} else {
-					stats.transitiveChanged++
-				}
-			} else if direct {
-				stats.directUnchanged++
-			} else {
-				stats.transitiveKept++
-			}
-			continue
+	for _, c := range diff.Changed {
+		if isDirect(c.New.NWO) {
+			stats.directChanged++
+		} else {
+			stats.transitiveChanged++
 		}
 	}
-
-	for _, dep := range new {
-		if handledNew[dep.Key()] {
-			continue
+	for _, c := range diff.Rekeyed {
+		if isDirect(c.New.NWO) {
+			stats.directChanged++
+		} else {
+			stats.transitiveChanged++
 		}
-		_, direct := directNames[dep.NWO]
-		var replacement *lockfile.Dependency
-		for _, oldDep := range oldByNWO[dep.NWO] {
-			if handledOld[oldDep.Key()] {
-				continue
-			}
-			replacement = &oldDep
-			break
-		}
-		if replacement != nil {
-			handledOld[replacement.Key()] = true
-			handledNew[dep.Key()] = true
-			if direct {
-				stats.directChanged++
-			} else {
-				stats.transitiveChanged++
-			}
-			continue
-		}
-		if direct {
+	}
+	for _, dep := range diff.Added {
+		if isDirect(dep.NWO) {
 			stats.directAdded++
 		} else {
 			stats.transitiveAdded++
 		}
 	}
-
-	for _, dep := range old {
-		if handledOld[dep.Key()] {
-			continue
-		}
-		if _, direct := directNames[dep.NWO]; direct {
+	for _, dep := range diff.Removed {
+		if isDirect(dep.NWO) {
 			stats.directRemoved++
 		} else {
 			stats.transitiveRemoved++
+		}
+	}
+	for _, dep := range diff.Unchanged {
+		if isDirect(dep.NWO) {
+			stats.directUnchanged++
+		} else {
+			stats.transitiveKept++
 		}
 	}
 
