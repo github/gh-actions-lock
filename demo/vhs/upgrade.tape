@@ -18,24 +18,13 @@ Type "grep -E 'uses:|  -' demo/workflows-upgrade/ci.yml"
 Enter
 Sleep 2s
 
-Type "echo '# Upgrade all actions to latest'"
+Type "echo '# Upgrade actions/checkout to latest'"
 Enter
 Sleep 1s
 
-Type "gh actions-pin upgrade demo/workflows-upgrade/ci.yml"
+Type "gh actions-pin upgrade --action actions/checkout demo/workflows-upgrade/ci.yml"
 Enter
-Sleep 10s
-
-# Select all upgrades
-Type "a"
-Sleep 500ms
-Enter
-Sleep 3s
-
-# Confirm
-Type "y"
-Enter
-Sleep 5s
+Sleep 12s
 
 Type "echo '# Updated refs and lockfile'"
 Enter
