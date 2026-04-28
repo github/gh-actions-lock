@@ -192,8 +192,8 @@ type actionOccurrence struct {
 // actionIndex holds the result of scanning workflows for action references.
 type actionIndex struct {
 	occurrences map[string]*actionOccurrence
-	order       []string            // stable NWO iteration order
-	pinnedSHAs  map[string]string   // "owner/repo@ref" → SHA from lockfile
+	order       []string          // stable NWO iteration order
+	pinnedSHAs  map[string]string // "owner/repo@ref" → SHA from lockfile
 }
 
 // scanWorkflowActions scans workflow files and builds an index of action

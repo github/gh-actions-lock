@@ -91,16 +91,16 @@ func TestDiffDeps_MultipleNWO_FuzzyPrefersSameSHA(t *testing.T) {
 
 func TestDiffDeps_MixedScenario(t *testing.T) {
 	old := []Dependency{
-		dep("a/b", "v1", "aaa"),     // unchanged
-		dep("c/d", "v1", "ccc"),     // SHA changes
-		dep("e/f", "v1", "eee"),     // rekeyed to v2
-		dep("g/h", "v1", "ggg"),     // removed
+		dep("a/b", "v1", "aaa"), // unchanged
+		dep("c/d", "v1", "ccc"), // SHA changes
+		dep("e/f", "v1", "eee"), // rekeyed to v2
+		dep("g/h", "v1", "ggg"), // removed
 	}
 	new := []Dependency{
-		dep("a/b", "v1", "aaa"),     // unchanged
-		dep("c/d", "v1", "ddd"),     // changed
-		dep("e/f", "v2", "fff"),     // rekeyed
-		dep("x/y", "v1", "xxx"),     // added
+		dep("a/b", "v1", "aaa"), // unchanged
+		dep("c/d", "v1", "ddd"), // changed
+		dep("e/f", "v2", "fff"), // rekeyed
+		dep("x/y", "v1", "xxx"), // added
 	}
 	d := DiffDeps(old, new)
 
