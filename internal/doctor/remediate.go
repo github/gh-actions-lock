@@ -207,9 +207,9 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	rem.output.Warning("%d %s found but not pinned", len(wr.ActionRefs), ui.Pluralize(len(wr.ActionRefs), "action", "actions"))
 
 	if !rem.prompter.IsInteractive() {
-		rem.output.Hint("run `gh actions-pin check %s`", wr.Path)
-		rem.Skipped++
-		return nil
+		// Non-interactive: auto-pin all refs (ref→SHA is deterministic).
+		rem.markRefsApproved(wr.ActionRefs)
+		return rem.applyPin(wr)
 	}
 
 	// For internal repos, offer the default branch as an alternative ref.
@@ -427,7 +427,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	rem.output.Warning("%s: %s", depLabel, finding.Detail)
 
 	if !rem.prompter.IsInteractive() {
-		rem.output.Hint("%s", finding.Remediation)
+		rem.output.Skip("%s: requires interactive tag selection", dep.Key())
 		rem.Skipped++
 		return nil
 	}
@@ -744,9 +744,8 @@ func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) erro
 	rem.output.Warning("%s: %s", dep.Key(), finding.Detail)
 
 	if !rem.prompter.IsInteractive() {
-		rem.output.Hint("%s", finding.Remediation)
-		rem.Skipped++
-		return nil
+		// Non-interactive: auto-apply ref change — deterministic re-resolve.
+		return rem.applyReResolve(wr, dep)
 	}
 
 	prompt := fmt.Sprintf("Re-pin %s to %s?", dep.NWO, newRef)

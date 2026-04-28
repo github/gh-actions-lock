@@ -64,8 +64,10 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			specific paths. Checks both direct and transitive dependencies
 			(composite actions that reference other actions).
 
-			When run interactively (TTY), offers to fix issues inline. Use
-			--no-interactive for report-only mode.
+			When run interactively (TTY), offers to fix issues inline.
+			Non-interactive mode (--no-interactive or CI) auto-fixes
+			deterministic issues and exits non-zero if anything remains
+			that requires human judgment.
 
 			With --json, structured results go to stdout and progress to stderr:
 
@@ -106,7 +108,7 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
+	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	return cmd
 }
 
@@ -142,7 +144,9 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 	// Determine if interactive remediation will follow.
 	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && f.IsTerminal()
-	willRemediate := interactive
+
+	// Always remediate — non-interactive mode auto-fixes what it can.
+	willRemediate := true
 
 	// Human-readable output.
 	presentCheckResults(f.UI, report, valid, willRemediate)

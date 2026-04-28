@@ -100,7 +100,7 @@ $ gh actions-pin upgrade --action actions/checkout
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
+	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	cmd.AddCommand(newCheckCmd(f))
 	cmd.AddCommand(newUpgradeCmd(f))
 
