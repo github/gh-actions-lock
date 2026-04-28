@@ -463,22 +463,11 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 		}
 
 		lineIndex := valueNode.Line - 1
-		if lineIndex >= 0 && lineIndex < len(lines) && strings.Contains(lines[lineIndex], oldValue) {
-			// Replace the entire uses: value portion of the line (nukes stale comments).
+		if lineIndex >= 0 && lineIndex < len(lines) {
 			if idx := strings.Index(lines[lineIndex], oldValue); idx >= 0 {
-				lines[lineIndex] = lines[lineIndex][:idx] + newValue
-			}
-			changed++
-			return
-		}
-
-		for i := range lines {
-			if strings.Contains(lines[i], oldValue) {
-				if idx := strings.Index(lines[i], oldValue); idx >= 0 {
-					lines[i] = lines[i][:idx] + newValue
-				}
+				// Replace only the matched ref, preserving any trailing content.
+				lines[lineIndex] = lines[lineIndex][:idx] + newValue + lines[lineIndex][idx+len(oldValue):]
 				changed++
-				return
 			}
 		}
 	})

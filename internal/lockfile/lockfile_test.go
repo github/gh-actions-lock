@@ -247,6 +247,64 @@ func TestRewriteActionRefs(t *testing.T) {
 	assert.NotContains(t, s, "uses: actions/setup-go@v5")
 }
 
+func TestRewriteActionRefs_PreservesTrailingComments(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # pinned for stability
+      - uses: actions/setup-go@v5
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "with_comment.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	output, changed, err := f.RewriteActionRefs(map[string]string{
+		"actions/checkout@v4": "actions/checkout@v4.2.1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed)
+
+	s := string(output)
+	assert.Contains(t, s, "uses: actions/checkout@v4.2.1 # pinned for stability")
+	assert.NotContains(t, s, "uses: actions/checkout@v4 #")
+}
+
+func TestRewriteActionRefs_OnlyMatchesYAMLUses(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+# DO NOT USE actions/checkout@v4 - see docs
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "comment_first.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	output, changed, err := f.RewriteActionRefs(map[string]string{
+		"actions/checkout@v4": "actions/checkout@v4.2.1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed)
+
+	s := string(output)
+	// The uses: line should be rewritten
+	assert.Contains(t, s, "uses: actions/checkout@v4.2.1")
+	// The comment should NOT be rewritten
+	assert.Contains(t, s, "# DO NOT USE actions/checkout@v4 - see docs")
+}
+
 func TestWriteDependenciesTrailingNewlineEdgeCases(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "no_trailing.yml")

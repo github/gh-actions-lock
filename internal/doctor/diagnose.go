@@ -2,15 +2,12 @@ package doctor
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
 )
-
-var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
 
 // Diagnose scans a set of workflows and produces findings for each.
 // It performs no output — purely analytical.
@@ -70,7 +67,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		// those should be SHAAsRef, not NotPinned.
 		var shaRefs, tagRefs []lockfile.ActionRef
 		for _, ref := range refs {
-			if shaRefRE.MatchString(ref.Ref) {
+			if lockfile.IsFullSHA(ref.Ref) {
 				shaRefs = append(shaRefs, ref)
 			} else {
 				tagRefs = append(tagRefs, ref)
@@ -132,7 +129,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		if !directNWOs[dep.NWO] {
 			continue
 		}
-		if shaRefRE.MatchString(dep.Ref) {
+		if lockfile.IsFullSHA(dep.Ref) {
 			parts := strings.SplitN(dep.NWO, "/", 3)
 			owner, repo := "", ""
 			if len(parts) >= 2 {
@@ -187,7 +184,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 
 	// Check each existing dep against live resolution.
 	for _, existing := range existingDeps {
-		if shaRefRE.MatchString(existing.Ref) {
+		if lockfile.IsFullSHA(existing.Ref) {
 			continue
 		}
 

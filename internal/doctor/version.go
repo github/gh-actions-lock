@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/github/gh-actions-pin/internal/lockfile"
 )
 
 // semver holds parsed version components.
@@ -20,6 +22,11 @@ type semver struct {
 var semverRE = regexp.MustCompile(`^(v?)(\d+)(?:\.(\d+))?(?:\.(\d+))?(.*)$`)
 
 func parseSemver(tag string) (semver, bool) {
+	// Full hex commit SHAs must never parse as versions — the regex can
+	// match SHAs starting with a digit (e.g. "1e7e51e…" → major=1, junk rest).
+	if lockfile.IsFullSHA(tag) {
+		return semver{}, false
+	}
 	m := semverRE.FindStringSubmatch(tag)
 	if m == nil {
 		return semver{}, false
@@ -56,6 +63,12 @@ func (s semver) IsFullSemver() bool {
 // (major-only like "v4" or minor-only like "v4.2") that should be narrowed
 // to a specific patch version for pinning.
 func IsMutableVersionTag(ref string) bool {
+	// Full commit SHAs are never version tags — the semver regex can
+	// accidentally match hex SHAs that start with a digit (e.g. "1e7e51e…"
+	// parses as major=1 with junk suffix).
+	if lockfile.IsFullSHA(ref) {
+		return false
+	}
 	sv, ok := parseSemver(ref)
 	if !ok {
 		return false

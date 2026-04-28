@@ -140,6 +140,12 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	if hadError {
 		return errSilent
 	}
+
+	if len(allChanges) == 0 && len(opts.Actions) > 0 {
+		f.UI.Warning("no matching actions found for: %s", strings.Join(opts.Actions, ", "))
+		f.UI.Hint("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
+		return errSilent
+	}
 	return nil
 }
 

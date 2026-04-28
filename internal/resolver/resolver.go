@@ -136,9 +136,6 @@ func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string
 	r.checkReachFn = fn
 }
 
-// isSHARef returns true if the ref looks like a full commit SHA (40 or 64 hex chars).
-var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
-
 // CheckReachability verifies that a resolved SHA is on the lineage of the
 // given ref within the repository. This catches fork-network injection where
 // a SHA exists in GitHub's shared object store but is not actually part of
@@ -177,13 +174,27 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		return result
 	}
 
-	// SHA-as-ref anti-pattern: compare/{sha}...{sha} is trivially identical
-	// and cannot detect fork commits. Warn the user.
-	if shaRefRE.MatchString(ref) {
-		result.Status = ReachabilityUnknown
-		result.Detail = fmt.Sprintf(
-			"pinned to a bare SHA without a tag ref — unable to verify commit origin, which weakens supply-chain security; pin to a tag instead: https://github.com/%s/%s/releases",
-			owner, repo)
+	// SHA-as-ref: compare/{sha}...{sha} is trivially identical and cannot
+	// detect fork commits. Instead, check against the repo's default branch
+	// which proves the commit exists in the canonical repo's history. Note:
+	// Note: runtime enforcement for bare-SHA refs is TBD — it's expensive.
+	if lockfile.IsFullSHA(ref) {
+		status, detail := r.apiReachabilityCheck(owner, repo, sha, "HEAD")
+		switch status {
+		case Reachable:
+			result.Status = Reachable
+			result.Detail = "pinned to a bare SHA; commit is reachable from default branch but origin cannot be verified at job runtime — prefer pinning to a tag"
+			r.reachCache[cacheKey] = result.Status
+		case Unreachable:
+			result.Status = Unreachable
+			result.Detail = "pinned to a bare SHA; commit is NOT reachable from default branch — possible fork-network commit"
+			r.reachCache[cacheKey] = result.Status
+		default:
+			result.Status = ReachabilityUnknown
+			result.Detail = fmt.Sprintf(
+				"pinned to a bare SHA — unable to verify commit origin (%s); pin to a tag instead: https://github.com/%s/%s/releases",
+				detail, owner, repo)
+		}
 		return result
 	}
 
@@ -482,7 +493,6 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 	for i, ref := range refs {
 		alias := fmt.Sprintf("a%d", i)
 		aliasMap[alias] = i
-		escapedRef := strings.ReplaceAll(ref.Ref, `"`, `\"`)
 
 		ymlPath := "action.yml"
 		yamlPath := "action.yaml"
@@ -493,7 +503,7 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 
 		fmt.Fprintf(&sb, " %s: repository(owner: %q, name: %q) {", alias, ref.Owner, ref.Repo)
 		sb.WriteString(" nameWithOwner")
-		fmt.Fprintf(&sb, " object(expression: %q) {", escapedRef)
+		fmt.Fprintf(&sb, " object(expression: %q) {", ref.Ref)
 		sb.WriteString(" ... on Commit { oid")
 		fmt.Fprintf(&sb, " file: file(path: %q) { object { ... on Blob { text } } }", ymlPath)
 		fmt.Fprintf(&sb, " fileYaml: file(path: %q) { object { ... on Blob { text } } }", yamlPath)
