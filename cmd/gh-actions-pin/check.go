@@ -146,12 +146,14 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		return writeCheckJSON(f.Out, report, valid, opts.JSONFields)
 	}
 
-	// Human-readable output.
-	presentCheckResults(f.UI, report, valid)
-
-	// Remediation.
+	// Determine if interactive remediation will follow.
 	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && f.IsTerminal()
 	willRemediate := interactive || opts.Write
+
+	// Human-readable output.
+	presentCheckResults(f.UI, report, valid, willRemediate)
+
+	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
 
 	if willRemediate && len(actionable) > 0 {
@@ -325,7 +327,7 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 }
 
 // presentCheckResults renders human-readable output from a doctor report.
-func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
+func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate bool) {
 	var validCount, failedCount int
 	for _, wr := range report.Workflows {
 		if wr.IsValid() {
@@ -480,9 +482,15 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 		}
 	}
 	if len(unpinnedWorkflows) > 0 {
-		out.Warning("%d %s not yet pinned (run `gh actions-pin` to fix)",
-			len(unpinnedWorkflows),
-			ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
+		if willRemediate {
+			out.Warning("%d %s not yet pinned — resolving below",
+				len(unpinnedWorkflows),
+				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
+		} else {
+			out.Warning("%d %s not yet pinned (run `gh actions-pin` to fix)",
+				len(unpinnedWorkflows),
+				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
+		}
 	}
 	// Separate SHA_AS_REF warnings into direct (aggregate) and transitive (individual).
 	var bareSHADeps []string
@@ -505,7 +513,11 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 		out.Warning("%d %s pinned to a bare SHA without a tag ref",
 			len(bareSHADeps),
 			ui.Pluralize(len(bareSHADeps), "action is", "actions are"))
-		out.Detail("  ↳ run `gh actions-pin upgrade` to pin to tagged releases")
+		if willRemediate {
+			out.Detail("  ↳ resolving below")
+		} else {
+			out.Detail("  ↳ run `gh actions-pin upgrade` to pin to tagged releases")
+		}
 	}
 	for _, key := range otherDetailWarnings {
 		wg := warnMap[key]
