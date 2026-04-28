@@ -99,9 +99,66 @@ func (r *WorkflowReport) CountByCategory(c Category) int {
 	return n
 }
 
+// IsValid returns true for findings that don't represent integrity violations.
+func (f *Finding) IsValid() bool {
+	switch f.Category {
+	case CategoryValid, CategoryRunOnly, CategorySHAAsRef:
+		return true
+	case CategoryNotPinned:
+		return f.ActionRef == nil // workflow-level is a warning
+	default:
+		return false
+	}
+}
+
+// IsWarning returns true for findings that should render as warnings (not errors).
+func (f *Finding) IsWarning() bool {
+	switch {
+	case f.Category == CategorySHAAsRef:
+		return true
+	case f.Category == CategoryValid && f.Severity == SeverityWarning:
+		return true
+	case f.Category == CategoryNotPinned && f.ActionRef == nil:
+		return true
+	default:
+		return false
+	}
+}
+
+// DepKey returns a dependency identifier for display grouping.
+func (f *Finding) DepKey() string {
+	if f.Dependency != nil {
+		return f.Dependency.Key()
+	}
+	if f.ActionRef != nil {
+		return f.ActionRef.FullName() + "@" + f.ActionRef.Ref
+	}
+	return ""
+}
+
 // Report aggregates all workflow reports for a doctor run.
 type Report struct {
 	Workflows []WorkflowReport
+}
+
+// IsValid returns true if all workflows in the report pass validation.
+func (r *Report) IsValid() bool {
+	for _, wr := range r.Workflows {
+		if !wr.IsValid() {
+			return false
+		}
+	}
+	return true
+}
+
+// IsValid returns true if no findings represent integrity violations.
+func (wr *WorkflowReport) IsValid() bool {
+	for _, f := range wr.Findings {
+		if !f.IsValid() {
+			return false
+		}
+	}
+	return true
 }
 
 // Summary returns counts by category across all workflows.

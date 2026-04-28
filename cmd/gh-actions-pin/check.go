@@ -139,7 +139,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	f.UI.StopProgress()
 
 	// Compute validity from findings.
-	valid := reportIsValid(report)
+	valid := report.IsValid()
 
 	// JSON output — always before any human-readable output.
 	if opts.JSONFields != "" {
@@ -204,36 +204,6 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		return errSilent
 	}
 	return nil
-}
-
-// reportIsValid returns true if the lockfile is in sync with all workflows.
-// Findings that represent integrity violations make it false.
-func reportIsValid(report *doctor.Report) bool {
-	for _, wr := range report.Workflows {
-		if !workflowIsValid(&wr) {
-			return false
-		}
-	}
-	return true
-}
-
-func workflowIsValid(wr *doctor.WorkflowReport) bool {
-	for _, f := range wr.Findings {
-		switch f.Category {
-		case doctor.CategoryValid, doctor.CategoryRunOnly, doctor.CategorySHAAsRef:
-			continue
-		case doctor.CategoryNotPinned:
-			// Workflow-level "not pinned" is a warning, not a failure.
-			// Individual missing dep (has ActionRef) is a failure.
-			if f.ActionRef != nil {
-				return false
-			}
-		default:
-			// tampered, unreachable, sha_mismatch, ref_changed, stale
-			return false
-		}
-	}
-	return true
 }
 
 // findingToJSON converts a doctor.Finding to a JSON-safe struct.
@@ -309,7 +279,7 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 		for _, wr := range report.Workflows {
 			wf := checkWorkflow{
 				Path:     wr.Path,
-				Valid:    workflowIsValid(&wr),
+				Valid:    wr.IsValid(),
 				Findings: []checkFinding{},
 			}
 			for _, f := range wr.Findings {
@@ -358,7 +328,7 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 	var validCount, failedCount int
 	for _, wr := range report.Workflows {
-		if workflowIsValid(&wr) {
+		if wr.IsValid() {
 			validCount++
 		} else {
 			failedCount++
@@ -379,10 +349,10 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 
 		for _, wr := range report.Workflows {
 			for _, f := range wr.Findings {
-				if isValidFinding(f) {
+				if f.IsValid() {
 					continue
 				}
-				depKey := findingDepKey(f)
+				depKey := f.DepKey()
 				if dg, ok := depMap[depKey]; ok {
 					dg.findings = append(dg.findings, f)
 				} else {
@@ -458,7 +428,7 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 	var warnings []doctor.Finding
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
-			if isWarningFinding(f) {
+			if f.IsWarning() {
 				warnings = append(warnings, f)
 			}
 		}
@@ -468,7 +438,7 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 	}
 
 	for _, f := range warnings {
-		depKey := findingDepKey(f)
+		depKey := f.DepKey()
 		switch {
 		case f.Category == doctor.CategoryNotPinned && f.ActionRef == nil:
 			out.Warning("%s: not yet pinned (run `gh actions-pin` to fix)", f.WorkflowPath)
@@ -487,43 +457,6 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 			out.Warning("%s: %s", depKey, f.Detail)
 		}
 	}
-}
-
-// isValidFinding returns true for findings that don't represent integrity violations.
-func isValidFinding(f doctor.Finding) bool {
-	switch f.Category {
-	case doctor.CategoryValid, doctor.CategoryRunOnly, doctor.CategorySHAAsRef:
-		return true
-	case doctor.CategoryNotPinned:
-		return f.ActionRef == nil // workflow-level is a warning
-	default:
-		return false
-	}
-}
-
-// isWarningFinding returns true for findings that should render as warnings.
-func isWarningFinding(f doctor.Finding) bool {
-	switch {
-	case f.Category == doctor.CategorySHAAsRef:
-		return true
-	case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
-		return true
-	case f.Category == doctor.CategoryNotPinned && f.ActionRef == nil:
-		return true
-	default:
-		return false
-	}
-}
-
-// findingDepKey returns a dependency identifier for display.
-func findingDepKey(f doctor.Finding) string {
-	if f.Dependency != nil {
-		return f.Dependency.Key()
-	}
-	if f.ActionRef != nil {
-		return f.ActionRef.FullName() + "@" + f.ActionRef.Ref
-	}
-	return ""
 }
 
 // extractRepoNWO strips sub-path and ref from a dep key like "owner/repo/sub@ref".
