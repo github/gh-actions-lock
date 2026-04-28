@@ -362,25 +362,13 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 			}
 		}
 
-		// Merge TAMPERED+UNREACHABLE for same dep; count categories.
+		// Count categories; render per-dep detail only for non-NOT_PINNED.
 		catCounts := map[doctor.Category]int{}
-		// Separate NOT_PINNED-only deps from deps with other issues.
-		type catGroup struct {
-			category doctor.Category
-			files    []string
-			sample   doctor.Finding
-		}
-		type renderedDep struct {
-			dep           string
-			hasTampered   bool
-			unreachDetail string
-			catOrder      []doctor.Category
-			catMap        map[doctor.Category]*catGroup
-			notPinnedOnly bool
-		}
-		var rendered []renderedDep
+		notPinnedDeps := 0
 		for _, dep := range depOrder {
 			dg := depMap[dep]
+
+			// Merge TAMPERED+UNREACHABLE for same dep.
 			hasTampered := false
 			var unreachableDetail string
 			for _, f := range dg.findings {
@@ -401,72 +389,32 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 				}
 				dg.findings = merged
 			}
+
+			// Tally and check if this dep is NOT_PINNED only.
+			allNotPinned := true
 			for _, f := range dg.findings {
 				catCounts[f.Category]++
+				if f.Category != doctor.CategoryNotPinned {
+					allNotPinned = false
+				}
+			}
+			if allNotPinned {
+				notPinnedDeps++
+				continue // pure aggregation — no per-dep output
 			}
 
-			var catOrd []doctor.Category
-			catM := map[doctor.Category]*catGroup{}
+			// Render per-dep detail for actionable categories.
 			for _, f := range dg.findings {
-				if cg, ok := catM[f.Category]; ok {
-					if f.WorkflowPath != "" {
-						cg.files = append(cg.files, f.WorkflowPath)
-					}
-				} else {
-					catOrd = append(catOrd, f.Category)
-					files := []string{}
-					if f.WorkflowPath != "" {
-						files = append(files, f.WorkflowPath)
-					}
-					catM[f.Category] = &catGroup{category: f.Category, files: files, sample: f}
+				if f.Category == doctor.CategoryNotPinned {
+					continue // skip NOT_PINNED lines in mixed groups too
 				}
-			}
-
-			notPinnedOnly := len(catOrd) == 1 && catOrd[0] == doctor.CategoryNotPinned
-			rendered = append(rendered, renderedDep{
-				dep: dep, hasTampered: hasTampered, unreachDetail: unreachableDetail,
-				catOrder: catOrd, catMap: catM, notPinnedOnly: notPinnedOnly,
-			})
-		}
-
-		// Render: show non-NOT_PINNED deps in full, cap NOT_PINNED-only list.
-		const maxNotPinned = 10
-		notPinnedShown := 0
-		notPinnedTotal := 0
-		for _, rd := range rendered {
-			if rd.notPinnedOnly {
-				notPinnedTotal++
-			}
-		}
-		for _, rd := range rendered {
-			for _, cat := range rd.catOrder {
-				cg := rd.catMap[cat]
-				f := cg.sample
-
-				// Cap NOT_PINNED-only deps when there are many.
-				if cat == doctor.CategoryNotPinned && rd.notPinnedOnly && notPinnedTotal > maxNotPinned {
-					notPinnedShown++
-					if notPinnedShown > maxNotPinned {
-						continue
-					}
+				label := strings.ToUpper(string(f.Category))
+				out.Detail("! %s %s", out.Dim(label), dep)
+				out.Detail("  %s", f.Detail)
+				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryTampered {
+					out.Detail("  %s", unreachableDetail)
 				}
-
-				label := strings.ToUpper(string(cat))
-				if len(cg.files) > 1 {
-					out.Detail("! %s %s (%d %s)",
-						out.Dim(label), rd.dep,
-						len(cg.files), ui.Pluralize(len(cg.files), "file", "files"))
-				} else {
-					out.Detail("! %s %s", out.Dim(label), rd.dep)
-				}
-				// Skip redundant detail for NOT_PINNED — the label says it all.
-				if cat != doctor.CategoryNotPinned {
-					out.Detail("  %s", f.Detail)
-				}
-				if rd.hasTampered && rd.unreachDetail != "" && cat == doctor.CategoryTampered {
-					out.Detail("  %s", rd.unreachDetail)
-				}
-				if f.Dependency != nil && cat == doctor.CategoryTampered {
+				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
 					parts := strings.SplitN(f.Dependency.NWO, "/", 3)
 					if len(parts) >= 2 {
 						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
@@ -474,11 +422,6 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 					}
 				}
 			}
-		}
-		if notPinnedTotal > maxNotPinned {
-			out.Detail("  ... and %d more unpinned %s",
-				notPinnedTotal-maxNotPinned,
-				ui.Pluralize(notPinnedTotal-maxNotPinned, "action", "actions"))
 		}
 
 		parts := []string{}
