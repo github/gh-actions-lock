@@ -1,0 +1,10 @@
+# Scenario: Action pinned to a bare SHA with no tag reference.
+# The tool detects this and presents a tag picker.
+name: SHA-as-ref demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nodeselector/actions-test-fixtures/nested-composite@ea53476fdc172d8552df5af9658a45a367e4f41d
