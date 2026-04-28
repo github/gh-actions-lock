@@ -38,7 +38,7 @@ func TestParseActionRef(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ParseActionRef(tt.input)
 			if tt.wantNil {
-				assert.Nil(t, got)
+				require.Nil(t, got)
 				return
 			}
 			require.NotNil(t, got)
@@ -171,7 +171,7 @@ func TestReadDependenciesNone(t *testing.T) {
 
 	deps, err := f.ReadDependencies()
 	require.NoError(t, err)
-	assert.Nil(t, deps)
+	require.Nil(t, deps)
 }
 
 func TestWriteDependencies(t *testing.T) {
