@@ -118,6 +118,15 @@ func (rem *Remediator) depKey(f Finding) string {
 	return ""
 }
 
+// skipDep records a dependency as skipped (needs interactive resolution).
+func (rem *Remediator) skipDep(dep *lockfile.Dependency) {
+	key := dep.Key()
+	rem.output.Skip("%s: requires interactive tag selection", key)
+	rem.choices[key] = "skipped"
+	rem.SkippedDeps = append(rem.SkippedDeps, key)
+	rem.Skipped++
+}
+
 func (rem *Remediator) repoNWO(f Finding) string {
 	if f.Dependency != nil {
 		parts := strings.SplitN(f.Dependency.NWO, "/", 3)
@@ -451,12 +460,9 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
 	depLabel := dep.NWO + "@" + rem.output.Hyperlink(dep.SHA[:12], commitURL)
 
-	if !rem.prompter.IsInteractive() {
+	if !rem.prompter.IsInteractive() && owner == "" {
 		rem.output.Warning("%s: %s", depLabel, finding.Detail)
-		rem.output.Skip("%s: requires interactive tag selection", dep.Key())
-		rem.choices[dep.Key()] = "skipped"
-		rem.SkippedDeps = append(rem.SkippedDeps, dep.Key())
-		rem.Skipped++
+		rem.skipDep(dep)
 		return nil
 	}
 
@@ -546,6 +552,11 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 
 	// If we found tags for this SHA, present smart suggestions.
 	if len(suggestions) > 0 {
+		if !rem.prompter.IsInteractive() {
+			// Multiple tags match — can't auto-pick, need human choice.
+			rem.skipDep(dep)
+			return nil
+		}
 		return rem.handleSHAWithSuggestions(wr, finding, suggestions, owner, repo)
 	}
 
@@ -556,6 +567,10 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	releasesLink := rem.output.Hyperlink("releases", releasesURL)
 	rem.output.Error("  commit %s does not belong to any release — you are running unreleased code", shaLink)
 	rem.output.Detail("  ↳ pin to a tagged release instead: %s", releasesLink)
+	if !rem.prompter.IsInteractive() {
+		rem.skipDep(dep)
+		return nil
+	}
 	return rem.handleSHATagPicker(wr, finding, owner, repo)
 }
 
