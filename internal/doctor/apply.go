@@ -76,19 +76,23 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 
 	// Narrow mutable version tags (v4, v4.2) to specific patch tags (v4.2.1)
 	// so that TAMPERED signals are meaningful — patch tags should never move.
+	// Skip narrowing for same-owner internal repos — broad tags are fine
+	// within your own org's private actions. Public repos always narrow.
 	rewrites := make(map[string]string)
 	for i := range deps {
 		dep := &deps[i]
 		if !IsMutableVersionTag(dep.Ref) {
 			continue
 		}
-		// Skip internal actions pinned to default branch.
-		if rem.isSameOwner(strings.SplitN(dep.NWO, "/", 3)[0]) {
-			continue
-		}
 		parts := strings.SplitN(dep.NWO, "/", 3)
 		if len(parts) < 2 {
 			continue
+		}
+		if rem.isSameOwner(parts[0]) {
+			info, err := rem.tagLister.GetRepoInfo(parts[0], parts[1])
+			if err == nil && info.IsInternal() {
+				continue
+			}
 		}
 		patchTag, err := rem.tagLister.BestPatchTagForSHA(parts[0], parts[1], dep.SHA)
 		if err != nil || patchTag == "" {
