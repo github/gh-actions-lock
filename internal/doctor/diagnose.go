@@ -10,7 +10,7 @@ import (
 	"github.com/github/gh-actions-pin/internal/ui"
 )
 
-var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
 
 // Diagnose scans a set of workflows and produces findings for each.
 // It performs no output — purely analytical.

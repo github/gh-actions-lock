@@ -150,7 +150,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 		}
 
 		if !first {
-			fmt.Fprintln(os.Stderr)
+			rem.output.Blank()
 		}
 		first = false
 
@@ -200,7 +200,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 		}
 	}
 
-	fmt.Fprintln(os.Stderr)
+	rem.output.Blank()
 	return nil
 }
 

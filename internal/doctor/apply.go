@@ -49,17 +49,9 @@ func (rem *Remediator) allRefsApproved(refs []lockfile.ActionRef) bool {
 	return true
 }
 
-// isSHARef returns true if ref looks like a full commit SHA (40 hex chars).
+// isSHARef returns true if ref looks like a full commit SHA (40 or 64 hex chars).
 func isSHARef(ref string) bool {
-	if len(ref) != 40 {
-		return false
-	}
-	for _, c := range ref {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
+	return lockfile.IsFullSHA(ref)
 }
 
 // LooksLikeVersion returns true if ref starts with "v" followed by a digit.

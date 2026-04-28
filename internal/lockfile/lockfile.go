@@ -78,13 +78,17 @@ func (d Dependency) Key() string {
 	return d.NWO + "@" + d.Ref
 }
 
+// HashAlgoOrDetect returns the hash algorithm, falling back to detection from SHA length.
+func (d Dependency) HashAlgoOrDetect() string {
+	if d.HashAlgo != "" {
+		return strings.ToLower(d.HashAlgo)
+	}
+	return detectHashAlgo(d.SHA)
+}
+
 // String formats the dependency as a YAML list entry.
 func (d Dependency) String() string {
-	algo := d.HashAlgo
-	if algo == "" {
-		algo = detectHashAlgo(d.SHA)
-	}
-	return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, strings.ToLower(algo), strings.ToLower(d.SHA))
+	return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, d.HashAlgoOrDetect(), strings.ToLower(d.SHA))
 }
 
 // ParseDependencyString parses a dependency entry string back into a Dependency.

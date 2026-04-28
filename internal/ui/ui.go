@@ -121,6 +121,11 @@ func (u *UI) Detail(msg string, args ...any) {
 	fmt.Fprintf(u.w, "  "+msg+"\n", args...)
 }
 
+// Blank prints an empty line.
+func (u *UI) Blank() {
+	fmt.Fprintln(u.w)
+}
+
 // Bold returns s in bold if color is enabled.
 func (u *UI) Bold(s string) string {
 	if u.noColor {

@@ -181,14 +181,14 @@ func runCheck(opts *checkOptions) error {
 
 		if err := rem.Remediate(report); err != nil {
 			if errors.Is(err, doctor.ErrAborted) {
-				fmt.Fprintln(os.Stderr)
+				output.Blank()
 				output.Info("Interrupted — no further changes applied")
 				return nil
 			}
 			return err
 		}
 
-		fmt.Fprintln(os.Stderr)
+		output.Blank()
 		if rem.Fixed > 0 {
 			output.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
 		}
@@ -423,16 +423,16 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 			// Print.
 			for _, f := range dg.findings {
 				cat := strings.ToUpper(string(f.Category))
-				fmt.Fprintf(os.Stderr, "  ! %s %s\n", output.Dim(cat), dep)
-				fmt.Fprintf(os.Stderr, "    %s\n", f.Detail)
+				output.Detail("! %s %s", output.Dim(cat), dep)
+				output.Detail("  %s", f.Detail)
 				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryTampered {
-					fmt.Fprintf(os.Stderr, "    %s\n", unreachableDetail)
+					output.Detail("  %s", unreachableDetail)
 				}
 				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
 					parts := strings.SplitN(f.Dependency.NWO, "/", 3)
 					if len(parts) >= 2 {
-						fmt.Fprintf(os.Stderr, "    → %s\n", output.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
-						fmt.Fprintf(os.Stderr, "    → %s\n", output.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", parts[0], parts[1])))
+						output.Detail("  → %s", output.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
+						output.Detail("  → %s", output.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", parts[0], parts[1])))
 					}
 				}
 			}
@@ -451,7 +451,7 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 			failedCount, checked,
 			ui.Pluralize(checked, "workflow", "workflows"),
 			strings.Join(parts, ", "))
-		fmt.Fprintln(os.Stderr)
+		output.Blank()
 	}
 
 	// Warnings.

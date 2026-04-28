@@ -99,11 +99,11 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	}, nil
 }
 
-// NewWithTransport creates a resolver with a custom HTTP transport. This is
-// primarily useful for tests that want cli/cli-style HTTP stubbing.
+// NewWithTransport creates a resolver with a custom HTTP transport and a
+// placeholder auth token. Intended for tests that stub HTTP responses.
 func NewWithTransport(hostname string, transport http.RoundTripper) (*Resolver, error) {
 	return NewWithOptions(api.ClientOptions{
-		AuthToken:    "test-token",
+		AuthToken:    "test-placeholder-token",
 		Host:         hostname,
 		Transport:    transport,
 		LogIgnoreEnv: true,
@@ -121,8 +121,8 @@ func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string
 	r.checkReachFn = fn
 }
 
-// isSHARef returns true if the ref looks like a full commit SHA (40 hex chars).
-var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+// isSHARef returns true if the ref looks like a full commit SHA (40 or 64 hex chars).
+var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
 
 // CheckReachability verifies that a resolved SHA is on the lineage of the
 // given ref within the repository. This catches fork-network injection where

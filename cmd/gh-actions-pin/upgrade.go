@@ -443,7 +443,7 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 	}
 
 	// Phase 4: Show the plan with release links.
-	fmt.Fprintln(os.Stderr)
+	output.Blank()
 	output.Header("Upgrade plan")
 	for _, idx := range selected {
 		c := candidates[idx]
@@ -458,7 +458,7 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 			output.Detail("in %s", f)
 		}
 	}
-	fmt.Fprintln(os.Stderr)
+	output.Blank()
 
 	// Phase 5: Confirm.
 	apply, err := opts.Prompter.Confirm("Apply these upgrades?", false)
@@ -648,8 +648,8 @@ func showDiff(hostname string, old, new []lockfile.Dependency) {
 
 	for _, c := range diff.Changed {
 		output.Infof("  %s %s\n", output.Yellow("~"), c.New.Key())
-		output.Infof("    %s sha1-%s\n", output.Red("-"), c.Old.SHA)
-		output.Infof("    %s sha1-%s\n", output.Green("+"), c.New.SHA)
+		output.Infof("    %s %s-%s\n", output.Red("-"), c.Old.HashAlgoOrDetect(), c.Old.SHA)
+		output.Infof("    %s %s-%s\n", output.Green("+"), c.New.HashAlgoOrDetect(), c.New.SHA)
 		output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
 	}
 
