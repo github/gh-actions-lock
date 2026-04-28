@@ -366,7 +366,6 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 
 		// Count categories; render per-dep detail only for non-NOT_PINNED.
 		catCounts := map[doctor.Category]int{}
-		notPinnedDeps := 0
 		for _, dep := range depOrder {
 			dg := depMap[dep]
 
@@ -401,7 +400,6 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				}
 			}
 			if allNotPinned {
-				notPinnedDeps++
 				continue // pure aggregation — no per-dep output
 			}
 
