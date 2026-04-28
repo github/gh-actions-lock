@@ -153,7 +153,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
-	var fixedCount int
+	var fixedCount, skippedCount, alertedCount int
 
 	if willRemediate && len(actionable) > 0 {
 		hostname := resolveHostname(opts.Hostname)
@@ -199,11 +199,13 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
 		}
 		fixedCount = rem.Fixed
+		skippedCount = rem.Skipped
+		alertedCount = rem.Alerted
 	}
 
 	if !valid {
-		// If remediation fixed issues, exit 0 — the user just watched it succeed.
-		if fixedCount > 0 {
+		// Exit 0 only if everything was resolved — nothing skipped or alerted.
+		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 {
 			return nil
 		}
 		return errSilent
