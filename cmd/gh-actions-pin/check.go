@@ -193,14 +193,15 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if rem.Fixed > 0 {
 			f.UI.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
 		}
-		if rem.Skipped > 0 {
-			f.UI.Skip("%d %s skipped", rem.Skipped, ui.Pluralize(rem.Skipped, "issue", "issues"))
+		uniqueSkipped := len(rem.SkippedDeps)
+		if uniqueSkipped > 0 {
+			f.UI.Skip("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
 		}
 		if rem.Alerted > 0 {
 			f.UI.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
 		}
 		fixedCount = rem.Fixed
-		skippedCount = rem.Skipped
+		skippedCount = uniqueSkipped
 		alertedCount = rem.Alerted
 		skippedDeps = rem.SkippedDeps
 	}
@@ -214,7 +215,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if remaining > 0 {
 			f.UI.Blank()
 			f.UI.Error("%d %s require interactive resolution — run `gh actions-pin` locally:",
-				remaining, ui.Pluralize(remaining, "issue", "issues"))
+				remaining, ui.Pluralize(remaining, "action", "actions"))
 			for _, dep := range skippedDeps {
 				f.UI.Detail("  %s", dep)
 			}
