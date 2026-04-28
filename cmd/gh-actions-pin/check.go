@@ -550,7 +550,14 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			if label == "" {
 				label = f.WorkflowPath
 			}
-			out.Warning("%s: %s", label, f.Detail)
+			if strings.Contains(f.Remediation, "transitive dependency") {
+				repoNWO := extractRepoNWO(label)
+				out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", label)
+				out.Detail("  ↳ this comes from a composite action's internal dependency")
+				out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
+			} else {
+				out.Warning("%s: %s", label, f.Detail)
+			}
 		}
 	}
 }
