@@ -535,7 +535,11 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			out.Detail("  ↳ this comes from a composite action's internal dependency")
 			out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
 		case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
-			out.Warning("%s: %s", depKey, f.Detail)
+			label := depKey
+			if label == "" {
+				label = f.WorkflowPath
+			}
+			out.Warning("%s: %s", label, f.Detail)
 		}
 	}
 }

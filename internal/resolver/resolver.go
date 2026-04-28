@@ -78,6 +78,11 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	}
 	opts.Host = hostname
 
+	// Wrap the transport with retry logic for transient 5xx/429 errors.
+	if opts.Transport == nil {
+		opts.Transport = newRetryTransport(http.DefaultTransport, 3)
+	}
+
 	client, err := api.NewGraphQLClient(opts)
 	if err != nil {
 		return nil, err
