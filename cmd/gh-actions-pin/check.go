@@ -21,7 +21,6 @@ type checkOptions struct {
 	JSONFields    string
 	Hostname      string
 	NoInteractive bool
-	Write         bool
 }
 
 // JSON output types — thin wrappers around doctor.Report.
@@ -66,8 +65,7 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			(composite actions that reference other actions).
 
 			When run interactively (TTY), offers to fix issues inline. Use
-			--no-interactive for report-only mode, or --accept-all to auto-fix
-			everything without prompting.
+			--no-interactive for report-only mode.
 
 			With --json, structured results go to stdout and progress to stderr:
 
@@ -87,9 +85,6 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 
 			# Verify a specific workflow
 			$ gh actions-pin check .github/workflows/ci.yml
-
-			# Auto-fix all issues without prompting
-			$ gh actions-pin check --accept-all
 
 			# Report-only mode (no prompts, no changes)
 			$ gh actions-pin check --no-interactive
@@ -112,7 +107,6 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
-	cmd.Flags().BoolVar(&opts.Write, "accept-all", false, "Auto-apply all safe fixes without prompting")
 	return cmd
 }
 
@@ -148,7 +142,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 	// Determine if interactive remediation will follow.
 	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && f.IsTerminal()
-	willRemediate := interactive || opts.Write
+	willRemediate := interactive
 
 	// Human-readable output.
 	presentCheckResults(f.UI, report, valid, willRemediate)
@@ -177,7 +171,6 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		}
 
 		rem := doctor.NewRemediator(prompter, r, restClient, f.UI, doctor.RemediateOptions{
-			Write:       opts.Write,
 			Interactive: interactive,
 			RepoOwner:   repoOwner,
 		})

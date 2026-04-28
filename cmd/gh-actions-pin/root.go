@@ -86,9 +86,6 @@ $ gh actions-pin .github/workflows/ci.yml
 # Output JSON for CI integration
 $ gh actions-pin --json=valid,errors
 
-# Auto-fix all issues without prompting
-$ gh actions-pin --accept-all
-
 # Upgrade a specific action
 $ gh actions-pin upgrade --action actions/checkout
 `),
@@ -104,7 +101,6 @@ $ gh actions-pin upgrade --action actions/checkout
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
-	cmd.Flags().BoolVar(&opts.Write, "accept-all", false, "Auto-apply all safe fixes without prompting")
 	cmd.AddCommand(newCheckCmd(f))
 	cmd.AddCommand(newUpgradeCmd(f))
 

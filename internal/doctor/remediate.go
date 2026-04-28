@@ -15,7 +15,6 @@ import (
 
 // RemediateOptions controls the remediation flow.
 type RemediateOptions struct {
-	Write       bool   // --write: auto-apply safe fixes without prompting
 	Interactive bool   // true when stderr is a TTY
 	RepoOwner   string // owner of the repo being scanned (for same-owner detection)
 }
@@ -206,11 +205,6 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 
 func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	rem.output.Warning("%d %s found but not pinned", len(wr.ActionRefs), ui.Pluralize(len(wr.ActionRefs), "action", "actions"))
-
-	if rem.opts.Write {
-		rem.markRefsApproved(wr.ActionRefs)
-		return rem.applyPin(wr)
-	}
 
 	if !rem.prompter.IsInteractive() {
 		rem.output.Hint("run `gh actions-pin check %s`", wr.Path)
@@ -434,13 +428,6 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 
 	if !rem.prompter.IsInteractive() {
 		rem.output.Hint("%s", finding.Remediation)
-		rem.Skipped++
-		return nil
-	}
-
-	// Batch mode can't choose a tag — skip.
-	if rem.opts.Write {
-		rem.output.Skip("%s: requires interactive tag selection", dep.Key())
 		rem.Skipped++
 		return nil
 	}
@@ -760,11 +747,6 @@ func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) erro
 		rem.output.Hint("%s", finding.Remediation)
 		rem.Skipped++
 		return nil
-	}
-
-	if rem.opts.Write {
-		// Batch mode: auto-apply ref changes — user clearly intended the change.
-		return rem.applyReResolve(wr, dep)
 	}
 
 	prompt := fmt.Sprintf("Re-pin %s to %s?", dep.NWO, newRef)
