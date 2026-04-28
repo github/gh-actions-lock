@@ -6,6 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 RESET="demo/vhs/reset-fixtures.sh"
 TAPES=(
   demo/vhs/check-autofix.tape
+  demo/vhs/ci-failure.tape
   demo/vhs/upgrade.tape
   demo/vhs/tamper-warning.tape
   demo/vhs/sha-as-ref.tape
