@@ -2,17 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/cli/go-gh/v2/pkg/repository"
-	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
@@ -28,7 +23,6 @@ type upgradeOptions struct {
 	Diff          bool
 	Hostname      string
 	JSONFields    string
-	Prompter      doctor.Prompter
 }
 
 type upgradeTarget struct {
@@ -61,22 +55,14 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			Upgrade action refs to newer versions and re-lock all direct and
 			transitive dependencies with their new commit SHAs.
 
-			With no flags, runs interactively: scans all workflows, shows which
-			actions have newer versions available with links to release notes,
-			and lets you pick which to upgrade.
+			Pass --action to target specific actions. Each action is upgraded to
+			its latest stable tag by default. Use --version to target a specific
+			version, or specify it inline as owner/repo@ref. Use --from to limit
+			upgrades to actions currently on a specific ref.
 
-			Pass --action to target specific actions non-interactively. Each
-			action is upgraded to its latest stable tag by default. Use --version
-			to target a specific version, or specify it inline as owner/repo@ref.
-			Use --from to limit upgrades to actions currently on a specific ref.
-
-			In non-interactive mode, changes are applied by default. Pass
-			--write=false to preview only.
+			Changes are applied by default. Pass --write=false to preview only.
 		`),
 		Example: heredoc.Doc(`
-			# Interactive: pick which actions to upgrade
-			$ gh actions-pin upgrade
-
 			# Upgrade checkout to the latest stable tag
 			$ gh actions-pin upgrade --action actions/checkout
 
@@ -96,16 +82,10 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
-			p := doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
-			opts.Prompter = p
 			if len(opts.Actions) == 0 {
-				// Interactive mode — must be a TTY.
-				if !p.IsInteractive() {
-					return fmt.Errorf("--action is required in non-interactive mode\n\n  gh actions-pin upgrade --action actions/checkout")
-				}
-				return runUpgradeInteractive(f, opts)
+				return fmt.Errorf("--action is required\n\n  gh actions-pin upgrade --action actions/checkout")
 			}
-			// Non-interactive: write by default unless --write=false was explicit.
+			// Write by default unless --write=false was explicit.
 			if !cmd.Flags().Changed("write") {
 				opts.Write = true
 			}
@@ -171,324 +151,6 @@ func writeUpgradeJSON(w io.Writer, changes []jsonUpgradeChange) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
-}
-
-// upgradeCandidate represents an action that can be upgraded.
-type upgradeCandidate struct {
-	NWO         string   // e.g. "actions/checkout"
-	CurrentRefs []string // deduplicated current refs across workflows (e.g. ["v5", "v4"])
-	LatestRef   string   // latest available tag (or default branch for re-resolve)
-	Files       []string // workflow files containing this action
-	ReResolve   bool     // true if this is a default-branch re-resolve (no ref change, just repin SHA)
-}
-
-// actionOccurrence tracks where a single NWO appears across workflows.
-type actionOccurrence struct {
-	refs     map[string]bool
-	files    map[string]bool
-	internal bool // same-owner action
-}
-
-// actionIndex holds the result of scanning workflows for action references.
-type actionIndex struct {
-	occurrences map[string]*actionOccurrence
-	order       []string          // stable NWO iteration order
-	pinnedSHAs  map[string]string // "owner/repo@ref" → SHA from lockfile
-}
-
-// scanWorkflowActions scans workflow files and builds an index of action
-// references, their locations, and currently pinned SHAs.
-func scanWorkflowActions(paths []string, repoOwner string) actionIndex {
-	idx := actionIndex{
-		occurrences: make(map[string]*actionOccurrence),
-		pinnedSHAs:  make(map[string]string),
-	}
-
-	for _, workflowPath := range paths {
-		wf, err := lockfile.Load(workflowPath)
-		if err != nil {
-			continue
-		}
-		refs, _, _ := wf.ExtractActionRefs()
-		for _, ref := range refs {
-			nwo := ref.NWO()
-			isInternal := repoOwner != "" && strings.EqualFold(ref.Owner, repoOwner)
-			occ, ok := idx.occurrences[nwo]
-			if !ok {
-				occ = &actionOccurrence{
-					refs:     make(map[string]bool),
-					files:    make(map[string]bool),
-					internal: isInternal,
-				}
-				idx.occurrences[nwo] = occ
-				idx.order = append(idx.order, nwo)
-			}
-			occ.refs[ref.Ref] = true
-			occ.files[workflowPath] = true
-		}
-
-		deps, _ := wf.ReadDependencies()
-		for _, dep := range deps {
-			depNWO := dep.NWO
-			if parts := strings.SplitN(depNWO, "/", 3); len(parts) == 3 {
-				depNWO = parts[0] + "/" + parts[1]
-			}
-			idx.pinnedSHAs[depNWO+"@"+dep.Ref] = dep.SHA
-		}
-	}
-
-	return idx
-}
-
-// findUpgradeCandidates resolves latest versions and returns actions that have
-// upgrades available. Warnings from tag resolution are returned separately.
-func findUpgradeCandidates(idx actionIndex, tagLister *doctor.TagLister) ([]upgradeCandidate, []string) {
-	var candidates []upgradeCandidate
-	var warnings []string
-
-	for _, nwo := range idx.order {
-		occ := idx.occurrences[nwo]
-		parts := strings.SplitN(nwo, "/", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		currentRefs := sortedKeys(occ.refs)
-		files := sortedKeys(occ.files)
-
-		if occ.internal {
-			cs := resolveInternalCandidates(nwo, occ, currentRefs, files, idx.pinnedSHAs, tagLister)
-			candidates = append(candidates, cs...)
-			continue
-		}
-
-		latest, err := tagLister.LatestStableTag(parts[0], parts[1])
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: %s", nwo, err))
-			continue
-		}
-		if latest == "" {
-			continue
-		}
-
-		hasUpgrade := false
-		for ref := range occ.refs {
-			if doctor.IsUpgrade(ref, latest) {
-				hasUpgrade = true
-				break
-			}
-		}
-		if !hasUpgrade {
-			continue
-		}
-
-		candidates = append(candidates, upgradeCandidate{
-			NWO:         nwo,
-			CurrentRefs: currentRefs,
-			LatestRef:   latest,
-			Files:       files,
-		})
-	}
-
-	return candidates, warnings
-}
-
-// resolveInternalCandidates handles same-owner actions which may need
-// default-branch re-resolve, version tag upgrade, or both.
-func resolveInternalCandidates(nwo string, occ *actionOccurrence, currentRefs, files []string, pinnedSHAs map[string]string, tagLister *doctor.TagLister) []upgradeCandidate {
-	parts := strings.SplitN(nwo, "/", 2)
-	info, err := tagLister.GetRepoInfo(parts[0], parts[1])
-	if err != nil {
-		return nil
-	}
-
-	var candidates []upgradeCandidate
-
-	// Check if default-branch HEAD has moved since last pin.
-	if occ.refs[info.DefaultBranch] {
-		currentSHA := pinnedSHAs[nwo+"@"+info.DefaultBranch]
-		headSHA, err := tagLister.BranchHeadSHA(parts[0], parts[1], info.DefaultBranch)
-		if err == nil && (currentSHA == "" || !strings.EqualFold(currentSHA, headSHA)) {
-			candidates = append(candidates, upgradeCandidate{
-				NWO:         nwo,
-				CurrentRefs: currentRefs,
-				LatestRef:   info.DefaultBranch,
-				Files:       files,
-				ReResolve:   true,
-			})
-		}
-	}
-
-	// Check version-tagged refs for upgrades.
-	hasVersionRef := false
-	for ref := range occ.refs {
-		if doctor.LooksLikeVersion(ref) {
-			hasVersionRef = true
-			break
-		}
-	}
-	if !hasVersionRef {
-		return candidates
-	}
-
-	latest, err := tagLister.LatestStableTag(parts[0], parts[1])
-	if err != nil || latest == "" {
-		return candidates
-	}
-
-	hasUpgrade := false
-	for ref := range occ.refs {
-		if doctor.LooksLikeVersion(ref) && doctor.IsUpgrade(ref, latest) {
-			hasUpgrade = true
-			break
-		}
-	}
-	if !hasUpgrade {
-		return candidates
-	}
-
-	var versionRefs []string
-	for _, ref := range currentRefs {
-		if doctor.LooksLikeVersion(ref) {
-			versionRefs = append(versionRefs, ref)
-		}
-	}
-	candidates = append(candidates, upgradeCandidate{
-		NWO:         nwo,
-		CurrentRefs: versionRefs,
-		LatestRef:   latest,
-		Files:       files,
-	})
-
-	return candidates
-}
-
-// sortedKeys returns the keys of a map[string]bool in sorted order.
-func sortedKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func runUpgradeInteractive(f *pinFactory, opts *upgradeOptions) error {
-	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
-	if err != nil {
-		return err
-	}
-
-	var repoOwner string
-	if currentRepo, err := repository.Current(); err == nil {
-		repoOwner = currentRepo.Owner
-	}
-
-	hostname := resolveHostname(opts.Hostname)
-	restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
-	if err != nil {
-		return err
-	}
-	tagLister := doctor.NewTagLister(restClient)
-
-	// Scan workflows for action references.
-	f.UI.StartProgress(fmt.Sprintf("Scanning %d %s", len(paths), ui.Pluralize(len(paths), "workflow", "workflows")))
-	idx := scanWorkflowActions(paths, repoOwner)
-	f.UI.StopProgress()
-
-	if len(idx.occurrences) == 0 {
-		f.UI.Success("No action references found")
-		return nil
-	}
-
-	// Resolve latest versions and find upgradable actions.
-	f.UI.StartProgress(fmt.Sprintf("Checking latest versions for %d %s",
-		len(idx.occurrences), ui.Pluralize(len(idx.occurrences), "action", "actions")))
-	candidates, warns := findUpgradeCandidates(idx, tagLister)
-	f.UI.StopProgress()
-
-	for _, w := range warns {
-		f.UI.Warning("%s", w)
-	}
-
-	if len(candidates) == 0 {
-		f.UI.Success("All actions are already at their latest versions")
-		return nil
-	}
-
-	// Present multi-select.
-	menuOptions := make([]string, len(candidates))
-	for i, c := range candidates {
-		if c.ReResolve {
-			menuOptions[i] = fmt.Sprintf("%s: re-resolve @%s (repin to latest commit)  (%d %s)",
-				c.NWO, c.LatestRef,
-				len(c.Files), ui.Pluralize(len(c.Files), "file", "files"))
-		} else {
-			current := strings.Join(c.CurrentRefs, ", ")
-			menuOptions[i] = fmt.Sprintf("%s: %s → %s  (%d %s)",
-				c.NWO, current, c.LatestRef,
-				len(c.Files), ui.Pluralize(len(c.Files), "file", "files"))
-		}
-	}
-
-	selected, err := opts.Prompter.MultiSelect("Select actions to upgrade", menuOptions)
-	if err != nil {
-		if errors.Is(err, doctor.ErrAborted) {
-			return nil
-		}
-		return err
-	}
-	if len(selected) == 0 {
-		f.UI.Info("Nothing selected")
-		return nil
-	}
-
-	// Phase 4: Show the plan with release links.
-	f.UI.Blank()
-	f.UI.Header("Upgrade plan")
-	for _, idx := range selected {
-		c := candidates[idx]
-		if c.ReResolve {
-			f.UI.Info("%s: re-resolve @%s to latest commit", c.NWO, c.LatestRef)
-		} else {
-			current := strings.Join(c.CurrentRefs, ", ")
-			f.UI.Info("%s: %s → %s", c.NWO, current, c.LatestRef)
-			f.UI.Detail("Release notes: https://github.com/%s/releases/tag/%s", c.NWO, c.LatestRef)
-		}
-		for _, file := range c.Files {
-			f.UI.Detail("in %s", file)
-		}
-	}
-	f.UI.Blank()
-
-	// Phase 5: Confirm.
-	apply, err := opts.Prompter.Confirm("Apply these upgrades?", false)
-	if err != nil {
-		if errors.Is(err, doctor.ErrAborted) {
-			return nil
-		}
-		return err
-	}
-	if !apply {
-		f.UI.Info("Upgrade cancelled")
-		return nil
-	}
-
-	// Phase 6: Apply. Build --action list and delegate to the existing upgrade path.
-	var actions []string
-	for _, idx := range selected {
-		c := candidates[idx]
-		actions = append(actions, c.NWO+"@"+c.LatestRef)
-	}
-
-	applyOpts := &upgradeOptions{
-		WorkflowPaths: paths,
-		Actions:       actions,
-		Write:         true,
-		Diff:          false,
-		Hostname:      opts.Hostname,
-	}
-	return runUpgrade(f, applyOpts)
 }
 
 func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
@@ -613,12 +275,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	}
 
 	if !opts.Write {
-		reviewHint := ""
-		if !opts.Diff {
-			reviewHint = buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, false)
-		}
-		applyHint := buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, true)
-		f.UI.Info("%s", previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
+		f.UI.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
 		return changes, nil
 	}
 
@@ -677,158 +334,6 @@ func showDiff(out *ui.UI, hostname string, old, new []lockfile.Dependency) {
 	if n := len(diff.Unchanged); n > 0 {
 		out.Infof("  %s\n", out.Dim(fmt.Sprintf("%d unchanged", n)))
 	}
-}
-
-type previewStats struct {
-	directAdded       int
-	directChanged     int
-	directRemoved     int
-	directUnchanged   int
-	transitiveAdded   int
-	transitiveChanged int
-	transitiveRemoved int
-	transitiveKept    int
-}
-
-func (s previewStats) hasChanges() bool {
-	return s.directAdded+s.directChanged+s.directRemoved+s.transitiveAdded+s.transitiveChanged+s.transitiveRemoved > 0
-}
-
-func (s previewStats) unchanged() int {
-	return s.directUnchanged + s.transitiveKept
-}
-
-func (s previewStats) hasTransitive() bool {
-	return s.transitiveAdded+s.transitiveChanged+s.transitiveRemoved+s.transitiveKept > 0
-}
-
-func previewMessage(workflowPath string, refs []lockfile.ActionRef, old, new []lockfile.Dependency, reviewHint, applyHint string) string {
-	stats := summarizePreview(refs, old, new)
-	var lines []string
-
-	if !stats.hasChanges() {
-		lines = append(lines, fmt.Sprintf("Preview: no dependency changes for %s", workflowPath))
-		if unchanged := stats.unchanged(); unchanged > 0 {
-			lines = append(lines, fmt.Sprintf("  unchanged: %d", unchanged))
-		}
-		return strings.Join(lines, "\n")
-	}
-
-	lines = append(lines, fmt.Sprintf("Preview summary for %s", workflowPath))
-	lines = append(lines, "  "+formatChangeSummary("direct", stats.directAdded, stats.directChanged, stats.directRemoved))
-	if stats.hasTransitive() {
-		lines = append(lines, "  "+formatChangeSummary("transitive", stats.transitiveAdded, stats.transitiveChanged, stats.transitiveRemoved))
-	}
-	if unchanged := stats.unchanged(); unchanged > 0 {
-		lines = append(lines, fmt.Sprintf("  unchanged: %d", unchanged))
-	}
-	if len(old) > 0 && stats.directAdded+stats.directChanged+stats.directRemoved > 0 {
-		lines = append(lines, "  Direct ref changes need `gh actions-pin upgrade --action <action>`.")
-	}
-	if reviewHint != "" {
-		lines = append(lines, "  Review with: "+reviewHint)
-	}
-	if applyHint != "" {
-		lines = append(lines, "  Apply with:  "+applyHint)
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func summarizePreview(refs []lockfile.ActionRef, old, new []lockfile.Dependency) previewStats {
-	var stats previewStats
-
-	directNames := make(map[string]struct{}, len(refs))
-	for _, ref := range refs {
-		directNames[ref.FullName()] = struct{}{}
-	}
-
-	isDirect := func(nwo string) bool {
-		_, ok := directNames[nwo]
-		return ok
-	}
-
-	diff := lockfile.DiffDeps(old, new)
-
-	for _, c := range diff.Changed {
-		if isDirect(c.New.NWO) {
-			stats.directChanged++
-		} else {
-			stats.transitiveChanged++
-		}
-	}
-	for _, c := range diff.Rekeyed {
-		if isDirect(c.New.NWO) {
-			stats.directChanged++
-		} else {
-			stats.transitiveChanged++
-		}
-	}
-	for _, dep := range diff.Added {
-		if isDirect(dep.NWO) {
-			stats.directAdded++
-		} else {
-			stats.transitiveAdded++
-		}
-	}
-	for _, dep := range diff.Removed {
-		if isDirect(dep.NWO) {
-			stats.directRemoved++
-		} else {
-			stats.transitiveRemoved++
-		}
-	}
-	for _, dep := range diff.Unchanged {
-		if isDirect(dep.NWO) {
-			stats.directUnchanged++
-		} else {
-			stats.transitiveKept++
-		}
-	}
-
-	return stats
-}
-
-func formatChangeSummary(label string, added, changed, removed int) string {
-	parts := []string{}
-	if added > 0 {
-		parts = append(parts, fmt.Sprintf("%d added", added))
-	}
-	if changed > 0 {
-		parts = append(parts, fmt.Sprintf("%d changed", changed))
-	}
-	if removed > 0 {
-		parts = append(parts, fmt.Sprintf("%d removed", removed))
-	}
-	if len(parts) == 0 {
-		return fmt.Sprintf("%s: no changes", label)
-	}
-	return fmt.Sprintf("%s: %s", label, strings.Join(parts, ", "))
-}
-
-func shellQuote(arg string) string {
-	if strings.ContainsAny(arg, " \t\n\"'\\") {
-		return fmt.Sprintf("%q", arg)
-	}
-	return arg
-}
-
-func buildCommandHint(base, workflowPath string, actions []string, fromRef, version string, write bool) string {
-	parts := []string{base}
-	for _, action := range actions {
-		parts = append(parts, "--action", shellQuote(action))
-	}
-	if fromRef != "" {
-		parts = append(parts, "--from", shellQuote(fromRef))
-	}
-	if version != "" {
-		parts = append(parts, "--version", shellQuote(version))
-	}
-	if write {
-		parts = append(parts, "--write")
-	}
-	parts = append(parts, shellQuote(workflowPath))
-	return strings.Join(parts, " ")
 }
 
 func parseUpgradeTargets(actions []string, fromRef, version string) ([]upgradeTarget, error) {
