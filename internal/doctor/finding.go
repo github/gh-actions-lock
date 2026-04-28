@@ -48,6 +48,8 @@ type Finding struct {
 	ActionRef *lockfile.ActionRef
 	// Dependency is the existing pinned dep if any.
 	Dependency *lockfile.Dependency
+	// ParentNWO is the dep key of the direct action that pulls in this transitive dep (empty if direct).
+	ParentNWO string
 	// Detail is a human-readable explanation.
 	Detail string
 	// Remediation describes what doctor can do about it.

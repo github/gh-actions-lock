@@ -324,6 +324,10 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			})
 		case resolver.ReachabilityUnknown:
 			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
+			parentNWO := ""
+			if isTransitive {
+				parentNWO = r.ParentMap()[rr.Owner+"/"+rr.Repo]
+			}
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
 				Category:     CategoryValid,
@@ -334,6 +338,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 					Ref: rr.Ref,
 					SHA: rr.SHA,
 				},
+				ParentNWO: parentNWO,
 				Remediation: func() string {
 					if isTransitive {
 						return "transitive dependency pinned to a bare SHA — reachability cannot be verified"

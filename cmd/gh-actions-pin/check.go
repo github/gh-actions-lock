@@ -459,8 +459,9 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 
 	// Warnings — deduplicate by dep key.
 	type warningGroup struct {
-		finding doctor.Finding
-		count   int
+		finding   doctor.Finding
+		count     int
+		workflows []string
 	}
 	var warnOrder []string
 	warnMap := map[string]*warningGroup{}
@@ -473,9 +474,10 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				}
 				if wg, ok := warnMap[key]; ok {
 					wg.count++
+					wg.workflows = append(wg.workflows, f.WorkflowPath)
 				} else {
 					warnOrder = append(warnOrder, key)
-					warnMap[key] = &warningGroup{finding: f, count: 1}
+					warnMap[key] = &warningGroup{finding: f, count: 1, workflows: []string{f.WorkflowPath}}
 				}
 			}
 		}
@@ -543,8 +545,7 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			// Transitive deps — shown individually since remediation differs.
 			repoNWO := extractRepoNWO(depKey)
 			out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
-			out.Detail("  ↳ this comes from a composite action's internal dependency")
-			out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
+			printTransitiveContext(out, f.ParentNWO, wg.workflows, repoNWO)
 		case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
 			label := depKey
 			if label == "" {
@@ -553,13 +554,33 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			if strings.Contains(f.Remediation, "transitive dependency") {
 				repoNWO := extractRepoNWO(label)
 				out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", label)
-				out.Detail("  ↳ this comes from a composite action's internal dependency")
-				out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
+				printTransitiveContext(out, f.ParentNWO, wg.workflows, repoNWO)
 			} else {
 				out.Warning("%s: %s", label, f.Detail)
 			}
 		}
 	}
+}
+
+// printTransitiveContext prints ↳ lines for a transitive dep finding.
+func printTransitiveContext(out *ui.UI, parentNWO string, workflows []string, repoNWO string) {
+	if parentNWO != "" {
+		out.Detail("  ↳ pulled in by %s", out.Bold(parentNWO))
+	} else {
+		out.Detail("  ↳ this comes from a composite action's internal dependency")
+	}
+	if len(workflows) > 0 {
+		out.Detail("  ↳ in %s", ui.Pluralize(len(workflows), "workflow", "workflows")+": "+formatWorkflowPaths(workflows))
+	}
+	out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
+}
+
+// formatWorkflowPaths formats a list of workflow paths for display.
+func formatWorkflowPaths(paths []string) string {
+	if len(paths) <= 3 {
+		return strings.Join(paths, ", ")
+	}
+	return strings.Join(paths[:3], ", ") + fmt.Sprintf(" (+%d more)", len(paths)-3)
 }
 
 // extractRepoNWO strips sub-path and ref from a dep key like "owner/repo/sub@ref".

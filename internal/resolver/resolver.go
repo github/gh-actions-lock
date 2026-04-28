@@ -61,8 +61,18 @@ type Resolver struct {
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
+	// parentMap tracks child NWO → parent dep key from last ResolveAllRecursive call.
+	parentMap map[string]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
+}
+
+// ParentMap returns the child NWO → parent dep key mapping from the last ResolveAllRecursive call.
+func (r *Resolver) ParentMap() map[string]string {
+	if r.parentMap == nil {
+		return map[string]string{}
+	}
+	return r.parentMap
 }
 
 // New creates a resolver using the authenticated gh context.
@@ -311,6 +321,7 @@ func cacheKey(ref lockfile.ActionRef) string {
 func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.Dependency, error) {
 	seen := make(map[string]bool)
 	var allDeps []lockfile.Dependency
+	r.parentMap = make(map[string]string)
 
 	pending := refs
 	depth := 0
@@ -351,8 +362,13 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 				continue
 			}
 
+			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
 				if actionRef := lockfile.ParseActionRef(use); actionRef != nil {
+					childNWO := actionRef.FullName()
+					if _, exists := r.parentMap[childNWO]; !exists {
+						r.parentMap[childNWO] = parentKey
+					}
 					nextPending = append(nextPending, *actionRef)
 				}
 			}
