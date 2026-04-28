@@ -482,13 +482,28 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 		}
 	}
 
+	// Collect workflow-level NOT_PINNED warnings separately for collapsing.
+	var unpinnedWorkflows []string
+	var otherWarnings []string
 	for _, key := range warnOrder {
+		wg := warnMap[key]
+		f := wg.finding
+		if f.Category == doctor.CategoryNotPinned && f.ActionRef == nil {
+			unpinnedWorkflows = append(unpinnedWorkflows, f.WorkflowPath)
+		} else {
+			otherWarnings = append(otherWarnings, key)
+		}
+	}
+	if len(unpinnedWorkflows) > 0 {
+		out.Warning("%d %s not yet pinned (run `gh actions-pin` to fix)",
+			len(unpinnedWorkflows),
+			ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
+	}
+	for _, key := range otherWarnings {
 		wg := warnMap[key]
 		f := wg.finding
 		depKey := f.DepKey()
 		switch {
-		case f.Category == doctor.CategoryNotPinned && f.ActionRef == nil:
-			out.Warning("%s: not yet pinned (run `gh actions-pin` to fix)", f.WorkflowPath)
 		case f.Category == doctor.CategorySHAAsRef:
 			isTransitive := f.Dependency != nil && f.ActionRef == nil
 			repoNWO := extractRepoNWO(depKey)
