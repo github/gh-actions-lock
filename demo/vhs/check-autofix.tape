@@ -1,26 +1,35 @@
 Output check-autofix.gif
 
-Set Shell zsh
+Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"
 Set FontSize 14
 Set Width 1200
 Set Height 700
 Set Framerate 24
 Set PlaybackSpeed 1.5
-Set TypingSpeed 5ms
+Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-# Show the unpinned workflow
-Type "cat demo/workflows-check/ci.yml"
-Enter 1
+Type "echo '# Unpinned workflow — 3 actions using mutable tags'"
+Enter
+Sleep 1s
+
+Type "grep uses: demo/workflows-check/ci.yml"
+Enter
 Sleep 2s
 
-# Run check to detect unpinned actions and auto-fix
-Type "gh actions-pin check --fix demo/workflows-check/ci.yml"
-Enter 1
+Type "echo '# Pin all actions (non-interactive auto-fix)'"
+Enter
+Sleep 1s
+
+Type "gh actions-pin check --no-interactive demo/workflows-check/ci.yml"
+Enter
 Sleep 12s
 
-# Show the pinned result
-Type "cat demo/workflows-check/ci.yml"
-Enter 1
+Type "echo '# Lockfile written — check the result'"
+Enter
+Sleep 1s
+
+Type "tail -6 demo/workflows-check/ci.yml"
+Enter
 Sleep 3s

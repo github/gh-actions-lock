@@ -7,14 +7,18 @@ Set Width 1200
 Set Height 700
 Set Framerate 24
 Set PlaybackSpeed 1.5
-Set TypingSpeed 5ms
+Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-# Scene: Action uses a bare SHA — tool detects and presents tag picker
-Type "# Action uses a bare SHA instead of a tag ref"
+Type "echo '# Action uses a bare SHA instead of a tag'"
 Enter
-Sleep 500ms
-Type "grep 'uses:' demo/workflows-interactive/sha-as-ref.yml"
+Sleep 1s
+
+Type "grep uses: demo/workflows-interactive/sha-as-ref.yml"
+Enter
+Sleep 2s
+
+Type "echo '# The tool detects this and offers tag suggestions'"
 Enter
 Sleep 1s
 
@@ -22,11 +26,11 @@ Type "gh actions-pin check demo/workflows-interactive/sha-as-ref.yml"
 Enter
 Sleep 8s
 
-# Tag picker is visible — select v1.0.1 (already highlighted as recommended)
+# Select first suggestion (recommended tag)
 Enter
 Sleep 3s
 
-# Confirm pin
+# Confirm
 Type "y"
 Enter
 Sleep 5s

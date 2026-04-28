@@ -1,37 +1,46 @@
 Output upgrade.gif
 
-Set Shell zsh
+Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"
 Set FontSize 14
 Set Width 1200
 Set Height 700
 Set Framerate 24
 Set PlaybackSpeed 1.5
-Set TypingSpeed 5ms
+Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-# Show current pinned versions
-Type "grep -A1 'uses:\|dependencies:' demo/workflows-upgrade/ci.yml | head -20"
-Enter 1
+Type "echo '# Currently pinned to older versions'"
+Enter
+Sleep 1s
+
+Type "grep -E 'uses:|  -' demo/workflows-upgrade/ci.yml"
+Enter
 Sleep 2s
 
-# Run upgrade to find newer versions
+Type "echo '# Upgrade all actions to latest'"
+Enter
+Sleep 1s
+
 Type "gh actions-pin upgrade demo/workflows-upgrade/ci.yml"
-Enter 1
+Enter
 Sleep 10s
 
 # Select all upgrades
 Type "a"
 Sleep 500ms
-Enter 1
+Enter
 Sleep 3s
 
 # Confirm
 Type "y"
-Enter 1
+Enter
 Sleep 5s
 
-# Show updated versions
-Type "grep 'uses:\|  -' demo/workflows-upgrade/ci.yml"
-Enter 1
+Type "echo '# Updated refs and lockfile'"
+Enter
+Sleep 1s
+
+Type "grep -E 'uses:|  -' demo/workflows-upgrade/ci.yml"
+Enter
 Sleep 3s
