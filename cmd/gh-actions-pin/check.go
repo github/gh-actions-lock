@@ -208,6 +208,11 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 {
 			return nil
 		}
+		remaining := skippedCount + alertedCount
+		if remaining > 0 {
+			f.UI.Error("%d %s require interactive resolution — run `gh actions-pin` locally",
+				remaining, ui.Pluralize(remaining, "issue", "issues"))
+		}
 		return errSilent
 	}
 	return nil
