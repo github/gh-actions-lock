@@ -390,15 +390,46 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 			for _, f := range dg.findings {
 				catCounts[f.Category]++
 			}
-			// Print.
+			// Deduplicate findings by category within each dep group.
+			// For repeated identical categories (e.g. NOT_PINNED across many workflows),
+			// show once with a count of affected files.
+			type catGroup struct {
+				category doctor.Category
+				files    []string
+				sample   doctor.Finding
+			}
+			var catOrder []doctor.Category
+			catMap := map[doctor.Category]*catGroup{}
 			for _, f := range dg.findings {
-				cat := strings.ToUpper(string(f.Category))
-				out.Detail("! %s %s", out.Dim(cat), dep)
+				if cg, ok := catMap[f.Category]; ok {
+					if f.WorkflowPath != "" {
+						cg.files = append(cg.files, f.WorkflowPath)
+					}
+				} else {
+					catOrder = append(catOrder, f.Category)
+					files := []string{}
+					if f.WorkflowPath != "" {
+						files = append(files, f.WorkflowPath)
+					}
+					catMap[f.Category] = &catGroup{category: f.Category, files: files, sample: f}
+				}
+			}
+			for _, cat := range catOrder {
+				cg := catMap[cat]
+				f := cg.sample
+				label := strings.ToUpper(string(cat))
+				if len(cg.files) > 1 {
+					out.Detail("! %s %s (%d %s)",
+						out.Dim(label), dep,
+						len(cg.files), ui.Pluralize(len(cg.files), "file", "files"))
+				} else {
+					out.Detail("! %s %s", out.Dim(label), dep)
+				}
 				out.Detail("  %s", f.Detail)
-				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryTampered {
+				if hasTampered && unreachableDetail != "" && cat == doctor.CategoryTampered {
 					out.Detail("  %s", unreachableDetail)
 				}
-				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
+				if f.Dependency != nil && cat == doctor.CategoryTampered {
 					parts := strings.SplitN(f.Dependency.NWO, "/", 3)
 					if len(parts) >= 2 {
 						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
@@ -424,12 +455,26 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 		out.Blank()
 	}
 
-	// Warnings.
-	var warnings []doctor.Finding
+	// Warnings — deduplicate by dep key.
+	type warningGroup struct {
+		finding doctor.Finding
+		count   int
+	}
+	var warnOrder []string
+	warnMap := map[string]*warningGroup{}
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
 			if f.IsWarning() {
-				warnings = append(warnings, f)
+				key := f.DepKey()
+				if key == "" {
+					key = f.WorkflowPath // workflow-level warnings
+				}
+				if wg, ok := warnMap[key]; ok {
+					wg.count++
+				} else {
+					warnOrder = append(warnOrder, key)
+					warnMap[key] = &warningGroup{finding: f, count: 1}
+				}
 			}
 		}
 		for _, pw := range wr.ParseWarnings {
@@ -437,7 +482,9 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 		}
 	}
 
-	for _, f := range warnings {
+	for _, key := range warnOrder {
+		wg := warnMap[key]
+		f := wg.finding
 		depKey := f.DepKey()
 		switch {
 		case f.Category == doctor.CategoryNotPinned && f.ActionRef == nil:
