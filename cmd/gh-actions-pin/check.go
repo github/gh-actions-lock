@@ -509,7 +509,12 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
 		}
 	}
-	// Separate SHA_AS_REF warnings into direct (aggregate) and transitive (individual).
+	// Separate SHA_AS_REF warnings into direct (aggregate) and transitive (suppressed).
+	// TODO: Transitive deps pinned to bare SHAs are silently swallowed for now.
+	// We need to figure out how to coexist better with composite actions that
+	// don't use dependency pinning — warning on every transitive dep is noisy
+	// and not actionable by the consumer. Revisit when we have a story for
+	// composite action authors to adopt pinning.
 	var bareSHADeps []string
 	var otherDetailWarnings []string
 	for _, key := range otherWarnings {
@@ -517,11 +522,13 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 		f := wg.finding
 		if f.Category == doctor.CategorySHAAsRef {
 			isTransitive := f.Dependency != nil && f.ActionRef == nil
-			if isTransitive {
-				otherDetailWarnings = append(otherDetailWarnings, key)
-			} else {
+			if !isTransitive {
 				bareSHADeps = append(bareSHADeps, key)
 			}
+			// transitive SHA_AS_REF: silently swallowed (see TODO above)
+		} else if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning &&
+			strings.Contains(f.Remediation, "transitive dependency") {
+			// transitive reachability unknown: silently swallowed (see TODO above)
 		} else {
 			otherDetailWarnings = append(otherDetailWarnings, key)
 		}
@@ -540,41 +547,12 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 		wg := warnMap[key]
 		f := wg.finding
 		depKey := f.DepKey()
-		switch {
-		case f.Category == doctor.CategorySHAAsRef:
-			out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
-			printTransitiveContext(out, f.ParentNWO, wg.workflows)
-		case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
+		if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning {
 			label := depKey
 			if label == "" {
 				label = f.WorkflowPath
 			}
-			if strings.Contains(f.Remediation, "transitive dependency") {
-				out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", label)
-				printTransitiveContext(out, f.ParentNWO, wg.workflows)
-			} else {
-				out.Warning("%s: %s", label, f.Detail)
-			}
+			out.Warning("%s: %s", label, f.Detail)
 		}
 	}
-}
-
-// printTransitiveContext prints ↳ lines for a transitive dep finding.
-func printTransitiveContext(out *ui.UI, parentNWO string, workflows []string) {
-	if parentNWO != "" {
-		out.Detail("  ↳ pulled in by %s", out.Bold(parentNWO))
-	} else {
-		out.Detail("  ↳ this comes from a composite action's internal dependency")
-	}
-	if len(workflows) > 0 {
-		out.Detail("  ↳ in %s", ui.Pluralize(len(workflows), "workflow", "workflows")+": "+formatWorkflowPaths(workflows))
-	}
-}
-
-// formatWorkflowPaths formats a list of workflow paths for display.
-func formatWorkflowPaths(paths []string) string {
-	if len(paths) <= 3 {
-		return strings.Join(paths, ", ")
-	}
-	return strings.Join(paths[:3], ", ") + fmt.Sprintf(" (+%d more)", len(paths)-3)
 }
