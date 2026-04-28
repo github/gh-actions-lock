@@ -55,21 +55,19 @@ func newUpgradeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade [<workflow-path>...]",
 		Args:  cobra.ArbitraryArgs,
-		Short: "Upgrade workflow action refs and repin dependencies",
+		Short: "Upgrade action versions and re-lock dependencies",
 		Long: heredoc.Doc(`
-			Upgrade selected workflow actions to a newer ref and then recompute the
-			inline dependencies: lock section.
+			Upgrade action refs to newer versions and re-lock all direct and
+			transitive dependencies with their new commit SHAs.
 
 			With no flags, runs interactively: scans all workflows, shows which
-			actions have newer versions available, and lets you pick which to
-			upgrade. Release page links are shown so you can review changelogs
-			before confirming.
+			actions have newer versions available with links to release notes,
+			and lets you pick which to upgrade.
 
-			Pass --action to target specific actions non-interactively. By default,
-			each selected action is upgraded to its latest stable tag. Use --version
-			to force a specific target ref for all selected actions, or specify it
-			inline as owner/repo@ref. Use --from to limit upgrades to actions
-			currently on a specific ref.
+			Pass --action to target specific actions non-interactively. Each
+			action is upgraded to its latest stable tag by default. Use --version
+			to target a specific version, or specify it inline as owner/repo@ref.
+			Use --from to limit upgrades to actions currently on a specific ref.
 
 			In non-interactive mode, changes are applied by default. Pass
 			--write=false to preview only.
@@ -121,6 +119,7 @@ func newUpgradeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the upgraded refs and dependencies back to the workflow file")
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (updated)")
+	cmd.Flags().Lookup("json").NoOptDefVal = "updated"
 
 	return cmd
 }
