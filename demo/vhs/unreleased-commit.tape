@@ -11,7 +11,7 @@ Set TypingSpeed 5ms
 Set Theme "GitHub Dark"
 
 # Scene: Action pinned to an unreleased commit — warning + tag picker
-Type "# Action pinned to a commit that doesn't belong to any release"
+Type "# Action pinned to a commit with no tagged release"
 Enter
 Sleep 500ms
 Type "grep 'uses:' demo/workflows-interactive/unreleased-commit.yml"
