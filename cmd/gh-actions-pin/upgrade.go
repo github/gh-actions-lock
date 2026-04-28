@@ -181,39 +181,27 @@ type upgradeCandidate struct {
 	ReResolve   bool     // true if this is a default-branch re-resolve (no ref change, just repin SHA)
 }
 
-func runUpgradeInteractive(opts *upgradeOptions) error {
-	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
-	if err != nil {
-		return err
-	}
+// actionOccurrence tracks where a single NWO appears across workflows.
+type actionOccurrence struct {
+	refs     map[string]bool
+	files    map[string]bool
+	internal bool // same-owner action
+}
 
-	// Detect current repo owner for same-owner (internal) action filtering.
-	var repoOwner string
-	if currentRepo, err := repository.Current(); err == nil {
-		repoOwner = currentRepo.Owner
-	}
+// actionIndex holds the result of scanning workflows for action references.
+type actionIndex struct {
+	occurrences map[string]*actionOccurrence
+	order       []string            // stable NWO iteration order
+	pinnedSHAs  map[string]string   // "owner/repo@ref" → SHA from lockfile
+}
 
-	// TagLister for cooldown-aware, paginated tag resolution.
-	hostname := resolveHostname(opts.Hostname)
-	restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
-	if err != nil {
-		return err
+// scanWorkflowActions scans workflow files and builds an index of action
+// references, their locations, and currently pinned SHAs.
+func scanWorkflowActions(paths []string, repoOwner string) actionIndex {
+	idx := actionIndex{
+		occurrences: make(map[string]*actionOccurrence),
+		pinnedSHAs:  make(map[string]string),
 	}
-	tagLister := doctor.NewTagLister(restClient)
-
-	// Phase 1: Scan all workflows and collect unique direct action NWOs.
-	output.StartProgress(fmt.Sprintf("Scanning %d %s", len(paths), ui.Pluralize(len(paths), "workflow", "workflows")))
-
-	type actionOccurrence struct {
-		refs     map[string]bool
-		files    map[string]bool
-		internal bool // same-owner action
-	}
-	occurrences := make(map[string]*actionOccurrence) // keyed by NWO
-	var nwoOrder []string
-	// Collect current pinned SHAs from lockfile deps for re-resolve staleness check.
-	// Key: "owner/repo@ref" → SHA
-	pinnedSHAs := make(map[string]string)
 
 	for _, workflowPath := range paths {
 		wf, err := lockfile.Load(workflowPath)
@@ -224,140 +212,64 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 		for _, ref := range refs {
 			nwo := ref.NWO()
 			isInternal := repoOwner != "" && strings.EqualFold(ref.Owner, repoOwner)
-			occ, ok := occurrences[nwo]
+			occ, ok := idx.occurrences[nwo]
 			if !ok {
 				occ = &actionOccurrence{
 					refs:     make(map[string]bool),
 					files:    make(map[string]bool),
 					internal: isInternal,
 				}
-				occurrences[nwo] = occ
-				nwoOrder = append(nwoOrder, nwo)
+				idx.occurrences[nwo] = occ
+				idx.order = append(idx.order, nwo)
 			}
 			occ.refs[ref.Ref] = true
 			occ.files[workflowPath] = true
 		}
 
-		// Read lockfile dependencies for pinned SHAs.
 		deps, _ := wf.ReadDependencies()
 		for _, dep := range deps {
-			// Normalize dep NWO to owner/repo (strip sub-path like /save).
 			depNWO := dep.NWO
 			if parts := strings.SplitN(depNWO, "/", 3); len(parts) == 3 {
 				depNWO = parts[0] + "/" + parts[1]
 			}
-			pinnedSHAs[depNWO+"@"+dep.Ref] = dep.SHA
+			idx.pinnedSHAs[depNWO+"@"+dep.Ref] = dep.SHA
 		}
 	}
 
-	output.StopProgress()
+	return idx
+}
 
-	if len(occurrences) == 0 {
-		output.Success("No action references found")
-		return nil
-	}
-
-	// Phase 2: Resolve latest tags (cooldown-aware) and find upgradable actions.
-	output.StartProgress(fmt.Sprintf("Checking latest versions for %d %s",
-		len(occurrences), ui.Pluralize(len(occurrences), "action", "actions")))
-
+// findUpgradeCandidates resolves latest versions and returns actions that have
+// upgrades available. Warnings from tag resolution are returned separately.
+func findUpgradeCandidates(idx actionIndex, tagLister *doctor.TagLister) ([]upgradeCandidate, []string) {
 	var candidates []upgradeCandidate
-	for _, nwo := range nwoOrder {
-		occ := occurrences[nwo]
+	var warnings []string
+
+	for _, nwo := range idx.order {
+		occ := idx.occurrences[nwo]
 		parts := strings.SplitN(nwo, "/", 2)
 		if len(parts) != 2 {
 			continue
 		}
 
-		currentRefs := make([]string, 0, len(occ.refs))
-		for ref := range occ.refs {
-			currentRefs = append(currentRefs, ref)
-		}
-		sort.Strings(currentRefs)
-
-		files := make([]string, 0, len(occ.files))
-		for f := range occ.files {
-			files = append(files, f)
-		}
-		sort.Strings(files)
+		currentRefs := sortedKeys(occ.refs)
+		files := sortedKeys(occ.files)
 
 		if occ.internal {
-			// Internal (same-owner) actions: offer to re-resolve default-branch
-			// refs. Version-tagged internal actions get normal upgrade treatment.
-			info, err := tagLister.GetRepoInfo(parts[0], parts[1])
-			if err != nil {
-				continue
-			}
-
-			hasDefaultBranch := false
-			hasVersionRef := false
-			for ref := range occ.refs {
-				if ref == info.DefaultBranch {
-					hasDefaultBranch = true
-				}
-				if doctor.LooksLikeVersion(ref) {
-					hasVersionRef = true
-				}
-			}
-
-			if hasDefaultBranch {
-				// Only offer re-resolve if the branch HEAD has moved since last pin.
-				currentSHA := pinnedSHAs[nwo+"@"+info.DefaultBranch]
-				headSHA, err := tagLister.BranchHeadSHA(parts[0], parts[1], info.DefaultBranch)
-				if err == nil && (currentSHA == "" || !strings.EqualFold(currentSHA, headSHA)) {
-					candidates = append(candidates, upgradeCandidate{
-						NWO:         nwo,
-						CurrentRefs: currentRefs,
-						LatestRef:   info.DefaultBranch,
-						Files:       files,
-						ReResolve:   true,
-					})
-				}
-			}
-			if hasVersionRef {
-				// Version-tagged internal action — check for tag upgrade like external.
-				latest, err := tagLister.LatestStableTag(parts[0], parts[1])
-				if err != nil || latest == "" {
-					continue
-				}
-				hasUpgrade := false
-				for ref := range occ.refs {
-					if doctor.LooksLikeVersion(ref) && doctor.IsUpgrade(ref, latest) {
-						hasUpgrade = true
-						break
-					}
-				}
-				if hasUpgrade {
-					var versionRefs []string
-					for _, ref := range currentRefs {
-						if doctor.LooksLikeVersion(ref) {
-							versionRefs = append(versionRefs, ref)
-						}
-					}
-					candidates = append(candidates, upgradeCandidate{
-						NWO:         nwo,
-						CurrentRefs: versionRefs,
-						LatestRef:   latest,
-						Files:       files,
-					})
-				}
-			}
+			cs := resolveInternalCandidates(nwo, occ, currentRefs, files, idx.pinnedSHAs, tagLister)
+			candidates = append(candidates, cs...)
 			continue
 		}
 
-		// External actions: resolve latest stable tag.
 		latest, err := tagLister.LatestStableTag(parts[0], parts[1])
 		if err != nil {
-			output.StopProgress()
-			output.Warning("%s: %s", nwo, err)
-			output.StartProgress("Checking latest versions")
+			warnings = append(warnings, fmt.Sprintf("%s: %s", nwo, err))
 			continue
 		}
 		if latest == "" {
-			continue // no suitable tags
+			continue
 		}
 
-		// Filter noops via semver-aware comparison.
 		hasUpgrade := false
 		for ref := range occ.refs {
 			if doctor.IsUpgrade(ref, latest) {
@@ -377,14 +289,133 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 		})
 	}
 
+	return candidates, warnings
+}
+
+// resolveInternalCandidates handles same-owner actions which may need
+// default-branch re-resolve, version tag upgrade, or both.
+func resolveInternalCandidates(nwo string, occ *actionOccurrence, currentRefs, files []string, pinnedSHAs map[string]string, tagLister *doctor.TagLister) []upgradeCandidate {
+	parts := strings.SplitN(nwo, "/", 2)
+	info, err := tagLister.GetRepoInfo(parts[0], parts[1])
+	if err != nil {
+		return nil
+	}
+
+	var candidates []upgradeCandidate
+
+	// Check if default-branch HEAD has moved since last pin.
+	if occ.refs[info.DefaultBranch] {
+		currentSHA := pinnedSHAs[nwo+"@"+info.DefaultBranch]
+		headSHA, err := tagLister.BranchHeadSHA(parts[0], parts[1], info.DefaultBranch)
+		if err == nil && (currentSHA == "" || !strings.EqualFold(currentSHA, headSHA)) {
+			candidates = append(candidates, upgradeCandidate{
+				NWO:         nwo,
+				CurrentRefs: currentRefs,
+				LatestRef:   info.DefaultBranch,
+				Files:       files,
+				ReResolve:   true,
+			})
+		}
+	}
+
+	// Check version-tagged refs for upgrades.
+	hasVersionRef := false
+	for ref := range occ.refs {
+		if doctor.LooksLikeVersion(ref) {
+			hasVersionRef = true
+			break
+		}
+	}
+	if !hasVersionRef {
+		return candidates
+	}
+
+	latest, err := tagLister.LatestStableTag(parts[0], parts[1])
+	if err != nil || latest == "" {
+		return candidates
+	}
+
+	hasUpgrade := false
+	for ref := range occ.refs {
+		if doctor.LooksLikeVersion(ref) && doctor.IsUpgrade(ref, latest) {
+			hasUpgrade = true
+			break
+		}
+	}
+	if !hasUpgrade {
+		return candidates
+	}
+
+	var versionRefs []string
+	for _, ref := range currentRefs {
+		if doctor.LooksLikeVersion(ref) {
+			versionRefs = append(versionRefs, ref)
+		}
+	}
+	candidates = append(candidates, upgradeCandidate{
+		NWO:         nwo,
+		CurrentRefs: versionRefs,
+		LatestRef:   latest,
+		Files:       files,
+	})
+
+	return candidates
+}
+
+// sortedKeys returns the keys of a map[string]bool in sorted order.
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func runUpgradeInteractive(opts *upgradeOptions) error {
+	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
+	if err != nil {
+		return err
+	}
+
+	var repoOwner string
+	if currentRepo, err := repository.Current(); err == nil {
+		repoOwner = currentRepo.Owner
+	}
+
+	hostname := resolveHostname(opts.Hostname)
+	restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
+	if err != nil {
+		return err
+	}
+	tagLister := doctor.NewTagLister(restClient)
+
+	// Scan workflows for action references.
+	output.StartProgress(fmt.Sprintf("Scanning %d %s", len(paths), ui.Pluralize(len(paths), "workflow", "workflows")))
+	idx := scanWorkflowActions(paths, repoOwner)
 	output.StopProgress()
+
+	if len(idx.occurrences) == 0 {
+		output.Success("No action references found")
+		return nil
+	}
+
+	// Resolve latest versions and find upgradable actions.
+	output.StartProgress(fmt.Sprintf("Checking latest versions for %d %s",
+		len(idx.occurrences), ui.Pluralize(len(idx.occurrences), "action", "actions")))
+	candidates, warns := findUpgradeCandidates(idx, tagLister)
+	output.StopProgress()
+
+	for _, w := range warns {
+		output.Warning("%s", w)
+	}
 
 	if len(candidates) == 0 {
 		output.Success("All actions are already at their latest versions")
 		return nil
 	}
 
-	// Phase 3: Present multi-select.
+	// Present multi-select.
 	menuOptions := make([]string, len(candidates))
 	for i, c := range candidates {
 		if c.ReResolve {
