@@ -3,7 +3,6 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 )
@@ -84,17 +83,17 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		if !IsMutableVersionTag(dep.Ref) {
 			continue
 		}
-		parts := strings.SplitN(dep.NWO, "/", 3)
-		if len(parts) < 2 {
+		owner, repo := dep.OwnerRepo()
+		if owner == "" {
 			continue
 		}
-		if rem.isSameOwner(parts[0]) {
-			info, err := rem.tagLister.GetRepoInfo(parts[0], parts[1])
+		if rem.isSameOwner(owner) {
+			info, err := rem.tagLister.GetRepoInfo(owner, repo)
 			if err == nil && info.IsInternal() {
 				continue
 			}
 		}
-		patchTag, err := rem.tagLister.BestPatchTagForSHA(parts[0], parts[1], dep.SHA)
+		patchTag, err := rem.tagLister.BestPatchTagForSHA(owner, repo, dep.SHA)
 		if err != nil || patchTag == "" {
 			continue
 		}

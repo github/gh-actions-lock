@@ -2,6 +2,8 @@ package doctor
 
 import (
 	"fmt"
+
+	"github.com/github/gh-actions-pin/internal/lockfile"
 	"strings"
 	"time"
 )
@@ -29,13 +31,13 @@ func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error)
 		return "", err
 	}
 
-	var best semver
+	var best lockfile.Semver
 	bestFound := false
 	for _, t := range matching {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := parseSemver(t.Name)
+		sv, ok := lockfile.ParseSemver(t.Name)
 		if !ok || !sv.IsFullSemver() {
 			continue
 		}
@@ -59,7 +61,7 @@ func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error)
 // This is used for auto-pinning: if there's exactly one obvious patch tag,
 // we can pin without prompting.
 func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string, error) {
-	refSV, refOK := parseSemver(ref)
+	refSV, refOK := lockfile.ParseSemver(ref)
 	if !refOK {
 		return "", nil
 	}
@@ -69,12 +71,12 @@ func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string,
 		return "", err
 	}
 
-	var candidates []semver
+	var candidates []lockfile.Semver
 	for _, t := range matching {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := parseSemver(t.Name)
+		sv, ok := lockfile.ParseSemver(t.Name)
 		if !ok || !sv.IsFullSemver() {
 			continue
 		}
@@ -126,10 +128,10 @@ func (tl *TagLister) SuggestTagsForSHA(owner, repo, sha string) ([]TagSuggestion
 	var suggestions []TagSuggestion
 
 	// Find the best semver match to derive family tags.
-	var bestSV semver
+	var bestSV lockfile.Semver
 	bestFound := false
 	for _, t := range matching {
-		if sv, ok := parseSemver(t.Name); ok && sv.Rest == "" && !t.IsMajor {
+		if sv, ok := lockfile.ParseSemver(t.Name); ok && sv.Rest == "" && !t.IsMajor {
 			if !bestFound || sv.Major > bestSV.Major ||
 				(sv.Major == bestSV.Major && sv.Minor > bestSV.Minor) ||
 				(sv.Major == bestSV.Major && sv.Minor == bestSV.Minor && sv.Patch > bestSV.Patch) {
@@ -224,7 +226,7 @@ func (tl *TagLister) CuratePickerTags(owner, repo, pinnedSHA string) ([]PickerTa
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := parseSemver(t.Name)
+		sv, ok := lockfile.ParseSemver(t.Name)
 		if !ok || sv.Rest != "" {
 			continue
 		}

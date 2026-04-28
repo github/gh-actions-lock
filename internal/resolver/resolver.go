@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -256,11 +254,10 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 	seen := make(map[string]bool)
 
 	for _, dep := range deps {
-		parts := strings.SplitN(dep.NWO, "/", 3)
-		if len(parts) < 2 {
+		owner, repo := dep.OwnerRepo()
+		if owner == "" {
 			continue
 		}
-		owner, repo := parts[0], parts[1]
 
 		key := dep.NWO + "/" + dep.SHA + "/" + dep.Ref
 		if seen[key] {
@@ -567,8 +564,6 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 	return deps, ymls, nil
 }
 
-var stableTagRE = regexp.MustCompile(`^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$`)
-
 func selectLatestTag(tags []string) string {
 	seen := make(map[string]struct{}, len(tags))
 	bestMajor := -1
@@ -590,22 +585,20 @@ func selectLatestTag(tags []string) string {
 			bestFallback = tag
 		}
 
-		matches := stableTagRE.FindStringSubmatch(tag)
-		if matches == nil {
+		sv, ok := lockfile.ParseSemver(tag)
+		if !ok || !sv.IsStable() {
 			continue
 		}
 
-		major := parseInt(matches[1])
-		minor := parseInt(matches[2])
-		patch := parseInt(matches[3])
-
-		if matches[2] == "" && matches[3] == "" && major > bestMajor {
-			bestMajor = major
+		if sv.Raw == sv.MajorTag() && sv.Major > bestMajor {
+			bestMajor = sv.Major
 			bestMajorTag = tag
 		}
 
-		version := [3]int{major, minor, patch}
-		if compareVersion(version, bestVersion) > 0 {
+		version := sv.Version()
+		if version[0] > bestVersion[0] ||
+			(version[0] == bestVersion[0] && version[1] > bestVersion[1]) ||
+			(version[0] == bestVersion[0] && version[1] == bestVersion[1] && version[2] > bestVersion[2]) {
 			bestVersion = version
 			bestVersionTag = tag
 		}
@@ -618,24 +611,4 @@ func selectLatestTag(tags []string) string {
 		return bestVersionTag
 	}
 	return bestFallback
-}
-
-func parseInt(s string) int {
-	if s == "" {
-		return 0
-	}
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
-func compareVersion(left, right [3]int) int {
-	for i := 0; i < len(left); i++ {
-		if left[i] > right[i] {
-			return 1
-		}
-		if left[i] < right[i] {
-			return -1
-		}
-	}
-	return 0
 }

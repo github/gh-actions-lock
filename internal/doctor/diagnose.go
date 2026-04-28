@@ -130,11 +130,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			continue
 		}
 		if lockfile.IsFullSHA(dep.Ref) {
-			parts := strings.SplitN(dep.NWO, "/", 3)
-			owner, repo := "", ""
-			if len(parts) >= 2 {
-				owner, repo = parts[0], parts[1]
-			}
+			owner, repo := dep.OwnerRepo()
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
 				Category:     CategorySHAAsRef,
@@ -212,11 +208,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				if candidates, has := liveByNWO[existing.NWO]; has && len(candidates) > 0 {
 					newDep := candidates[0]
 					if newDep.Ref != existing.Ref {
-						nwoParts := strings.SplitN(existing.NWO, "/", 3)
-						var refOwner, refRepo string
-						if len(nwoParts) >= 2 {
-							refOwner, refRepo = nwoParts[0], nwoParts[1]
-						}
+						refOwner, refRepo := existing.OwnerRepo()
 						wr.Findings = append(wr.Findings, Finding{
 							WorkflowPath: path,
 							Category:     CategoryRefChanged,
@@ -258,13 +250,13 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 		if !strings.EqualFold(existing.SHA, live.SHA) {
 			liveCopy := live
-			parts := strings.SplitN(existing.NWO, "/", 3)
+			owner, repo := existing.OwnerRepo()
 			var compareHint string
-			if len(parts) >= 2 {
+			if owner != "" {
 				compareHint = fmt.Sprintf(
 					"\n  → Compare: https://github.com/%s/%s/compare/%s...%s\n  → Releases: https://github.com/%s/%s/releases\n  → If unexpected, reach out to the action maintainer",
-					parts[0], parts[1], existing.SHA, live.SHA,
-					parts[0], parts[1])
+					owner, repo, existing.SHA, live.SHA,
+					owner, repo)
 			}
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,

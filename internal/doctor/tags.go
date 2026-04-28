@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/lockfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -146,7 +147,7 @@ func (tl *TagLister) LatestStableTag(owner, repo string) (string, error) {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := parseSemver(t.Name)
+		sv, ok := lockfile.ParseSemver(t.Name)
 		if !ok || sv.Rest != "" {
 			continue // skip pre-release, non-semver
 		}

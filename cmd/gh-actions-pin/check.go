@@ -432,10 +432,10 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 					out.Detail("  %s", unreachableDetail)
 				}
 				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
-					parts := strings.SplitN(f.Dependency.NWO, "/", 3)
-					if len(parts) >= 2 {
-						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
-						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", parts[0], parts[1])))
+					owner, repo := f.Dependency.OwnerRepo()
+					if owner != "" {
+						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", owner, repo, f.Dependency.SHA)))
+						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
 					}
 				}
 			}

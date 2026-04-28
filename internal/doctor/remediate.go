@@ -129,9 +129,9 @@ func (rem *Remediator) skipDep(dep *lockfile.Dependency) {
 
 func (rem *Remediator) repoNWO(f Finding) string {
 	if f.Dependency != nil {
-		parts := strings.SplitN(f.Dependency.NWO, "/", 3)
-		if len(parts) >= 2 {
-			return parts[0] + "/" + parts[1]
+		owner, repo := f.Dependency.OwnerRepo()
+		if owner != "" {
+			return owner + "/" + repo
 		}
 	}
 	if f.ActionRef != nil {
@@ -306,7 +306,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		autoPin := false
 
 		// Case 1: Already a full semver tag (v4.3.1) — good default, verify it's a real tag.
-		if sv, svOK := parseSemver(ref.Ref); svOK && sv.IsFullSemver() {
+		if sv, svOK := lockfile.ParseSemver(ref.Ref); svOK && sv.IsFullSemver() {
 			if rem.tagLister.LookupTag(ref.Owner, ref.Repo, ref.Ref) != nil {
 				autoPin = true
 			}
@@ -450,11 +450,7 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error {
 	dep := finding.Dependency
 
-	parts := strings.SplitN(dep.NWO, "/", 3)
-	owner, repo := "", ""
-	if len(parts) >= 2 {
-		owner, repo = parts[0], parts[1]
-	}
+	owner, repo := dep.OwnerRepo()
 
 	// Make the SHA a clickable link to the commit on GitHub.
 	commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
@@ -529,7 +525,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	if len(suggestions) > 0 && !rem.isSameOwner(owner) {
 		var fullSemverTags []TagSuggestion
 		for _, s := range suggestions {
-			sv, ok := parseSemver(s.Tag.Name)
+			sv, ok := lockfile.ParseSemver(s.Tag.Name)
 			if ok && sv.IsFullSemver() {
 				fullSemverTags = append(fullSemverTags, s)
 			}
