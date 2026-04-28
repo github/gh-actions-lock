@@ -154,6 +154,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
 	var fixedCount, skippedCount, alertedCount int
+	var skippedDeps []string
 
 	if willRemediate && len(actionable) > 0 {
 		hostname := resolveHostname(opts.Hostname)
@@ -201,6 +202,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		fixedCount = rem.Fixed
 		skippedCount = rem.Skipped
 		alertedCount = rem.Alerted
+		skippedDeps = rem.SkippedDeps
 	}
 
 	if !valid || skippedCount > 0 || alertedCount > 0 {
@@ -210,8 +212,12 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		}
 		remaining := skippedCount + alertedCount
 		if remaining > 0 {
-			f.UI.Error("%d %s require interactive resolution — run `gh actions-pin` locally",
+			f.UI.Blank()
+			f.UI.Error("%d %s require interactive resolution — run `gh actions-pin` locally:",
 				remaining, ui.Pluralize(remaining, "issue", "issues"))
+			for _, dep := range skippedDeps {
+				f.UI.Detail("  %s", dep)
+			}
 		}
 		return errSilent
 	}

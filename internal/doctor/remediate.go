@@ -43,9 +43,10 @@ type Remediator struct {
 	remaining map[string]int
 
 	// Counters for summary.
-	Fixed   int
-	Skipped int
-	Alerted int
+	Fixed       int
+	Skipped     int
+	Alerted     int
+	SkippedDeps []string // unique dep keys that were skipped (for summary)
 }
 
 // NewRemediator creates a new Remediator.
@@ -454,6 +455,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 		rem.output.Warning("%s: %s", depLabel, finding.Detail)
 		rem.output.Skip("%s: requires interactive tag selection", dep.Key())
 		rem.choices[dep.Key()] = "skipped"
+		rem.SkippedDeps = append(rem.SkippedDeps, dep.Key())
 		rem.Skipped++
 		return nil
 	}
