@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 type checkOptions struct {
@@ -50,7 +50,7 @@ type checkWorkflow struct {
 	Dependencies []checkDependency `json:"dependencies,omitempty"`
 }
 
-func newCheckCmd() *cobra.Command {
+func newCheckCmd(f *pinFactory) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
@@ -104,7 +104,7 @@ func newCheckCmd() *cobra.Command {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
-			return runCheck(opts)
+			return runCheck(f, opts)
 		},
 	}
 
@@ -116,14 +116,14 @@ func newCheckCmd() *cobra.Command {
 	return cmd
 }
 
-func runCheck(opts *checkOptions) error {
+func runCheck(f *pinFactory, opts *checkOptions) error {
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
 		return err
 	}
 	opts.WorkflowPaths = paths
 
-	r, err := newResolver(resolveHostname(opts.Hostname))
+	r, err := f.NewResolver(resolveHostname(opts.Hostname))
 	if err != nil {
 		return err
 	}
@@ -131,26 +131,26 @@ func runCheck(opts *checkOptions) error {
 	// Single pass: doctor.Diagnose handles all validation.
 	total := len(opts.WorkflowPaths)
 	if opts.JSONFields == "" && total > 1 {
-		output.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
+		f.UI.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
 	report := doctor.Diagnose(opts.WorkflowPaths, r)
 
-	output.StopProgress()
+	f.UI.StopProgress()
 
 	// Compute validity from findings.
 	valid := reportIsValid(report)
 
 	// JSON output — always before any human-readable output.
 	if opts.JSONFields != "" {
-		return writeCheckJSON(report, valid, opts.JSONFields)
+		return writeCheckJSON(f.Out, report, valid, opts.JSONFields)
 	}
 
 	// Human-readable output.
-	presentCheckResults(report, valid)
+	presentCheckResults(f.UI, report, valid)
 
 	// Remediation.
-	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && isTerminal()
+	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && f.IsTerminal()
 	willRemediate := interactive || opts.Write
 	actionable := report.WorkflowsNeedingAttention()
 
@@ -173,7 +173,7 @@ func runCheck(opts *checkOptions) error {
 			repoOwner = currentRepo.Owner
 		}
 
-		rem := doctor.NewRemediator(prompter, r, restClient, output, doctor.RemediateOptions{
+		rem := doctor.NewRemediator(prompter, r, restClient, f.UI, doctor.RemediateOptions{
 			Write:       opts.Write,
 			Interactive: interactive,
 			RepoOwner:   repoOwner,
@@ -181,22 +181,22 @@ func runCheck(opts *checkOptions) error {
 
 		if err := rem.Remediate(report); err != nil {
 			if errors.Is(err, doctor.ErrAborted) {
-				output.Blank()
-				output.Info("Interrupted — no further changes applied")
+				f.UI.Blank()
+				f.UI.Info("Interrupted — no further changes applied")
 				return nil
 			}
 			return err
 		}
 
-		output.Blank()
+		f.UI.Blank()
 		if rem.Fixed > 0 {
-			output.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
+			f.UI.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
 		}
 		if rem.Skipped > 0 {
-			output.Skip("%d %s skipped", rem.Skipped, ui.Pluralize(rem.Skipped, "issue", "issues"))
+			f.UI.Skip("%d %s skipped", rem.Skipped, ui.Pluralize(rem.Skipped, "issue", "issues"))
 		}
 		if rem.Alerted > 0 {
-			output.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
+			f.UI.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
 		}
 	}
 
@@ -254,7 +254,7 @@ func findingToJSON(f doctor.Finding) checkFinding {
 }
 
 // writeCheckJSON writes the unified JSON output.
-func writeCheckJSON(report *doctor.Report, valid bool, fieldsCSV string) error {
+func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV string) error {
 	fields := strings.Split(fieldsCSV, ",")
 
 	// Build all data lazily.
@@ -349,13 +349,13 @@ func writeCheckJSON(report *doctor.Report, valid bool, fieldsCSV string) error {
 		}
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(payload)
 }
 
 // presentCheckResults renders human-readable output from a doctor report.
-func presentCheckResults(report *doctor.Report, valid bool) {
+func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool) {
 	var validCount, failedCount int
 	for _, wr := range report.Workflows {
 		if workflowIsValid(&wr) {
@@ -367,7 +367,7 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 	checked := validCount + failedCount
 
 	if valid && checked > 0 {
-		output.Success("All %d %s valid", checked, ui.Pluralize(checked, "workflow", "workflows"))
+		out.Success("All %d %s valid", checked, ui.Pluralize(checked, "workflow", "workflows"))
 	} else if checked > 0 {
 		// Collect error findings grouped by dependency.
 		type depGroup struct {
@@ -423,16 +423,16 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 			// Print.
 			for _, f := range dg.findings {
 				cat := strings.ToUpper(string(f.Category))
-				output.Detail("! %s %s", output.Dim(cat), dep)
-				output.Detail("  %s", f.Detail)
+				out.Detail("! %s %s", out.Dim(cat), dep)
+				out.Detail("  %s", f.Detail)
 				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryTampered {
-					output.Detail("  %s", unreachableDetail)
+					out.Detail("  %s", unreachableDetail)
 				}
 				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
 					parts := strings.SplitN(f.Dependency.NWO, "/", 3)
 					if len(parts) >= 2 {
-						output.Detail("  → %s", output.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
-						output.Detail("  → %s", output.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", parts[0], parts[1])))
+						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", parts[0], parts[1], f.Dependency.SHA)))
+						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", parts[0], parts[1])))
 					}
 				}
 			}
@@ -447,11 +447,11 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 				parts = append(parts, fmt.Sprintf("%d %s", n, string(cat)))
 			}
 		}
-		output.Error("%d of %d %s failed: %s",
+		out.Error("%d of %d %s failed: %s",
 			failedCount, checked,
 			ui.Pluralize(checked, "workflow", "workflows"),
 			strings.Join(parts, ", "))
-		output.Blank()
+		out.Blank()
 	}
 
 	// Warnings.
@@ -463,7 +463,7 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 			}
 		}
 		for _, pw := range wr.ParseWarnings {
-			output.Warning("%s: %s", wr.Path, pw)
+			out.Warning("%s: %s", wr.Path, pw)
 		}
 	}
 
@@ -471,20 +471,20 @@ func presentCheckResults(report *doctor.Report, valid bool) {
 		depKey := findingDepKey(f)
 		switch {
 		case f.Category == doctor.CategoryNotPinned && f.ActionRef == nil:
-			output.Warning("%s: not yet pinned (run `gh actions-pin` to fix)", f.WorkflowPath)
+			out.Warning("%s: not yet pinned (run `gh actions-pin` to fix)", f.WorkflowPath)
 		case f.Category == doctor.CategorySHAAsRef:
 			isTransitive := f.Dependency != nil && f.ActionRef == nil
 			repoNWO := extractRepoNWO(depKey)
 			if isTransitive {
-				output.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
-				output.Detail("  ↳ this comes from a composite action's internal dependency")
-				output.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", output.Bold(repoNWO))
+				out.Warning("%s: transitive dependency pinned to a bare SHA — reachability cannot be verified", depKey)
+				out.Detail("  ↳ this comes from a composite action's internal dependency")
+				out.Detail("  ↳ ask the maintainer of %s to onboard to dependency pinning", out.Bold(repoNWO))
 			} else {
-				output.Warning("%s: %s", depKey, f.Detail)
-				output.Detail("  ↳ releases: https://github.com/%s/releases", repoNWO)
+				out.Warning("%s: %s", depKey, f.Detail)
+				out.Detail("  ↳ releases: https://github.com/%s/releases", repoNWO)
 			}
 		case f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning:
-			output.Warning("%s: %s", depKey, f.Detail)
+			out.Warning("%s: %s", depKey, f.Detail)
 		}
 	}
 }
@@ -537,8 +537,4 @@ func extractRepoNWO(depKey string) string {
 		return parts[0] + "/" + parts[1]
 	}
 	return nwo
-}
-
-func isTerminal() bool {
-	return term.IsTerminal(int(os.Stderr.Fd()))
 }

@@ -123,21 +123,16 @@ func TestShowDiffIncludesCommitLinks(t *testing.T) {
 		{NWO: "actions/setup-go", Ref: "v6", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
 	}
 
-	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stderr = w
-	oldOutput := output
-	output = ui.NewPlain(w)
-	showDiff("github.com", oldDeps, newDeps)
+	testUI := ui.NewPlain(w)
+	showDiff(testUI, "github.com", oldDeps, newDeps)
 	_ = w.Close()
-	os.Stderr = oldStderr
-	output = oldOutput
 
-	out, err := io.ReadAll(r)
+	rawOut, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("reading captured stderr: %v", err)
 	}
-	got := string(out)
+	got := string(rawOut)
 
 	for _, want := range []string{
 		"permalink: https://github.com/actions/checkout/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -157,21 +152,16 @@ func TestShowDiffIncludesCompareLinkForRefReplacement(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v5", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 	}
 
-	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stderr = w
-	oldOutput := output
-	output = ui.NewPlain(w)
-	showDiff("github.com", oldDeps, newDeps)
+	testUI := ui.NewPlain(w)
+	showDiff(testUI, "github.com", oldDeps, newDeps)
 	_ = w.Close()
-	os.Stderr = oldStderr
-	output = oldOutput
 
-	out, err := io.ReadAll(r)
+	rawOut, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("reading captured stderr: %v", err)
 	}
-	got := string(out)
+	got := string(rawOut)
 
 	for _, want := range []string{
 		"~ actions/checkout",

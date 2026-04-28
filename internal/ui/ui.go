@@ -50,6 +50,29 @@ func New() *UI {
 	}
 }
 
+// NewWithWriter creates a UI that writes to the given writer. If the writer
+// is an *os.File whose fd is a terminal, color is auto-detected. Otherwise
+// color is disabled. This is the injection-friendly constructor for DI.
+func NewWithWriter(w io.Writer) *UI {
+	noColor := isColorDisabled()
+	isTTY := false
+	if f, ok := w.(*os.File); ok {
+		isTTY = term.IsTerminal(int(f.Fd()))
+	}
+	colorEnabled := isTTY && !noColor
+
+	profile := termenv.Ascii
+	if colorEnabled {
+		profile = termenv.ColorProfile()
+	}
+
+	return &UI{
+		w:       w,
+		output:  termenv.NewOutput(w, termenv.WithProfile(profile)),
+		noColor: !colorEnabled,
+	}
+}
+
 // NewPlain creates a UI with no color and writes to the given writer.
 // Useful for tests.
 func NewPlain(w io.Writer) *UI {

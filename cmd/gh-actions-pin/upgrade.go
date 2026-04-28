@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -49,7 +50,7 @@ type jsonUpgradeResult struct {
 	Updated []jsonUpgradeChange `json:"updated"`
 }
 
-func newUpgradeCmd() *cobra.Command {
+func newUpgradeCmd(f *pinFactory) *cobra.Command {
 	opts := &upgradeOptions{}
 
 	cmd := &cobra.Command{
@@ -102,13 +103,13 @@ func newUpgradeCmd() *cobra.Command {
 				if !p.IsInteractive() {
 					return fmt.Errorf("--action is required in non-interactive mode\n\n  gh actions-pin upgrade --action actions/checkout")
 				}
-				return runUpgradeInteractive(opts)
+				return runUpgradeInteractive(f, opts)
 			}
 			// Non-interactive: write by default unless --write=false was explicit.
 			if !cmd.Flags().Changed("write") {
 				opts.Write = true
 			}
-			return runUpgrade(opts)
+			return runUpgrade(f, opts)
 		},
 	}
 
@@ -124,7 +125,7 @@ func newUpgradeCmd() *cobra.Command {
 	return cmd
 }
 
-func runUpgrade(opts *upgradeOptions) error {
+func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
 		return err
@@ -136,7 +137,7 @@ func runUpgrade(opts *upgradeOptions) error {
 		return err
 	}
 
-	r, err := newResolver(resolveHostname(opts.Hostname))
+	r, err := f.NewResolver(resolveHostname(opts.Hostname))
 	if err != nil {
 		return err
 	}
@@ -144,16 +145,16 @@ func runUpgrade(opts *upgradeOptions) error {
 	var hadError bool
 	var allChanges []jsonUpgradeChange
 	for _, workflowPath := range opts.WorkflowPaths {
-		changes, err := upgradeOneFile(opts, workflowPath, r, targets)
+		changes, err := upgradeOneFile(f, opts, workflowPath, r, targets)
 		if err != nil {
-			output.Error("%s: %s", workflowPath, err)
+			f.UI.Error("%s: %s", workflowPath, err)
 			hadError = true
 		}
 		allChanges = append(allChanges, changes...)
 	}
 
 	if opts.JSONFields != "" {
-		return writeUpgradeJSON(allChanges)
+		return writeUpgradeJSON(f.Out, allChanges)
 	}
 
 	if hadError {
@@ -162,12 +163,12 @@ func runUpgrade(opts *upgradeOptions) error {
 	return nil
 }
 
-func writeUpgradeJSON(changes []jsonUpgradeChange) error {
+func writeUpgradeJSON(w io.Writer, changes []jsonUpgradeChange) error {
 	result := jsonUpgradeResult{Updated: changes}
 	if result.Updated == nil {
 		result.Updated = []jsonUpgradeChange{}
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
 }
@@ -372,7 +373,7 @@ func sortedKeys(m map[string]bool) []string {
 	return keys
 }
 
-func runUpgradeInteractive(opts *upgradeOptions) error {
+func runUpgradeInteractive(f *pinFactory, opts *upgradeOptions) error {
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
 		return err
@@ -391,27 +392,27 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 	tagLister := doctor.NewTagLister(restClient)
 
 	// Scan workflows for action references.
-	output.StartProgress(fmt.Sprintf("Scanning %d %s", len(paths), ui.Pluralize(len(paths), "workflow", "workflows")))
+	f.UI.StartProgress(fmt.Sprintf("Scanning %d %s", len(paths), ui.Pluralize(len(paths), "workflow", "workflows")))
 	idx := scanWorkflowActions(paths, repoOwner)
-	output.StopProgress()
+	f.UI.StopProgress()
 
 	if len(idx.occurrences) == 0 {
-		output.Success("No action references found")
+		f.UI.Success("No action references found")
 		return nil
 	}
 
 	// Resolve latest versions and find upgradable actions.
-	output.StartProgress(fmt.Sprintf("Checking latest versions for %d %s",
+	f.UI.StartProgress(fmt.Sprintf("Checking latest versions for %d %s",
 		len(idx.occurrences), ui.Pluralize(len(idx.occurrences), "action", "actions")))
 	candidates, warns := findUpgradeCandidates(idx, tagLister)
-	output.StopProgress()
+	f.UI.StopProgress()
 
 	for _, w := range warns {
-		output.Warning("%s", w)
+		f.UI.Warning("%s", w)
 	}
 
 	if len(candidates) == 0 {
-		output.Success("All actions are already at their latest versions")
+		f.UI.Success("All actions are already at their latest versions")
 		return nil
 	}
 
@@ -438,27 +439,27 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 		return err
 	}
 	if len(selected) == 0 {
-		output.Info("Nothing selected")
+		f.UI.Info("Nothing selected")
 		return nil
 	}
 
 	// Phase 4: Show the plan with release links.
-	output.Blank()
-	output.Header("Upgrade plan")
+	f.UI.Blank()
+	f.UI.Header("Upgrade plan")
 	for _, idx := range selected {
 		c := candidates[idx]
 		if c.ReResolve {
-			output.Info("%s: re-resolve @%s to latest commit", c.NWO, c.LatestRef)
+			f.UI.Info("%s: re-resolve @%s to latest commit", c.NWO, c.LatestRef)
 		} else {
 			current := strings.Join(c.CurrentRefs, ", ")
-			output.Info("%s: %s → %s", c.NWO, current, c.LatestRef)
-			output.Detail("Release notes: https://github.com/%s/releases/tag/%s", c.NWO, c.LatestRef)
+			f.UI.Info("%s: %s → %s", c.NWO, current, c.LatestRef)
+			f.UI.Detail("Release notes: https://github.com/%s/releases/tag/%s", c.NWO, c.LatestRef)
 		}
-		for _, f := range c.Files {
-			output.Detail("in %s", f)
+		for _, file := range c.Files {
+			f.UI.Detail("in %s", file)
 		}
 	}
-	output.Blank()
+	f.UI.Blank()
 
 	// Phase 5: Confirm.
 	apply, err := opts.Prompter.Confirm("Apply these upgrades?", false)
@@ -469,7 +470,7 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 		return err
 	}
 	if !apply {
-		output.Info("Upgrade cancelled")
+		f.UI.Info("Upgrade cancelled")
 		return nil
 	}
 
@@ -487,10 +488,10 @@ func runUpgradeInteractive(opts *upgradeOptions) error {
 		Diff:          false,
 		Hostname:      opts.Hostname,
 	}
-	return runUpgrade(applyOpts)
+	return runUpgrade(f, applyOpts)
 }
 
-func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
+func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -503,7 +504,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 
 	refs, _, warnings := wf.ExtractActionRefs()
 	for _, warning := range warnings {
-		output.Warning("%s", warning)
+		f.UI.Warning("%s", warning)
 	}
 
 	if len(refs) == 0 {
@@ -552,9 +553,9 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		return nil, nil
 	}
 
-	output.Header("%s", workflowPath)
+	f.UI.Header("%s", workflowPath)
 	for _, line := range planLines {
-		output.Detail("%s", line)
+		f.UI.Detail("%s", line)
 	}
 
 	updatedContent, _, err := wf.RewriteActionRefs(replacements)
@@ -568,12 +569,12 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 
 	upgradedRefs, _, upgradedWarnings := upgradedWF.ExtractActionRefs()
 	for _, warning := range upgradedWarnings {
-		output.Warning("%s", warning)
+		f.UI.Warning("%s", warning)
 	}
 
-	output.Info("Resolving %d action reference(s)...", len(upgradedRefs))
+	f.UI.Info("Resolving %d action reference(s)...", len(upgradedRefs))
 	for _, ref := range upgradedRefs {
-		output.Detail("%s@%s", ref.FullName(), ref.Ref)
+		f.UI.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
 	deps, err := r.ResolveAllRecursive(upgradedRefs)
@@ -582,10 +583,10 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 	}
 
 	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
-		output.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
+		f.UI.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
-			output.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
-			output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
+			f.UI.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
+			f.UI.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 		}
 		return nil, fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
@@ -608,7 +609,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 	}
 
 	if opts.Diff {
-		showDiff(r.Hostname(), existingDeps, deps)
+		showDiff(f.UI, r.Hostname(), existingDeps, deps)
 	}
 
 	if !opts.Write {
@@ -617,7 +618,7 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 			reviewHint = buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, false)
 		}
 		applyHint := buildCommandHint("gh actions-pin upgrade", workflowPath, opts.Actions, opts.FromRef, opts.Version, true)
-		output.Info("%s", previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
+		f.UI.Info("%s", previewMessage(workflowPath, upgradedRefs, existingDeps, deps, reviewHint, applyHint))
 		return changes, nil
 	}
 
@@ -629,9 +630,9 @@ func upgradeOneFile(opts *upgradeOptions, workflowPath string, r *resolver.Resol
 		return nil, fmt.Errorf("writing file: %w", err)
 	}
 
-	output.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
+	f.UI.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
 	for _, c := range changes {
-		output.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
+		f.UI.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
 	}
 	return changes, nil
 }
@@ -643,38 +644,38 @@ func actionMatchesFilter(nwo, filter string) bool {
 	return strings.HasPrefix(nwo, filter+"/")
 }
 
-func showDiff(hostname string, old, new []lockfile.Dependency) {
+func showDiff(out *ui.UI, hostname string, old, new []lockfile.Dependency) {
 	diff := lockfile.DiffDeps(old, new)
 
 	for _, c := range diff.Changed {
-		output.Infof("  %s %s\n", output.Yellow("~"), c.New.Key())
-		output.Infof("    %s %s-%s\n", output.Red("-"), c.Old.HashAlgoOrDetect(), c.Old.SHA)
-		output.Infof("    %s %s-%s\n", output.Green("+"), c.New.HashAlgoOrDetect(), c.New.SHA)
-		output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
+		out.Infof("  %s %s\n", out.Yellow("~"), c.New.Key())
+		out.Infof("    %s %s-%s\n", out.Red("-"), c.Old.HashAlgoOrDetect(), c.Old.SHA)
+		out.Infof("    %s %s-%s\n", out.Green("+"), c.New.HashAlgoOrDetect(), c.New.SHA)
+		out.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
 	}
 
 	for _, c := range diff.Rekeyed {
-		output.Infof("  %s %s\n", output.Yellow("~"), c.New.NWO)
-		output.Infof("    %s %s\n", output.Red("-"), c.Old.String())
-		output.Infof("    %s %s\n", output.Green("+"), c.New.String())
+		out.Infof("  %s %s\n", out.Yellow("~"), c.New.NWO)
+		out.Infof("    %s %s\n", out.Red("-"), c.Old.String())
+		out.Infof("    %s %s\n", out.Green("+"), c.New.String())
 		if !strings.EqualFold(c.Old.SHA, c.New.SHA) {
-			output.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
+			out.Infof("    compare: https://%s/%s/compare/%s...%s\n", hostname, c.New.NWO, c.Old.SHA, c.New.SHA)
 		} else {
-			output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, c.New.NWO, c.New.SHA)
+			out.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, c.New.NWO, c.New.SHA)
 		}
 	}
 
 	for _, dep := range diff.Added {
-		output.Infof("  %s %s\n", output.Green("+"), dep.String())
-		output.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
+		out.Infof("  %s %s\n", out.Green("+"), dep.String())
+		out.Infof("    permalink: https://%s/%s/commit/%s\n", hostname, dep.NWO, dep.SHA)
 	}
 
 	for _, dep := range diff.Removed {
-		output.Infof("  %s %s\n", output.Red("-"), dep.String())
+		out.Infof("  %s %s\n", out.Red("-"), dep.String())
 	}
 
 	if n := len(diff.Unchanged); n > 0 {
-		output.Infof("  %s\n", output.Dim(fmt.Sprintf("%d unchanged", n)))
+		out.Infof("  %s\n", out.Dim(fmt.Sprintf("%d unchanged", n)))
 	}
 }
 

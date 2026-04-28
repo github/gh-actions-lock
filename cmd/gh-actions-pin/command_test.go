@@ -181,43 +181,34 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(string, string, string, string) (resolver.ReachabilityStatus, string), args ...string) (string, string, error) {
 	t.Helper()
 
-	oldResolver := newResolver
-	newResolver = func(hostname string) (*resolver.Resolver, error) {
-		r, err := resolver.NewWithTransport(hostname, rt)
-		if err != nil {
-			return nil, err
-		}
-		if reachFn != nil {
-			r.SetCheckReachabilityFunc(reachFn)
-		}
-		return r, nil
-	}
-	defer func() {
-		newResolver = oldResolver
-	}()
-
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
 	stdoutR, stdoutW, err := os.Pipe()
 	require.NoError(t, err)
 	stderrR, stderrW, err := os.Pipe()
 	require.NoError(t, err)
 
-	os.Stdout = stdoutW
-	os.Stderr = stderrW
+	f := &pinFactory{
+		Out:    stdoutW,
+		ErrOut: stderrW,
+		UI:     ui.NewPlain(stderrW),
+		NewResolver: func(hostname string) (*resolver.Resolver, error) {
+			r, err := resolver.NewWithTransport(hostname, rt)
+			if err != nil {
+				return nil, err
+			}
+			if reachFn != nil {
+				r.SetCheckReachabilityFunc(reachFn)
+			}
+			return r, nil
+		},
+		IsTerminal: func() bool { return false },
+	}
 
-	oldOutput := output
-	output = ui.NewPlain(stderrW)
-	defer func() { output = oldOutput }()
-
-	cmd := NewRootCmd()
+	cmd := NewRootCmd(f)
 	cmd.SetArgs(args)
 	runErr := cmd.Execute()
 
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
 
 	stdoutBytes, readErr := io.ReadAll(stdoutR)
 	require.NoError(t, readErr)

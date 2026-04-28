@@ -1,32 +1,60 @@
 package main
 
 import (
-	"errors"
-	"fmt"
-	"os"
+"errors"
+"fmt"
+"io"
+"os"
 
-	"github.com/MakeNowJust/heredoc"
-	"github.com/cli/go-gh/v2/pkg/repository"
-	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
-	"github.com/github/gh-actions-pin/internal/ui"
-	"github.com/spf13/cobra"
+"github.com/MakeNowJust/heredoc"
+"github.com/cli/go-gh/v2/pkg/repository"
+"github.com/github/gh-actions-pin/internal/lockfile"
+"github.com/github/gh-actions-pin/internal/resolver"
+"github.com/github/gh-actions-pin/internal/ui"
+"github.com/spf13/cobra"
+"golang.org/x/term"
 )
 
 var errSilent = errors.New("silent error")
-var newResolver = resolver.New
-var output = ui.New()
 
-func NewRootCmd() *cobra.Command {
-	opts := &checkOptions{}
+// pinFactory provides dependency injection for all commands. When integrating
+// into cli/cli, swap this for cmdutil.Factory — the interface is analogous.
+type pinFactory struct {
+// Out is the writer for structured output (JSON). Typically os.Stdout.
+Out io.Writer
+// ErrOut is the writer for human-readable output (progress, errors). Typically os.Stderr.
+ErrOut io.Writer
+// UI provides formatted terminal output via ErrOut.
+UI *ui.UI
+// NewResolver creates a resolver for the given hostname.
+NewResolver func(hostname string) (*resolver.Resolver, error)
+// IsTerminal reports whether ErrOut is a TTY.
+IsTerminal func() bool
+}
 
-	cmd := &cobra.Command{
-		Use:           "actions-pin [<workflow-path>...]",
-		Args:          cobra.ArbitraryArgs,
-		Short:         "Lock and verify GitHub Actions dependencies",
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		Long: heredoc.Doc(`
+// NewDefaultFactory creates a factory wired to real stdio.
+func NewDefaultFactory() *pinFactory {
+return &pinFactory{
+Out:         os.Stdout,
+ErrOut:      os.Stderr,
+UI:          ui.New(),
+NewResolver: resolver.New,
+IsTerminal: func() bool {
+return term.IsTerminal(int(os.Stderr.Fd()))
+},
+}
+}
+
+func NewRootCmd(f *pinFactory) *cobra.Command {
+opts := &checkOptions{}
+
+cmd := &cobra.Command{
+Use:           "actions-pin [<workflow-path>...]",
+Args:          cobra.ArbitraryArgs,
+Short:         "Lock and verify GitHub Actions dependencies",
+SilenceErrors: true,
+SilenceUsage:  true,
+Long: heredoc.Doc(`
 Lock and verify GitHub Actions dependencies to protect your workflows
 from supply chain attacks.
 
@@ -48,7 +76,7 @@ Commands:
   gh actions-pin             Verify and fix the dependency lock
   gh actions-pin upgrade     Bump action versions and re-lock
 `),
-		Example: heredoc.Doc(`
+Example: heredoc.Doc(`
 # Verify all workflows
 $ gh actions-pin
 
@@ -64,61 +92,62 @@ $ gh actions-pin --accept-all
 # Upgrade a specific action
 $ gh actions-pin upgrade --action actions/checkout
 `),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.WorkflowPaths = args
-			}
-			return runCheck(opts)
-		},
-	}
+RunE: func(cmd *cobra.Command, args []string) error {
+if len(args) > 0 {
+opts.WorkflowPaths = args
+}
+return runCheck(f, opts)
+},
+}
 
-	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
-	cmd.Flags().Lookup("json").NoOptDefVal = "valid,errors,warnings,dependencies,workflows"
-	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
-	cmd.Flags().BoolVar(&opts.Write, "accept-all", false, "Auto-apply all safe fixes without prompting")
-	cmd.AddCommand(newCheckCmd())
-	cmd.AddCommand(newUpgradeCmd())
+cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
+cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
+cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
+cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Report-only mode (no prompts, no changes)")
+cmd.Flags().BoolVar(&opts.Write, "accept-all", false, "Auto-apply all safe fixes without prompting")
+cmd.AddCommand(newCheckCmd(f))
+cmd.AddCommand(newUpgradeCmd(f))
 
-	return cmd
+return cmd
 }
 
 // Execute runs the root command and returns an exit code.
 func Execute() int {
-	if err := NewRootCmd().Execute(); err != nil {
-		if !errors.Is(err, errSilent) {
-			output.Error("%s", err)
-		}
-		return 1
-	}
-	return 0
+f := NewDefaultFactory()
+if err := NewRootCmd(f).Execute(); err != nil {
+if !errors.Is(err, errSilent) {
+f.UI.Error("%s", err)
+}
+return 1
+}
+return 0
 }
 
 func discoverWorkflowPaths(existing []string) ([]string, error) {
-	if len(existing) > 0 {
-		return existing, nil
-	}
+if len(existing) > 0 {
+return existing, nil
+}
 
-	paths, err := lockfile.DiscoverWorkflows()
-	if err != nil {
-		return nil, err
-	}
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("no workflow files found in .github/workflows/")
-	}
-	return paths, nil
+paths, err := lockfile.DiscoverWorkflows()
+if err != nil {
+return nil, err
+}
+if len(paths) == 0 {
+return nil, fmt.Errorf("no workflow files found in .github/workflows/")
+}
+return paths, nil
 }
 
 func resolveHostname(override string) string {
-	if override != "" {
-		return override
-	}
-	if host := os.Getenv("GH_HOST"); host != "" {
-		return host
-	}
-	repo, err := repository.Current()
-	if err == nil && repo.Host != "" {
-		return repo.Host
-	}
-	return "github.com"
+if override != "" {
+return override
+}
+if host := os.Getenv("GH_HOST"); host != "" {
+return host
+}
+repo, err := repository.Current()
+if err == nil && repo.Host != "" {
+return repo.Host
+}
+return "github.com"
 }
