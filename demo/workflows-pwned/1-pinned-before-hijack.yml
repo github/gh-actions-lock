@@ -1,0 +1,42 @@
+name: "1: Pinned before attack — tag hijacked to unrelated code"
+
+# =============================================================================
+# ATTACKER CAPABILITY: Write access to move tags
+# TIMELINE:
+#   1. Maintainer releases @tampered → ea53476 (legitimate)
+#   2. You pin: lockfile records ea53476 ✓
+#   3. Attacker moves tag to orphan commit 614a37a (no shared history)
+#   4. You run `gh actions-pin check` → CAUGHT
+#
+# This is the tj-actions/changed-files scenario. The attacker moves a tag
+# to point at completely unrelated code — an orphan commit, a fork-network
+# SHA, anything outside the real release lineage.
+#
+# RESULT:  CAUGHT ✗
+#          ✗ TAMPERED    — live SHA ≠ pinned SHA (tag was moved)
+#          ✗ UNREACHABLE — new SHA has no shared history with the pinned SHA
+#
+# The lockfile's known-good SHA acts as a tripwire. The moment the tag
+# moves, check detects both the SHA mismatch and the broken lineage.
+#
+# DEMO:    https://github.com/nodeselector/actions-test-fixtures/commit/614a37a
+#
+# Run:     gh actions-pin check .github/workflows/1-pinned-before-hijack.yml
+# =============================================================================
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nodeselector/actions-test-fixtures/nested-composite@tampered
+
+# Automatically generated and managed by: `gh actions pin <workflow-path>`
+dependencies:
+  - github.com/actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+  # Pinned at the real HEAD (ea53476) before the attacker moved the tag
+  - github.com/nodeselector/actions-test-fixtures/nested-composite@tampered:sha1-ea53476fdc172d8552df5af9658a45a367e4f41d

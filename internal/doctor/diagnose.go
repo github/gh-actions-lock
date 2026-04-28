@@ -250,20 +250,12 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 		if !strings.EqualFold(existing.SHA, live.SHA) {
 			liveCopy := live
-			owner, repo := existing.OwnerRepo()
-			var compareHint string
-			if owner != "" {
-				compareHint = fmt.Sprintf(
-					"\n  → Compare: https://github.com/%s/%s/compare/%s...%s\n  → Releases: https://github.com/%s/%s/releases\n  → If unexpected, reach out to the action maintainer",
-					owner, repo, existing.SHA, live.SHA,
-					owner, repo)
-			}
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
 				Category:     CategoryTampered,
 				Severity:     SeverityError,
 				Dependency:   &existing,
-				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s%s", existing.SHA[:12], live.SHA[:12], compareHint),
+				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s", existing.SHA[:12], live.SHA[:12]),
 				Remediation:  fmt.Sprintf("update to %s with `gh actions-pin upgrade`", liveCopy.SHA[:12]),
 			})
 		}
@@ -298,10 +290,19 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 
 	// Reachability checks.
 	reachResults := r.CheckReachabilityAll(existingDeps)
+	// Build dep lookup by key for attaching to reachability findings.
+	depByKey := make(map[string]lockfile.Dependency, len(existingDeps))
+	for _, d := range existingDeps {
+		depByKey[d.Key()] = d
+	}
 	for _, rr := range reachResults {
 		depID := rr.DepKey
 		if depID == "" {
 			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+		}
+		var depPtr *lockfile.Dependency
+		if d, ok := depByKey[rr.DepKey]; ok {
+			depPtr = &d
 		}
 		switch rr.Status {
 		case resolver.Unreachable:
@@ -309,7 +310,8 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				WorkflowPath: path,
 				Category:     CategoryUnreachable,
 				Severity:     SeverityError,
-				Detail:       fmt.Sprintf("%s: SHA %s is NOT reachable from ref — possible fork injection", depID, rr.SHA[:12]),
+				Dependency:   depPtr,
+				Detail:       fmt.Sprintf("SHA %s is NOT reachable from ref — possible fork injection", rr.SHA[:12]),
 			})
 		case resolver.ReachabilityUnknown:
 			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]

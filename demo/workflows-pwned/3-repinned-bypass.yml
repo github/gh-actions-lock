@@ -1,0 +1,52 @@
+name: "3: Re-pinned after attack — full bypass"
+
+# =============================================================================
+# ATTACKER CAPABILITY: Same as scenario 2
+# TIMELINE:
+#   1. Maintainer releases @bypassed → ea53476 (legitimate)
+#   2. You pin: lockfile records ea53476 ✓
+#   3. Attacker moves tag to 38b3412 (lineage-preserving)
+#   4. You run `gh actions-pin check` → TAMPERED fires (scenario 2)
+#   5. You think "oh, just a new release" and re-pin with `gh actions-pin`
+#   6. Lockfile now records 38b3412 — the attacker's SHA
+#   7. You run `gh actions-pin check` → ALL CLEAR. Attacker wins.
+#
+# This is the continuation of scenario 2. The victim re-pinned, accepting
+# the attacker's SHA as the new known-good state.
+#
+# RESULT:  COMPLETELY INVISIBLE ✓ (false negative)
+#          ✓ NOT TAMPERED — pinned SHA matches live resolution
+#          ✓ REACHABLE    — SHA is in the tag's lineage
+#          `check` reports this workflow as clean.
+#
+# The lockfile is a tamper-EVIDENT seal, not tamper-proof. It catches tag
+# movement on first contact (scenario 2). But once the victim re-pins, a
+# history-preserving rewrite is indistinguishable from a legitimate release.
+#
+# MITIGATIONS (outside lockfile scope):
+#   • Tag protection rules / rulesets (prevent tag movement at the source)
+#   • Immutable releases (prevent re-tagging after publish)
+#   • Sigstore provenance attestations (verify build origin)
+#   • GitHub artifact attestations (verify source → binary chain)
+#
+# DEMO:    https://github.com/nodeselector/actions-test-fixtures/commit/38b3412
+#
+# Run:     gh actions-pin check .github/workflows/3-repinned-bypass.yml
+# =============================================================================
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nodeselector/actions-test-fixtures/nested-composite@bypassed
+
+# Automatically generated and managed by: `gh actions pin <workflow-path>`
+dependencies:
+  - github.com/actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+  # Re-pinned after tag move — attacker's SHA is now the pinned SHA
+  - github.com/nodeselector/actions-test-fixtures/nested-composite@bypassed:sha1-38b3412adcb7afb4a061c519513e45cbaf4a1cec

@@ -433,8 +433,14 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				}
 				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
 					owner, repo := f.Dependency.OwnerRepo()
+					if hasTampered && unreachableDetail != "" {
+						out.Detail("  %s", out.Bold("⚠ The new commit has no shared history with your pinned SHA."))
+						out.Detail("  %s", "Do NOT accept without reviewing the diff for malicious changes.")
+					} else {
+						out.Detail("  %s", "Validate the change is a legitimate update before accepting.")
+					}
 					if owner != "" {
-						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...", owner, repo, f.Dependency.SHA)))
+						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA, f.Dependency.Ref)))
 						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
 					}
 				}
