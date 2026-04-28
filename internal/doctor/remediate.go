@@ -140,7 +140,18 @@ func (rem *Remediator) pinPromptTitle(nwo, owner, repo string) string {
 }
 
 func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
-	rem.output.Header("%s", wr.Path)
+	headerPrinted := false
+	ensureHeader := func() {
+		if !headerPrinted {
+			rem.output.Header("%s", wr.Path)
+			headerPrinted = true
+		}
+	}
+
+	// In interactive mode, always show the header.
+	if rem.prompter.IsInteractive() {
+		ensureHeader()
+	}
 
 	first := true
 	for _, finding := range wr.Findings {
@@ -148,6 +159,18 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			continue
 		}
 
+		// For non-interactive SHA_AS_REF, check if this dep was already printed.
+		// If so, skip silently (no header, no blank line).
+		if !rem.prompter.IsInteractive() && finding.Category == CategorySHAAsRef {
+			if finding.Dependency != nil {
+				if _, seen := rem.choices[finding.Dependency.Key()]; seen {
+					rem.Skipped++
+					continue
+				}
+			}
+		}
+
+		ensureHeader()
 		if !first {
 			rem.output.Blank()
 		}
@@ -199,7 +222,9 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 		}
 	}
 
-	rem.output.Blank()
+	if headerPrinted {
+		rem.output.Blank()
+	}
 	return nil
 }
 
@@ -424,13 +449,16 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	// Make the SHA a clickable link to the commit on GitHub.
 	commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
 	depLabel := dep.NWO + "@" + rem.output.Hyperlink(dep.SHA[:12], commitURL)
-	rem.output.Warning("%s: %s", depLabel, finding.Detail)
 
 	if !rem.prompter.IsInteractive() {
+		rem.output.Warning("%s: %s", depLabel, finding.Detail)
 		rem.output.Skip("%s: requires interactive tag selection", dep.Key())
+		rem.choices[dep.Key()] = "skipped"
 		rem.Skipped++
 		return nil
 	}
+
+	rem.output.Warning("%s: %s", depLabel, finding.Detail)
 
 	if owner == "" {
 		rem.Skipped++

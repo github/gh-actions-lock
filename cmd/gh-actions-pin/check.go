@@ -203,7 +203,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		alertedCount = rem.Alerted
 	}
 
-	if !valid {
+	if !valid || skippedCount > 0 || alertedCount > 0 {
 		// Exit 0 only if everything was resolved — nothing skipped or alerted.
 		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 {
 			return nil
