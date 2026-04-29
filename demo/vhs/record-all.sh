@@ -8,6 +8,8 @@ TAPES=(
   demo/vhs/check-autofix.tape
   demo/vhs/ci-failure.tape
   demo/vhs/upgrade.tape
+  demo/vhs/upgrade-version.tape
+  demo/vhs/edit-repin.tape
   demo/vhs/tamper-warning.tape
   demo/vhs/sha-as-ref.tape
   demo/vhs/unreleased-commit.tape
