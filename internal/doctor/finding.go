@@ -14,12 +14,12 @@ const (
 	CategoryStale Category = "stale"
 	// CategoryRefChanged means the uses: ref was manually changed (e.g. v6.2.0 → v6).
 	CategoryRefChanged Category = "ref_changed"
-	// CategoryUnreachable means the pinned SHA is not reachable from its ref.
-	CategoryUnreachable Category = "unreachable"
-	// CategorySHAMismatch means a ref looks like a SHA but resolves to a different commit.
-	CategorySHAMismatch Category = "sha_mismatch"
-	// CategoryTampered means the ref was changed in the workflow but not in the lockfile.
-	CategoryTampered Category = "tampered"
+	// CategoryImposterCommit means the pinned SHA is not in the ref's git history (possible fork-network commit).
+	CategoryImposterCommit Category = "imposter_commit"
+	// CategoryMisleadingSHA means a ref looks like a SHA but resolves to a different commit.
+	CategoryMisleadingSHA Category = "misleading_sha"
+	// CategoryRefMoved means the upstream tag now resolves to a different SHA than what's locked.
+	CategoryRefMoved Category = "ref_moved"
 	// CategoryValid means the dependency is pinned and verified.
 	CategoryValid Category = "valid"
 	// CategoryRunOnly means the workflow has no action refs (only run: steps).
@@ -81,7 +81,7 @@ type WorkflowReport struct {
 func (r *WorkflowReport) NeedsAttention() bool {
 	for _, f := range r.Findings {
 		switch f.Category {
-		case CategoryValid, CategoryRunOnly, CategorySHAMismatch:
+		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA:
 			continue
 		default:
 			return true

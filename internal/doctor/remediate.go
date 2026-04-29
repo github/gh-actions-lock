@@ -215,18 +215,18 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 				return err
 			}
 
-		case CategoryTampered:
+		case CategoryRefMoved:
 			rem.output.Error("%s: %s", finding.Dependency.Key(), finding.Detail)
 			rem.output.Hint("Ref has moved — investigate before updating. Use `gh actions-pin upgrade` manually.")
 			rem.Alerted++
 
-		case CategoryUnreachable:
+		case CategoryImposterCommit:
 			rem.output.Error("%s", finding.Detail)
 			rem.output.Hint("This may indicate a fork-network injection attack. Do not auto-fix.")
 			rem.Alerted++
 
-		case CategorySHAMismatch:
-			rem.output.Error("SHA_MISMATCH %s: %s", rem.depKey(finding), finding.Detail)
+		case CategoryMisleadingSHA:
+			rem.output.Error("MISLEADING_SHA %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 			rem.Alerted++
 		}

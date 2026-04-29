@@ -1,5 +1,3 @@
-# Scenario: Action pinned to an unreleased commit (no tag points at it).
-# The tool warns loudly and offers a tag picker.
 name: Unreleased commit demo
 on: push
 jobs:

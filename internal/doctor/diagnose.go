@@ -155,11 +155,11 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		return wr
 	}
 
-	// SHA_MISMATCH: detect refs that look like SHAs but resolve to different commits.
+	// MISLEADING_SHA: detect refs that look like SHAs but resolve to different commits.
 	for _, mismatch := range lockfile.CheckSHARefMismatches(liveDeps) {
 		wr.Findings = append(wr.Findings, Finding{
 			WorkflowPath: path,
-			Category:     CategorySHAMismatch,
+			Category:     CategoryMisleadingSHA,
 			Severity:     SeverityError,
 			Dependency:   &mismatch.Dep,
 			Detail:       fmt.Sprintf("ref %s resolved to %s", mismatch.Dep.Ref, mismatch.ResolvedAs),
@@ -252,7 +252,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			liveCopy := live
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
-				Category:     CategoryTampered,
+				Category:     CategoryRefMoved,
 				Severity:     SeverityError,
 				Dependency:   &existing,
 				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s", existing.SHA[:12], live.SHA[:12]),
@@ -308,7 +308,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		case resolver.Unreachable:
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
-				Category:     CategoryUnreachable,
+				Category:     CategoryImposterCommit,
 				Severity:     SeverityError,
 				Dependency:   depPtr,
 				Detail:       fmt.Sprintf("SHA %s is NOT reachable from ref — possible fork injection", rr.SHA[:12]),

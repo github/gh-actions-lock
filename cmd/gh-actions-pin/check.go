@@ -74,12 +74,12 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			  gh actions-pin check --json 2>/dev/null | jq .valid
 
 			Issue types:
-			  TAMPERED      - locked SHA no longer matches upstream
+			  REF_MOVED      - locked SHA no longer matches upstream (expected for mutable tags like v4)
 			  MISSING       - action in workflow has no lock entry
 			  STALE         - lock entry references an action no longer in the workflow
 			  REF_CHANGED   - workflow ref was edited; lock needs updating
-			  SHA_MISMATCH  - ref looks like a SHA but resolves to a different commit
-			  UNREACHABLE   - locked SHA is not in the ref's history
+			  MISLEADING_SHA - ref looks like a SHA but resolves to a different commit
+			  IMPOSTER_COMMIT   - locked SHA is not in the ref's history
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows
@@ -386,21 +386,21 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 		for _, dep := range depOrder {
 			dg := depMap[dep]
 
-			// Merge TAMPERED+UNREACHABLE for same dep.
+			// Merge REF_MOVED+IMPOSTER_COMMIT for same dep.
 			hasTampered := false
 			var unreachableDetail string
 			for _, f := range dg.findings {
-				if f.Category == doctor.CategoryTampered {
+				if f.Category == doctor.CategoryRefMoved {
 					hasTampered = true
 				}
-				if f.Category == doctor.CategoryUnreachable {
+				if f.Category == doctor.CategoryImposterCommit {
 					unreachableDetail = f.Detail
 				}
 			}
 			if hasTampered && unreachableDetail != "" {
 				var merged []doctor.Finding
 				for _, f := range dg.findings {
-					if f.Category == doctor.CategoryUnreachable {
+					if f.Category == doctor.CategoryImposterCommit {
 						continue
 					}
 					merged = append(merged, f)
@@ -428,10 +428,10 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				label := strings.ToUpper(string(f.Category))
 				out.Detail("! %s %s", out.Dim(label), dep)
 				out.Detail("  %s", f.Detail)
-				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryTampered {
+				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryRefMoved {
 					out.Detail("  %s", unreachableDetail)
 				}
-				if f.Dependency != nil && f.Category == doctor.CategoryTampered {
+				if f.Dependency != nil && f.Category == doctor.CategoryRefMoved {
 					owner, repo := f.Dependency.OwnerRepo()
 					if hasTampered && unreachableDetail != "" {
 						out.Detail("  %s", out.Bold("⚠ The new commit has no shared history with your pinned SHA."))
@@ -449,8 +449,8 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 
 		parts := []string{}
 		for _, cat := range []doctor.Category{
-			doctor.CategoryTampered, doctor.CategoryRefChanged, doctor.CategoryNotPinned,
-			doctor.CategoryStale, doctor.CategorySHAMismatch, doctor.CategoryUnreachable,
+			doctor.CategoryRefMoved, doctor.CategoryRefChanged, doctor.CategoryNotPinned,
+			doctor.CategoryStale, doctor.CategoryMisleadingSHA, doctor.CategoryImposterCommit,
 		} {
 			if n, ok := catCounts[cat]; ok {
 				parts = append(parts, fmt.Sprintf("%d %s", n, string(cat)))

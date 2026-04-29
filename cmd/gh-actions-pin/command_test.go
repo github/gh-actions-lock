@@ -285,12 +285,12 @@ dependencies:
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["tampered"], "should detect SHA changed: %+v", payload.Findings)
-	assert.True(t, categories["unreachable"], "should detect unreachable commit: %+v", payload.Findings)
+	assert.True(t, categories["ref_moved"], "should detect SHA changed: %+v", payload.Findings)
+	assert.True(t, categories["imposter_commit"], "should detect unreachable commit: %+v", payload.Findings)
 }
 
 // TestCheck_UnreachableOnly verifies that when a pinned SHA matches live
-// resolution but is not reachable from the ref, an UNREACHABLE error is reported.
+// resolution but is not reachable from the ref, an IMPOSTER_COMMIT error is reported.
 func TestCheck_UnreachableOnly(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -334,7 +334,7 @@ dependencies:
 
 	hasUnreachable := false
 	for _, f := range payload.Findings {
-		if f.Category == "unreachable" {
+		if f.Category == "imposter_commit" {
 			hasUnreachable = true
 		}
 	}
