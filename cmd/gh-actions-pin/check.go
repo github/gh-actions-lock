@@ -198,7 +198,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.Skip("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
 		}
 		if rem.Alerted > 0 {
-			f.UI.Warning("%d %s need manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"))
+			f.UI.Warning("%d %s %s manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"), ui.Pluralize(rem.Alerted, "needs", "need"))
 		}
 		fixedCount = rem.Fixed
 		skippedCount = uniqueSkipped
@@ -214,8 +214,8 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		remaining := skippedCount + alertedCount
 		if remaining > 0 {
 			f.UI.Blank()
-			f.UI.Error("%d %s require interactive resolution — run `gh actions-pin` locally:",
-				remaining, ui.Pluralize(remaining, "action", "actions"))
+			f.UI.Error("%d %s %s interactive resolution — run `gh actions-pin` locally:",
+				remaining, ui.Pluralize(remaining, "action", "actions"), ui.Pluralize(remaining, "requires", "require"))
 			for _, dep := range skippedDeps {
 				f.UI.Detail("  %s", dep)
 			}
