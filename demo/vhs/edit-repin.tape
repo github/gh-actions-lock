@@ -10,15 +10,11 @@ Set PlaybackSpeed 1.5
 Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-Type "echo '# Simulate a Dependabot PR: bump checkout v4.2.0 -> v5'"
-Enter
-Sleep 1s
-
 Type "grep checkout demo/workflows-upgrade/ci.yml"
 Enter
 Sleep 2s
 
-Type "echo '# Edit the ref (like Dependabot would)'"
+Type "echo '# Edit the ref'"
 Enter
 Sleep 1s
 

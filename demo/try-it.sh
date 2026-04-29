@@ -28,7 +28,8 @@ scenarios=(
   "upgrade-latest"
   "upgrade-version"
   "edit-repin"
-  "tamper-detection"
+  "ref-moved"
+  "imposter-commit"
   "json-output"
 )
 
@@ -48,8 +49,9 @@ usage() {
   echo "    upgrade-version    Upgrade to a specific version (--version)"
   echo "    edit-repin         Edit ref + re-pin (Dependabot workflow)"
   echo ""
-  echo "  Attack detection"
-  echo "    tamper-detection   Tag hijacked to orphan commit"
+  echo "  Change detection"
+  echo "    ref-moved          Tag moved forward (routine release)"
+  echo "    imposter-commit    Tag hijacked to orphan commit (fork injection)"
   echo "    json-output        JSON output for CI integration"
   echo ""
   echo "  all                  Run all scenarios sequentially"
@@ -138,12 +140,21 @@ scenario_edit_repin() {
   run tail -5 demo/workflows-upgrade/ci.yml
 }
 
-scenario_tamper_detection() {
-  banner "Tamper & imposter commit detection"
+scenario_ref_moved() {
+  banner "Ref moved — routine update"
+  bash "$RESET"
+  comment "Workflow pinned before tag moved forward (normal release)"
+  run grep -E 'uses:|  -' demo/workflows-pwned/5-pinned-before-update.yml
+  comment "Check detects the tag now points to a newer commit"
+  run gh actions-pin check demo/workflows-pwned/5-pinned-before-update.yml
+}
+
+scenario_imposter_commit() {
+  banner "Imposter commit — fork injection"
   bash "$RESET"
   comment "Workflow pinned BEFORE the tag was hijacked"
   run grep -E 'uses:|  -' demo/workflows-pwned/1-pinned-before-hijack.yml
-  comment "Check detects the tag now points to a different commit"
+  comment "Check detects the tag moved to an orphan commit"
   run gh actions-pin check demo/workflows-pwned/1-pinned-before-hijack.yml
 }
 
@@ -164,7 +175,8 @@ run_all() {
   scenario_upgrade_latest
   scenario_upgrade_version
   scenario_edit_repin
-  scenario_tamper_detection
+  scenario_ref_moved
+  scenario_imposter_commit
   scenario_json_output
   banner "All non-interactive scenarios complete"
 }
@@ -180,7 +192,9 @@ case "${1}" in
   upgrade-latest)     scenario_upgrade_latest ;;
   upgrade-version)    scenario_upgrade_version ;;
   edit-repin)         scenario_edit_repin ;;
-  tamper-detection|tamper) scenario_tamper_detection ;;
+  ref-moved)          scenario_ref_moved ;;
+  imposter-commit|imposter) scenario_imposter_commit ;;
+  tamper-detection|tamper) scenario_ref_moved; scenario_imposter_commit ;;
   json-output|json)   scenario_json_output ;;
   all)                run_all ;;
   *)                  echo "Unknown scenario: $1"; echo; usage ;;
