@@ -27,17 +27,7 @@ type Remediator struct {
 	output    *ui.UI
 	opts      RemediateOptions
 
-	// Session memory: maps "owner/repo@SHA" → chosen tag name.
-	// When the same dep appears in multiple workflows, auto-apply the prior choice.
-	choices map[string]string
-
-	// Internal repo ref choices: maps "owner/repo" → chosen ref (e.g. "main" or "v2").
-	// Applied across all workflows for same-owner actions.
-	internalRefChoices map[string]string
-
-	// Approved refs: tracks "owner/repo@ref" that the user already approved for pinning.
-	// When all refs in a workflow were already approved, auto-apply without prompting.
-	approvedRefs map[string]bool
+	state sessionState
 
 	// How many remaining occurrences of each choiceKey across all workflows.
 	remaining map[string]int
@@ -52,14 +42,12 @@ type Remediator struct {
 // NewRemediator creates a new Remediator.
 func NewRemediator(p Prompter, r *resolver.Resolver, client *api.RESTClient, out *ui.UI, opts RemediateOptions) *Remediator {
 	return &Remediator{
-		prompter:           p,
-		resolver:           r,
-		tagLister:          NewTagLister(client),
-		output:             out,
-		opts:               opts,
-		choices:            make(map[string]string),
-		internalRefChoices: make(map[string]string),
-		approvedRefs:       make(map[string]bool),
+		prompter:  p,
+		resolver:  r,
+		tagLister: NewTagLister(client),
+		output:    out,
+		opts:      opts,
+		state:     newSessionState(),
 	}
 }
 
@@ -72,7 +60,7 @@ func (rem *Remediator) isSameOwner(actionOwner string) bool {
 // offerApplyAll checks if this dep appears in more workflows and auto-applies
 // the same choice everywhere. No prompt needed — same dep, same tag, just do it.
 func (rem *Remediator) offerApplyAll(dep *lockfile.Dependency, tag string) {
-	key := rem.choiceKey(dep)
+	key := choiceKey(dep)
 	rem.remaining[key]--
 	others := rem.remaining[key]
 	if others <= 0 {
@@ -80,7 +68,7 @@ func (rem *Remediator) offerApplyAll(dep *lockfile.Dependency, tag string) {
 	}
 
 	rem.output.Detail("  ↳ applying %s to %d remaining %s", tag, others, ui.Pluralize(others, "file", "files"))
-	rem.recordChoice(dep, tag)
+	rem.state.recordChoice(dep, tag)
 }
 
 // Remediate walks through a report and handles each workflow that needs attention.
@@ -95,7 +83,7 @@ func (rem *Remediator) Remediate(report *Report) error {
 	for _, wr := range actionable {
 		for _, f := range wr.Findings {
 			if f.Category == CategorySHAAsRef && f.Dependency != nil {
-				rem.remaining[rem.choiceKey(f.Dependency)]++
+				rem.remaining[choiceKey(f.Dependency)]++
 			}
 		}
 	}
@@ -122,7 +110,7 @@ func (rem *Remediator) depKey(f Finding) string {
 func (rem *Remediator) skipDep(dep *lockfile.Dependency) {
 	key := dep.Key()
 	rem.output.Skip("%s: requires interactive tag selection", key)
-	rem.choices[key] = "skipped"
+	rem.state.choices[key] = "skipped"
 	rem.SkippedDeps = append(rem.SkippedDeps, key)
 	rem.Skipped++
 }
@@ -173,7 +161,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 		// If so, skip silently (no header, no blank line).
 		if !rem.prompter.IsInteractive() && finding.Category == CategorySHAAsRef {
 			if finding.Dependency != nil {
-				if _, seen := rem.choices[finding.Dependency.Key()]; seen {
+				if _, seen := rem.state.choices[finding.Dependency.Key()]; seen {
 					rem.Skipped++
 					continue
 				}
@@ -243,7 +231,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 	if !rem.prompter.IsInteractive() {
 		// Non-interactive: auto-pin all refs (ref→SHA is deterministic).
-		rem.markRefsApproved(wr.ActionRefs)
+		rem.state.markRefsApproved(wr.ActionRefs)
 		return rem.applyPin(wr)
 	}
 
@@ -251,7 +239,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	wr = rem.offerDefaultBranch(wr)
 
 	// If all refs in this workflow were already approved in a prior workflow, auto-apply.
-	if rem.allRefsApproved(wr.ActionRefs) {
+	if rem.state.allRefsApproved(wr.ActionRefs) {
 		rem.output.Detail("  ↳ all actions already approved — auto-pinning")
 		return rem.applyPin(wr)
 	}
@@ -270,7 +258,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		key := ref.FullName() + "@" + ref.Ref
 
 		// Prior choice — auto-apply without prompting.
-		if rem.approvedRefs[refKey(ref)] {
+		if rem.state.approvedRefs[refKey(ref)] {
 			sha := shaByKey[key]
 			rem.output.Detail("  %s → %s  %s", key, sha[:12], rem.output.Dim("↩ prior choice"))
 			approved = append(approved, ref)
@@ -335,11 +323,11 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 				rem.output.Detail("    %s → %s  %s", key, shaLabel, tagLink)
 			}
 			// Record both original and narrowed ref for cascade.
-			rem.approvedRefs[refKey(ref)] = true
+			rem.state.approvedRefs[refKey(ref)] = true
 			if displayTag != ref.Ref {
 				narrowedRef := ref
 				narrowedRef.Ref = displayTag
-				rem.approvedRefs[refKey(narrowedRef)] = true
+				rem.state.approvedRefs[refKey(narrowedRef)] = true
 			}
 			approved = append(approved, ref)
 			continue
@@ -384,7 +372,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	}
 
 	wr.ActionRefs = approved
-	rem.markRefsApproved(approved)
+	rem.state.markRefsApproved(approved)
 	return rem.applyPin(wr)
 }
 
@@ -418,7 +406,7 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 		// Session memory: reuse prior choice for this repo, but only for
 		// non-version refs. Version-ish refs must match the workflow uses: line.
 		if !LooksLikeVersion(ref.Ref) {
-			if priorRef, ok := rem.internalRefChoices[nwo]; ok {
+			if priorRef, ok := rem.state.internalRefChoices[nwo]; ok {
 				if priorRef != ref.Ref {
 					rem.output.Detail("  ↳ reusing prior choice for %s: %s", ref.FullName(), priorRef)
 					ref.Ref = priorRef
@@ -433,7 +421,7 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 			rem.output.Detail("  %s: using %s (default branch) instead of %s",
 				ref.FullName(), info.DefaultBranch, ref.Ref)
 			ref.Ref = info.DefaultBranch
-			rem.internalRefChoices[nwo] = info.DefaultBranch
+			rem.state.internalRefChoices[nwo] = info.DefaultBranch
 			updated = append(updated, ref)
 			continue
 		}
@@ -472,14 +460,14 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	// Session memory: reuse prior internal ref choice for same-owner repos (any SHA).
 	if rem.isSameOwner(owner) {
 		nwo := owner + "/" + repo
-		if priorRef, ok := rem.internalRefChoices[nwo]; ok {
+		if priorRef, ok := rem.state.internalRefChoices[nwo]; ok {
 			rem.output.Detail("  ↳ reusing prior choice for %s: %s", nwo, priorRef)
 			return rem.applySHAToTag(wr, dep, owner, repo, priorRef)
 		}
 	}
 
 	// Session memory: if we already chose a tag for this exact dep, auto-apply.
-	if priorTag, ok := rem.recallChoice(dep); ok {
+	if priorTag, ok := rem.state.recallChoice(dep); ok {
 		rem.output.Detail("  ↳ reusing prior choice: %s", priorTag)
 		return rem.applySHAToTag(wr, dep, owner, repo, priorTag)
 	}
@@ -506,8 +494,8 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 				shaLabel := rem.output.Hyperlink(dep.SHA[:12], commitURL)
 				rem.output.Detail("  ↳ already installed to %s (%s)  %s", tag.Name, shaLabel, tagLink)
 				nwo := owner + "/" + repo
-				rem.internalRefChoices[nwo] = tag.Name
-				rem.recordChoice(dep, tag.Name)
+				rem.state.internalRefChoices[nwo] = tag.Name
+				rem.state.recordChoice(dep, tag.Name)
 				return rem.applySHAToTag(wr, dep, owner, repo, tag.Name)
 			}
 		}
@@ -515,7 +503,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
 			rem.output.Detail("  ↳ using %s (default branch) for %s/%s", info.DefaultBranch, owner, repo)
 			nwo := owner + "/" + repo
-			rem.internalRefChoices[nwo] = info.DefaultBranch
+			rem.state.internalRefChoices[nwo] = info.DefaultBranch
 			return rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch)
 		}
 	}
@@ -541,7 +529,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 			commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
 			shaLabel := rem.output.Hyperlink(dep.SHA[:12], commitURL)
 			rem.output.Detail("  ↳ auto-pinning to %s (%s)  %s", tag.Name, shaLabel, tagLink)
-			rem.recordChoice(dep, tag.Name)
+			rem.state.recordChoice(dep, tag.Name)
 			return rem.applySHAToTag(wr, dep, owner, repo, tag.Name)
 		}
 	}
@@ -574,9 +562,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 	dep := finding.Dependency
 
 	// Build picker — full semver first (recommended), then major tags.
-	options := make([]string, 0, len(suggestions)+3)
 	reordered := reorderSuggestions(suggestions)
-	// For external repos, drop major-only tags — we always pin to patch versions.
 	if !rem.isSameOwner(owner) {
 		var filtered []TagSuggestion
 		for _, s := range reordered {
@@ -586,91 +572,57 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 		}
 		reordered = filtered
 	}
+
+	options := make([]string, 0, len(reordered)+3)
 	for i, s := range reordered {
-		// Make only the tag name a clickable link.
-		tagURL := TagURL(owner, repo, s.Tag.Name)
-		label := rem.output.Hyperlink(s.Tag.Name, tagURL)
-		if s.Preferred {
-			label += "  📌 current"
-		}
-		if !rem.isSameOwner(owner) {
-			if s.Tag.IsImmutable {
-				label += "  🔒 immutable"
-			} else if s.Tag.IsRelease {
-				label += "  (release)"
-			}
-		}
-		if i == 0 && !s.Tag.IsMajor && !rem.isSameOwner(owner) {
-			label += "  (recommended)"
-		}
-		if age := FormatTagAge(rem.tagLister.ReleaseDate(owner, repo, s.Tag.Name)); age != "" {
-			label += "  " + age
-		}
-		options = append(options, label)
+		recommend := i == 0 && !s.Tag.IsMajor && !rem.isSameOwner(owner)
+		options = append(options, rem.tagLabel(owner, repo, pickerTag{
+			Name:        s.Tag.Name,
+			IsInstalled: s.Preferred,
+			IsImmutable: s.Tag.IsImmutable,
+			IsRelease:   s.Tag.IsRelease,
+			IsMajor:     s.Tag.IsMajor,
+		}, recommend))
 	}
 
-	// For same-owner repos, offer the default branch.
-	defaultBranchIdx := -1
-	if rem.isSameOwner(owner) {
-		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
-			branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, info.DefaultBranch)
-			label := rem.output.Hyperlink(info.DefaultBranch, branchURL) + "  (default branch)"
-			if age := FormatTagAge(info.PushedAt); age != "" {
-				label += "  last push " + age
-			}
-			options = append(options, label)
-			defaultBranchIdx = len(options) - 1
-		}
-	}
+	var defaultBranchIdx int
+	options, defaultBranchIdx = rem.defaultBranchOption(options, owner, repo)
+	tagCount := len(reordered)
 
-	options = append(options, "Show all tags")
-	options = append(options, "Skip this action")
-
-	idx, err := rem.prompter.Select(
+	result, err := rem.runPicker(
 		rem.pinPromptTitle(dep.NWO, owner, repo),
-		options,
+		options, tagCount, defaultBranchIdx,
+		pickerSentinels{ShowAll: true},
 	)
 	if err != nil {
-		if errors.Is(err, ErrAborted) {
-			return ErrAborted
-		}
-		rem.Skipped++
-		return nil
-	}
-	if idx < 0 || idx >= len(options) {
-		rem.Skipped++
-		return nil
+		return err
 	}
 
-	if idx == len(options)-1 {
+	switch result.Action {
+	case pickerSkip:
 		rem.Skipped++
 		return nil
-	}
-	if idx == len(options)-2 {
-		// Fall through to full tag picker.
+	case pickerShowAll:
 		return rem.handleSHATagPicker(wr, finding, owner, repo)
-	}
-	if idx == defaultBranchIdx {
+	case pickerDefaultBranch:
 		info, _ := rem.tagLister.GetRepoInfo(owner, repo)
-		if rem.isSameOwner(owner) {
-			rem.internalRefChoices[owner+"/"+repo] = info.DefaultBranch
-		}
+		rem.state.internalRefChoices[owner+"/"+repo] = info.DefaultBranch
 		if err := rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch); err != nil {
 			return err
 		}
 		rem.offerApplyAll(dep, info.DefaultBranch)
 		return nil
+	default:
+		selectedTag := reordered[result.TagIndex].Tag
+		if rem.isSameOwner(owner) {
+			rem.state.internalRefChoices[owner+"/"+repo] = selectedTag.Name
+		}
+		if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
+			return err
+		}
+		rem.offerApplyAll(dep, selectedTag.Name)
+		return nil
 	}
-
-	selectedTag := reordered[idx].Tag
-	if rem.isSameOwner(owner) {
-		rem.internalRefChoices[owner+"/"+repo] = selectedTag.Name
-	}
-	if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
-		return err
-	}
-	rem.offerApplyAll(dep, selectedTag.Name)
-	return nil
 }
 
 func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, owner, repo string) error {
@@ -691,89 +643,57 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 
 	options := make([]string, 0, len(curated)+3)
 	for _, pt := range curated {
-		// Make only the tag name a clickable link; append decorators after.
-		tagURL := TagURL(owner, repo, pt.Tag.Name)
-		label := rem.output.Hyperlink(pt.Tag.Name, tagURL)
-		if pt.Installed {
-			label += "  📌 current"
-		}
-		if !rem.isSameOwner(owner) {
-			if pt.Tag.IsImmutable {
-				label += "  🔒 immutable"
-			} else if pt.Tag.IsRelease {
-				label += "  (release)"
-			}
-		}
-		if age := FormatTagAge(rem.tagLister.ReleaseDate(owner, repo, pt.Tag.Name)); age != "" {
-			label += "  " + age
-		}
-		options = append(options, label)
+		options = append(options, rem.tagLabel(owner, repo, pickerTag{
+			Name:        pt.Tag.Name,
+			IsInstalled: pt.Installed,
+			IsImmutable: pt.Tag.IsImmutable,
+			IsRelease:   pt.Tag.IsRelease,
+			IsMajor:     pt.Tag.IsMajor,
+		}, false))
 	}
 
-	// For same-owner repos, offer the default branch.
-	defaultBranchIdx := -1
-	if rem.isSameOwner(owner) {
-		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
-			branchURL := fmt.Sprintf("https://github.com/%s/%s/tree/%s", owner, repo, info.DefaultBranch)
-			label := rem.output.Hyperlink(info.DefaultBranch, branchURL) + "  (default branch)"
-			if age := FormatTagAge(info.PushedAt); age != "" {
-				label += "  last push " + age
-			}
-			options = append(options, label)
-			defaultBranchIdx = len(options) - 1
-		}
-	}
+	var defaultBranchIdx int
+	options, defaultBranchIdx = rem.defaultBranchOption(options, owner, repo)
+	tagCount := len(curated)
 
-	options = append(options, fmt.Sprintf("Open releases → https://github.com/%s/%s/releases", owner, repo))
-	options = append(options, "Skip this action")
-
-	idx, err := rem.prompter.Select(
+	releasesURL := fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)
+	result, err := rem.runPicker(
 		rem.pinPromptTitle(owner+"/"+repo, owner, repo),
-		options,
+		options, tagCount, defaultBranchIdx,
+		pickerSentinels{OpenReleases: releasesURL},
 	)
 	if err != nil {
-		if errors.Is(err, ErrAborted) {
-			return ErrAborted
-		}
-		rem.Skipped++
-		return nil
-	}
-	if idx < 0 || idx >= len(options) {
-		rem.Skipped++
-		return nil
+		return err
 	}
 
-	if idx == len(options)-1 {
+	switch result.Action {
+	case pickerSkip:
 		rem.Skipped++
 		return nil
-	}
-	if idx == len(options)-2 {
+	case pickerOpenReleases:
 		rem.output.Info("Opening releases page...")
-		openBrowser(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo))
+		openBrowser(releasesURL)
 		rem.Skipped++
 		return nil
-	}
-	if idx == defaultBranchIdx {
+	case pickerDefaultBranch:
 		info, _ := rem.tagLister.GetRepoInfo(owner, repo)
-		if rem.isSameOwner(owner) {
-			rem.internalRefChoices[owner+"/"+repo] = info.DefaultBranch
-		}
+		rem.state.internalRefChoices[owner+"/"+repo] = info.DefaultBranch
 		if err := rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch); err != nil {
 			return err
 		}
 		rem.offerApplyAll(dep, info.DefaultBranch)
 		return nil
+	default:
+		selectedTag := curated[result.TagIndex].Tag
+		if rem.isSameOwner(owner) {
+			rem.state.internalRefChoices[owner+"/"+repo] = selectedTag.Name
+		}
+		if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
+			return err
+		}
+		rem.offerApplyAll(dep, selectedTag.Name)
+		return nil
 	}
-
-	selectedTag := curated[idx].Tag
-	if rem.isSameOwner(owner) {
-		rem.internalRefChoices[owner+"/"+repo] = selectedTag.Name
-	}
-	if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
-		return err
-	}
-	rem.offerApplyAll(dep, selectedTag.Name)
-	return nil
 }
 
 func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) error {

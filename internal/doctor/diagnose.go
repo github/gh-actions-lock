@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
@@ -166,100 +165,8 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		})
 	}
 
-	depsByKey := make(map[string]lockfile.Dependency)
-	for _, dep := range existingDeps {
-		depsByKey[dep.Key()] = dep
-	}
-	liveByKey := make(map[string]lockfile.Dependency)
-	// Multi-value NWO index for transitive fuzzy matching.
-	liveByNWO := make(map[string][]lockfile.Dependency)
-	for _, dep := range liveDeps {
-		liveByKey[dep.Key()] = dep
-		liveByNWO[dep.NWO] = append(liveByNWO[dep.NWO], dep)
-	}
-
-	// Check each existing dep against live resolution.
-	for _, existing := range existingDeps {
-		if lockfile.IsFullSHA(existing.Ref) {
-			continue
-		}
-
-		live, ok := liveByKey[existing.Key()]
-		if !ok {
-			// Fuzzy match by NWO: same repo, same SHA or narrowed version.
-			if candidates, has := liveByNWO[existing.NWO]; has {
-				for _, cand := range candidates {
-					if strings.EqualFold(cand.SHA, existing.SHA) {
-						live = cand
-						ok = true
-						break
-					}
-					if IsNarrowedVersion(cand.Ref, existing.Ref) {
-						live = cand
-						ok = true
-						break
-					}
-				}
-			}
-		}
-		if !ok {
-			// Direct ref change?
-			if directNWOs[existing.NWO] {
-				if candidates, has := liveByNWO[existing.NWO]; has && len(candidates) > 0 {
-					newDep := candidates[0]
-					if newDep.Ref != existing.Ref {
-						refOwner, refRepo := existing.OwnerRepo()
-						wr.Findings = append(wr.Findings, Finding{
-							WorkflowPath: path,
-							Category:     CategoryRefChanged,
-							Severity:     SeverityWarning,
-							Dependency:   &existing,
-							ActionRef: &lockfile.ActionRef{
-								Owner: refOwner,
-								Repo:  refRepo,
-								Ref:   newDep.Ref,
-							},
-							Detail:      fmt.Sprintf("ref changed from %s to %s in workflow — re-pin to update", existing.Ref, newDep.Ref),
-							Remediation: "re-pin to match the new ref",
-						})
-						continue
-					}
-				}
-			}
-			// Transitive dep no longer discovered, or stale direct dep.
-			if !directNWOs[existing.NWO] {
-				wr.Findings = append(wr.Findings, Finding{
-					WorkflowPath: path,
-					Category:     CategoryStale,
-					Severity:     SeverityInfo,
-					Dependency:   &existing,
-					Detail:       "transitive dependency no longer discovered from upstream composite action",
-					Remediation:  "re-resolve to clean up",
-				})
-			} else {
-				wr.Findings = append(wr.Findings, Finding{
-					WorkflowPath: path,
-					Category:     CategoryStale,
-					Severity:     SeverityInfo,
-					Dependency:   &existing,
-					Detail:       "no longer in workflow — will be cleaned up",
-					Remediation:  "re-resolve to remove orphaned dependency",
-				})
-			}
-			continue
-		}
-		if !strings.EqualFold(existing.SHA, live.SHA) {
-			liveCopy := live
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategoryRefMoved,
-				Severity:     SeverityError,
-				Dependency:   &existing,
-				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s", existing.SHA[:12], live.SHA[:12]),
-				Remediation:  fmt.Sprintf("update to %s with `gh actions-pin upgrade`", liveCopy.SHA[:12]),
-			})
-		}
-	}
+	// Compare pinned deps against live resolution.
+	wr.Findings = append(wr.Findings, compareSnapshots(path, existingDeps, liveDeps, directNWOs)...)
 
 	// Build set of NWOs with ref-changed findings to avoid duplicate "not pinned" findings.
 	refChangedNWOs := make(map[string]bool)
@@ -270,6 +177,10 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	}
 
 	// Check for missing deps (action in workflow but not pinned).
+	depsByKey := make(map[string]lockfile.Dependency, len(existingDeps))
+	for _, dep := range existingDeps {
+		depsByKey[dep.Key()] = dep
+	}
 	for _, ref := range refs {
 		key := ref.FullName() + "@" + ref.Ref
 		if _, ok := depsByKey[key]; !ok {

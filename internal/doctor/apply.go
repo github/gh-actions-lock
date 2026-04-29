@@ -7,47 +7,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/lockfile"
 )
 
-// choiceKey returns a stable key for session memory: "owner/repo@SHA".
-func (rem *Remediator) choiceKey(dep *lockfile.Dependency) string {
-	return dep.NWO + "@" + dep.SHA
-}
-
-// recordChoice saves a tag choice for a dep so it can be auto-applied later.
-func (rem *Remediator) recordChoice(dep *lockfile.Dependency, tag string) {
-	rem.choices[rem.choiceKey(dep)] = tag
-}
-
-// recallChoice returns (tag, true) if we already made a choice for this dep.
-func (rem *Remediator) recallChoice(dep *lockfile.Dependency) (string, bool) {
-	tag, ok := rem.choices[rem.choiceKey(dep)]
-	return tag, ok
-}
-
-// refKey returns a session memory key for an unpinned action ref: "owner/repo@ref".
-func refKey(ref lockfile.ActionRef) string {
-	return ref.FullName() + "@" + ref.Ref
-}
-
-// markRefsApproved records all action refs as approved for auto-pinning.
-func (rem *Remediator) markRefsApproved(refs []lockfile.ActionRef) {
-	for _, ref := range refs {
-		rem.approvedRefs[refKey(ref)] = true
-	}
-}
-
-// allRefsApproved returns true if every ref was already approved in a prior workflow.
-func (rem *Remediator) allRefsApproved(refs []lockfile.ActionRef) bool {
-	if len(refs) == 0 {
-		return false
-	}
-	for _, ref := range refs {
-		if !rem.approvedRefs[refKey(ref)] {
-			return false
-		}
-	}
-	return true
-}
-
 // isSHARef returns true if ref looks like a full commit SHA (40 or 64 hex chars).
 func isSHARef(ref string) bool {
 	return lockfile.IsFullSHA(ref)
