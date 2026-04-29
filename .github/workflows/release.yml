@@ -17,6 +17,7 @@ jobs:
         with:
           generate_attestations: true
           go_version_file: go.mod
+          go_build_options: ./cmd/gh-actions-pin
 
 # Automatically generated and managed by: `gh actions-pin --write <workflow-path>`
 dependencies:
