@@ -1,0 +1,8 @@
+name: Unreleased commit demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nodeselector/actions-test-fixtures/nested-composite@dc9920815252718c9bfb9e3ac7d25d4fbf5ca9b1

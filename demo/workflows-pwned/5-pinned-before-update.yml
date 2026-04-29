@@ -1,0 +1,42 @@
+name: "5: Pinned before routine update — tag moved forward in lineage"
+
+# =============================================================================
+# SCENARIO: Legitimate upstream release
+# TIMELINE:
+#   1. Maintainer releases @updated → 38b3412 (legitimate)
+#   2. You pin: lockfile records 38b3412 ✓
+#   3. Maintainer pushes a new commit, moves @updated → ea53476 (descendant)
+#   4. You run `gh actions-pin check` → REF_MOVED detected
+#
+# This is the normal case: a maintainer cuts a new release and moves the tag
+# forward. The new SHA is a descendant of the pinned SHA — same lineage,
+# just newer. The compare link lets you review what changed.
+#
+# RESULT:  REF_MOVED ⚠ (informational)
+#          ✗ REF_MOVED  — live SHA (ea53476) ≠ pinned SHA (38b3412)
+#          ✓ REACHABLE  — new SHA is a descendant of the pinned SHA
+#
+# The lockfile detects the tag moved but lineage is intact. Review the diff,
+# then `gh actions-pin upgrade` to accept the new version.
+#
+# DEMO:    https://github.com/nodeselector/actions-test-fixtures/compare/38b3412adcb7afb4a061c519513e45cbaf4a1cec...ea53476fdc172d8552df5af9658a45a367e4f41d
+#
+# Run:     gh actions-pin check demo/workflows-pwned/5-pinned-before-update.yml
+# =============================================================================
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nodeselector/actions-test-fixtures/nested-composite@updated
+
+# Automatically generated and managed by: `gh actions pin <workflow-path>`
+dependencies:
+  - github.com/actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+  # Pinned at 38b3412 before maintainer bumped tag to ea53476
+  - github.com/nodeselector/actions-test-fixtures/nested-composite@updated:sha1-38b3412adcb7afb4a061c519513e45cbaf4a1cec

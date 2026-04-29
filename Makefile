@@ -3,7 +3,7 @@ BIN := gh-actions-pin
 .PHONY: build test install reinstall
 
 build:
-	go build -o $(BIN) .
+	go build -o $(BIN) ./cmd/gh-actions-pin
 
 test:
 	go test ./...

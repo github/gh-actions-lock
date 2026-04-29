@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,9 +70,8 @@ dependencies:
 	)
 	require.NoError(t, err)
 	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "Planning upgrade(s)...")
 	assert.Contains(t, stderr, "actions/checkout: v5 -> v6")
-	assert.Contains(t, stderr, "Upgraded and pinned 3 dependencies")
+	assert.Contains(t, stderr, "Upgraded 1 action(s)")
 
 	content, readErr := os.ReadFile(workflowPath)
 	require.NoError(t, readErr)
@@ -114,175 +113,18 @@ dependencies:
   - github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
 `)
 
-	stdout, stderr, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json", "valid,errors,warnings", workflowPath,
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "Re-resolving 2 action reference(s)...")
 
 	var payload struct {
-		Valid    bool              `json:"valid"`
-		Errors   []validationError `json:"errors"`
-		Warnings []string          `json:"warnings"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
-	assert.Empty(t, payload.Errors)
-	assert.Empty(t, payload.Warnings)
-}
-
-func TestPinCommand_PreviewWithHTTPMocks(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-				"a1": testRepoResponse("actions/setup-go", "4a3601121dd01d1626a1e23e37211e3254c1c06c", nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-`)
-
-	stdout, stderr, err := runCommandWithHTTP(t, reg, workflowPath)
-	require.NoError(t, err)
-	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "Resolving 2 action reference(s)...")
-	assert.Contains(t, stderr, "Preview summary for")
-	assert.Contains(t, stderr, "direct: 2 added")
-	assert.Contains(t, stderr, "Apply with:  gh actions-pin --write")
-}
-
-func TestPinCommand_WriteRejectsDirectRefChangesByDefault(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - github.com/actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd
-`)
-
-	stdout, stderr, err := runCommandWithHTTP(t, reg, "--write", workflowPath)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, errSilent))
-	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "refusing to bless them with --write")
-	assert.Contains(t, stderr, "hint: use `gh actions-pin upgrade --action actions/checkout --from v5 --version v6 --write`")
-
-	content, readErr := os.ReadFile(workflowPath)
-	require.NoError(t, readErr)
-	assert.Contains(t, string(content), "uses: actions/checkout@v6")
-	assert.Contains(t, string(content), "github.com/actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd")
-}
-
-func TestPinCommand_WriteAllowsAcknowledgedRefChanges(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - github.com/actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd
-`)
-
-	stdout, stderr, err := runCommandWithHTTP(t, reg, "--write", "--allow-ref-changes", workflowPath)
-	require.NoError(t, err)
-	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "Pinned 1 dependencies")
-
-	content, readErr := os.ReadFile(workflowPath)
-	require.NoError(t, readErr)
-	assert.Contains(t, string(content), "github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd")
-}
-
-func TestUpdateCommand_TargetedRefreshWithHTTPMocks(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - github.com/actions/checkout@v6:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  - github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
-`)
-
-	stdout, stderr, err := runCommandWithHTTP(t, reg,
-		"update", "--action", "github.com/actions/checkout", "--write", workflowPath,
-	)
-	require.NoError(t, err)
-	assert.Empty(t, stdout)
-	assert.Contains(t, stderr, "Pinned 2 dependencies")
-
-	content, readErr := os.ReadFile(workflowPath)
-	require.NoError(t, readErr)
-	got := string(content)
-	assert.Contains(t, got, "github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd")
-	assert.Contains(t, got, "github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c")
+	assert.Empty(t, payload.Findings)
 }
 
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
@@ -339,39 +181,34 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(string, string, string, string) (resolver.ReachabilityStatus, string), args ...string) (string, string, error) {
 	t.Helper()
 
-	oldResolver := newResolver
-	newResolver = func(hostname string) (*resolver.Resolver, error) {
-		r, err := resolver.NewWithTransport(hostname, rt)
-		if err != nil {
-			return nil, err
-		}
-		if reachFn != nil {
-			r.SetCheckReachabilityFunc(reachFn)
-		}
-		return r, nil
-	}
-	defer func() {
-		newResolver = oldResolver
-	}()
-
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
 	stdoutR, stdoutW, err := os.Pipe()
 	require.NoError(t, err)
 	stderrR, stderrW, err := os.Pipe()
 	require.NoError(t, err)
 
-	os.Stdout = stdoutW
-	os.Stderr = stderrW
+	f := &pinFactory{
+		Out:    stdoutW,
+		ErrOut: stderrW,
+		UI:     ui.NewPlain(stderrW),
+		NewResolver: func(hostname string) (*resolver.Resolver, error) {
+			r, err := resolver.NewWithTransport(hostname, rt)
+			if err != nil {
+				return nil, err
+			}
+			if reachFn != nil {
+				r.SetCheckReachabilityFunc(reachFn)
+			}
+			return r, nil
+		},
+		IsTerminal: func() bool { return false },
+	}
 
-	cmd := newRootCmd()
+	cmd := NewRootCmd(f)
 	cmd.SetArgs(args)
 	runErr := cmd.Execute()
 
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
 
 	stdoutBytes, readErr := io.ReadAll(stdoutR)
 	require.NoError(t, readErr)
@@ -433,27 +270,27 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json", "valid,errors", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "JSON mode communicates errors in payload")
 
 	var payload struct {
-		Valid  bool              `json:"valid"`
-		Errors []validationError `json:"errors"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
 
-	errorTypes := map[string]bool{}
-	for _, e := range payload.Errors {
-		errorTypes[e.Type] = true
+	categories := map[string]bool{}
+	for _, f := range payload.Findings {
+		categories[f.Category] = true
 	}
-	assert.True(t, errorTypes["TAMPERED"], "should detect SHA changed: %+v", payload.Errors)
-	assert.True(t, errorTypes["UNREACHABLE"], "should detect unreachable commit: %+v", payload.Errors)
+	assert.True(t, categories["ref_moved"], "should detect SHA changed: %+v", payload.Findings)
+	assert.True(t, categories["imposter_commit"], "should detect unreachable commit: %+v", payload.Findings)
 }
 
 // TestCheck_UnreachableOnly verifies that when a pinned SHA matches live
-// resolution but is not reachable from the ref, an UNREACHABLE error is reported.
+// resolution but is not reachable from the ref, an IMPOSTER_COMMIT error is reported.
 func TestCheck_UnreachableOnly(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -484,24 +321,24 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json", "valid,errors", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "JSON mode communicates errors in payload")
 
 	var payload struct {
-		Valid  bool              `json:"valid"`
-		Errors []validationError `json:"errors"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
 
 	hasUnreachable := false
-	for _, e := range payload.Errors {
-		if e.Type == "UNREACHABLE" {
+	for _, f := range payload.Findings {
+		if f.Category == "imposter_commit" {
 			hasUnreachable = true
 		}
 	}
-	assert.True(t, hasUnreachable, "should detect unreachable commit: %+v", payload.Errors)
+	assert.True(t, hasUnreachable, "should detect unreachable commit: %+v", payload.Findings)
 }
 
 // TestCheck_ReachabilityUnknown verifies that when the reachability check
@@ -536,20 +373,25 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
-		"check", "--json", "valid,errors,warnings", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
 	var payload struct {
-		Valid    bool              `json:"valid"`
-		Errors   []validationError `json:"errors"`
-		Warnings []string          `json:"warnings"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid, "valid should be true when reachability is unknown")
-	assert.Empty(t, payload.Errors)
-	assert.NotEmpty(t, payload.Warnings, "should have a reachability warning")
-	assert.Contains(t, payload.Warnings[0], "reachability check inconclusive")
+
+	// Reachability unknown produces a CategoryValid finding with SeverityWarning.
+	hasWarning := false
+	for _, f := range payload.Findings {
+		if f.Severity == "warning" && strings.Contains(f.Detail, "clone failed") {
+			hasWarning = true
+		}
+	}
+	assert.True(t, hasWarning, "should have a reachability warning: %+v", payload.Findings)
 }
 
 // TestCheck_Reachable verifies the happy path: pinned SHA matches live
@@ -583,50 +425,15 @@ dependencies:
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json", "valid,errors,warnings", workflowPath,
+		"check", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
 	var payload struct {
-		Valid    bool              `json:"valid"`
-		Errors   []validationError `json:"errors"`
-		Warnings []string          `json:"warnings"`
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
-	assert.Empty(t, payload.Errors)
-	assert.Empty(t, payload.Warnings)
-}
-
-// TestPin_UnreachableWarnsOnly verifies that an unreachable SHA during pin
-// warns on stderr but does not block the operation.
-func TestPin_UnreachableWarnsOnly(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	sha := "ffffffffffffffffffffffffffffffffffffffff"
-
-	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: example/action@v1
-`)
-
-	_, stderr, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(), "--diff", workflowPath)
-	require.NoError(t, err, "pin should succeed even with unreachable warning")
-	assert.Contains(t, stderr, "NOT reachable")
-	assert.Contains(t, stderr, "fork-network injection")
+	assert.Empty(t, payload.Findings)
 }

@@ -78,13 +78,26 @@ func (d Dependency) Key() string {
 	return d.NWO + "@" + d.Ref
 }
 
+// OwnerRepo splits NWO into owner and repo components.
+func (d Dependency) OwnerRepo() (string, string) {
+	parts := strings.SplitN(d.NWO, "/", 3)
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
+
+// HashAlgoOrDetect returns the hash algorithm, falling back to detection from SHA length.
+func (d Dependency) HashAlgoOrDetect() string {
+	if d.HashAlgo != "" {
+		return strings.ToLower(d.HashAlgo)
+	}
+	return detectHashAlgo(d.SHA)
+}
+
 // String formats the dependency as a YAML list entry.
 func (d Dependency) String() string {
-	algo := d.HashAlgo
-	if algo == "" {
-		algo = detectHashAlgo(d.SHA)
-	}
-	return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, strings.ToLower(algo), strings.ToLower(d.SHA))
+	return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, d.HashAlgoOrDetect(), strings.ToLower(d.SHA))
 }
 
 // ParseDependencyString parses a dependency entry string back into a Dependency.
@@ -238,6 +251,10 @@ func ParseActionRef(uses string) *ActionRef {
 	return actionRef
 }
 
+func isYAMLFile(path string) bool {
+	return strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
+}
+
 func isReusableWorkflow(actionRef *ActionRef) bool {
 	if actionRef.Path == "" {
 		return false
@@ -245,11 +262,11 @@ func isReusableWorkflow(actionRef *ActionRef) bool {
 	if !strings.Contains(actionRef.Path, ".github/workflows/") {
 		return false
 	}
-	return strings.HasSuffix(actionRef.Path, ".yml") || strings.HasSuffix(actionRef.Path, ".yaml")
+	return isYAMLFile(actionRef.Path)
 }
 
 func isLocalReusableWorkflow(localPath string) bool {
-	return strings.HasSuffix(localPath, ".yml") || strings.HasSuffix(localPath, ".yaml")
+	return isYAMLFile(localPath)
 }
 
 // ExecutionType describes how an action runs.
@@ -361,7 +378,6 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 			if !seenLocal[value] {
 				seenLocal[value] = true
 				localPaths = append(localPaths, value)
-				warnings = append(warnings, fmt.Sprintf("skipping unsupported local path action: %s", value))
 			}
 			return
 		}
@@ -425,7 +441,7 @@ func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
 	})
 
 	var sb strings.Builder
-	sb.WriteString("\n# Automatically generated and managed by: `gh actions-pin --write <workflow-path>`\n")
+	sb.WriteString("\n# Automatically generated and managed by gh-actions-pin\n")
 	sb.WriteString("dependencies:\n")
 	for _, dep := range deps {
 		sb.WriteString("  - " + dep.String() + "\n")
@@ -460,17 +476,11 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 		}
 
 		lineIndex := valueNode.Line - 1
-		if lineIndex >= 0 && lineIndex < len(lines) && strings.Contains(lines[lineIndex], oldValue) {
-			lines[lineIndex] = strings.Replace(lines[lineIndex], oldValue, newValue, 1)
-			changed++
-			return
-		}
-
-		for i := range lines {
-			if strings.Contains(lines[i], oldValue) {
-				lines[i] = strings.Replace(lines[i], oldValue, newValue, 1)
+		if lineIndex >= 0 && lineIndex < len(lines) {
+			if idx := strings.Index(lines[lineIndex], oldValue); idx >= 0 {
+				// Replace only the matched ref, preserving any trailing content.
+				lines[lineIndex] = lines[lineIndex][:idx] + newValue + lines[lineIndex][idx+len(oldValue):]
 				changed++
-				return
 			}
 		}
 	})
@@ -479,7 +489,7 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 }
 
 var (
-	reDepsSectionWithComment = regexp.MustCompile(`(?m)^\n?# Automatically generated and managed by:.*\ndependencies:\n(?:  - .*\n)*`)
+	reDepsSectionWithComment = regexp.MustCompile(`(?m)^\n?# Automatically generated and managed by[^\n]*\ndependencies:\n(?:  - .*\n)*`)
 	reDepsSectionBare        = regexp.MustCompile(`(?m)^dependencies:\n(?:  - .*\n)*`)
 )
 

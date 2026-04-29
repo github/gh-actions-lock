@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -61,8 +59,18 @@ type Resolver struct {
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
+	// parentMap tracks child NWO → parent dep key from last ResolveAllRecursive call.
+	parentMap map[string]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
+}
+
+// ParentMap returns the child NWO → parent dep key mapping from the last ResolveAllRecursive call.
+func (r *Resolver) ParentMap() map[string]string {
+	if r.parentMap == nil {
+		return map[string]string{}
+	}
+	return r.parentMap
 }
 
 // New creates a resolver using the authenticated gh context.
@@ -77,6 +85,11 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		hostname = "github.com"
 	}
 	opts.Host = hostname
+
+	// Wrap the transport with retry logic for transient 5xx/429 errors.
+	if opts.Transport == nil {
+		opts.Transport = newRetryTransport(http.DefaultTransport, 3)
+	}
 
 	client, err := api.NewGraphQLClient(opts)
 	if err != nil {
@@ -99,11 +112,11 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	}, nil
 }
 
-// NewWithTransport creates a resolver with a custom HTTP transport. This is
-// primarily useful for tests that want cli/cli-style HTTP stubbing.
+// NewWithTransport creates a resolver with a custom HTTP transport and a
+// placeholder auth token. Intended for tests that stub HTTP responses.
 func NewWithTransport(hostname string, transport http.RoundTripper) (*Resolver, error) {
 	return NewWithOptions(api.ClientOptions{
-		AuthToken:    "test-token",
+		AuthToken:    "test-placeholder-token",
 		Host:         hostname,
 		Transport:    transport,
 		LogIgnoreEnv: true,
@@ -120,9 +133,6 @@ func (r *Resolver) Hostname() string {
 func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string) (ReachabilityStatus, string)) {
 	r.checkReachFn = fn
 }
-
-// isSHARef returns true if the ref looks like a full commit SHA (40 hex chars).
-var shaRefRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 // CheckReachability verifies that a resolved SHA is on the lineage of the
 // given ref within the repository. This catches fork-network injection where
@@ -162,11 +172,27 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		return result
 	}
 
-	// SHA-as-ref anti-pattern: compare/{sha}...{sha} is trivially identical
-	// and cannot detect fork commits. Warn the user.
-	if shaRefRE.MatchString(ref) {
-		result.Status = ReachabilityUnknown
-		result.Detail = "ref is a raw SHA — reachability cannot be verified; pin to a tag instead"
+	// SHA-as-ref: compare/{sha}...{sha} is trivially identical and cannot
+	// detect fork commits. Instead, check against the repo's default branch
+	// which proves the commit exists in the canonical repo's history. Note:
+	// Note: runtime enforcement for bare-SHA refs is TBD — it's expensive.
+	if lockfile.IsFullSHA(ref) {
+		status, detail := r.apiReachabilityCheck(owner, repo, sha, "HEAD")
+		switch status {
+		case Reachable:
+			result.Status = Reachable
+			result.Detail = "pinned to a bare SHA; commit is reachable from default branch but origin cannot be verified at job runtime — prefer pinning to a tag"
+			r.reachCache[cacheKey] = result.Status
+		case Unreachable:
+			result.Status = Unreachable
+			result.Detail = "pinned to a bare SHA; commit is NOT reachable from default branch — possible fork-network commit"
+			r.reachCache[cacheKey] = result.Status
+		default:
+			result.Status = ReachabilityUnknown
+			result.Detail = fmt.Sprintf(
+				"pinned to a bare SHA — unable to verify commit origin (%s); pin to a tag instead: https://github.com/%s/%s/releases",
+				detail, owner, repo)
+		}
 		return result
 	}
 
@@ -228,11 +254,10 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 	seen := make(map[string]bool)
 
 	for _, dep := range deps {
-		parts := strings.SplitN(dep.NWO, "/", 3)
-		if len(parts) < 2 {
+		owner, repo := dep.OwnerRepo()
+		if owner == "" {
 			continue
 		}
-		owner, repo := parts[0], parts[1]
 
 		key := dep.NWO + "/" + dep.SHA + "/" + dep.Ref
 		if seen[key] {
@@ -304,6 +329,7 @@ func cacheKey(ref lockfile.ActionRef) string {
 func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.Dependency, error) {
 	seen := make(map[string]bool)
 	var allDeps []lockfile.Dependency
+	r.parentMap = make(map[string]string)
 
 	pending := refs
 	depth := 0
@@ -344,8 +370,13 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 				continue
 			}
 
+			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
 				if actionRef := lockfile.ParseActionRef(use); actionRef != nil {
+					childNWO := actionRef.FullName()
+					if _, exists := r.parentMap[childNWO]; !exists {
+						r.parentMap[childNWO] = parentKey
+					}
 					nextPending = append(nextPending, *actionRef)
 				}
 			}
@@ -459,7 +490,6 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 	for i, ref := range refs {
 		alias := fmt.Sprintf("a%d", i)
 		aliasMap[alias] = i
-		escapedRef := strings.ReplaceAll(ref.Ref, `"`, `\"`)
 
 		ymlPath := "action.yml"
 		yamlPath := "action.yaml"
@@ -470,7 +500,7 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 
 		fmt.Fprintf(&sb, " %s: repository(owner: %q, name: %q) {", alias, ref.Owner, ref.Repo)
 		sb.WriteString(" nameWithOwner")
-		fmt.Fprintf(&sb, " object(expression: %q) {", escapedRef)
+		fmt.Fprintf(&sb, " object(expression: %q) {", ref.Ref)
 		sb.WriteString(" ... on Commit { oid")
 		fmt.Fprintf(&sb, " file: file(path: %q) { object { ... on Blob { text } } }", ymlPath)
 		fmt.Fprintf(&sb, " fileYaml: file(path: %q) { object { ... on Blob { text } } }", yamlPath)
@@ -534,8 +564,6 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 	return deps, ymls, nil
 }
 
-var stableTagRE = regexp.MustCompile(`^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$`)
-
 func selectLatestTag(tags []string) string {
 	seen := make(map[string]struct{}, len(tags))
 	bestMajor := -1
@@ -557,22 +585,20 @@ func selectLatestTag(tags []string) string {
 			bestFallback = tag
 		}
 
-		matches := stableTagRE.FindStringSubmatch(tag)
-		if matches == nil {
+		sv, ok := lockfile.ParseSemver(tag)
+		if !ok || !sv.IsStable() {
 			continue
 		}
 
-		major := parseInt(matches[1])
-		minor := parseInt(matches[2])
-		patch := parseInt(matches[3])
-
-		if matches[2] == "" && matches[3] == "" && major > bestMajor {
-			bestMajor = major
+		if sv.Raw == sv.MajorTag() && sv.Major > bestMajor {
+			bestMajor = sv.Major
 			bestMajorTag = tag
 		}
 
-		version := [3]int{major, minor, patch}
-		if compareVersion(version, bestVersion) > 0 {
+		version := sv.Version()
+		if version[0] > bestVersion[0] ||
+			(version[0] == bestVersion[0] && version[1] > bestVersion[1]) ||
+			(version[0] == bestVersion[0] && version[1] == bestVersion[1] && version[2] > bestVersion[2]) {
 			bestVersion = version
 			bestVersionTag = tag
 		}
@@ -585,24 +611,4 @@ func selectLatestTag(tags []string) string {
 		return bestVersionTag
 	}
 	return bestFallback
-}
-
-func parseInt(s string) int {
-	if s == "" {
-		return 0
-	}
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
-func compareVersion(left, right [3]int) int {
-	for i := 0; i < len(left); i++ {
-		if left[i] > right[i] {
-			return 1
-		}
-		if left[i] < right[i] {
-			return -1
-		}
-	}
-	return 0
 }
