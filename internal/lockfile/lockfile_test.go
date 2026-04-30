@@ -191,6 +191,50 @@ func TestWriteDependencies(t *testing.T) {
 	assert.Contains(t, s, "github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683")
 	assert.Contains(t, s, "github.com/actions/setup-go@v5:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5")
 	assert.Contains(t, s, "# Automatically generated and managed by gh-actions-pin")
+	assert.NotContains(t, s, "# Direct dependencies")
+}
+
+func TestWriteDependenciesAddsTransitiveSection(t *testing.T) {
+	f, err := Load("testdata/simple.yml")
+	require.NoError(t, err)
+
+	deps := []Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "11bd71901bbe5b1630ceea73d27597364c9af683", HashAlgo: "sha1"},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", HashAlgo: "sha1"},
+		{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"},
+	}
+
+	output, err := f.WriteDependencies(deps)
+	require.NoError(t, err)
+
+	s := string(output)
+	assert.Contains(t, s, "# Transitive dependencies")
+	assert.Contains(t, s, "github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684")
+	assert.NotContains(t, s, "# Direct dependencies")
+	assert.Less(t, strings.Index(s, "github.com/actions/setup-go@v5"), strings.Index(s, "# Transitive dependencies"))
+}
+
+func TestWriteDependenciesDeduplicatesDirectAndTransitive(t *testing.T) {
+	f, err := Load("testdata/simple.yml")
+	require.NoError(t, err)
+
+	deps := []Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "11bd71901bbe5b1630ceea73d27597364c9af683", HashAlgo: "sha1"},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", HashAlgo: "sha1"},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", HashAlgo: "sha1"},
+		{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"},
+		{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"},
+	}
+
+	output, err := f.WriteDependencies(deps)
+	require.NoError(t, err)
+
+	s := string(output)
+	assert.Equal(t, 1, strings.Count(s, "github.com/actions/setup-go@v5:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5"))
+	assert.Equal(t, 1, strings.Count(s, "github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684"))
+	assert.Contains(t, s, "# Transitive dependencies")
+	assert.Less(t, strings.Index(s, "github.com/actions/setup-go@v5"), strings.Index(s, "# Transitive dependencies"))
+	assert.Greater(t, strings.Index(s, "github.com/actions/cache/save@v4"), strings.Index(s, "# Transitive dependencies"))
 }
 
 func TestWriteDependenciesRoundTrip(t *testing.T) {
@@ -227,6 +271,7 @@ func TestWriteDependenciesReplacesExisting(t *testing.T) {
 	assert.NotContains(t, s, "d35c59abb061a4a6fb18e82ac0862c26744d6ab5")
 	assert.Contains(t, s, "0000000000000000000000000000000000000001")
 	assert.Equal(t, 1, strings.Count(s, "dependencies:"))
+	assert.NotContains(t, s, "# Direct dependencies")
 }
 
 func TestRewriteActionRefs(t *testing.T) {
@@ -341,6 +386,33 @@ func TestDependencySorted(t *testing.T) {
 	idxFirst := strings.Index(s, "aaa/first")
 	idxLast := strings.Index(s, "zzz/last")
 	assert.Greater(t, idxLast, idxFirst, "dependencies should be sorted alphabetically")
+}
+
+func TestWriteDependenciesWithOnlyTransitiveDeps(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: go test ./...
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "transitive_only.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	deps := []Dependency{{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"}}
+
+	output, err := f.WriteDependencies(deps)
+	require.NoError(t, err)
+
+	s := string(output)
+	assert.NotContains(t, s, "# Direct dependencies")
+	assert.Contains(t, s, "# Transitive dependencies")
+	assert.Contains(t, s, "github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684")
 }
 
 func TestParseActionMeta(t *testing.T) {

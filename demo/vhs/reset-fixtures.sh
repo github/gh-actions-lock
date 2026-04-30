@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: nodeselector/actions-test-fixtures/nested-composite@updated
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest

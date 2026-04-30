@@ -8,8 +8,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v4.3.1
+      - uses: actions/setup-go@v5.6.0
         with:
           go-version-file: go.mod
       - run: go test ./...
@@ -17,7 +17,20 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: golangci/golangci-lint-action@v6
+      - uses: actions/checkout@v4.3.1
+      - uses: nodeselector/actions-test-fixtures/nested-composite@updated
+      - uses: golangci/golangci-lint-action@v6.5.2
         with:
           version: latest
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v4.3.1:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+  - github.com/actions/setup-go@v5.6.0:sha1-40f1582b2485089dde7abd97c1529aa768e1baff
+  - github.com/golangci/golangci-lint-action@v6.5.2:sha1-55c2c1448f86e01eaae002a5a3a9624417608d84
+  - github.com/nodeselector/actions-test-fixtures/nested-composite@updated:sha1-ea53476fdc172d8552df5af9658a45a367e4f41d
+
+  # Transitive dependencies
+  - github.com/nodeselector/actions-test-fixtures-b/simple-echo@main:sha1-92b7b0058bc223c6e9dd4e19ef9247c934ba7637
+  - github.com/nodeselector/actions-test-fixtures/simple-composite@main:sha1-fbe04216bcc00ebe76c49276d4b8ee066a21ef22
+  - github.com/nodeselector/actions-test-fixtures/simple-node@main:sha1-fbe04216bcc00ebe76c49276d4b8ee066a21ef22

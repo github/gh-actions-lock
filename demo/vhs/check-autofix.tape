@@ -10,7 +10,7 @@ Set PlaybackSpeed 1.5
 Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-Type "echo '# Unpinned workflow — 3 actions using mutable tags'"
+Type "echo '# Unpinned workflow — 4 actions using mutable tags, including a nested composite'"
 Enter
 Sleep 1s
 
@@ -30,6 +30,6 @@ Type "echo '# Lockfile written — check the result'"
 Enter
 Sleep 1s
 
-Type "tail -6 demo/workflows-check/ci.yml"
+Type "awk '/^# Automatically generated/ || /^dependencies:/ || /^  # / || /^  - / { print }' demo/workflows-check/ci.yml"
 Enter
 Sleep 3s

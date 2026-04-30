@@ -435,16 +435,59 @@ func (f *File) ReadDependencies() ([]Dependency, error) {
 // WriteDependencies returns the workflow content with an updated dependencies: section.
 func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
 	content := string(f.Content)
+	directRefs, _, _ := f.ExtractActionRefs()
+	directKeys := make(map[string]bool, len(directRefs))
+	for _, ref := range directRefs {
+		directKeys[ref.FullName()+"@"+ref.Ref] = true
+	}
 
-	sort.Slice(deps, func(i, j int) bool {
-		return deps[i].String() < deps[j].String()
+	directDepsByKey := make(map[string]Dependency)
+	transitiveDepsByKey := make(map[string]Dependency)
+	for _, dep := range deps {
+		key := dep.Key()
+		if directKeys[key] {
+			directDepsByKey[key] = dep
+			delete(transitiveDepsByKey, key)
+			continue
+		}
+		if _, exists := directDepsByKey[key]; exists {
+			continue
+		}
+		if _, exists := transitiveDepsByKey[key]; !exists {
+			transitiveDepsByKey[key] = dep
+		}
+	}
+
+	directDeps := make([]Dependency, 0, len(directDepsByKey))
+	for _, dep := range directDepsByKey {
+		directDeps = append(directDeps, dep)
+	}
+	transitiveDeps := make([]Dependency, 0, len(transitiveDepsByKey))
+	for _, dep := range transitiveDepsByKey {
+		transitiveDeps = append(transitiveDeps, dep)
+	}
+
+	sort.Slice(directDeps, func(i, j int) bool {
+		return directDeps[i].String() < directDeps[j].String()
+	})
+	sort.Slice(transitiveDeps, func(i, j int) bool {
+		return transitiveDeps[i].String() < transitiveDeps[j].String()
 	})
 
 	var sb strings.Builder
 	sb.WriteString("\n# Automatically generated and managed by gh-actions-pin\n")
 	sb.WriteString("dependencies:\n")
-	for _, dep := range deps {
+	for _, dep := range directDeps {
 		sb.WriteString("  - " + dep.String() + "\n")
+	}
+	if len(transitiveDeps) > 0 {
+		if len(directDeps) > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("  # Transitive dependencies\n")
+		for _, dep := range transitiveDeps {
+			sb.WriteString("  - " + dep.String() + "\n")
+		}
 	}
 
 	content = removeDependenciesSection(content)
@@ -489,8 +532,8 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 }
 
 var (
-	reDepsSectionWithComment = regexp.MustCompile(`(?m)^\n?# Automatically generated and managed by[^\n]*\ndependencies:\n(?:  - .*\n)*`)
-	reDepsSectionBare        = regexp.MustCompile(`(?m)^dependencies:\n(?:  - .*\n)*`)
+	reDepsSectionWithComment = regexp.MustCompile(`(?ms)^\n?# Automatically generated and managed by[^\n]*\ndependencies:\n(?:  (?:#.*|- .*)\n|\n)*`)
+	reDepsSectionBare        = regexp.MustCompile(`(?ms)^dependencies:\n(?:  (?:#.*|- .*)\n|\n)*`)
 )
 
 func removeDependenciesSection(content string) string {

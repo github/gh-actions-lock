@@ -19,6 +19,20 @@ RESET_COLOR='\033[0m'
 banner() { echo -e "\n${BOLD}${CYAN}── $1 ──${RESET_COLOR}\n"; }
 comment() { echo -e "${DIM}# $1${RESET_COLOR}"; }
 run() { echo -e "${GREEN}\$ $*${RESET_COLOR}"; "$@"; echo; }
+show_workflow_summary() {
+  awk '
+    /uses:/ || /^# Automatically generated/ || /^dependencies:/ || /^  # / || /^  - / {
+      print
+    }
+  ' "$1"
+}
+show_lockfile() {
+  awk '
+    /^# Automatically generated/ || /^dependencies:/ || /^  # / || /^  - / {
+      print
+    }
+  ' "$1"
+}
 
 scenarios=(
   "check-autofix"
@@ -61,12 +75,12 @@ usage() {
 scenario_check_autofix() {
   banner "Auto-fix (non-interactive)"
   bash "$RESET"
-  comment "Unpinned workflow — 3 actions using mutable tags"
+  comment "Unpinned workflow — 4 actions using mutable tags, including a nested composite"
   run grep uses: demo/workflows-check/ci.yml
   comment "Pin all actions (non-interactive auto-fix)"
   run gh actions-pin check --no-interactive demo/workflows-check/ci.yml
   comment "Lockfile written — check the result"
-  run tail -6 demo/workflows-check/ci.yml
+  run show_lockfile demo/workflows-check/ci.yml
   comment "Subsequent check passes"
   run gh actions-pin check demo/workflows-check/ci.yml
 }
@@ -106,11 +120,11 @@ scenario_upgrade_latest() {
   banner "Upgrade to latest"
   bash "$RESET"
   comment "Currently pinned to older versions"
-  run grep -E 'uses:|  -' demo/workflows-upgrade/ci.yml
+  run show_workflow_summary demo/workflows-upgrade/ci.yml
   comment "Upgrade actions/checkout to latest"
   run gh actions-pin upgrade --action actions/checkout demo/workflows-upgrade/ci.yml
   comment "Updated refs and lockfile"
-  run grep -E 'uses:|  -' demo/workflows-upgrade/ci.yml
+  run show_workflow_summary demo/workflows-upgrade/ci.yml
 }
 
 scenario_upgrade_version() {
@@ -137,14 +151,14 @@ scenario_edit_repin() {
   comment "Re-pin with check"
   run gh actions-pin check --no-interactive demo/workflows-upgrade/ci.yml
   comment "New lockfile written"
-  run tail -5 demo/workflows-upgrade/ci.yml
+  run show_lockfile demo/workflows-upgrade/ci.yml
 }
 
 scenario_ref_moved() {
   banner "Ref moved — routine update"
   bash "$RESET"
   comment "Workflow pinned before tag moved forward (normal release)"
-  run grep -E 'uses:|  -' demo/workflows-pwned/5-pinned-before-update.yml
+  run show_workflow_summary demo/workflows-pwned/5-pinned-before-update.yml
   comment "Check detects the tag now points to a newer commit"
   run gh actions-pin check demo/workflows-pwned/5-pinned-before-update.yml
 }
@@ -153,7 +167,7 @@ scenario_imposter_commit() {
   banner "Imposter commit — fork injection"
   bash "$RESET"
   comment "Workflow pinned BEFORE the tag was hijacked"
-  run grep -E 'uses:|  -' demo/workflows-pwned/1-pinned-before-hijack.yml
+  run show_workflow_summary demo/workflows-pwned/1-pinned-before-hijack.yml
   comment "Check detects the tag moved to an orphan commit"
   run gh actions-pin check demo/workflows-pwned/1-pinned-before-hijack.yml
 }
