@@ -18,7 +18,7 @@ Type "grep -E 'uses:|  -' demo/workflows-pwned/1-pinned-before-hijack.yml"
 Enter
 Sleep 2s
 
-Type "echo '# Attacker moved the tag to an orphan commit (fork injection)'"
+Type "echo '# Attacker moved the tag to a fork-network commit (fork injection)'"
 Enter
 Sleep 1s
 

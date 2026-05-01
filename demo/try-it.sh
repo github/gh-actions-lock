@@ -67,7 +67,7 @@ usage() {
   echo ""
   echo "  Change detection"
   echo "    ref-moved          Tag moved forward (routine release)"
-  echo "    imposter-commit    Tag hijacked to orphan commit (fork injection)"
+  echo "    imposter-commit    Tag hijacked to fork-network commit (fork injection)"
   echo "    json-output        JSON output for CI integration"
   echo ""
   echo "  all                  Run all scenarios sequentially"
@@ -170,7 +170,7 @@ scenario_imposter_commit() {
   bash "$RESET"
   comment "Workflow pinned BEFORE the tag was hijacked"
   run show_workflow_summary demo/workflows-pwned/1-pinned-before-hijack.yml
-  comment "Check detects the tag moved to an orphan commit"
+  comment "Check detects the tag moved to a fork-network commit"
   run gh actions-pin check demo/workflows-pwned/1-pinned-before-hijack.yml
 }
 
