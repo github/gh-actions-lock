@@ -54,6 +54,8 @@ type ReachabilityResult struct {
 type Resolver struct {
 	client            *api.GraphQLClient
 	restClient        *api.RESTClient
+	httpTransport     http.RoundTripper // raw transport for non-API requests (branch_commits)
+	authToken         string            // auth token for non-API requests
 	hostname          string
 	MaxRecursionDepth int
 	cache             map[string]resolvedEntry
@@ -130,6 +132,8 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	return &Resolver{
 		client:            client,
 		restClient:        restClient,
+		httpTransport:     opts.Transport,
+		authToken:         opts.AuthToken,
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		cache:             make(map[string]resolvedEntry),
@@ -225,6 +229,27 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	status, detail := r.apiReachabilityCheck(owner, repo, sha, ref)
 	result.Status = status
 	result.Detail = detail
+
+	// When the ancestry check passes for a named ref, verify the ref's
+	// current target is actually contained in a branch of this repository
+	// — not just reachable through the fork network. The Compare API
+	// transparently spans the fork network, so a fork commit that preserves
+	// lineage (normal git commit with an upstream parent) passes the
+	// ancestry check. We catch this using the undocumented branch_commits
+	// endpoint (same approach as zizmor): if the resolved SHA has no
+	// branches in this repo, it's a fork-network commit.
+	//
+	// See: https://docs.zizmor.sh/audits/#impostor-commit
+	if status == Reachable {
+		containStatus, containDetail := r.branchCommitsCheck(owner, repo, ref)
+		if containStatus == Unreachable {
+			result.Status = Unreachable
+			result.Detail = containDetail
+		}
+		// If containment check is Unknown (rate limit etc), keep the
+		// Reachable result — we don't downgrade on uncertainty.
+	}
+
 	if result.Status != ReachabilityUnknown {
 		r.reachCache[cacheKey] = result.Status
 	}
@@ -271,6 +296,80 @@ func (r *Resolver) apiReachabilityCheck(owner, repo, sha, ref string) (Reachabil
 		return Reachable, "ancestor of " + ref + " (compare: " + resp.Status + ")"
 	}
 	return Unreachable, fmt.Sprintf("merge base is %s, not the pinned SHA — likely a fork-network commit", resp.MergeBaseCommit.SHA[:12])
+}
+
+// branchCommitsResponse is the subset of the undocumented branch_commits
+// endpoint response we need. The endpoint lives on the web host (not the
+// API host) and returns which branches and tags contain a given commit.
+type branchCommitsResponse struct {
+	Branches []struct {
+		Branch string `json:"branch"`
+	} `json:"branches"`
+	Tags []string `json:"tags"`
+}
+
+// branchCommitsCheck uses the undocumented branch_commits endpoint (same
+// approach as zizmor) to verify that a ref's current target is contained in
+// at least one branch of the repository. Fork-network commits appear in the
+// fork network's commit graph but have branches=[] in the upstream repo.
+//
+// Flow: resolve ref → SHA via REST API, then GET /{owner}/{repo}/branch_commits/{sha}.
+func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStatus, string) {
+	// Step 1: resolve ref to its current SHA
+	var commitResp struct {
+		SHA string `json:"sha"`
+	}
+	commitPath := fmt.Sprintf("repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
+	if err := r.restClient.Get(commitPath, &commitResp); err != nil {
+		return ReachabilityUnknown, fmt.Sprintf("could not resolve ref %s: %s", ref, err)
+	}
+	if commitResp.SHA == "" {
+		return ReachabilityUnknown, fmt.Sprintf("could not resolve ref %s: empty SHA", ref)
+	}
+
+	// Step 2: call branch_commits on the web host (not the API host)
+	webHost := r.hostname
+	bcURL := fmt.Sprintf("https://%s/%s/%s/branch_commits/%s", webHost, owner, repo, commitResp.SHA)
+
+	req, err := http.NewRequest("GET", bcURL, nil)
+	if err != nil {
+		return ReachabilityUnknown, fmt.Sprintf("could not build branch_commits request: %s", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if r.authToken != "" {
+		req.Header.Set("Authorization", "token "+r.authToken)
+	}
+
+	transport := r.httpTransport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		return ReachabilityUnknown, fmt.Sprintf("branch_commits request failed: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ReachabilityUnknown, fmt.Sprintf("branch_commits returned HTTP %d", resp.StatusCode)
+	}
+
+	var bcResp branchCommitsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&bcResp); err != nil {
+		return ReachabilityUnknown, fmt.Sprintf("could not decode branch_commits response: %s", err)
+	}
+
+	if len(bcResp.Branches) == 0 {
+		return Unreachable, fmt.Sprintf(
+			"ref %s resolves to %s which is not on any branch in %s/%s — possible fork-network injection",
+			ref, commitResp.SHA[:12], owner, repo)
+	}
+
+	branchNames := make([]string, len(bcResp.Branches))
+	for i, b := range bcResp.Branches {
+		branchNames[i] = b.Branch
+	}
+	return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
 }
 
 // CheckReachabilityAll runs reachability checks on a batch of dependencies,
