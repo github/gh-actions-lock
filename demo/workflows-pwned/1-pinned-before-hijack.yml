@@ -1,25 +1,32 @@
-name: "1: Pinned before attack — tag hijacked to unrelated code"
+name: "1: Pinned before attack — tag hijacked to fork-network commit"
 
 # =============================================================================
-# ATTACKER CAPABILITY: Write access to move tags
+# ATTACKER CAPABILITY: Write access to move tags (fork-network injection)
 # TIMELINE:
 #   1. Maintainer releases @tampered → ea53476 (legitimate)
 #   2. You pin: lockfile records ea53476 ✓
-#   3. Attacker moves tag to orphan commit 614a37a (no shared history)
-#   4. You run `gh actions-pin check` → CAUGHT
+#   3. Attacker forks the repo (choam-io/actions-test-fixtures-fork), pushes
+#      a malicious commit (7b403c9) to their fork's attacker-payload branch
+#   4. Attacker moves @tampered tag to 7b403c9 — a commit that exists in
+#      the fork network's shared object store but NOT in the upstream lineage
+#   5. You run `gh actions-pin check` → CAUGHT
 #
 # This is the tj-actions/changed-files scenario. The attacker moves a tag
-# to point at completely unrelated code — an orphan commit, a fork-network
-# SHA, anything outside the real release lineage.
+# to point at a commit from a fork — GitHub shares object stores across
+# fork networks, so the SHA resolves, but it has no lineage in the
+# upstream repo's history.
 #
 # RESULT:  CAUGHT ✗
-#          ✗ TAMPERED    — live SHA ≠ pinned SHA (tag was moved)
-#          ✗ UNREACHABLE — new SHA has no shared history with the pinned SHA
+#          ✗ REF_MOVED   — live SHA ≠ pinned SHA (tag was moved)
+#          The reachability check runs on the PINNED SHA (ea53476), which
+#          IS reachable — it's the real commit. The tripwire is the SHA
+#          mismatch, not the lineage check.
 #
 # The lockfile's known-good SHA acts as a tripwire. The moment the tag
 # moves, check detects both the SHA mismatch and the broken lineage.
 #
-# DEMO:    https://github.com/nodeselector/actions-test-fixtures/commit/614a37a
+# FORK:    https://github.com/choam-io/actions-test-fixtures-fork
+# PAYLOAD: https://github.com/choam-io/actions-test-fixtures-fork/commit/7b403c9
 #
 # Run:     gh actions-pin check .github/workflows/1-pinned-before-hijack.yml
 # =============================================================================

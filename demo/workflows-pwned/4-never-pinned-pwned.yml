@@ -4,19 +4,21 @@ name: "4: Never pinned — walking into a compromised repo"
 # ATTACKER CAPABILITY: Write access to move tags (attack already happened)
 # TIMELINE:
 #   1. Maintainer released @tampered → ea53476 (legitimate)
-#   2. Attacker moved tag to orphan commit 614a37a
-#   3. You discover the action and run `gh actions-pin` for the first time
-#   4. Lockfile records 614a37a — the ATTACKER's SHA. You never knew ea53476.
-#   5. You run `gh actions-pin check` → ???
+#   2. Attacker forked the repo (choam-io/actions-test-fixtures-fork), pushed
+#      a malicious commit (7b403c9) to their fork's attacker-payload branch
+#   3. Attacker moved tag to 7b403c9 (fork-network commit)
+#   4. You discover the action and run `gh actions-pin` for the first time
+#   5. Lockfile records 7b403c9 — the ATTACKER's SHA. You never knew ea53476.
+#   6. You run `gh actions-pin check` → ???
 #
 # You're pinning for the first time AFTER the attack. There's no prior
 # known-good SHA to compare against. TAMPERED can't fire — there's nothing
 # to tamper relative to.
 #
 # RESULT:  COMPLETELY INVISIBLE ✓ (false negative)
-#          ✓ NOT TAMPERED — pinned SHA matches live resolution (both are 614a37a)
+#          ✓ NOT TAMPERED — pinned SHA matches live resolution (both are 7b403c9)
 #          ✓ REACHABLE    — tag points directly at the pinned SHA ("identical")
-#          Reachability can't help here: the tag IS the orphan commit.
+#          Reachability can't help here: the tag IS the fork commit.
 #          There's no "expected" lineage to compare against.
 #
 # BOTTOM LINE: Pinning is not a security guarantee at the moment of first
@@ -26,7 +28,8 @@ name: "4: Never pinned — walking into a compromised repo"
 # lineage checking can save you — you need out-of-band verification
 # (attestations, code review, trusted release channels).
 #
-# DEMO:    https://github.com/nodeselector/actions-test-fixtures/commit/614a37a
+# FORK:    https://github.com/choam-io/actions-test-fixtures-fork
+# PAYLOAD: https://github.com/choam-io/actions-test-fixtures-fork/commit/7b403c9
 #
 # Run:     gh actions-pin check .github/workflows/4-never-pinned-pwned.yml
 # =============================================================================
@@ -47,5 +50,5 @@ jobs:
 # The lockfile recorded the attacker's SHA because that's what the tag resolved to.
 dependencies:
   - github.com/actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
-  # Pinned AFTER the attack — attacker's orphan SHA is all you've ever known
-  - github.com/nodeselector/actions-test-fixtures/nested-composite@tampered:sha1-614a37a63d1a75476792a8781b55983a9d9bcb80
+  # Pinned AFTER the attack — attacker's fork-network SHA is all you've ever known
+  - github.com/nodeselector/actions-test-fixtures/nested-composite@tampered:sha1-7b403c9ec14bd3ae0bbf793c2bee8815a7ac920a
