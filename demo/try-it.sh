@@ -21,14 +21,16 @@ comment() { echo -e "${DIM}# $1${RESET_COLOR}"; }
 run() { echo -e "${GREEN}\$ $*${RESET_COLOR}"; "$@"; echo; }
 show_workflow_summary() {
   awk '
-    /uses:/ || /^# Automatically generated/ || /^dependencies:/ || /^  # / || /^  - / {
+    /^# Automatically generated/ { in_deps=1 }
+    /uses:/ || (in_deps && (/^# / || /^dependencies:/ || /^  # / || /^  - / || /^$/)) {
       print
     }
   ' "$1"
 }
 show_lockfile() {
   awk '
-    /^# Automatically generated/ || /^dependencies:/ || /^  # / || /^  - / {
+    /^# Automatically generated/ { in_deps=1 }
+    in_deps && (/^# / || /^dependencies:/ || /^  # / || /^  - / || /^$/) {
       print
     }
   ' "$1"
@@ -75,11 +77,11 @@ usage() {
 scenario_check_autofix() {
   banner "Auto-fix (non-interactive)"
   bash "$RESET"
-  comment "Unpinned workflow — 4 actions using mutable tags, including a nested composite"
+  comment "Unpinned workflow — 4 actions including a nested composite with transitive deps"
   run grep uses: demo/workflows-check/ci.yml
   comment "Pin all actions (non-interactive auto-fix)"
   run gh actions-pin check --no-interactive demo/workflows-check/ci.yml
-  comment "Lockfile written — check the result"
+  comment "Lockfile groups transitive deps by parent composite action"
   run show_lockfile demo/workflows-check/ci.yml
   comment "Subsequent check passes"
   run gh actions-pin check demo/workflows-check/ci.yml
