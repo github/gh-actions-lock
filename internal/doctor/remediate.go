@@ -377,9 +377,8 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 }
 
 // offerDefaultBranch checks each action ref for same-owner repos (internal
-// actions) and switches bare SHA or non-semver refs to the default branch.
-// For refs that already look like a version tag, offers a choice.
-// Uses session memory so the user is only asked once per owner/repo.
+// actions) and switches bare SHA refs to the default branch. Named refs
+// (tags, branches, versions) are preserved as-is.
 // Returns a (possibly modified) copy of the WorkflowReport with updated refs.
 func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 	updated := make([]lockfile.ActionRef, 0, len(wr.ActionRefs))
@@ -388,8 +387,6 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 			updated = append(updated, ref)
 			continue
 		}
-
-		nwo := ref.Owner + "/" + ref.Repo
 
 		info, err := rem.tagLister.GetRepoInfo(ref.Owner, ref.Repo)
 		if err != nil {
@@ -403,31 +400,16 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 			continue
 		}
 
-		// Session memory: reuse prior choice for this repo, but only for
-		// non-version refs. Version-ish refs must match the workflow uses: line.
-		if !LooksLikeVersion(ref.Ref) {
-			if priorRef, ok := rem.state.internalRefChoices[nwo]; ok {
-				if priorRef != ref.Ref {
-					rem.output.Detail("  ↳ reusing prior choice for %s: %s", ref.FullName(), priorRef)
-					ref.Ref = priorRef
-				}
-				updated = append(updated, ref)
-				continue
-			}
-		}
-
-		// Bare SHA or non-version ref on a same-owner repo → use default branch.
-		if isSHARef(ref.Ref) || !LooksLikeVersion(ref.Ref) {
+		// Bare SHA → swap to default branch. Named refs stay as-is.
+		if isSHARef(ref.Ref) {
 			rem.output.Detail("  %s: using %s (default branch) instead of %s",
 				ref.FullName(), info.DefaultBranch, ref.Ref)
 			ref.Ref = info.DefaultBranch
-			rem.state.internalRefChoices[nwo] = info.DefaultBranch
 			updated = append(updated, ref)
 			continue
 		}
 
-		// Version-ish ref on a same-owner repo — pin as-is. Changing the ref
-		// here without rewriting the workflow uses: line would create a mismatch.
+		// Named ref (tag, branch, version) — preserve what the user wrote.
 		updated = append(updated, ref)
 	}
 
