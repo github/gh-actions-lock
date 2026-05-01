@@ -79,7 +79,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		}
 	}
 
-	written, err := wf.WriteDependencies(deps)
+	written, err := wf.WriteDependencies(deps, rem.resolver.ParentMap())
 	if err != nil {
 		return fmt.Errorf("writing dependencies: %w", err)
 	}
@@ -128,7 +128,7 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	if err != nil {
 		return fmt.Errorf("re-resolving after ref change: %w", err)
 	}
-	written, err := wf2.WriteDependencies(deps)
+	written, err := wf2.WriteDependencies(deps, rem.resolver.ParentMap())
 	if err != nil {
 		return fmt.Errorf("writing dependencies: %w", err)
 	}
@@ -154,7 +154,7 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 		return fmt.Errorf("resolving actions: %w", err)
 	}
 
-	written, err := wf.WriteDependencies(deps)
+	written, err := wf.WriteDependencies(deps, rem.resolver.ParentMap())
 	if err != nil {
 		return fmt.Errorf("writing dependencies: %w", err)
 	}

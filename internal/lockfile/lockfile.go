@@ -395,9 +395,11 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 }
 
 // ReadDependencies extracts the current dependencies: section from the workflow.
+// Exact duplicate entries (same key and SHA) are silently deduped.
+// Conflicting duplicates (same key, different SHA) produce an error.
 func (f *File) ReadDependencies() ([]Dependency, error) {
 	var deps []Dependency
-	seen := make(map[string]bool)
+	seen := make(map[string]Dependency)
 
 	doc := docNode(&f.root)
 	if doc == nil {
@@ -420,10 +422,14 @@ func (f *File) ReadDependencies() ([]Dependency, error) {
 			if err != nil {
 				return nil, fmt.Errorf("parsing dependency entry: %w", err)
 			}
-			if seen[dep.Key()] {
-				return nil, fmt.Errorf("duplicate dependency entry for %s", dep.Key())
+			if prev, exists := seen[dep.Key()]; exists {
+				if !strings.EqualFold(prev.SHA, dep.SHA) || prev.HashAlgo != dep.HashAlgo {
+					return nil, fmt.Errorf("conflicting dependency entries for %s", dep.Key())
+				}
+				// Exact duplicate — skip silently.
+				continue
 			}
-			seen[dep.Key()] = true
+			seen[dep.Key()] = dep
 			deps = append(deps, dep)
 		}
 		return deps, nil
@@ -433,7 +439,10 @@ func (f *File) ReadDependencies() ([]Dependency, error) {
 }
 
 // WriteDependencies returns the workflow content with an updated dependencies: section.
-func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
+// When parentMap is non-nil, transitive dependencies are grouped by the parent
+// composite action that brings them in — the same dep may appear under multiple
+// parents. The parser silently deduplicates exact duplicate entries.
+func (f *File) WriteDependencies(deps []Dependency, parentMap map[string][]string) ([]byte, error) {
 	content := string(f.Content)
 	directRefs, _, _ := f.ExtractActionRefs()
 	directKeys := make(map[string]bool, len(directRefs))
@@ -442,36 +451,37 @@ func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
 	}
 
 	directDepsByKey := make(map[string]Dependency)
-	transitiveDepsByKey := make(map[string]Dependency)
+	var transitiveDeps []Dependency
 	for _, dep := range deps {
 		key := dep.Key()
 		if directKeys[key] {
 			directDepsByKey[key] = dep
-			delete(transitiveDepsByKey, key)
 			continue
 		}
 		if _, exists := directDepsByKey[key]; exists {
 			continue
 		}
-		if _, exists := transitiveDepsByKey[key]; !exists {
-			transitiveDepsByKey[key] = dep
+		transitiveDeps = append(transitiveDeps, dep)
+	}
+
+	// Dedup transitive deps list.
+	seenTransitive := make(map[string]bool)
+	var dedupedTransitive []Dependency
+	for _, dep := range transitiveDeps {
+		if !seenTransitive[dep.Key()] {
+			seenTransitive[dep.Key()] = true
+			dedupedTransitive = append(dedupedTransitive, dep)
 		}
 	}
+	transitiveDeps = dedupedTransitive
 
 	directDeps := make([]Dependency, 0, len(directDepsByKey))
 	for _, dep := range directDepsByKey {
 		directDeps = append(directDeps, dep)
 	}
-	transitiveDeps := make([]Dependency, 0, len(transitiveDepsByKey))
-	for _, dep := range transitiveDepsByKey {
-		transitiveDeps = append(transitiveDeps, dep)
-	}
 
 	sort.Slice(directDeps, func(i, j int) bool {
 		return directDeps[i].String() < directDeps[j].String()
-	})
-	sort.Slice(transitiveDeps, func(i, j int) bool {
-		return transitiveDeps[i].String() < transitiveDeps[j].String()
 	})
 
 	var sb strings.Builder
@@ -480,14 +490,9 @@ func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
 	for _, dep := range directDeps {
 		sb.WriteString("  - " + dep.String() + "\n")
 	}
+
 	if len(transitiveDeps) > 0 {
-		if len(directDeps) > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString("  # Transitive dependencies\n")
-		for _, dep := range transitiveDeps {
-			sb.WriteString("  - " + dep.String() + "\n")
-		}
+		writeTransitiveDeps(&sb, transitiveDeps, directDeps, parentMap)
 	}
 
 	content = removeDependenciesSection(content)
@@ -495,6 +500,81 @@ func (f *File) WriteDependencies(deps []Dependency) ([]byte, error) {
 	content += sb.String()
 
 	return []byte(content), nil
+}
+
+// writeTransitiveDeps writes the transitive dependencies section, grouped by
+// parent composite action when parentMap is available.
+func writeTransitiveDeps(sb *strings.Builder, transitiveDeps []Dependency, directDeps []Dependency, parentMap map[string][]string) {
+	if len(directDeps) > 0 {
+		sb.WriteString("\n")
+	}
+
+	// If no parent map or all transitive deps are unmapped, use flat format.
+	if len(parentMap) == 0 {
+		sb.WriteString("  # Transitive dependencies\n")
+		sort.Slice(transitiveDeps, func(i, j int) bool {
+			return transitiveDeps[i].String() < transitiveDeps[j].String()
+		})
+		for _, dep := range transitiveDeps {
+			sb.WriteString("  - " + dep.String() + "\n")
+		}
+		return
+	}
+
+	// Group transitive deps by parent. A dep can appear under multiple parents.
+	type parentGroup struct {
+		parentKey string
+		deps      []Dependency
+	}
+	groupMap := make(map[string]*parentGroup)
+	var groupOrder []string
+	var orphans []Dependency
+
+	for _, dep := range transitiveDeps {
+		parents, ok := parentMap[dep.Key()]
+		if !ok || len(parents) == 0 {
+			orphans = append(orphans, dep)
+			continue
+		}
+		for _, pKey := range parents {
+			g, exists := groupMap[pKey]
+			if !exists {
+				g = &parentGroup{parentKey: pKey}
+				groupMap[pKey] = g
+				groupOrder = append(groupOrder, pKey)
+			}
+			g.deps = append(g.deps, dep)
+		}
+	}
+
+	sort.Strings(groupOrder)
+
+	for i, pKey := range groupOrder {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		g := groupMap[pKey]
+		sort.Slice(g.deps, func(a, b int) bool {
+			return g.deps[a].String() < g.deps[b].String()
+		})
+		sb.WriteString("  # Transitive dependencies (via " + pKey + ")\n")
+		for _, dep := range g.deps {
+			sb.WriteString("  - " + dep.String() + "\n")
+		}
+	}
+
+	if len(orphans) > 0 {
+		if len(groupOrder) > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("  # Transitive dependencies\n")
+		sort.Slice(orphans, func(i, j int) bool {
+			return orphans[i].String() < orphans[j].String()
+		})
+		for _, dep := range orphans {
+			sb.WriteString("  - " + dep.String() + "\n")
+		}
+	}
 }
 
 // RewriteActionRefs rewrites targeted uses: refs in the original workflow

@@ -228,7 +228,10 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
 			parentNWO := ""
 			if isTransitive {
-				parentNWO = r.ParentMap()[rr.Owner+"/"+rr.Repo]
+				depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
+				if parents := r.ParentMap()[depKey]; len(parents) > 0 {
+					parentNWO = parents[0]
+				}
 			}
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,

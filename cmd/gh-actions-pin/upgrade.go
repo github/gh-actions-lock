@@ -285,7 +285,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return changes, nil
 	}
 
-	written, err := upgradedWF.WriteDependencies(deps)
+	written, err := upgradedWF.WriteDependencies(deps, r.ParentMap())
 	if err != nil {
 		return nil, fmt.Errorf("writing dependencies: %w", err)
 	}
