@@ -1,29 +1,31 @@
-name: "2: Pinned before attack — tag moved to ancestor (lineage preserved)"
+name: "2: Pinned before attack — tag moved backward (lineage broken)"
 
 # =============================================================================
-# ATTACKER CAPABILITY: Write access to push commits AND move tags
+# ATTACKER CAPABILITY: Write access to move tags
 # TIMELINE:
-#   1. Maintainer releases @bypassed → ea53476 (legitimate)
+#   1. Maintainer releases @bypassed → ea53476 (legitimate, HEAD of main)
 #   2. You pin: lockfile records ea53476 ✓
-#   3. Attacker pushes malicious commit extending the real history
-#   4. Attacker moves tag to 38b3412 (a real ancestor — lineage intact)
-#   5. You run `gh actions-pin check` → CAUGHT (TAMPERED fires)
+#   3. Attacker moves tag BACKWARD to 38b3412 (parent of ea53476)
+#   4. You run `gh actions-pin check` → FULLY CAUGHT
 #
-# More sophisticated than scenario 1. The attacker preserves git lineage
-# so the malicious commit is a real ancestor/descendant of the legitimate
-# release. Reachability can't distinguish this from normal history.
+# A clumsy attack: the attacker moves the tag to an older commit. The
+# reachability check catches this because the pinned SHA (ea53476) is
+# a DESCENDANT of the tag's new position (38b3412) — not an ancestor.
+# The direction matters: "is the pinned SHA reachable going backward
+# from the ref?" No, because the ref now points at an older commit.
 #
-# RESULT:  PARTIALLY CAUGHT ⚠
-#          ✗ TAMPERED    — live SHA (38b3412) ≠ pinned SHA (ea53476)
-#          ✓ REACHABLE   — SHA is in the tag's lineage → passes
+# RESULT:  FULLY CAUGHT ✗✗
+#          ✗ REF_MOVED       — live SHA (38b3412) ≠ pinned SHA (ea53476)
+#          ✗ IMPOSTER_COMMIT — pinned SHA is NOT reachable from ref
+#                              (tag points backward, pinned SHA is ahead)
 #
-# The TAMPERED check catches the tag movement. But if the victim sees
-# "tampered" and thinks "oh, just a new release" and re-pins →
-# see scenario 3.
+# Both checks fire. This is the easiest attack to detect — the tag moved
+# in the wrong direction. Compare with scenario 1 where the attacker
+# preserves lineage by building on top of real history.
 #
 # DEMO:    https://github.com/nodeselector/actions-test-fixtures/commit/38b3412
 #
-# Run:     gh actions-pin check .github/workflows/2-pinned-before-lineage-rewrite.yml
+# Run:     gh actions-pin check demo/workflows-pwned/2-pinned-before-lineage-rewrite.yml
 # =============================================================================
 
 on:

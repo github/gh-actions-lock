@@ -6,32 +6,29 @@ name: "4: Never pinned — walking into a compromised repo"
 #   1. Maintainer released @tampered → ea53476 (legitimate)
 #   2. Attacker forked the repo (choam-io/actions-test-fixtures-fork), pushed
 #      a malicious commit (7b403c9) to their fork's attacker-payload branch
-#   3. Attacker moved tag to 7b403c9 (fork-network commit)
+#   3. Attacker moved @tampered tag to 7b403c9 (fork-network commit)
 #   4. You discover the action and run `gh actions-pin` for the first time
 #   5. Lockfile records 7b403c9 — the ATTACKER's SHA. You never knew ea53476.
-#   6. You run `gh actions-pin check` → ???
+#   6. You run `gh actions-pin check` → ALL CLEAR
 #
 # You're pinning for the first time AFTER the attack. There's no prior
-# known-good SHA to compare against. TAMPERED can't fire — there's nothing
-# to tamper relative to.
+# known-good SHA to compare against.
 #
 # RESULT:  COMPLETELY INVISIBLE ✓ (false negative)
-#          ✓ NOT TAMPERED — pinned SHA matches live resolution (both are 7b403c9)
+#          ✓ NOT TAMPERED — pinned SHA matches live resolution (both 7b403c9)
 #          ✓ REACHABLE    — tag points directly at the pinned SHA ("identical")
-#          Reachability can't help here: the tag IS the fork commit.
-#          There's no "expected" lineage to compare against.
 #
-# BOTTOM LINE: Pinning is not a security guarantee at the moment of first
-# pin. It establishes a baseline. The lockfile can only detect CHANGES
-# from that baseline. If you walk into a compromised repo, the malicious
-# state becomes your known-good state. No amount of SHA comparison or
-# lineage checking can save you — you need out-of-band verification
-# (attestations, code review, trusted release channels).
+# Pinning establishes a BASELINE, not a guarantee of legitimacy. The
+# lockfile can only detect CHANGES from that baseline. If you walk into
+# a compromised repo, the malicious state becomes your known-good state.
+# No amount of SHA comparison or lineage checking can save you — you
+# need out-of-band verification (attestations, code review, trusted
+# release channels).
 #
 # FORK:    https://github.com/choam-io/actions-test-fixtures-fork
 # PAYLOAD: https://github.com/choam-io/actions-test-fixtures-fork/commit/7b403c9
 #
-# Run:     gh actions-pin check .github/workflows/4-never-pinned-pwned.yml
+# Run:     gh actions-pin check demo/workflows-pwned/4-never-pinned-pwned.yml
 # =============================================================================
 
 on:
