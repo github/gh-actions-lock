@@ -168,6 +168,37 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	// Compare pinned deps against live resolution.
 	wr.Findings = append(wr.Findings, compareSnapshots(path, existingDeps, liveDeps, directNWOs)...)
 
+	// LOCKFILE_FORGERY: for each REF_MOVED finding, check if the pinned SHA
+	// is actually an ancestor of the live SHA. If not, the lockfile entry was
+	// likely injected or tampered with (or upstream rewrote history).
+	liveByKey := make(map[string]lockfile.Dependency, len(liveDeps))
+	for _, dep := range liveDeps {
+		liveByKey[dep.Key()] = dep
+	}
+	for i := range wr.Findings {
+		f := &wr.Findings[i]
+		if f.Category != CategoryRefMoved || f.Dependency == nil {
+			continue
+		}
+		live, ok := liveByKey[f.Dependency.Key()]
+		if !ok {
+			continue
+		}
+		owner, repo := f.Dependency.OwnerRepo()
+		status, detail := r.CheckAncestry(owner, repo, f.Dependency.SHA, live.SHA)
+		switch status {
+		case resolver.AncestryNotAncestor:
+			f.Category = CategoryLockfileForgery
+			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — %s",
+				f.Dependency.SHA[:12], live.SHA[:12], detail)
+			f.Remediation = "investigate immediately — the lockfile may have been tampered with"
+		case resolver.AncestryUnknown:
+			// Fail open: keep as REF_MOVED, add a note about the ancestry check.
+			f.Detail += fmt.Sprintf(" (ancestry check inconclusive: %s)", detail)
+		}
+		// AncestryConfirmed: leave as REF_MOVED — legitimate tag movement.
+	}
+
 	// Build set of NWOs with ref-changed findings to avoid duplicate "not pinned" findings.
 	refChangedNWOs := make(map[string]bool)
 	for _, f := range wr.Findings {

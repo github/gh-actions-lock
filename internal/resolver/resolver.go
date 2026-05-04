@@ -350,6 +350,62 @@ func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStat
 	return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
 }
 
+// AncestryStatus represents whether a pinned SHA is a legitimate ancestor of the live SHA.
+type AncestryStatus int
+
+const (
+	// AncestryConfirmed means the pinned SHA is an ancestor of the live SHA.
+	AncestryConfirmed AncestryStatus = iota
+	// AncestryNotAncestor means the pinned SHA is NOT an ancestor — possible forgery.
+	AncestryNotAncestor
+	// AncestryUnknown means the check could not be completed (rate limit, API error).
+	AncestryUnknown
+)
+
+// compareResponse is the subset of the GitHub Compare API response we need.
+type compareResponse struct {
+	Status          string `json:"status"`
+	MergeBaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
+}
+
+// CheckAncestry uses the Compare API to test whether pinnedSHA is an ancestor
+// of liveSHA. This detects lockfile forgery: if someone injects a SHA that was
+// never in the ref's lineage, merge_base(pinned, live) ≠ pinned.
+func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (AncestryStatus, string) {
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
+		owner, repo, url.PathEscape(pinnedSHA), url.PathEscape(liveSHA))
+
+	var resp compareResponse
+	err := r.restClient.Get(path, &resp)
+	if err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) {
+			switch httpErr.StatusCode {
+			case http.StatusNotFound:
+				return AncestryNotAncestor, "commit not found in repository"
+			case http.StatusConflict: // 409 — no common ancestor
+				return AncestryNotAncestor, "no common ancestor between pinned and live SHA"
+			case http.StatusForbidden, http.StatusTooManyRequests:
+				detail := fmt.Sprintf("rate limited (HTTP %d)", httpErr.StatusCode)
+				if reset := httpErr.Headers.Get("X-RateLimit-Reset"); reset != "" {
+					detail += "; resets at " + reset
+				}
+				return AncestryUnknown, detail
+			default:
+				return AncestryUnknown, fmt.Sprintf("API error (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+			}
+		}
+		return AncestryUnknown, err.Error()
+	}
+
+	if strings.EqualFold(resp.MergeBaseCommit.SHA, pinnedSHA) {
+		return AncestryConfirmed, fmt.Sprintf("pinned SHA is ancestor of live SHA (compare: %s)", resp.Status)
+	}
+	return AncestryNotAncestor, fmt.Sprintf("merge base is %s, not the pinned SHA — possible lockfile forgery or upstream history rewrite", resp.MergeBaseCommit.SHA[:12])
+}
+
 // CheckReachabilityAll runs reachability checks on a batch of dependencies,
 // deduplicating by owner/repo/sha/ref.
 func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []ReachabilityResult {

@@ -420,11 +420,20 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				label := strings.ToUpper(string(f.Category))
 				out.Detail("! %s %s", out.Dim(label), dep)
 				out.Detail("  %s", f.Detail)
+				if f.Category == doctor.CategoryLockfileForgery && f.Dependency != nil {
+					owner, repo := f.Dependency.OwnerRepo()
+					out.Detail("  %s", out.Bold("⚠ The pinned SHA was never in this ref's history."))
+					out.Detail("  %s", "This lockfile entry may have been injected maliciously.")
+					if owner != "" {
+						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
+					}
+				}
 			}
 		}
 
 		parts := []string{}
 		for _, cat := range []doctor.Category{
+			doctor.CategoryLockfileForgery,
 			doctor.CategoryRefChanged, doctor.CategoryNotPinned,
 			doctor.CategoryStale, doctor.CategoryMisleadingSHA, doctor.CategoryImposterCommit,
 		} {

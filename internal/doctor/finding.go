@@ -18,6 +18,9 @@ const (
 	CategoryImposterCommit Category = "imposter_commit"
 	// CategoryMisleadingSHA means a ref looks like a SHA but resolves to a different commit.
 	CategoryMisleadingSHA Category = "misleading_sha"
+	// CategoryLockfileForgery means the pinned SHA is not an ancestor of the
+	// current ref — the lockfile entry was likely injected or tampered with.
+	CategoryLockfileForgery Category = "lockfile_forgery"
 	// CategoryRefMoved means the upstream tag now resolves to a different SHA than what's locked.
 	CategoryRefMoved Category = "ref_moved"
 	// CategoryValid means the dependency is pinned and verified.

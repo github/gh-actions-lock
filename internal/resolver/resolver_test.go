@@ -624,3 +624,126 @@ func TestBranchCommitsCheck_RefResolveFails(t *testing.T) {
 	}
 	reg.Verify(t)
 }
+
+func TestCheckAncestry_Confirmed(t *testing.T) {
+	pinnedSHA := "abc123abc123abc123abc123abc123abc123abc1"
+	liveSHA := "def456def456def456def456def456def456def4"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": pinnedSHA,
+			},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, _ := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	if status != AncestryConfirmed {
+		t.Fatalf("expected AncestryConfirmed, got %d", status)
+	}
+	reg.Verify(t)
+}
+
+func TestCheckAncestry_NotAncestor_DifferentMergeBase(t *testing.T) {
+	pinnedSHA := "abc123abc123abc123abc123abc123abc123abc1"
+	liveSHA := "def456def456def456def456def456def456def4"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "diverged",
+			"merge_base_commit": map[string]any{
+				"sha": "unrelated_000000000000000000000000000000",
+			},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, detail := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	if status != AncestryNotAncestor {
+		t.Fatalf("expected AncestryNotAncestor, got %d", status)
+	}
+	if !strings.Contains(detail, "not the pinned SHA") {
+		t.Fatalf("expected detail about merge base mismatch, got %q", detail)
+	}
+	reg.Verify(t)
+}
+
+func TestCheckAncestry_NotAncestor_404(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(404),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	if status != AncestryNotAncestor {
+		t.Fatalf("expected AncestryNotAncestor for 404, got %d", status)
+	}
+	if !strings.Contains(detail, "not found") {
+		t.Fatalf("expected 'not found' detail, got %q", detail)
+	}
+	reg.Verify(t)
+}
+
+func TestCheckAncestry_NotAncestor_409(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(409),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	if status != AncestryNotAncestor {
+		t.Fatalf("expected AncestryNotAncestor for 409, got %d", status)
+	}
+	if !strings.Contains(detail, "no common ancestor") {
+		t.Fatalf("expected 'no common ancestor' detail, got %q", detail)
+	}
+	reg.Verify(t)
+}
+
+func TestCheckAncestry_Unknown_RateLimit(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(429),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	if status != AncestryUnknown {
+		t.Fatalf("expected AncestryUnknown for rate limit, got %d", status)
+	}
+	if !strings.Contains(detail, "rate limited") {
+		t.Fatalf("expected 'rate limited' detail, got %q", detail)
+	}
+	reg.Verify(t)
+}
