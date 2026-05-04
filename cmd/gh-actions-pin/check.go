@@ -531,6 +531,12 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			wg := warnMap[key]
 			f := wg.finding
 			out.Detail("  ↳ %s: %s", key, f.Detail)
+			if f.Dependency != nil && f.LiveSHA != "" {
+				owner, repo := f.Dependency.OwnerRepo()
+				if owner != "" {
+					out.Detail("    %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA[:12], f.LiveSHA[:12])))
+				}
+			}
 		}
 	}
 	for _, key := range otherDetailWarnings {
