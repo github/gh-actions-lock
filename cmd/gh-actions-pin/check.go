@@ -348,7 +348,13 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(payload)
+	if err := enc.Encode(payload); err != nil {
+		return err
+	}
+	if !valid {
+		return errSilent
+	}
+	return nil
 }
 
 // presentCheckResults renders human-readable output from a doctor report.
