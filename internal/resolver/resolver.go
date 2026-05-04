@@ -61,7 +61,7 @@ type Resolver struct {
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
-	bcCache           map[string]*branchCommitsResponse // owner/repo/sha → cached branch_commits response (nil = error/429)
+	bcCache           map[string]bcCacheEntry // owner/repo/sha → cached branch_commits result
 	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
 	parentMap map[string][]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
@@ -140,7 +140,7 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		cache:             make(map[string]resolvedEntry),
 		latestRefCache:    make(map[string]string),
 		reachCache:        make(map[string]ReachabilityStatus),
-		bcCache:           make(map[string]*branchCommitsResponse),
+		bcCache:           make(map[string]bcCacheEntry),
 	}, nil
 }
 
@@ -170,12 +170,6 @@ func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string
 // given ref within the repository. This catches fork-network injection where
 // a SHA exists in GitHub's shared object store but is not actually part of
 // the canonical repository's history.
-//
-// Uses the GitHub Compare API and checks merge_base identity:
-//   - merge_base == pinnedSHA → Reachable (SHA is a true ancestor of ref)
-//   - merge_base != pinnedSHA → Unreachable (fork/imposter commit)
-//   - 404 (no common ancestor or not found) → Unreachable
-//   - 403/429 (rate limit) or other error → Unknown
 //
 // CheckReachability verifies that a dependency's commit is reachable from a
 // branch in the repository, catching fork-network injection attacks.
@@ -246,6 +240,13 @@ type branchCommitsResponse struct {
 	Tags []string `json:"tags"`
 }
 
+// bcCacheEntry holds a cached branch_commits result. A nil resp with a non-empty
+// errDetail indicates a failed request (429, 500, network error, decode error).
+type bcCacheEntry struct {
+	resp      *branchCommitsResponse
+	errDetail string
+}
+
 // branchCommitsCheck uses the undocumented branch_commits endpoint (same
 // approach as zizmor) to verify that a ref's current target is contained in
 // at least one branch of the repository. Fork-network commits appear in the
@@ -282,16 +283,16 @@ func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStat
 	// Step 2: check bcCache for this SHA to avoid duplicate HTTP calls.
 	bcKey := owner + "/" + repo + "/" + commitResp.SHA
 	if cached, ok := r.bcCache[bcKey]; ok {
-		if cached == nil {
-			return ReachabilityUnknown, "branch_commits returned HTTP 429"
+		if cached.resp == nil {
+			return ReachabilityUnknown, cached.errDetail
 		}
-		if len(cached.Branches) == 0 {
+		if len(cached.resp.Branches) == 0 {
 			return Unreachable, fmt.Sprintf(
 				"ref %s resolves to %s which is not on any branch in %s/%s — possible fork-network injection",
 				ref, commitResp.SHA[:12], owner, repo)
 		}
-		branchNames := make([]string, len(cached.Branches))
-		for i, b := range cached.Branches {
+		branchNames := make([]string, len(cached.resp.Branches))
+		for i, b := range cached.resp.Branches {
 			branchNames[i] = b.Branch
 		}
 		return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
@@ -316,22 +317,25 @@ func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStat
 	}
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
-		r.bcCache[bcKey] = nil
-		return ReachabilityUnknown, fmt.Sprintf("branch_commits request failed: %s", err)
+		detail := fmt.Sprintf("branch_commits request failed: %s", err)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return ReachabilityUnknown, detail
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		r.bcCache[bcKey] = nil
-		return ReachabilityUnknown, fmt.Sprintf("branch_commits returned HTTP %d", resp.StatusCode)
+		detail := fmt.Sprintf("branch_commits returned HTTP %d", resp.StatusCode)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return ReachabilityUnknown, detail
 	}
 
 	var bcResp branchCommitsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&bcResp); err != nil {
-		r.bcCache[bcKey] = nil
-		return ReachabilityUnknown, fmt.Sprintf("could not decode branch_commits response: %s", err)
+		detail := fmt.Sprintf("could not decode branch_commits response: %s", err)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return ReachabilityUnknown, detail
 	}
-	r.bcCache[bcKey] = &bcResp
+	r.bcCache[bcKey] = bcCacheEntry{resp: &bcResp}
 
 	if len(bcResp.Branches) == 0 {
 		return Unreachable, fmt.Sprintf(
