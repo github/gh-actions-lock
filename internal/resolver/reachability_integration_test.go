@@ -108,15 +108,15 @@ func TestIntegration_Unreachable_NonexistentSHA(t *testing.T) {
 }
 
 // TestIntegration_Unreachable_ForkNetworkInjection tests that a fork commit
-// used as a pinned SHA against a clean tag is detected as unreachable. This
-// catches the simple case where merge_base(forkSHA, v1) != forkSHA.
+// used as a pinned SHA against a clean tag is detected as unreachable.
+// branch_commits returns no branches for fork-network commits in the upstream repo.
 func TestIntegration_Unreachable_ForkNetworkInjection(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
 	result := r.CheckReachability(fixtureOwner, fixtureRepo, forkAttackerSHA, "v1")
 	assert.Equal(t, Unreachable, result.Status,
-		"fork-network SHA should NOT be reachable via merge-base identity check: %+v", result)
+		"fork-network SHA should NOT be reachable via branch_commits check: %+v", result)
 }
 
 // TestIntegration_Unreachable_ForkNetworkInjection_PreservedLineage is the
@@ -127,10 +127,8 @@ func TestIntegration_Unreachable_ForkNetworkInjection(t *testing.T) {
 // upstream parent (fbe0421), so it PRESERVES LINEAGE — the old pinned SHA
 // (v1SHA / ea53476) IS an ancestor of the fork commit.
 //
-// The ancestry check alone (compare(v1SHA...tampered)) would pass because
-// merge_base == v1SHA. The containment check (compare(HEAD...tampered)) catches
-// this because the fork commit is "diverged" from the default branch — it's not
-// in this repository's history, only visible through the fork network.
+// The branch_commits endpoint catches this because fork-network commits have
+// no branches in the upstream repo, regardless of their ancestry.
 func TestIntegration_Unreachable_ForkNetworkInjection_PreservedLineage(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
