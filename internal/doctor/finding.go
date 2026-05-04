@@ -54,6 +54,8 @@ type Finding struct {
 	Detail string
 	// Remediation describes what doctor can do about it.
 	Remediation string
+	// LiveSHA is the current upstream SHA when it differs from the pinned SHA (e.g. REF_MOVED).
+	LiveSHA string
 }
 
 // InventoryEntry describes a single dependency with context.

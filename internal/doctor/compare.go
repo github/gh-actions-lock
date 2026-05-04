@@ -37,6 +37,7 @@ func compareSnapshots(path string, existing, live []lockfile.Dependency, directN
 				Dependency:   &pinned,
 				Detail:       fmt.Sprintf("pinned %s but ref now resolves to %s", pinned.SHA[:12], resolvedCopy.SHA[:12]),
 				Remediation:  fmt.Sprintf("update to %s with `gh actions-pin upgrade`", resolvedCopy.SHA[:12]),
+				LiveSHA:      resolvedCopy.SHA,
 			})
 		}
 	}
