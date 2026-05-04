@@ -222,7 +222,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 				Category:     CategoryImposterCommit,
 				Severity:     SeverityError,
 				Dependency:   depPtr,
-				Detail:       fmt.Sprintf("SHA %s is NOT reachable from ref — possible fork injection", rr.SHA[:12]),
+				Detail:       rr.Detail,
 			})
 		case resolver.ReachabilityUnknown:
 			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]

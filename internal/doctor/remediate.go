@@ -153,7 +153,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 
 	first := true
 	for _, finding := range wr.Findings {
-		if finding.Category == CategoryValid || finding.Category == CategoryRunOnly {
+		if finding.Category == CategoryValid || finding.Category == CategoryRunOnly || finding.Category == CategoryRefMoved {
 			continue
 		}
 
@@ -202,11 +202,6 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			if err := rem.handleRefChanged(wr, finding); err != nil {
 				return err
 			}
-
-		case CategoryRefMoved:
-			rem.output.Error("%s: %s", finding.Dependency.Key(), finding.Detail)
-			rem.output.Hint("Ref has moved — investigate before updating. Use `gh actions-pin upgrade` manually.")
-			rem.Alerted++
 
 		case CategoryImposterCommit:
 			rem.output.Error("%s", finding.Detail)
