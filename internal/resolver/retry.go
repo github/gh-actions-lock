@@ -3,6 +3,7 @@ package resolver
 import (
 	"math"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -37,8 +38,9 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			if attempt < rt.maxRetries {
+				retryAfter := resp.Header.Get("Retry-After")
 				resp.Body.Close()
-				rt.backoff(attempt)
+				rt.backoffWithRetryAfter(attempt, retryAfter)
 				continue
 			}
 		}
@@ -47,10 +49,21 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
+func (rt *retryTransport) backoffWithRetryAfter(attempt int, retryAfter string) {
+	// Respect Retry-After header if present (common on 429s).
+	if retryAfter != "" {
+		if secs, err := strconv.Atoi(retryAfter); err == nil && secs > 0 && secs <= 120 {
+			time.Sleep(time.Duration(secs) * time.Second)
+			return
+		}
+	}
+	rt.backoff(attempt)
+}
+
 func (rt *retryTransport) backoff(attempt int) {
-	delay := time.Duration(math.Pow(2, float64(attempt))) * 500 * time.Millisecond
-	if delay > 5*time.Second {
-		delay = 5 * time.Second
+	delay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+	if delay > 10*time.Second {
+		delay = 10 * time.Second
 	}
 	time.Sleep(delay)
 }

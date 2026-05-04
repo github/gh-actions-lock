@@ -37,6 +37,7 @@ type Remediator struct {
 	Skipped     int
 	Alerted     int
 	SkippedDeps []string // unique dep keys that were skipped (for summary)
+	AlertedDeps []string // dep keys that triggered security alerts (deduplicated)
 }
 
 // NewRemediator creates a new Remediator.
@@ -106,6 +107,16 @@ func (rem *Remediator) depKey(f Finding) string {
 	return ""
 }
 
+func (rem *Remediator) addAlertedDep(f Finding) {
+	key := rem.depKey(f)
+	for _, k := range rem.AlertedDeps {
+		if k == key {
+			return
+		}
+	}
+	rem.AlertedDeps = append(rem.AlertedDeps, key)
+}
+
 // skipDep records a dependency as skipped (needs interactive resolution).
 func (rem *Remediator) skipDep(dep *lockfile.Dependency) {
 	key := dep.Key()
@@ -153,7 +164,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 
 	first := true
 	for _, finding := range wr.Findings {
-		if finding.Category == CategoryValid || finding.Category == CategoryRunOnly {
+		if finding.Category == CategoryValid || finding.Category == CategoryRunOnly || finding.Category == CategoryRefMoved {
 			continue
 		}
 
@@ -203,20 +214,17 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 				return err
 			}
 
-		case CategoryRefMoved:
-			rem.output.Error("%s: %s", finding.Dependency.Key(), finding.Detail)
-			rem.output.Hint("Ref has moved — investigate before updating. Use `gh actions-pin upgrade` manually.")
-			rem.Alerted++
-
 		case CategoryImposterCommit:
 			rem.output.Error("%s", finding.Detail)
 			rem.output.Hint("This may indicate a fork-network injection attack. Do not auto-fix.")
 			rem.Alerted++
+			rem.addAlertedDep(finding)
 
 		case CategoryMisleadingSHA:
 			rem.output.Error("MISLEADING_SHA %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 			rem.Alerted++
+			rem.addAlertedDep(finding)
 		}
 	}
 
@@ -377,9 +385,8 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 }
 
 // offerDefaultBranch checks each action ref for same-owner repos (internal
-// actions) and switches bare SHA or non-semver refs to the default branch.
-// For refs that already look like a version tag, offers a choice.
-// Uses session memory so the user is only asked once per owner/repo.
+// actions) and switches bare SHA refs to the default branch. Named refs
+// (tags, branches, versions) are preserved as-is.
 // Returns a (possibly modified) copy of the WorkflowReport with updated refs.
 func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 	updated := make([]lockfile.ActionRef, 0, len(wr.ActionRefs))
@@ -388,8 +395,6 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 			updated = append(updated, ref)
 			continue
 		}
-
-		nwo := ref.Owner + "/" + ref.Repo
 
 		info, err := rem.tagLister.GetRepoInfo(ref.Owner, ref.Repo)
 		if err != nil {
@@ -403,31 +408,16 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 			continue
 		}
 
-		// Session memory: reuse prior choice for this repo, but only for
-		// non-version refs. Version-ish refs must match the workflow uses: line.
-		if !LooksLikeVersion(ref.Ref) {
-			if priorRef, ok := rem.state.internalRefChoices[nwo]; ok {
-				if priorRef != ref.Ref {
-					rem.output.Detail("  ↳ reusing prior choice for %s: %s", ref.FullName(), priorRef)
-					ref.Ref = priorRef
-				}
-				updated = append(updated, ref)
-				continue
-			}
-		}
-
-		// Bare SHA or non-version ref on a same-owner repo → use default branch.
-		if isSHARef(ref.Ref) || !LooksLikeVersion(ref.Ref) {
+		// Bare SHA → swap to default branch. Named refs stay as-is.
+		if isSHARef(ref.Ref) {
 			rem.output.Detail("  %s: using %s (default branch) instead of %s",
 				ref.FullName(), info.DefaultBranch, ref.Ref)
 			ref.Ref = info.DefaultBranch
-			rem.state.internalRefChoices[nwo] = info.DefaultBranch
 			updated = append(updated, ref)
 			continue
 		}
 
-		// Version-ish ref on a same-owner repo — pin as-is. Changing the ref
-		// here without rewriting the workflow uses: line would create a mismatch.
+		// Named ref (tag, branch, version) — preserve what the user wrote.
 		updated = append(updated, ref)
 	}
 

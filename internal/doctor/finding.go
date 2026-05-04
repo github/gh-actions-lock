@@ -54,6 +54,8 @@ type Finding struct {
 	Detail string
 	// Remediation describes what doctor can do about it.
 	Remediation string
+	// LiveSHA is the current upstream SHA when it differs from the pinned SHA (e.g. REF_MOVED).
+	LiveSHA string
 }
 
 // InventoryEntry describes a single dependency with context.
@@ -81,7 +83,7 @@ type WorkflowReport struct {
 func (r *WorkflowReport) NeedsAttention() bool {
 	for _, f := range r.Findings {
 		switch f.Category {
-		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA:
+		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA, CategoryRefMoved:
 			continue
 		default:
 			return true
@@ -104,7 +106,7 @@ func (r *WorkflowReport) CountByCategory(c Category) int {
 // IsValid returns true for findings that don't represent integrity violations.
 func (f *Finding) IsValid() bool {
 	switch f.Category {
-	case CategoryValid, CategoryRunOnly, CategorySHAAsRef:
+	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
 		return true
 	case CategoryNotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
@@ -117,6 +119,8 @@ func (f *Finding) IsValid() bool {
 func (f *Finding) IsWarning() bool {
 	switch {
 	case f.Category == CategorySHAAsRef:
+		return true
+	case f.Category == CategoryRefMoved:
 		return true
 	case f.Category == CategoryValid && f.Severity == SeverityWarning:
 		return true

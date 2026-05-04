@@ -1,27 +1,47 @@
-name: "1: Pinned before attack — tag hijacked to unrelated code"
+name: "1: Pinned before attack — fork-network injection (caught by branch_commits)"
 
 # =============================================================================
-# ATTACKER CAPABILITY: Write access to move tags
+# ATTACKER CAPABILITY: Fork repo + write access to move tags
 # TIMELINE:
-#   1. Maintainer releases @tampered → ea53476 (legitimate)
+#   1. Maintainer releases @tampered → ea53476 (legitimate, HEAD of main)
 #   2. You pin: lockfile records ea53476 ✓
-#   3. Attacker moves tag to orphan commit 614a37a (no shared history)
-#   4. You run `gh actions-pin check` → CAUGHT
+#   3. Attacker forks the repo (choam-io/actions-test-fixtures-fork), pushes
+#      a malicious commit (7b403c9) to their fork's attacker-payload branch.
+#      The commit's parent (fbe0421) is a real descendant of ea53476, so
+#      the malicious commit has legitimate git ancestry.
+#   4. Attacker moves @tampered tag to 7b403c9 — a fork-network commit
+#      that exists in GitHub's shared object store
+#   5. You run `gh actions-pin check` → FULLY CAUGHT
 #
-# This is the tj-actions/changed-files scenario. The attacker moves a tag
-# to point at completely unrelated code — an orphan commit, a fork-network
-# SHA, anything outside the real release lineage.
+# This is the tj-actions/changed-files scenario. The attacker builds on
+# top of real history, so git lineage is preserved — but the fork commit
+# is NOT on any branch of the upstream repo.
 #
-# RESULT:  CAUGHT ✗
-#          ✗ TAMPERED    — live SHA ≠ pinned SHA (tag was moved)
-#          ✗ UNREACHABLE — new SHA has no shared history with the pinned SHA
+# RESULT:  FULLY CAUGHT ✗✗
+#          ⚠ REF_MOVED       — live SHA (7b403c9) ≠ pinned SHA (ea53476)
+#          ✗ IMPOSTER_COMMIT — 7b403c9 is not on any branch in
+#                              nodeselector/actions-test-fixtures
+#                              (fork-network injection detected via
+#                              branch_commits endpoint)
 #
-# The lockfile's known-good SHA acts as a tripwire. The moment the tag
-# moves, check detects both the SHA mismatch and the broken lineage.
+# Detection: branch_commits checks whether the tag's current target
+# exists on any branch of the UPSTREAM repo. Fork-network commits
+# live in GitHub's shared object store but have no branches in the
+# upstream repo — branch_commits returns empty → impostor.
 #
-# DEMO:    https://github.com/nodeselector/actions-test-fixtures/commit/614a37a
+# REF_MOVED is a warning (tag movement is expected for routine
+# releases). IMPOSTER_COMMIT is the error — the commit doesn't
+# belong to this repo.
 #
-# Run:     gh actions-pin check .github/workflows/1-pinned-before-hijack.yml
+# CONTRAST WITH SCENARIO 5:
+#   Both show REF_MOVED. Scenario 5 is a genuine release where the
+#   new SHA is on a branch — reachability passes. Here the SHA is a
+#   fork commit with no branches — impostor detected.
+#
+# FORK:    https://github.com/choam-io/actions-test-fixtures-fork
+# PAYLOAD: https://github.com/choam-io/actions-test-fixtures-fork/commit/7b403c9
+#
+# Run:     gh actions-pin check demo/workflows-pwned/1-pinned-before-hijack.yml
 # =============================================================================
 
 on:
