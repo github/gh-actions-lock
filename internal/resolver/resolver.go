@@ -73,6 +73,32 @@ func (r *Resolver) ParentMap() map[string][]string {
 	return r.parentMap
 }
 
+// RekeyParentMap updates parentMap keys and values after dependency refs have
+// been rewritten (e.g. tag narrowing v4 → v4.3.1, or PreserveRefs restoring
+// a previous tag). Both child keys and parent values are remapped.
+func (r *Resolver) RekeyParentMap(rewrites map[string]string) {
+	if len(rewrites) == 0 || len(r.parentMap) == 0 {
+		return
+	}
+	updated := make(map[string][]string, len(r.parentMap))
+	for childKey, parents := range r.parentMap {
+		newChild := childKey
+		if rk, ok := rewrites[childKey]; ok {
+			newChild = rk
+		}
+		newParents := make([]string, len(parents))
+		for i, p := range parents {
+			if rk, ok := rewrites[p]; ok {
+				newParents[i] = rk
+			} else {
+				newParents[i] = p
+			}
+		}
+		updated[newChild] = newParents
+	}
+	r.parentMap = updated
+}
+
 // New creates a resolver using the authenticated gh context.
 func New(hostname string) (*Resolver, error) {
 	return NewWithOptions(api.ClientOptions{Host: hostname})

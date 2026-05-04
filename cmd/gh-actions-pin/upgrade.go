@@ -259,7 +259,22 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return nil, fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
 
+	// Snapshot dep keys before PreserveRefs so we can rekey the parent map.
+	preKeys := make([]string, len(deps))
+	for i, d := range deps {
+		preKeys[i] = d.Key()
+	}
+
 	deps = lockfile.PreserveRefs(existingDeps, deps)
+
+	// Rekey parent map for any refs that PreserveRefs restored.
+	parentRewrites := make(map[string]string)
+	for i, d := range deps {
+		if newKey := d.Key(); newKey != preKeys[i] {
+			parentRewrites[preKeys[i]] = newKey
+		}
+	}
+	r.RekeyParentMap(parentRewrites)
 
 	diff := lockfile.DiffDeps(existingDeps, deps)
 	var changes []jsonUpgradeChange

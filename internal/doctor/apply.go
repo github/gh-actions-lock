@@ -37,6 +37,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// Skip narrowing for same-owner internal repos — broad tags are fine
 	// within your own org's private actions. Public repos always narrow.
 	rewrites := make(map[string]string)
+	parentRewrites := make(map[string]string)
 	for i := range deps {
 		dep := &deps[i]
 		if !IsMutableVersionTag(dep.Ref) {
@@ -59,9 +60,13 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		oldUses := dep.NWO + "@" + dep.Ref
 		newUses := dep.NWO + "@" + patchTag
 		rewrites[oldUses] = newUses
+		parentRewrites[dep.Key()] = dep.NWO + "@" + patchTag
 		rem.output.Detail("  %s → %s (pinning to patch version)", dep.Ref, patchTag)
 		dep.Ref = patchTag
 	}
+
+	// Update parent map keys to reflect narrowed refs.
+	rem.resolver.RekeyParentMap(parentRewrites)
 
 	// If we have rewrites, update the uses: lines in the workflow first.
 	if len(rewrites) > 0 {

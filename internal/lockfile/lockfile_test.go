@@ -493,8 +493,11 @@ jobs:
 		{NWO: "unknown/dep", Ref: "v1", SHA: "cccc0000cccc0000cccc0000cccc0000cccc0000", HashAlgo: "sha1"},
 	}
 
-	// parentMap exists but doesn't cover unknown/dep
-	parentMap := map[string][]string{}
+	// parentMap has an entry for a different dep so the orphan-handling branch
+	// (non-empty map, but unknown/dep not mapped) is exercised.
+	parentMap := map[string][]string{
+		"some/other@v1": {"actions/checkout@v4"},
+	}
 
 	output, err := f.WriteDependencies(deps, parentMap)
 	require.NoError(t, err)
