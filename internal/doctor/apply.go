@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
 // isSHARef returns true if ref looks like a full commit SHA (40 or 64 hex chars).
@@ -30,6 +31,24 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	deps, err := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
+	}
+
+	// Check for impostor commits at pin time — don't let fork-network
+	// commits get pinned in the first place. Fail closed: if we can't
+	// verify reachability (e.g. branch_commits returns 429), refuse to
+	// pin rather than silently accepting a potentially poisoned commit.
+	reachResults := rem.resolver.CheckReachabilityAll(deps)
+	for _, rr := range reachResults {
+		switch rr.Status {
+		case resolver.Unreachable:
+			rem.output.Error("%s/%s@%s: %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
+			rem.Alerted++
+			return fmt.Errorf("refusing to pin: impostor commit detected for %s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+		case resolver.ReachabilityUnknown:
+			rem.output.Error("%s/%s@%s: could not verify commit reachability — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
+			rem.Alerted++
+			return fmt.Errorf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later)", rr.Owner, rr.Repo, rr.Ref)
+		}
 	}
 
 	// Narrow mutable version tags (v4, v4.2) to specific patch tags (v4.2.1)

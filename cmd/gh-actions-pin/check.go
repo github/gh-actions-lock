@@ -386,28 +386,6 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 		for _, dep := range depOrder {
 			dg := depMap[dep]
 
-			// Merge REF_MOVED+IMPOSTER_COMMIT for same dep.
-			hasTampered := false
-			var unreachableDetail string
-			for _, f := range dg.findings {
-				if f.Category == doctor.CategoryRefMoved {
-					hasTampered = true
-				}
-				if f.Category == doctor.CategoryImposterCommit {
-					unreachableDetail = f.Detail
-				}
-			}
-			if hasTampered && unreachableDetail != "" {
-				var merged []doctor.Finding
-				for _, f := range dg.findings {
-					if f.Category == doctor.CategoryImposterCommit {
-						continue
-					}
-					merged = append(merged, f)
-				}
-				dg.findings = merged
-			}
-
 			// Tally and check if this dep is NOT_PINNED only.
 			allNotPinned := true
 			for _, f := range dg.findings {
@@ -428,28 +406,12 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				label := strings.ToUpper(string(f.Category))
 				out.Detail("! %s %s", out.Dim(label), dep)
 				out.Detail("  %s", f.Detail)
-				if hasTampered && unreachableDetail != "" && f.Category == doctor.CategoryRefMoved {
-					out.Detail("  %s", unreachableDetail)
-				}
-				if f.Dependency != nil && f.Category == doctor.CategoryRefMoved {
-					owner, repo := f.Dependency.OwnerRepo()
-					if hasTampered && unreachableDetail != "" {
-						out.Detail("  %s", out.Bold("⚠ The new commit has no shared history with your pinned SHA."))
-						out.Detail("  %s", "Do NOT accept without reviewing the diff for malicious changes.")
-					} else {
-						out.Detail("  %s", "Validate the change is a legitimate update before accepting.")
-					}
-					if owner != "" {
-						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA, f.Dependency.Ref)))
-						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
-					}
-				}
 			}
 		}
 
 		parts := []string{}
 		for _, cat := range []doctor.Category{
-			doctor.CategoryRefMoved, doctor.CategoryRefChanged, doctor.CategoryNotPinned,
+			doctor.CategoryRefChanged, doctor.CategoryNotPinned,
 			doctor.CategoryStale, doctor.CategoryMisleadingSHA, doctor.CategoryImposterCommit,
 		} {
 			if n, ok := catCounts[cat]; ok {
@@ -521,7 +483,9 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 	// don't use dependency pinning — warning on every transitive dep is noisy
 	// and not actionable by the consumer. Revisit when we have a story for
 	// composite action authors to adopt pinning.
+	// Collect REF_MOVED warnings for compact display.
 	var bareSHADeps []string
+	var refMovedWarnings []string
 	var otherDetailWarnings []string
 	for _, key := range otherWarnings {
 		wg := warnMap[key]
@@ -532,6 +496,8 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				bareSHADeps = append(bareSHADeps, key)
 			}
 			// transitive SHA_AS_REF: silently swallowed (see TODO above)
+		} else if f.Category == doctor.CategoryRefMoved {
+			refMovedWarnings = append(refMovedWarnings, key)
 		} else if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning &&
 			strings.Contains(f.Remediation, "transitive dependency") {
 			// transitive reachability unknown: silently swallowed (see TODO above)
@@ -547,6 +513,16 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			out.Detail("  ↳ resolving below")
 		} else {
 			out.Detail("  ↳ run `gh actions-pin upgrade` to pin to tagged releases")
+		}
+	}
+	if len(refMovedWarnings) > 0 {
+		out.Warning("%d %s moved upstream — run `gh actions-pin upgrade` to update",
+			len(refMovedWarnings),
+			ui.Pluralize(len(refMovedWarnings), "ref has", "refs have"))
+		for _, key := range refMovedWarnings {
+			wg := warnMap[key]
+			f := wg.finding
+			out.Detail("  ↳ %s: %s", key, f.Detail)
 		}
 	}
 	for _, key := range otherDetailWarnings {

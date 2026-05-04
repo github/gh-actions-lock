@@ -104,7 +104,7 @@ func (r *WorkflowReport) CountByCategory(c Category) int {
 // IsValid returns true for findings that don't represent integrity violations.
 func (f *Finding) IsValid() bool {
 	switch f.Category {
-	case CategoryValid, CategoryRunOnly, CategorySHAAsRef:
+	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
 		return true
 	case CategoryNotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
@@ -117,6 +117,8 @@ func (f *Finding) IsValid() bool {
 func (f *Finding) IsWarning() bool {
 	switch {
 	case f.Category == CategorySHAAsRef:
+		return true
+	case f.Category == CategoryRefMoved:
 		return true
 	case f.Category == CategoryValid && f.Severity == SeverityWarning:
 		return true
