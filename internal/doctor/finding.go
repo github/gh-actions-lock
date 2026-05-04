@@ -81,7 +81,7 @@ type WorkflowReport struct {
 func (r *WorkflowReport) NeedsAttention() bool {
 	for _, f := range r.Findings {
 		switch f.Category {
-		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA:
+		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA, CategoryRefMoved:
 			continue
 		default:
 			return true

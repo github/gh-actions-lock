@@ -154,7 +154,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
 	var fixedCount, skippedCount, alertedCount int
-	var skippedDeps []string
+	var skippedDeps, alertedDeps []string
 
 	if willRemediate && len(actionable) > 0 {
 		hostname := resolveHostname(opts.Hostname)
@@ -204,6 +204,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		skippedCount = uniqueSkipped
 		alertedCount = rem.Alerted
 		skippedDeps = rem.SkippedDeps
+		alertedDeps = rem.AlertedDeps
 	}
 
 	if !valid || skippedCount > 0 || alertedCount > 0 {
@@ -211,11 +212,18 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 {
 			return nil
 		}
-		remaining := skippedCount + alertedCount
-		if remaining > 0 {
+		if alertedCount > 0 {
+			f.UI.Blank()
+			f.UI.Error("%d %s %s investigation — do not auto-fix:",
+				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
+			for _, dep := range alertedDeps {
+				f.UI.Detail("  %s", dep)
+			}
+		}
+		if skippedCount > 0 {
 			f.UI.Blank()
 			f.UI.Error("%d %s %s interactive resolution — run `gh actions-pin` locally:",
-				remaining, ui.Pluralize(remaining, "action", "actions"), ui.Pluralize(remaining, "requires", "require"))
+				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
 				f.UI.Detail("  %s", dep)
 			}
