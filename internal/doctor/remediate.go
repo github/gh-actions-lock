@@ -37,6 +37,7 @@ type Remediator struct {
 	Skipped     int
 	Alerted     int
 	SkippedDeps []string // unique dep keys that were skipped (for summary)
+	AlertedDeps []string // unique dep keys that were alerted (security issues)
 }
 
 // NewRemediator creates a new Remediator.
@@ -207,11 +208,13 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			rem.output.Error("%s", finding.Detail)
 			rem.output.Hint("This may indicate a fork-network injection attack. Do not auto-fix.")
 			rem.Alerted++
+			rem.AlertedDeps = append(rem.AlertedDeps, rem.depKey(finding))
 
 		case CategoryMisleadingSHA:
 			rem.output.Error("MISLEADING_SHA %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 			rem.Alerted++
+			rem.AlertedDeps = append(rem.AlertedDeps, rem.depKey(finding))
 		}
 	}
 
