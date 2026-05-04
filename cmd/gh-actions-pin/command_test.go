@@ -272,7 +272,7 @@ dependencies:
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
 	)
-	require.NoError(t, err, "JSON mode communicates errors in payload")
+	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
 	var payload struct {
 		Valid    bool           `json:"valid"`
@@ -323,7 +323,7 @@ dependencies:
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
 	)
-	require.NoError(t, err, "JSON mode communicates errors in payload")
+	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
 	var payload struct {
 		Valid    bool           `json:"valid"`

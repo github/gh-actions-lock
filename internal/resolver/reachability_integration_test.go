@@ -22,9 +22,9 @@ const (
 	fixtureOwner = "nodeselector"
 	fixtureRepo  = "actions-test-fixtures"
 
-	// HEAD of main, also where tag v1 points
-	headSHA = "ea53476fdc172d8552df5af9658a45a367e4f41d"
-	// Parent of HEAD — in v1's lineage but not at HEAD (tag-drift scenario)
+	// Where tag v1 points (was HEAD of main at time of fixture creation)
+	v1SHA = "ea53476fdc172d8552df5af9658a45a367e4f41d"
+	// Parent of v1 — in v1's lineage but not at v1 HEAD (tag-drift scenario)
 	parentSHA = "38b3412adcb7afb4a061c519513e45cbaf4a1cec"
 	// Root commit of main (oldest ancestor)
 	rootSHA = "5f13f2a16a43112afcd6e1bcc29c418176894d53"
@@ -32,8 +32,10 @@ const (
 	orphanSHA = "614a37a63d1a75476792a8781b55983a9d9bcb80"
 	// A SHA that doesn't exist anywhere
 	fakeSHA = "0000000000000000000000000000000000000000"
-	// Commit on choam-io/actions-test-fixtures-fork attacker-payload branch
-	// This SHA exists in the fork network but NOT in the upstream repo's lineage
+	// Commit on choam-io/actions-test-fixtures-fork attacker-payload branch.
+	// This SHA exists in the fork network but NOT in the upstream repo's branches.
+	// Tag "tampered" in the upstream repo has been moved to point at this commit,
+	// simulating a fork-network injection attack with preserved lineage.
 	forkAttackerSHA = "7b403c9ec14bd3ae0bbf793c2bee8815a7ac920a"
 )
 
@@ -59,7 +61,7 @@ func TestIntegration_Reachable_HeadSHA(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, headSHA, "v1")
+	result := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
 	assert.Equal(t, Reachable, result.Status, "HEAD SHA should be reachable from v1: %+v", result)
 }
 
@@ -105,33 +107,55 @@ func TestIntegration_Unreachable_NonexistentSHA(t *testing.T) {
 	assert.Equal(t, Unreachable, result.Status, "fake SHA should be unreachable: %+v", result)
 }
 
-// TestIntegration_Unreachable_ForkNetworkInjection is the KEY test proving
-// the Compare API merge-base identity check detects fork-network injection.
-//
-// The Compare API operates on the fork-network-shared object store, so the
-// fork commit IS visible. However, the merge_base_commit for a fork commit
-// will NOT be the fork SHA itself — it will be the actual common ancestor in
-// the upstream history. This mismatch (merge_base != pinnedSHA) is the signal
-// that detects the imposter commit.
+// TestIntegration_Unreachable_ForkNetworkInjection tests that a fork commit
+// used as a pinned SHA against a clean tag is detected as unreachable.
+// branch_commits returns no branches for fork-network commits in the upstream repo.
 func TestIntegration_Unreachable_ForkNetworkInjection(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
 	result := r.CheckReachability(fixtureOwner, fixtureRepo, forkAttackerSHA, "v1")
 	assert.Equal(t, Unreachable, result.Status,
-		"fork-network SHA should NOT be reachable via merge-base identity check: %+v", result)
+		"fork-network SHA should NOT be reachable via branch_commits check: %+v", result)
 }
 
-// TestIntegration_SHAAsRef_ReturnsUnknown verifies that when the ref is itself
-// a raw SHA (the anti-pattern), we return Unknown with guidance to pin to a tag.
-func TestIntegration_SHAAsRef_ReturnsUnknown(t *testing.T) {
+// TestIntegration_Unreachable_ForkNetworkInjection_PreservedLineage is the
+// critical test for tag manipulation attacks with preserved lineage.
+//
+// Scenario: tag "tampered" has been moved to point at forkAttackerSHA (7b403c9),
+// a commit in choam-io/actions-test-fixtures-fork. This fork commit has a real
+// upstream parent (fbe0421), so it PRESERVES LINEAGE — the old pinned SHA
+// (v1SHA / ea53476) IS an ancestor of the fork commit.
+//
+// The branch_commits endpoint catches this because fork-network commits have
+// no branches in the upstream repo, regardless of their ancestry.
+func TestIntegration_Unreachable_ForkNetworkInjection_PreservedLineage(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, headSHA, headSHA)
-	assert.Equal(t, ReachabilityUnknown, result.Status,
-		"SHA-as-ref should return Unknown: %+v", result)
-	assert.Contains(t, result.Detail, "pin to a tag")
+	// v1SHA (ea53476) was the original pinned SHA.
+	// Tag "tampered" now points to forkAttackerSHA (7b403c9) which descends
+	// from v1SHA through the fork network. Without the containment check,
+	// this would incorrectly pass as Reachable.
+	result := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "tampered")
+	assert.Equal(t, Unreachable, result.Status,
+		"fork commit via tag manipulation should be detected even with preserved lineage: %+v", result)
+	assert.Contains(t, result.Detail, "fork-network",
+		"detail should mention fork-network injection: %s", result.Detail)
+}
+
+// TestIntegration_SHAAsRef_ReturnsReachableWithWarning verifies that when the
+// ref is itself a raw SHA (the anti-pattern), we return Reachable with guidance
+// to pin to a tag instead, since origin can't be verified at job runtime.
+func TestIntegration_SHAAsRef_ReturnsReachableWithWarning(t *testing.T) {
+	skipWithoutAuth(t)
+	r := newLiveResolver(t)
+
+	result := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, v1SHA)
+	assert.Equal(t, Reachable, result.Status,
+		"SHA-as-ref with valid commit should return Reachable: %+v", result)
+	assert.Contains(t, result.Detail, "bare SHA",
+		"detail should warn about bare SHA pinning: %s", result.Detail)
 }
 
 // TestIntegration_CacheConsistency verifies that repeated calls return
@@ -140,8 +164,8 @@ func TestIntegration_CacheConsistency(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	r1 := r.CheckReachability(fixtureOwner, fixtureRepo, headSHA, "v1")
-	r2 := r.CheckReachability(fixtureOwner, fixtureRepo, headSHA, "v1")
+	r1 := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
+	r2 := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
 	assert.Equal(t, r1.Status, r2.Status)
 	assert.Equal(t, "cached", r2.Detail, "second call should come from cache")
 }

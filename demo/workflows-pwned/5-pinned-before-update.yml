@@ -1,25 +1,34 @@
-name: "5: Pinned before routine update — tag moved forward in lineage"
+name: "5: Pinned before routine update — legitimate tag movement"
 
 # =============================================================================
-# SCENARIO: Legitimate upstream release
+# SCENARIO: Legitimate upstream release (not an attack)
 # TIMELINE:
 #   1. Maintainer releases @updated → 38b3412 (legitimate)
 #   2. You pin: lockfile records 38b3412 ✓
 #   3. Maintainer pushes a new commit, moves @updated → ea53476 (descendant)
-#   4. You run `gh actions-pin check` → REF_MOVED detected
+#   4. You run `gh actions-pin check` → REF_MOVED ⚠
 #
-# This is the normal case: a maintainer cuts a new release and moves the tag
-# forward. The new SHA is a descendant of the pinned SHA — same lineage,
-# just newer. The compare link lets you review what changed.
+# The normal case: a maintainer cuts a new release and moves the tag
+# forward. The new SHA (ea53476) is a descendant of the pinned SHA
+# (38b3412) — same lineage, just newer. ea53476 is on branches of the
+# upstream repo, so branch_commits confirms it's reachable.
 #
-# RESULT:  REF_MOVED ⚠ (informational)
-#          ✗ REF_MOVED  — live SHA (ea53476) ≠ pinned SHA (38b3412)
-#          ✓ REACHABLE  — new SHA is a descendant of the pinned SHA
+# RESULT:  WARNING ONLY ⚠ (informational, not an attack)
+#          ⚠ REF_MOVED — live SHA (ea53476) ≠ pinned SHA (38b3412)
+#          ✓ REACHABLE — ea53476 is on branch(es) in the upstream repo
 #
-# The lockfile detects the tag moved but lineage is intact. Review the diff,
-# then `gh actions-pin upgrade` to accept the new version.
+# REF_MOVED is a warning, not an error. The check passes — your lockfile
+# is still valid, just behind upstream. Use `gh actions-pin upgrade` to
+# accept the new version and update the lockfile.
 #
-# DEMO:    https://github.com/nodeselector/actions-test-fixtures/compare/38b3412adcb7afb4a061c519513e45cbaf4a1cec...ea53476fdc172d8552df5af9658a45a367e4f41d
+# CONTRAST WITH SCENARIO 1:
+#   Both show REF_MOVED. The difference: scenario 1's new SHA (7b403c9)
+#   is a fork-network commit with no branches in the upstream repo →
+#   IMPOSTER_COMMIT fires. Here, the new SHA is on a real branch →
+#   reachability passes. branch_commits distinguishes the two cases
+#   that the old compare-API approach could not.
+#
+# DEMO:    https://github.com/nodeselector/actions-test-fixtures/compare/38b3412...ea53476
 #
 # Run:     gh actions-pin check demo/workflows-pwned/5-pinned-before-update.yml
 # =============================================================================

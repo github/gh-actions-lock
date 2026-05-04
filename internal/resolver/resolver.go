@@ -54,11 +54,14 @@ type ReachabilityResult struct {
 type Resolver struct {
 	client            *api.GraphQLClient
 	restClient        *api.RESTClient
+	httpTransport     http.RoundTripper // raw transport for non-API requests (branch_commits)
+	authToken         string            // auth token for non-API requests
 	hostname          string
 	MaxRecursionDepth int
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
+	bcCache           map[string]bcCacheEntry // owner/repo/sha → cached branch_commits result
 	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
 	parentMap map[string][]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
@@ -130,11 +133,14 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	return &Resolver{
 		client:            client,
 		restClient:        restClient,
+		httpTransport:     opts.Transport,
+		authToken:         opts.AuthToken,
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		cache:             make(map[string]resolvedEntry),
 		latestRefCache:    make(map[string]string),
 		reachCache:        make(map[string]ReachabilityStatus),
+		bcCache:           make(map[string]bcCacheEntry),
 	}, nil
 }
 
@@ -165,15 +171,14 @@ func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string
 // a SHA exists in GitHub's shared object store but is not actually part of
 // the canonical repository's history.
 //
-// Uses the GitHub Compare API and checks merge_base identity:
-//   - merge_base == pinnedSHA → Reachable (SHA is a true ancestor of ref)
-//   - merge_base != pinnedSHA → Unreachable (fork/imposter commit)
-//   - 404 (no common ancestor or not found) → Unreachable
-//   - 403/429 (rate limit) or other error → Unknown
+// CheckReachability verifies that a dependency's commit is reachable from a
+// branch in the repository, catching fork-network injection attacks.
 //
-// When ref is itself a raw SHA (the "uses: owner/repo@SHA" anti-pattern),
-// the compare becomes {sha}...{sha} which trivially returns "identical" and
-// cannot detect fork commits. In this case, a warning is returned instead.
+// Uses the undocumented branch_commits endpoint (same approach as zizmor):
+// resolve ref → SHA, then check if that SHA appears on any branch. Fork
+// commits have branches=[] in the upstream repo.
+//
+// See: https://docs.zizmor.sh/audits/#impostor-commit
 func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityResult {
 	result := ReachabilityResult{
 		Owner: owner,
@@ -192,85 +197,157 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	// Allow tests to inject a fake implementation
 	if r.checkReachFn != nil {
 		result.Status, result.Detail = r.checkReachFn(owner, repo, sha, ref)
-		if result.Status != ReachabilityUnknown {
-			r.reachCache[cacheKey] = result.Status
-		}
+		r.reachCache[cacheKey] = result.Status
 		return result
 	}
 
-	// SHA-as-ref: compare/{sha}...{sha} is trivially identical and cannot
-	// detect fork commits. Instead, check against the repo's default branch
-	// which proves the commit exists in the canonical repo's history. Note:
-	// Note: runtime enforcement for bare-SHA refs is TBD — it's expensive.
+	// For bare-SHA refs, check the SHA directly. For named refs, resolve
+	// the ref to its current SHA first.
+	checkRef := ref
 	if lockfile.IsFullSHA(ref) {
-		status, detail := r.apiReachabilityCheck(owner, repo, sha, "HEAD")
-		switch status {
+		checkRef = sha
+	}
+
+	result.Status, result.Detail = r.branchCommitsCheck(owner, repo, checkRef)
+
+	// Annotate bare-SHA refs with guidance to prefer tags.
+	if lockfile.IsFullSHA(ref) {
+		switch result.Status {
 		case Reachable:
-			result.Status = Reachable
-			result.Detail = "pinned to a bare SHA; commit is reachable from default branch but origin cannot be verified at job runtime — prefer pinning to a tag"
-			r.reachCache[cacheKey] = result.Status
+			result.Detail = "pinned to a bare SHA; commit is on a branch but origin cannot be verified at job runtime — prefer pinning to a tag"
 		case Unreachable:
-			result.Status = Unreachable
-			result.Detail = "pinned to a bare SHA; commit is NOT reachable from default branch — possible fork-network commit"
-			r.reachCache[cacheKey] = result.Status
-		default:
-			result.Status = ReachabilityUnknown
+			result.Detail = "pinned to a bare SHA; commit is NOT on any branch — possible fork-network commit"
+		case ReachabilityUnknown:
 			result.Detail = fmt.Sprintf(
 				"pinned to a bare SHA — unable to verify commit origin (%s); pin to a tag instead: https://github.com/%s/%s/releases",
-				detail, owner, repo)
+				result.Detail, owner, repo)
 		}
-		return result
 	}
 
-	status, detail := r.apiReachabilityCheck(owner, repo, sha, ref)
-	result.Status = status
-	result.Detail = detail
-	if result.Status != ReachabilityUnknown {
-		r.reachCache[cacheKey] = result.Status
-	}
+	// Cache all results including Unknown — within a single CLI run, re-hitting
+	// the same endpoint after a 429 just makes the rate limit worse.
+	r.reachCache[cacheKey] = result.Status
 	return result
 }
 
-// compareResponse is the subset of the GitHub Compare API response we need.
-type compareResponse struct {
-	MergeBaseCommit struct {
-		SHA string `json:"sha"`
-	} `json:"merge_base_commit"`
-	Status string `json:"status"`
+// branchCommitsResponse is the subset of the undocumented branch_commits
+// endpoint response we need. The endpoint lives on the web host (not the
+// API host) and returns which branches and tags contain a given commit.
+type branchCommitsResponse struct {
+	Branches []struct {
+		Branch string `json:"branch"`
+	} `json:"branches"`
+	Tags []string `json:"tags"`
 }
 
-// apiReachabilityCheck uses the GitHub Compare API to verify that sha is an
-// ancestor of ref. The key insight: merge_base(ancestor, descendant) == ancestor.
-// If the merge_base is NOT the pinned SHA, the commit lives on the fork network.
-func (r *Resolver) apiReachabilityCheck(owner, repo, sha, ref string) (ReachabilityStatus, string) {
-	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
-		owner, repo, url.PathEscape(sha), url.PathEscape(ref))
+// bcCacheEntry holds a cached branch_commits result. A nil resp with a non-empty
+// errDetail indicates a failed request (429, 500, network error, decode error).
+type bcCacheEntry struct {
+	resp      *branchCommitsResponse
+	errDetail string
+}
 
-	var resp compareResponse
-	err := r.restClient.Get(path, &resp)
-	if err != nil {
-		var httpErr *api.HTTPError
-		if errors.As(err, &httpErr) {
-			switch {
-			case httpErr.StatusCode == http.StatusNotFound:
-				return Unreachable, "no common ancestor or commit not found"
-			case httpErr.StatusCode == http.StatusForbidden || httpErr.StatusCode == http.StatusTooManyRequests:
-				detail := fmt.Sprintf("rate limited (HTTP %d)", httpErr.StatusCode)
-				if reset := httpErr.Headers.Get("X-RateLimit-Reset"); reset != "" {
-					detail += "; resets at " + reset
-				}
-				return ReachabilityUnknown, detail
-			default:
-				return ReachabilityUnknown, fmt.Sprintf("API error (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
-			}
+// branchCommitsCheck uses the undocumented branch_commits endpoint (same
+// approach as zizmor) to verify that a ref's current target is contained in
+// at least one branch of the repository. Fork-network commits appear in the
+// fork network's commit graph but have branches=[] in the upstream repo.
+//
+// Why not the documented Compare API? Compare requires a known base ref
+// (e.g. refs/heads/main...{sha}), and for tags — the common pinning target —
+// the tag itself is the attack vector (comparing a tampered tag against its
+// own commit is trivially "identical"). You'd need to enumerate all branches
+// and compare each one, which is O(branches) API calls.
+//
+// branch_commits answers "is this SHA on ANY branch?" in a single call.
+// It wraps spokesd ListReferences with RefListOptions.contains under the hood.
+//
+// To stop relying on this undocumented endpoint, GitHub would need to expose
+// a documented "commit contains" API (e.g. GET /repos/{owner}/{repo}/commits/{sha}/refs
+// or a `contains` parameter on the existing list-branches endpoint).
+// See: https://docs.zizmor.sh/audits/#impostor-commit
+//
+// Flow: resolve ref → SHA via REST API, then GET /{owner}/{repo}/branch_commits/{sha}.
+func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStatus, string) {
+	// Step 1: resolve ref to its current SHA
+	var commitResp struct {
+		SHA string `json:"sha"`
+	}
+	commitPath := fmt.Sprintf("repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
+	if err := r.restClient.Get(commitPath, &commitResp); err != nil {
+		return ReachabilityUnknown, fmt.Sprintf("could not resolve ref %s: %s", ref, err)
+	}
+	if commitResp.SHA == "" {
+		return ReachabilityUnknown, fmt.Sprintf("could not resolve ref %s: empty SHA", ref)
+	}
+
+	// Step 2: check bcCache for this SHA to avoid duplicate HTTP calls.
+	bcKey := owner + "/" + repo + "/" + commitResp.SHA
+	if cached, ok := r.bcCache[bcKey]; ok {
+		if cached.resp == nil {
+			return ReachabilityUnknown, cached.errDetail
 		}
-		return ReachabilityUnknown, err.Error()
+		if len(cached.resp.Branches) == 0 {
+			return Unreachable, fmt.Sprintf(
+				"ref %s resolves to %s which is not on any branch in %s/%s — possible fork-network injection",
+				ref, commitResp.SHA[:12], owner, repo)
+		}
+		branchNames := make([]string, len(cached.resp.Branches))
+		for i, b := range cached.resp.Branches {
+			branchNames[i] = b.Branch
+		}
+		return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
 	}
 
-	if resp.MergeBaseCommit.SHA == sha {
-		return Reachable, "ancestor of " + ref + " (compare: " + resp.Status + ")"
+	// Step 3: call branch_commits on the web host (not the API host)
+	webHost := r.hostname
+	bcURL := fmt.Sprintf("https://%s/%s/%s/branch_commits/%s", webHost, owner, repo, commitResp.SHA)
+
+	req, err := http.NewRequest("GET", bcURL, nil)
+	if err != nil {
+		return ReachabilityUnknown, fmt.Sprintf("could not build branch_commits request: %s", err)
 	}
-	return Unreachable, fmt.Sprintf("merge base is %s, not the pinned SHA — likely a fork-network commit", resp.MergeBaseCommit.SHA[:12])
+	req.Header.Set("Accept", "application/json")
+	if r.authToken != "" {
+		req.Header.Set("Authorization", "token "+r.authToken)
+	}
+
+	transport := r.httpTransport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		detail := fmt.Sprintf("branch_commits request failed: %s", err)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return ReachabilityUnknown, detail
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		detail := fmt.Sprintf("branch_commits returned HTTP %d", resp.StatusCode)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return ReachabilityUnknown, detail
+	}
+
+	var bcResp branchCommitsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&bcResp); err != nil {
+		detail := fmt.Sprintf("could not decode branch_commits response: %s", err)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return ReachabilityUnknown, detail
+	}
+	r.bcCache[bcKey] = bcCacheEntry{resp: &bcResp}
+
+	if len(bcResp.Branches) == 0 {
+		return Unreachable, fmt.Sprintf(
+			"ref %s resolves to %s which is not on any branch in %s/%s — possible fork-network injection",
+			ref, commitResp.SHA[:12], owner, repo)
+	}
+
+	branchNames := make([]string, len(bcResp.Branches))
+	for i, b := range bcResp.Branches {
+		branchNames[i] = b.Branch
+	}
+	return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
 }
 
 // CheckReachabilityAll runs reachability checks on a batch of dependencies,
