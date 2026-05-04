@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -246,11 +245,11 @@ func LoadCooldownConfig() CooldownConfig {
 		RepoOverrides: make(map[string]int),
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
+	p := configPath()
+	if p == "" {
 		return cfg
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".config", "gh-actions-pin", "config.yml"))
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return cfg
 	}

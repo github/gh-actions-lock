@@ -224,6 +224,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			rem.output.Error("LOCKFILE_FORGERY %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("The pinned SHA was never in this ref's lineage — possible lockfile tampering.")
 			rem.Alerted++
+			rem.addAlertedDep(finding)
 
 		case CategoryMisleadingSHA:
 			rem.output.Error("MISLEADING_SHA %s: %s", rem.depKey(finding), finding.Detail)

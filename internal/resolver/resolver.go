@@ -66,6 +66,10 @@ type Resolver struct {
 	parentMap map[string][]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
+
+	// DisableReachability skips the branch_commits reachability check entirely.
+	// When true, CheckReachability returns ReachabilityUnknown immediately.
+	DisableReachability bool
 }
 
 // ParentMap returns the child dep key → parent dep keys mapping from the last ResolveAllRecursive call.
@@ -166,6 +170,11 @@ func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string
 	r.checkReachFn = fn
 }
 
+// HasReachabilityFunc reports whether a test reachability function has been injected.
+func (r *Resolver) HasReachabilityFunc() bool {
+	return r.checkReachFn != nil
+}
+
 // CheckReachability verifies that a resolved SHA is on the lineage of the
 // given ref within the repository. This catches fork-network injection where
 // a SHA exists in GitHub's shared object store but is not actually part of
@@ -197,6 +206,14 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	// Allow tests to inject a fake implementation
 	if r.checkReachFn != nil {
 		result.Status, result.Detail = r.checkReachFn(owner, repo, sha, ref)
+		r.reachCache[cacheKey] = result.Status
+		return result
+	}
+
+	// Feature-flagged: skip branch_commits when disabled.
+	if r.DisableReachability {
+		result.Status = ReachabilityUnknown
+		result.Detail = "reachability check disabled via config"
 		r.reachCache[cacheKey] = result.Status
 		return result
 	}

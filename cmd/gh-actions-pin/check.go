@@ -123,6 +123,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	if err != nil {
 		return err
 	}
+	// Respect test overrides — only apply config when no test func is injected.
+	if !r.HasReachabilityFunc() {
+		r.DisableReachability = !doctor.ReachabilityEnabled()
+	}
 
 	// Single pass: doctor.Diagnose handles all validation.
 	total := len(opts.WorkflowPaths)
