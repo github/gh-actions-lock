@@ -183,7 +183,7 @@ func TestWriteDependencies(t *testing.T) {
 		{NWO: "actions/setup-go", Ref: "v5", SHA: "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -204,7 +204,7 @@ func TestWriteDependenciesAddsTransitiveSection(t *testing.T) {
 		{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -226,7 +226,7 @@ func TestWriteDependenciesDeduplicatesDirectAndTransitive(t *testing.T) {
 		{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -245,7 +245,7 @@ func TestWriteDependenciesRoundTrip(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v4", SHA: "abc123abc123abc123abc123abc123abc123abc1", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -263,7 +263,7 @@ func TestWriteDependenciesReplacesExisting(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v4", SHA: "0000000000000000000000000000000000000001", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -362,7 +362,7 @@ func TestWriteDependenciesTrailingNewlineEdgeCases(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v4", SHA: "abc123abc123abc123abc123abc123abc123abc1", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -379,7 +379,7 @@ func TestDependencySorted(t *testing.T) {
 		{NWO: "aaa/first", Ref: "v1", SHA: "bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000", HashAlgo: "sha1"},
 	}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
@@ -406,13 +406,155 @@ jobs:
 
 	deps := []Dependency{{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"}}
 
-	output, err := f.WriteDependencies(deps)
+	output, err := f.WriteDependencies(deps, nil)
 	require.NoError(t, err)
 
 	s := string(output)
 	assert.NotContains(t, s, "# Direct dependencies")
 	assert.Contains(t, s, "# Transitive dependencies")
 	assert.Contains(t, s, "github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684")
+}
+
+func TestWriteDependenciesGroupedByParent(t *testing.T) {
+	f, err := Load("testdata/simple.yml")
+	require.NoError(t, err)
+
+	deps := []Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "11bd71901bbe5b1630ceea73d27597364c9af683", HashAlgo: "sha1"},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", HashAlgo: "sha1"},
+		{NWO: "actions/cache/save", Ref: "v4", SHA: "5a3ec84eff668545956fd18022155c47e93e2684", HashAlgo: "sha1"},
+		{NWO: "other/dep", Ref: "v1", SHA: "aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000", HashAlgo: "sha1"},
+	}
+
+	parentMap := map[string][]string{
+		"actions/cache/save@v4": {"actions/setup-go@v5"},
+		"other/dep@v1":         {"actions/checkout@v4"},
+	}
+
+	output, err := f.WriteDependencies(deps, parentMap)
+	require.NoError(t, err)
+
+	s := string(output)
+	// Direct deps should be present
+	assert.Contains(t, s, "github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683")
+	assert.Contains(t, s, "github.com/actions/setup-go@v5:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5")
+
+	// Transitive deps should be grouped by parent
+	assert.Contains(t, s, "# Transitive dependencies (via actions/checkout@v4)")
+	assert.Contains(t, s, "# Transitive dependencies (via actions/setup-go@v5)")
+	assert.Contains(t, s, "github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684")
+	assert.Contains(t, s, "github.com/other/dep@v1:sha1-aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000")
+}
+
+func TestWriteDependenciesTransitiveUnderMultipleParents(t *testing.T) {
+	f, err := Load("testdata/simple.yml")
+	require.NoError(t, err)
+
+	deps := []Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "11bd71901bbe5b1630ceea73d27597364c9af683", HashAlgo: "sha1"},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", HashAlgo: "sha1"},
+		{NWO: "shared/dep", Ref: "v1", SHA: "bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000", HashAlgo: "sha1"},
+	}
+
+	// shared/dep is pulled in by both direct actions
+	parentMap := map[string][]string{
+		"shared/dep@v1": {"actions/checkout@v4", "actions/setup-go@v5"},
+	}
+
+	output, err := f.WriteDependencies(deps, parentMap)
+	require.NoError(t, err)
+
+	s := string(output)
+	// The shared dep should appear under BOTH parent sections
+	assert.Contains(t, s, "# Transitive dependencies (via actions/checkout@v4)")
+	assert.Contains(t, s, "# Transitive dependencies (via actions/setup-go@v5)")
+	assert.Equal(t, 2, strings.Count(s, "github.com/shared/dep@v1:sha1-bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000"),
+		"shared dep should appear once under each parent")
+}
+
+func TestWriteDependenciesOrphanTransitiveWithParentMap(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "orphan.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	deps := []Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "11bd71901bbe5b1630ceea73d27597364c9af683", HashAlgo: "sha1"},
+		{NWO: "unknown/dep", Ref: "v1", SHA: "cccc0000cccc0000cccc0000cccc0000cccc0000", HashAlgo: "sha1"},
+	}
+
+	// parentMap has an entry for a different dep so the orphan-handling branch
+	// (non-empty map, but unknown/dep not mapped) is exercised.
+	parentMap := map[string][]string{
+		"some/other@v1": {"actions/checkout@v4"},
+	}
+
+	output, err := f.WriteDependencies(deps, parentMap)
+	require.NoError(t, err)
+
+	s := string(output)
+	// Orphan transitive dep should fall into generic section
+	assert.Contains(t, s, "# Transitive dependencies\n")
+	assert.Contains(t, s, "github.com/unknown/dep@v1:sha1-cccc0000cccc0000cccc0000cccc0000cccc0000")
+}
+
+func TestReadDependenciesExactDuplicateDeduped(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+dependencies:
+  - github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683
+  - github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "dup.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	deps, err := f.ReadDependencies()
+	require.NoError(t, err)
+	assert.Len(t, deps, 1)
+	assert.Equal(t, "actions/checkout", deps[0].NWO)
+}
+
+func TestReadDependenciesConflictingDuplicateErrors(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+dependencies:
+  - github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683
+  - github.com/actions/checkout@v4:sha1-aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "conflict.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	_, err = f.ReadDependencies()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting dependency entries")
 }
 
 func TestParseActionMeta(t *testing.T) {

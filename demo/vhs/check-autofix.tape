@@ -10,7 +10,7 @@ Set PlaybackSpeed 1.5
 Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-Type "echo '# Unpinned workflow — 4 actions using mutable tags, including a nested composite'"
+Type "echo '# Unpinned workflow — 4 actions including a nested composite with transitive deps'"
 Enter
 Sleep 1s
 
@@ -26,10 +26,10 @@ Type "gh actions-pin check --no-interactive demo/workflows-check/ci.yml"
 Enter
 Sleep 12s
 
-Type "echo '# Lockfile written — check the result'"
+Type "echo '# Lockfile groups transitive deps by parent composite action'"
 Enter
 Sleep 1s
 
-Type "awk '/^# Automatically generated/ || /^dependencies:/ || /^  # / || /^  - / { print }' demo/workflows-check/ci.yml"
+Type "awk '/^# Automatically generated/{d=1} d&&(/^#/||/^dep/||/^  /||/^$/)' demo/workflows-check/ci.yml"
 Enter
 Sleep 3s

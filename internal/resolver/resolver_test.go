@@ -158,6 +158,69 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 	if len(deps) != 3 {
 		t.Fatalf("expected three unique deps, got %d: %+v", len(deps), deps)
 	}
+
+	// Verify parentMap tracks the child dep key → parent dep key.
+	pm := r.ParentMap()
+	parents, ok := pm["actions/setup-go@v6"]
+	if !ok || len(parents) != 1 || parents[0] != "owner/composite@v1" {
+		t.Fatalf("expected parentMap to map actions/setup-go@v6 → [owner/composite@v1], got %v", pm)
+	}
+}
+
+func TestResolveAllRecursiveMultipleParents(t *testing.T) {
+	r := &Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+		cache: map[string]resolvedEntry{
+			"owner/compositeA@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/compositeA", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: shared/dep@v1\n",
+			},
+			"owner/compositeB@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/compositeB", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+				actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: shared/dep@v1\n",
+			},
+			"shared/dep@v1": {
+				dep:       lockfile.Dependency{NWO: "shared/dep", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+				actionYML: "name: Shared\nruns:\n  using: node20\n",
+			},
+		},
+		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
+	}
+
+	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+		{Owner: "owner", Repo: "compositeA", Ref: "v1"},
+		{Owner: "owner", Repo: "compositeB", Ref: "v1"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+
+	if len(deps) != 3 {
+		t.Fatalf("expected 3 unique deps, got %d: %+v", len(deps), deps)
+	}
+
+	pm := r.ParentMap()
+	parents, ok := pm["shared/dep@v1"]
+	if !ok {
+		t.Fatal("expected parentMap to contain shared/dep@v1")
+	}
+	if len(parents) != 2 {
+		t.Fatalf("expected 2 parents for shared/dep@v1, got %d: %v", len(parents), parents)
+	}
+	// Both composites should be parents (order may vary).
+	hasA, hasB := false, false
+	for _, p := range parents {
+		if p == "owner/compositeA@v1" {
+			hasA = true
+		}
+		if p == "owner/compositeB@v1" {
+			hasB = true
+		}
+	}
+	if !hasA || !hasB {
+		t.Fatalf("expected both compositeA and compositeB as parents, got %v", parents)
+	}
 }
 
 func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {

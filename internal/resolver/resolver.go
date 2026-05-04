@@ -59,18 +59,44 @@ type Resolver struct {
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
-	// parentMap tracks child NWO → parent dep key from last ResolveAllRecursive call.
-	parentMap map[string]string
+	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
+	parentMap map[string][]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
 }
 
-// ParentMap returns the child NWO → parent dep key mapping from the last ResolveAllRecursive call.
-func (r *Resolver) ParentMap() map[string]string {
+// ParentMap returns the child dep key → parent dep keys mapping from the last ResolveAllRecursive call.
+func (r *Resolver) ParentMap() map[string][]string {
 	if r.parentMap == nil {
-		return map[string]string{}
+		return map[string][]string{}
 	}
 	return r.parentMap
+}
+
+// RekeyParentMap updates parentMap keys and values after dependency refs have
+// been rewritten (e.g. tag narrowing v4 → v4.3.1, or PreserveRefs restoring
+// a previous tag). Both child keys and parent values are remapped.
+func (r *Resolver) RekeyParentMap(rewrites map[string]string) {
+	if len(rewrites) == 0 || len(r.parentMap) == 0 {
+		return
+	}
+	updated := make(map[string][]string, len(r.parentMap))
+	for childKey, parents := range r.parentMap {
+		newChild := childKey
+		if rk, ok := rewrites[childKey]; ok {
+			newChild = rk
+		}
+		newParents := make([]string, len(parents))
+		for i, p := range parents {
+			if rk, ok := rewrites[p]; ok {
+				newParents[i] = rk
+			} else {
+				newParents[i] = p
+			}
+		}
+		updated[newChild] = newParents
+	}
+	r.parentMap = updated
 }
 
 // New creates a resolver using the authenticated gh context.
@@ -329,7 +355,7 @@ func cacheKey(ref lockfile.ActionRef) string {
 func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.Dependency, error) {
 	seen := make(map[string]bool)
 	var allDeps []lockfile.Dependency
-	r.parentMap = make(map[string]string)
+	r.parentMap = make(map[string][]string)
 
 	pending := refs
 	depth := 0
@@ -373,9 +399,18 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
 				if actionRef := lockfile.ParseActionRef(use); actionRef != nil {
-					childNWO := actionRef.FullName()
-					if _, exists := r.parentMap[childNWO]; !exists {
-						r.parentMap[childNWO] = parentKey
+					childKey := actionRef.FullName() + "@" + actionRef.Ref
+					// Track all parents, deduplicating.
+					parents := r.parentMap[childKey]
+					found := false
+					for _, p := range parents {
+						if p == parentKey {
+							found = true
+							break
+						}
+					}
+					if !found {
+						r.parentMap[childKey] = append(parents, parentKey)
 					}
 					nextPending = append(nextPending, *actionRef)
 				}
