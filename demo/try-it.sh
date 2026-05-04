@@ -46,6 +46,7 @@ scenarios=(
   "edit-repin"
   "ref-moved"
   "imposter-commit"
+  "lockfile-forgery"
   "json-output"
 )
 
@@ -68,6 +69,7 @@ usage() {
   echo "  Change detection"
   echo "    ref-moved          Tag moved forward (routine release)"
   echo "    imposter-commit    Tag hijacked to fork-network commit (fork injection)"
+  echo "    lockfile-forgery   Lockfile entry replaced with fork commit SHA"
   echo "    json-output        JSON output for CI integration"
   echo ""
   echo "  all                  Run all scenarios sequentially"
@@ -174,6 +176,15 @@ scenario_imposter_commit() {
   run gh actions-pin check demo/workflows-pwned/1-pinned-before-hijack.yml
 }
 
+scenario_lockfile_forgery() {
+  banner "Lockfile forgery — injected SHA not in ref lineage"
+  bash "$RESET"
+  comment "Lockfile was tampered with — pinned SHA replaced by a fork commit"
+  run show_workflow_summary demo/workflows-pwned/6-lockfile-forgery.yml
+  comment "Check detects the pinned SHA is not an ancestor of the live ref"
+  run gh actions-pin check demo/workflows-pwned/6-lockfile-forgery.yml
+}
+
 scenario_json_output() {
   banner "JSON output for CI integration"
   bash "$RESET"
@@ -193,6 +204,7 @@ run_all() {
   scenario_edit_repin
   scenario_ref_moved
   scenario_imposter_commit
+  scenario_lockfile_forgery
   scenario_json_output
   banner "All non-interactive scenarios complete"
 }
@@ -210,7 +222,8 @@ case "${1}" in
   edit-repin)         scenario_edit_repin ;;
   ref-moved)          scenario_ref_moved ;;
   imposter-commit|imposter) scenario_imposter_commit ;;
-  tamper-detection|tamper) scenario_ref_moved; scenario_imposter_commit ;;
+  lockfile-forgery|forgery) scenario_lockfile_forgery ;;
+  tamper-detection|tamper) scenario_ref_moved; scenario_imposter_commit; scenario_lockfile_forgery ;;
   json-output|json)   scenario_json_output ;;
   all)                run_all ;;
   *)                  echo "Unknown scenario: $1"; echo; usage ;;
