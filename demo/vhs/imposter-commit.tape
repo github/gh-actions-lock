@@ -10,7 +10,7 @@ Set PlaybackSpeed 1.5
 Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-Type "echo '# Workflow was pinned to a legitimate SHA'"
+Type "echo '# Workflow pinned to a legitimate SHA — attacker moved tag to a fork-network commit'"
 Enter
 Sleep 1s
 
@@ -18,7 +18,7 @@ Type "grep -E 'uses:|  -' demo/workflows-pwned/1-pinned-before-hijack.yml"
 Enter
 Sleep 2s
 
-Type "echo '# Attacker moved the tag to a fork-network commit (fork injection)'"
+Type "echo '# branch_commits detects the fork injection — IMPOSTER_COMMIT fires'"
 Enter
 Sleep 1s
 

@@ -1,4 +1,4 @@
-name: "4: Never pinned — walking into a compromised repo"
+name: "4: Never pinned — fork injection caught even without prior baseline"
 
 # =============================================================================
 # ATTACKER CAPABILITY: Write access to move tags (attack already happened)
@@ -7,26 +7,37 @@ name: "4: Never pinned — walking into a compromised repo"
 #   2. Attacker forked the repo (choam-io/actions-test-fixtures-fork), pushed
 #      a malicious commit (7b403c9) to their fork's attacker-payload branch
 #   3. Attacker moved @tampered tag to 7b403c9 (fork-network commit)
-#   4. You discover the action and run `gh actions-pin` for the first time
-#   5. Lockfile records 7b403c9 — the ATTACKER's SHA. You never knew ea53476.
-#   6. You run `gh actions-pin check` → ALL CLEAR
+#   4. You discover the action and try `gh actions-pin` for the first time
+#      → BLOCKED: pin-time reachability check detects impostor commit
 #
-# You're pinning for the first time AFTER the attack. There's no prior
-# known-good SHA to compare against.
+# With the branch_commits reachability check, this scenario is now caught
+# at TWO points:
 #
-# RESULT:  COMPLETELY INVISIBLE ✓ (false negative)
-#          ✓ NOT TAMPERED — pinned SHA matches live resolution (both 7b403c9)
-#          ✓ REACHABLE    — tag points directly at the pinned SHA ("identical")
+# PIN TIME:
+#   `gh actions-pin` resolves @tampered → 7b403c9, runs
+#   CheckReachabilityAll before writing the lockfile, discovers
+#   7b403c9 is not on any branch → refuses to pin. You never get a
+#   lockfile with the attacker's SHA.
 #
-# Pinning establishes a BASELINE, not a guarantee of legitimacy. The
-# lockfile can only detect CHANGES from that baseline. If you walk into
-# a compromised repo, the malicious state becomes your known-good state.
-# No amount of SHA comparison or lineage checking can save you — you
-# need out-of-band verification (attestations, code review, trusted
-# release channels).
+# CHECK TIME (if lockfile was created by older version):
+#   This fixture simulates a lockfile that was created before pin-time
+#   checks existed. Even so, `gh actions-pin check` catches it:
+#
+# RESULT:  CAUGHT ✗
+#          ✓ NOT TAMPERED    — pinned SHA matches live resolution (both 7b403c9)
+#          ✗ IMPOSTER_COMMIT — 7b403c9 is not on any branch in
+#                              nodeselector/actions-test-fixtures
+#                              (fork-network commit detected)
+#
+# This is a major improvement over the old compare-API approach. The
+# compare API only detected tag MOVEMENT (SHA mismatch). If there was
+# no prior baseline, there was no mismatch to detect. branch_commits
+# asks a different question: "does this commit belong to this repo?"
+# Fork-network commits don't — regardless of whether you have a
+# prior known-good SHA.
 #
 # FORK:    https://github.com/choam-io/actions-test-fixtures-fork
-# PAYLOAD: https://github.com/choam-io/actions-test-fixtures-fork/commit/7b403c9
+# PAYLOAD: https://github.com/nodeselector/actions-test-fixtures/commit/7b403c9
 #
 # Run:     gh actions-pin check demo/workflows-pwned/4-never-pinned-pwned.yml
 # =============================================================================

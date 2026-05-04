@@ -1,4 +1,4 @@
-name: "1: Pinned before attack — fork-network injection (lineage preserved)"
+name: "1: Pinned before attack — fork-network injection (caught by branch_commits)"
 
 # =============================================================================
 # ATTACKER CAPABILITY: Fork repo + write access to move tags
@@ -11,22 +11,32 @@ name: "1: Pinned before attack — fork-network injection (lineage preserved)"
 #      the malicious commit has legitimate git ancestry.
 #   4. Attacker moves @tampered tag to 7b403c9 — a fork-network commit
 #      that exists in GitHub's shared object store
-#   5. You run `gh actions-pin check` → CAUGHT (ref_moved)
+#   5. You run `gh actions-pin check` → FULLY CAUGHT
 #
 # This is the tj-actions/changed-files scenario. The attacker builds on
-# top of real history, so git lineage is preserved — but the SHA mismatch
-# between pinned and live is enough to catch it.
+# top of real history, so git lineage is preserved — but the fork commit
+# is NOT on any branch of the upstream repo.
 #
-# RESULT:  CAUGHT ✗
-#          ✗ REF_MOVED   — live SHA (7b403c9) ≠ pinned SHA (ea53476)
-#          ✓ REACHABLE   — pinned SHA is an ancestor of the fork commit
-#                          (the attacker built on top of real history)
+# RESULT:  FULLY CAUGHT ✗✗
+#          ⚠ REF_MOVED       — live SHA (7b403c9) ≠ pinned SHA (ea53476)
+#          ✗ IMPOSTER_COMMIT — 7b403c9 is not on any branch in
+#                              nodeselector/actions-test-fixtures
+#                              (fork-network injection detected via
+#                              branch_commits endpoint)
 #
-# The lockfile's known-good SHA acts as a tripwire. Even though the fork
-# commit has legitimate ancestry, the SHA mismatch fires ref_moved.
-# Reachability passes because the attacker preserved lineage — making
-# this indistinguishable from a legitimate update if the victim re-pins
-# (see scenario 3 for that failure mode).
+# Detection: branch_commits checks whether the tag's current target
+# exists on any branch of the UPSTREAM repo. Fork-network commits
+# live in GitHub's shared object store but have no branches in the
+# upstream repo — branch_commits returns empty → impostor.
+#
+# REF_MOVED is a warning (tag movement is expected for routine
+# releases). IMPOSTER_COMMIT is the error — the commit doesn't
+# belong to this repo.
+#
+# CONTRAST WITH SCENARIO 5:
+#   Both show REF_MOVED. Scenario 5 is a genuine release where the
+#   new SHA is on a branch — reachability passes. Here the SHA is a
+#   fork commit with no branches — impostor detected.
 #
 # FORK:    https://github.com/choam-io/actions-test-fixtures-fork
 # PAYLOAD: https://github.com/choam-io/actions-test-fixtures-fork/commit/7b403c9
