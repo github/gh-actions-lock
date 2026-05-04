@@ -199,6 +199,15 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		// AncestryConfirmed: leave as REF_MOVED — legitimate tag movement.
 	}
 
+	// Build set of dep keys already promoted to LOCKFILE_FORGERY so we don't
+	// also flag them as IMPOSTER_COMMIT — the two are mutually exclusive.
+	forgeryKeys := make(map[string]bool)
+	for _, f := range wr.Findings {
+		if f.Category == CategoryLockfileForgery && f.Dependency != nil {
+			forgeryKeys[f.Dependency.Key()] = true
+		}
+	}
+
 	// Build set of NWOs with ref-changed findings to avoid duplicate "not pinned" findings.
 	refChangedNWOs := make(map[string]bool)
 	for _, f := range wr.Findings {
@@ -248,6 +257,9 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 		switch rr.Status {
 		case resolver.Unreachable:
+			if forgeryKeys[rr.DepKey] {
+				continue // already flagged as LOCKFILE_FORGERY — reachability is implied
+			}
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: path,
 				Category:     CategoryImposterCommit,
