@@ -451,34 +451,34 @@ dependencies:
 // shows the pinned SHA is NOT an ancestor of the live SHA, the finding is
 // promoted from REF_MOVED to LOCKFILE_FORGERY.
 func TestCheck_LockfileForgery_NotAncestor(t *testing.T) {
-reg := &httpmock.Registry{}
-defer reg.Verify(t)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
 
-pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-// GraphQL resolution returns the live SHA (different from pinned).
-reg.Register(
-httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
-httpmock.JSONResponse(map[string]any{
-"data": map[string]any{
-"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
-},
-}),
-)
+	// GraphQL resolution returns the live SHA (different from pinned).
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+			},
+		}),
+	)
 
-// Compare API: merge_base ≠ pinnedSHA → not an ancestor.
-reg.Register(
-httpmock.REST("GET", "repos/example/action/compare/"),
-httpmock.JSONResponse(map[string]any{
-"status": "diverged",
-"merge_base_commit": map[string]any{
-"sha": "cccccccccccccccccccccccccccccccccccccccc",
-},
-}),
-)
+	// Compare API: merge_base ≠ pinnedSHA → not an ancestor.
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "diverged",
+			"merge_base_commit": map[string]any{
+				"sha": "cccccccccccccccccccccccccccccccccccccccc",
+			},
+		}),
+	)
 
-workflowPath := writeTempWorkflow(t, `
+	workflowPath := writeTempWorkflow(t, `
 name: ci
 on: push
 jobs:
@@ -492,57 +492,57 @@ dependencies:
   - github.com/example/action@v1:sha1-`+pinnedSHA+`
 `)
 
-stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-"check", "--json=valid,findings", workflowPath,
-)
-require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=valid,findings", workflowPath,
+	)
+	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
-var payload struct {
-Valid    bool           `json:"valid"`
-Findings []checkFinding `json:"findings"`
-}
-require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-assert.False(t, payload.Valid)
+	var payload struct {
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.False(t, payload.Valid)
 
-categories := map[string]bool{}
-for _, f := range payload.Findings {
-categories[f.Category] = true
-}
-assert.True(t, categories["lockfile_forgery"], "should detect lockfile forgery: %+v", payload.Findings)
-assert.False(t, categories["ref_moved"], "should NOT have ref_moved (promoted to forgery): %+v", payload.Findings)
+	categories := map[string]bool{}
+	for _, f := range payload.Findings {
+		categories[f.Category] = true
+	}
+	assert.True(t, categories["lockfile_forgery"], "should detect lockfile forgery: %+v", payload.Findings)
+	assert.False(t, categories["ref_moved"], "should NOT have ref_moved (promoted to forgery): %+v", payload.Findings)
 }
 
 // TestCheck_LockfileForgery_LegitAncestor verifies that when the Compare API
 // confirms the pinned SHA IS an ancestor of the live SHA, the finding stays
 // as REF_MOVED (legitimate tag movement, not forgery).
 func TestCheck_LockfileForgery_LegitAncestor(t *testing.T) {
-reg := &httpmock.Registry{}
-defer reg.Verify(t)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
 
-pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-reg.Register(
-httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
-httpmock.JSONResponse(map[string]any{
-"data": map[string]any{
-"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
-},
-}),
-)
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+			},
+		}),
+	)
 
-// Compare API: merge_base == pinnedSHA → legitimate ancestor.
-reg.Register(
-httpmock.REST("GET", "repos/example/action/compare/"),
-httpmock.JSONResponse(map[string]any{
-"status": "ahead",
-"merge_base_commit": map[string]any{
-"sha": pinnedSHA,
-},
-}),
-)
+	// Compare API: merge_base == pinnedSHA → legitimate ancestor.
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": pinnedSHA,
+			},
+		}),
+	)
 
-workflowPath := writeTempWorkflow(t, `
+	workflowPath := writeTempWorkflow(t, `
 name: ci
 on: push
 jobs:
@@ -556,51 +556,51 @@ dependencies:
   - github.com/example/action@v1:sha1-`+pinnedSHA+`
 `)
 
-stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-"check", "--json=valid,findings", workflowPath,
-)
-require.NoError(t, err, "ref_moved is a warning, should not error")
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=valid,findings", workflowPath,
+	)
+	require.NoError(t, err, "ref_moved is a warning, should not error")
 
-var payload struct {
-Valid    bool           `json:"valid"`
-Findings []checkFinding `json:"findings"`
-}
-require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
+	var payload struct {
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
 
-categories := map[string]bool{}
-for _, f := range payload.Findings {
-categories[f.Category] = true
-}
-assert.True(t, categories["ref_moved"], "should keep as ref_moved for legit ancestor: %+v", payload.Findings)
-assert.False(t, categories["lockfile_forgery"], "should NOT have lockfile_forgery: %+v", payload.Findings)
+	categories := map[string]bool{}
+	for _, f := range payload.Findings {
+		categories[f.Category] = true
+	}
+	assert.True(t, categories["ref_moved"], "should keep as ref_moved for legit ancestor: %+v", payload.Findings)
+	assert.False(t, categories["lockfile_forgery"], "should NOT have lockfile_forgery: %+v", payload.Findings)
 }
 
 // TestCheck_LockfileForgery_RateLimited verifies that when the ancestry check
 // is rate-limited, the finding stays as REF_MOVED (fail open).
 func TestCheck_LockfileForgery_RateLimited(t *testing.T) {
-reg := &httpmock.Registry{}
-defer reg.Verify(t)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
 
-pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-reg.Register(
-httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
-httpmock.JSONResponse(map[string]any{
-"data": map[string]any{
-"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
-},
-}),
-)
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+			},
+		}),
+	)
 
-// Compare API: rate limited.
-reg.Register(
-httpmock.REST("GET", "repos/example/action/compare/"),
-httpmock.StatusResponse(429),
-)
+	// Compare API: rate limited.
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.StatusResponse(429),
+	)
 
-workflowPath := writeTempWorkflow(t, `
+	workflowPath := writeTempWorkflow(t, `
 name: ci
 on: push
 jobs:
@@ -614,29 +614,29 @@ dependencies:
   - github.com/example/action@v1:sha1-`+pinnedSHA+`
 `)
 
-stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-"check", "--json=valid,findings", workflowPath,
-)
-require.NoError(t, err, "ref_moved is a warning, should not error")
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=valid,findings", workflowPath,
+	)
+	require.NoError(t, err, "ref_moved is a warning, should not error")
 
-var payload struct {
-Valid    bool           `json:"valid"`
-Findings []checkFinding `json:"findings"`
-}
-require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
+	var payload struct {
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
 
-categories := map[string]bool{}
-for _, f := range payload.Findings {
-categories[f.Category] = true
-}
-assert.True(t, categories["ref_moved"], "should keep as ref_moved when rate limited: %+v", payload.Findings)
-assert.False(t, categories["lockfile_forgery"], "should NOT have lockfile_forgery when rate limited: %+v", payload.Findings)
+	categories := map[string]bool{}
+	for _, f := range payload.Findings {
+		categories[f.Category] = true
+	}
+	assert.True(t, categories["ref_moved"], "should keep as ref_moved when rate limited: %+v", payload.Findings)
+	assert.False(t, categories["lockfile_forgery"], "should NOT have lockfile_forgery when rate limited: %+v", payload.Findings)
 
-// Verify the detail mentions the inconclusive ancestry check.
-for _, f := range payload.Findings {
-if f.Category == "ref_moved" {
-assert.Contains(t, f.Detail, "ancestry check inconclusive")
-}
-}
+	// Verify the detail mentions the inconclusive ancestry check.
+	for _, f := range payload.Findings {
+		if f.Category == "ref_moved" {
+			assert.Contains(t, f.Detail, "ancestry check inconclusive")
+		}
+	}
 }

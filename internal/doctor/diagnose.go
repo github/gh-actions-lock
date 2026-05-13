@@ -189,6 +189,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		switch status {
 		case resolver.AncestryNotAncestor:
 			f.Category = CategoryLockfileForgery
+			f.Severity = SeverityError
 			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — %s",
 				f.Dependency.SHA[:12], live.SHA[:12], detail)
 			f.Remediation = "investigate immediately — the lockfile may have been tampered with"
@@ -248,10 +249,6 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 			depByKey[d.Key()] = d
 		}
 		for _, rr := range reachResults {
-			depID := rr.DepKey
-			if depID == "" {
-				depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
-			}
 			var depPtr *lockfile.Dependency
 			if d, ok := depByKey[rr.DepKey]; ok {
 				depPtr = &d
