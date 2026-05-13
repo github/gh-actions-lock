@@ -1,0 +1,35 @@
+name: "6: Lockfile forgery — injected SHA not in ref lineage"
+
+# =============================================================================
+# ATTACKER CAPABILITY: Write access to lockfile (e.g. PR with lockfile edit)
+# TIMELINE:
+#   1. Maintainer releases @updated → ea53476 (legitimate)
+#   2. You pin: lockfile records ea53476 ✓
+#   3. Attacker opens PR that edits the lockfile, replacing ea53476 with
+#      0344cd0 — a commit from a fork (choam-io/actions-test-fixtures-fork)
+#   4. The forged SHA is a valid composite action, so CI runs it
+#   5. You run `gh actions-pin check` → CAUGHT
+#
+# Unlike scenario 1 (tag hijack), the tag was never moved. The ref still
+# resolves to ea53476. The attack is purely in the lockfile: someone
+# injected a SHA that was never part of @updated's lineage.
+#
+# The Compare API reveals this: merge_base(forgedSHA, liveSHA) ≠ forgedSHA,
+# because the forged commit descends from a fork branch, not the tag.
+#
+# RESULT:  CAUGHT ✗
+#          ✗ LOCKFILE_FORGERY — pinned SHA is not an ancestor of live SHA
+#          The lockfile's integrity check catches the injected SHA.
+# =============================================================================
+
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: nodeselector/actions-test-fixtures/nested-composite@updated
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/nodeselector/actions-test-fixtures/nested-composite@updated:sha1-0344cd079836aa2179e635a5fb1ab7eab52cdb82
+  # ↑ FORGED: this SHA is from choam-io/actions-test-fixtures-fork, NOT from @updated's lineage

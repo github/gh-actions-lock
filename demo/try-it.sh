@@ -19,6 +19,19 @@ RESET_COLOR='\033[0m'
 banner() { echo -e "\n${BOLD}${CYAN}── $1 ──${RESET_COLOR}\n"; }
 comment() { echo -e "${DIM}# $1${RESET_COLOR}"; }
 run() { echo -e "${GREEN}\$ $*${RESET_COLOR}"; "$@"; echo; }
+
+# Enable the reachability check (branch_commits) for scenarios that need it.
+# This undocumented endpoint 429s aggressively so it's off by default.
+# Uses GH_ACTIONS_PIN_CONFIG to avoid mutating real user config.
+enable_reachability() {
+  _DEMO_CONFIG=$(mktemp /tmp/gh-actions-pin-demo-XXXXXX.yml)
+  echo "reachability_check: true" > "$_DEMO_CONFIG"
+  export GH_ACTIONS_PIN_CONFIG="$_DEMO_CONFIG"
+}
+disable_reachability() {
+  unset GH_ACTIONS_PIN_CONFIG
+  rm -f "${_DEMO_CONFIG:-}"
+}
 show_workflow_summary() {
   awk '
     /^# Automatically generated/ { in_deps=1 }
@@ -46,6 +59,7 @@ scenarios=(
   "edit-repin"
   "ref-moved"
   "imposter-commit"
+  "lockfile-forgery"
   "json-output"
 )
 
@@ -68,6 +82,7 @@ usage() {
   echo "  Change detection"
   echo "    ref-moved          Tag moved forward (routine release)"
   echo "    imposter-commit    Tag hijacked to fork-network commit (fork injection)"
+  echo "    lockfile-forgery   Lockfile entry replaced with fork commit SHA"
   echo "    json-output        JSON output for CI integration"
   echo ""
   echo "  all                  Run all scenarios sequentially"
@@ -168,10 +183,23 @@ scenario_ref_moved() {
 scenario_imposter_commit() {
   banner "Imposter commit — fork injection"
   bash "$RESET"
+  enable_reachability
+  trap disable_reachability EXIT
   comment "Workflow pinned BEFORE the tag was hijacked"
   run show_workflow_summary demo/workflows-pwned/1-pinned-before-hijack.yml
   comment "Check detects the tag moved to a fork-network commit"
   run gh actions-pin check demo/workflows-pwned/1-pinned-before-hijack.yml
+  disable_reachability
+  trap - EXIT
+}
+
+scenario_lockfile_forgery() {
+  banner "Lockfile forgery — injected SHA not in ref lineage"
+  bash "$RESET"
+  comment "Lockfile was tampered with — pinned SHA replaced by a fork commit"
+  run show_workflow_summary demo/workflows-pwned/6-lockfile-forgery.yml
+  comment "Check detects the pinned SHA is not an ancestor of the live ref"
+  run gh actions-pin check demo/workflows-pwned/6-lockfile-forgery.yml
 }
 
 scenario_json_output() {
@@ -193,6 +221,7 @@ run_all() {
   scenario_edit_repin
   scenario_ref_moved
   scenario_imposter_commit
+  scenario_lockfile_forgery
   scenario_json_output
   banner "All non-interactive scenarios complete"
 }
@@ -210,7 +239,8 @@ case "${1}" in
   edit-repin)         scenario_edit_repin ;;
   ref-moved)          scenario_ref_moved ;;
   imposter-commit|imposter) scenario_imposter_commit ;;
-  tamper-detection|tamper) scenario_ref_moved; scenario_imposter_commit ;;
+  lockfile-forgery|forgery) scenario_lockfile_forgery ;;
+  tamper-detection|tamper) scenario_ref_moved; scenario_imposter_commit; scenario_lockfile_forgery ;;
   json-output|json)   scenario_json_output ;;
   all)                run_all ;;
   *)                  echo "Unknown scenario: $1"; echo; usage ;;

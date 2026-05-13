@@ -37,17 +37,23 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// commits get pinned in the first place. Fail closed: if we can't
 	// verify reachability (e.g. branch_commits returns 429), refuse to
 	// pin rather than silently accepting a potentially poisoned commit.
-	reachResults := rem.resolver.CheckReachabilityAll(deps)
-	for _, rr := range reachResults {
-		switch rr.Status {
-		case resolver.Unreachable:
-			rem.output.Error("%s/%s@%s: %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
-			rem.Alerted++
-			return fmt.Errorf("refusing to pin: impostor commit detected for %s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
-		case resolver.ReachabilityUnknown:
-			rem.output.Error("%s/%s@%s: could not verify commit reachability — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
-			rem.Alerted++
-			return fmt.Errorf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later)", rr.Owner, rr.Repo, rr.Ref)
+	//
+	// When reachability is disabled via config, skip this gate entirely —
+	// the branch_commits endpoint would return "disabled" for every dep,
+	// which would block all pinning.
+	if !rem.resolver.DisableReachability {
+		reachResults := rem.resolver.CheckReachabilityAll(deps)
+		for _, rr := range reachResults {
+			switch rr.Status {
+			case resolver.Unreachable:
+				rem.output.Error("%s/%s@%s: %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
+				rem.Alerted++
+				return fmt.Errorf("refusing to pin: impostor commit detected for %s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+			case resolver.ReachabilityUnknown:
+				rem.output.Error("%s/%s@%s: could not verify commit reachability — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
+				rem.Alerted++
+				return fmt.Errorf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later)", rr.Owner, rr.Repo, rr.Ref)
+			}
 		}
 	}
 

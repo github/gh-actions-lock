@@ -220,6 +220,12 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			rem.Alerted++
 			rem.addAlertedDep(finding)
 
+		case CategoryLockfileForgery:
+			rem.output.Error("LOCKFILE_FORGERY %s: %s", rem.depKey(finding), finding.Detail)
+			rem.output.Hint("The pinned SHA was never in this ref's lineage — possible lockfile tampering.")
+			rem.Alerted++
+			rem.addAlertedDep(finding)
+
 		case CategoryMisleadingSHA:
 			rem.output.Error("MISLEADING_SHA %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")

@@ -168,6 +168,47 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	// Compare pinned deps against live resolution.
 	wr.Findings = append(wr.Findings, compareSnapshots(path, existingDeps, liveDeps, directNWOs)...)
 
+	// LOCKFILE_FORGERY: for each REF_MOVED finding, check if the pinned SHA
+	// is actually an ancestor of the live SHA. If not, the lockfile entry was
+	// likely injected or tampered with (or upstream rewrote history).
+	liveByKey := make(map[string]lockfile.Dependency, len(liveDeps))
+	for _, dep := range liveDeps {
+		liveByKey[dep.Key()] = dep
+	}
+	for i := range wr.Findings {
+		f := &wr.Findings[i]
+		if f.Category != CategoryRefMoved || f.Dependency == nil {
+			continue
+		}
+		live, ok := liveByKey[f.Dependency.Key()]
+		if !ok {
+			continue
+		}
+		owner, repo := f.Dependency.OwnerRepo()
+		status, detail := r.CheckAncestry(owner, repo, f.Dependency.SHA, live.SHA)
+		switch status {
+		case resolver.AncestryNotAncestor:
+			f.Category = CategoryLockfileForgery
+			f.Severity = SeverityError
+			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — %s",
+				f.Dependency.SHA[:12], live.SHA[:12], detail)
+			f.Remediation = "investigate immediately — the lockfile may have been tampered with"
+		case resolver.AncestryUnknown:
+			// Fail open: keep as REF_MOVED, add a note about the ancestry check.
+			f.Detail += fmt.Sprintf(" (ancestry check inconclusive: %s)", detail)
+		}
+		// AncestryConfirmed: leave as REF_MOVED — legitimate tag movement.
+	}
+
+	// Build set of dep keys already promoted to LOCKFILE_FORGERY so we don't
+	// also flag them as IMPOSTER_COMMIT — the two are mutually exclusive.
+	forgeryKeys := make(map[string]bool)
+	for _, f := range wr.Findings {
+		if f.Category == CategoryLockfileForgery && f.Dependency != nil {
+			forgeryKeys[f.Dependency.Key()] = true
+		}
+	}
+
 	// Build set of NWOs with ref-changed findings to avoid duplicate "not pinned" findings.
 	refChangedNWOs := make(map[string]bool)
 	for _, f := range wr.Findings {
@@ -199,57 +240,58 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		}
 	}
 
-	// Reachability checks.
-	reachResults := r.CheckReachabilityAll(existingDeps)
-	// Build dep lookup by key for attaching to reachability findings.
-	depByKey := make(map[string]lockfile.Dependency, len(existingDeps))
-	for _, d := range existingDeps {
-		depByKey[d.Key()] = d
-	}
-	for _, rr := range reachResults {
-		depID := rr.DepKey
-		if depID == "" {
-			depID = fmt.Sprintf("%s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
+	// Reachability checks (skip entirely when disabled — no warnings, no findings).
+	if !r.DisableReachability {
+		reachResults := r.CheckReachabilityAll(existingDeps)
+		// Build dep lookup by key for attaching to reachability findings.
+		depByKey := make(map[string]lockfile.Dependency, len(existingDeps))
+		for _, d := range existingDeps {
+			depByKey[d.Key()] = d
 		}
-		var depPtr *lockfile.Dependency
-		if d, ok := depByKey[rr.DepKey]; ok {
-			depPtr = &d
-		}
-		switch rr.Status {
-		case resolver.Unreachable:
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategoryImposterCommit,
-				Severity:     SeverityError,
-				Dependency:   depPtr,
-				Detail:       rr.Detail,
-			})
-		case resolver.ReachabilityUnknown:
-			isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
-			parentNWO := ""
-			if isTransitive {
-				if parents := r.ParentMap()[rr.DepKey]; len(parents) > 0 {
-					parentNWO = parents[0]
-				}
+		for _, rr := range reachResults {
+			var depPtr *lockfile.Dependency
+			if d, ok := depByKey[rr.DepKey]; ok {
+				depPtr = &d
 			}
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategoryValid,
-				Severity:     SeverityWarning,
-				Detail:       rr.Detail,
-				Dependency: &lockfile.Dependency{
-					NWO: rr.Owner + "/" + rr.Repo,
-					Ref: rr.Ref,
-					SHA: rr.SHA,
-				},
-				ParentNWO: parentNWO,
-				Remediation: func() string {
-					if isTransitive {
-						return "transitive dependency pinned to a bare SHA — reachability cannot be verified"
+			switch rr.Status {
+			case resolver.Unreachable:
+				if forgeryKeys[rr.DepKey] {
+					continue // already flagged as LOCKFILE_FORGERY — reachability is implied
+				}
+				wr.Findings = append(wr.Findings, Finding{
+					WorkflowPath: path,
+					Category:     CategoryImposterCommit,
+					Severity:     SeverityError,
+					Dependency:   depPtr,
+					Detail:       rr.Detail,
+				})
+			case resolver.ReachabilityUnknown:
+				isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
+				parentNWO := ""
+				if isTransitive {
+					if parents := r.ParentMap()[rr.DepKey]; len(parents) > 0 {
+						parentNWO = parents[0]
 					}
-					return "reachability check inconclusive"
-				}(),
-			})
+				}
+				wr.Findings = append(wr.Findings, Finding{
+					WorkflowPath: path,
+					Category:     CategoryValid,
+					Severity:     SeverityWarning,
+					Detail:       rr.Detail,
+					Dependency: &lockfile.Dependency{
+						NWO: rr.Owner + "/" + rr.Repo,
+						Ref: rr.Ref,
+						SHA: rr.SHA,
+					},
+					ParentNWO: parentNWO,
+					Remediation: func() string {
+						if isTransitive {
+							return "transitive dependency pinned to a bare SHA — reachability cannot be verified"
+						}
+						return "reachability check inconclusive"
+					}(),
+				})
+			}
 		}
 	}
 
