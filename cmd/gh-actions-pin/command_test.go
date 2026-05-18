@@ -640,3 +640,255 @@ dependencies:
 		}
 	}
 }
+
+func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
+
+	// First query: direct refs (checkout + setup-go).
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
+			},
+		}),
+	)
+	// Second query: transitive dep discovered from composite (cache/save).
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "actions", name: "cache"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  - github.com/actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+
+  # Transitive dependencies (via actions/setup-go@v6)
+  - github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
+`)
+
+	// Test per-workflow dependencies view
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=workflows", workflowPath,
+	)
+	require.NoError(t, err)
+
+	var payload struct {
+		Workflows []struct {
+			Path         string            `json:"path"`
+			Valid        bool              `json:"valid"`
+			Dependencies []checkDependency `json:"dependencies"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	require.Len(t, payload.Workflows, 1)
+
+	wf := payload.Workflows[0]
+	assert.True(t, wf.Valid)
+	require.Len(t, wf.Dependencies, 3)
+
+	// Find the transitive dep
+	var transitiveDep *checkDependency
+	for i := range wf.Dependencies {
+		if wf.Dependencies[i].NWO == "actions/cache/save" {
+			transitiveDep = &wf.Dependencies[i]
+			break
+		}
+	}
+	require.NotNil(t, transitiveDep, "transitive dep actions/cache/save should be present")
+	assert.False(t, transitiveDep.Direct)
+	assert.Equal(t, []string{"actions/setup-go@v6"}, transitiveDep.RequiredBy)
+
+	// Direct deps should NOT have required_by
+	for _, d := range wf.Dependencies {
+		if d.Direct {
+			assert.Empty(t, d.RequiredBy, "direct dep %s should not have required_by", d.NWO)
+		}
+	}
+}
+
+func TestCheckCommand_JSONDependenciesInfersRequiredByWithoutComments(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
+
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "actions", name: "setup-go"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "actions", name: "cache"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v6
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+  - github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
+`)
+
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=workflows", workflowPath,
+	)
+	require.NoError(t, err)
+
+	var payload struct {
+		Workflows []struct {
+			Dependencies []checkDependency `json:"dependencies"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	require.Len(t, payload.Workflows, 1)
+
+	var transitiveDep *checkDependency
+	for i := range payload.Workflows[0].Dependencies {
+		if payload.Workflows[0].Dependencies[i].NWO == "actions/cache/save" {
+			transitiveDep = &payload.Workflows[0].Dependencies[i]
+			break
+		}
+	}
+	require.NotNil(t, transitiveDep, "transitive dep actions/cache/save should be present")
+	assert.False(t, transitiveDep.Direct)
+	assert.Equal(t, []string{"actions/setup-go@v6"}, transitiveDep.RequiredBy)
+}
+
+func TestCheckCommand_JSONDefaultFieldsExcludesDependencies(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`)
+
+	// --json with no value should use the default fields (valid,findings,workflows)
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json", workflowPath,
+	)
+	require.NoError(t, err)
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(stdout), &raw))
+
+	// Default should include valid, findings, workflows
+	assert.Contains(t, raw, "valid")
+	assert.Contains(t, raw, "findings")
+	assert.Contains(t, raw, "workflows")
+	// Default should NOT include dependencies (opt-in only)
+	assert.NotContains(t, raw, "dependencies", "default --json should not include top-level dependencies to avoid duplication with workflows")
+}
+
+func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
+	// When two workflow files share the same dep, top-level dependencies
+	// should deduplicate them.
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// Single mock — the resolver caches, so both workflows resolve via one query.
+	reg.Register(
+		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
+			},
+		}),
+	)
+
+	wf1 := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`)
+
+	wf2Path := filepath.Join(filepath.Dir(wf1), "workflow2.yml")
+	require.NoError(t, os.WriteFile(wf2Path, []byte(strings.TrimSpace(`
+name: deploy
+on: push
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`)+"\n"), 0o600))
+
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--json=dependencies", wf1, wf2Path,
+	)
+	require.NoError(t, err)
+
+	var payload struct {
+		Dependencies []checkDependency `json:"dependencies"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+
+	// Should be deduplicated — 1 dep, not 2
+	assert.Len(t, payload.Dependencies, 1, "top-level dependencies should be deduplicated across workflows")
+	assert.Equal(t, "actions/checkout", payload.Dependencies[0].NWO)
+}

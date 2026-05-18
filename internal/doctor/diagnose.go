@@ -114,12 +114,17 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	}
 
 	// Build dependency inventory with direct/transitive classification.
+	commentParents := wf.ReadParentMap()
 	for _, dep := range existingDeps {
-		wr.Inventory = append(wr.Inventory, InventoryEntry{
+		entry := InventoryEntry{
 			Dep:    dep,
 			File:   path,
 			Direct: directNWOs[dep.NWO],
-		})
+		}
+		if !entry.Direct {
+			entry.Parents = commentParents[dep.Key()]
+		}
+		wr.Inventory = append(wr.Inventory, entry)
 	}
 
 	// Check for SHA-as-ref anti-pattern in existing deps (direct only).
@@ -153,6 +158,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		})
 		return wr
 	}
+	populateInventoryParents(wr.Inventory, r.ParentMap())
 
 	// MISLEADING_SHA: detect refs that look like SHAs but resolve to different commits.
 	for _, mismatch := range lockfile.CheckSHARefMismatches(liveDeps) {
@@ -313,4 +319,16 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	}
 
 	return wr
+}
+
+func populateInventoryParents(inventory []InventoryEntry, parentMap map[string][]string) {
+	for i := range inventory {
+		if inventory[i].Direct || len(inventory[i].Parents) > 0 {
+			continue
+		}
+		parents := parentMap[inventory[i].Dep.Key()]
+		if len(parents) > 0 {
+			inventory[i].Parents = append([]string(nil), parents...)
+		}
+	}
 }

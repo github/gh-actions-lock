@@ -508,6 +508,126 @@ jobs:
 	assert.Contains(t, s, "github.com/unknown/dep@v1:sha1-cccc0000cccc0000cccc0000cccc0000cccc0000")
 }
 
+func TestReadParentMapGroupedByParent(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683
+  - github.com/actions/setup-go@v5:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+
+  # Transitive dependencies (via actions/setup-go@v5)
+  - github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
+
+  # Transitive dependencies (via actions/checkout@v4)
+  - github.com/other/dep@v1:sha1-aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "grouped.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	pm := f.ReadParentMap()
+	assert.Equal(t, []string{"actions/setup-go@v5"}, pm["actions/cache/save@v4"])
+	assert.Equal(t, []string{"actions/checkout@v4"}, pm["other/dep@v1"])
+	// Direct deps should NOT appear in parentMap
+	_, hasCheckout := pm["actions/checkout@v4"]
+	assert.False(t, hasCheckout)
+}
+
+func TestReadParentMapFlatTransitive(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683
+
+  # Transitive dependencies
+  - github.com/other/dep@v1:sha1-aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "flat.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	pm := f.ReadParentMap()
+	// Flat transitive section has no parent info
+	assert.Empty(t, pm)
+}
+
+func TestReadParentMapEmpty(t *testing.T) {
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "nodeps.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	pm := f.ReadParentMap()
+	assert.Empty(t, pm)
+}
+
+func TestReadParentMapMultipleParents(t *testing.T) {
+	// WriteDependencies can produce a dep under multiple parent sections.
+	content := []byte(`name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+
+# Automatically generated and managed by gh-actions-pin
+dependencies:
+  - github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683
+  - github.com/actions/setup-go@v5:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+
+  # Transitive dependencies (via actions/checkout@v4)
+  - github.com/shared/dep@v1:sha1-bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000
+
+  # Transitive dependencies (via actions/setup-go@v5)
+  - github.com/shared/dep@v1:sha1-bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000
+`)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "multi.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	pm := f.ReadParentMap()
+	parents := pm["shared/dep@v1"]
+	assert.Len(t, parents, 2)
+	assert.Contains(t, parents, "actions/checkout@v4")
+	assert.Contains(t, parents, "actions/setup-go@v5")
+}
+
 func TestReadDependenciesExactDuplicateDeduped(t *testing.T) {
 	content := []byte(`name: ci
 on: push

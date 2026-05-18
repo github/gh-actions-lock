@@ -577,6 +577,74 @@ func writeTransitiveDeps(sb *strings.Builder, transitiveDeps []Dependency, direc
 	}
 }
 
+// reTransitiveVia matches the "# Transitive dependencies (via <dep-key>)" comment.
+var reTransitiveVia = regexp.MustCompile(`#\s*Transitive dependencies\s*\(via\s+(.+?)\)`)
+
+// ReadParentMap extracts the transitive dependency parent mapping from the
+// dependencies: section comments. It parses "# Transitive dependencies (via X)"
+// lines and associates subsequent dependency entries with the parent key.
+// Returns child dep key → parent dep keys.
+func (f *File) ReadParentMap() map[string][]string {
+	parentMap := make(map[string][]string)
+	lines := strings.Split(string(f.Content), "\n")
+
+	inDeps := false
+	var currentParent string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect start of dependencies section.
+		if trimmed == "dependencies:" {
+			inDeps = true
+			continue
+		}
+		if !inDeps {
+			continue
+		}
+
+		// Exit dependencies section on non-indented, non-empty line.
+		if trimmed != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+
+		// Check for transitive group comment.
+		if m := reTransitiveVia.FindStringSubmatch(trimmed); len(m) == 2 {
+			currentParent = m[1]
+			continue
+		}
+
+		// Plain "# Transitive dependencies" comment (no via) clears parent.
+		if strings.Contains(trimmed, "# Transitive dependencies") && !strings.Contains(trimmed, "(via") {
+			currentParent = ""
+			continue
+		}
+
+		// Parse dependency entry.
+		if strings.HasPrefix(trimmed, "- ") {
+			depStr := strings.TrimPrefix(trimmed, "- ")
+			dep, err := ParseDependencyString(depStr)
+			if err != nil {
+				continue
+			}
+			if currentParent != "" {
+				parentMap[dep.Key()] = appendUnique(parentMap[dep.Key()], currentParent)
+			}
+		}
+	}
+
+	return parentMap
+}
+
+func appendUnique(slice []string, s string) []string {
+	for _, v := range slice {
+		if v == s {
+			return slice
+		}
+	}
+	return append(slice, s)
+}
+
 // RewriteActionRefs rewrites targeted uses: refs in the original workflow
 // content while preserving the surrounding formatting and comments.
 func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, error) {

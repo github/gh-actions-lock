@@ -30,16 +30,18 @@ type checkFinding struct {
 	Category    string `json:"category"`
 	Severity    string `json:"severity"`
 	Dependency  string `json:"dependency,omitempty"`
+	RequiredBy  string `json:"required_by,omitempty"`
 	Detail      string `json:"detail"`
 	Remediation string `json:"remediation,omitempty"`
 }
 
 type checkDependency struct {
-	NWO      string `json:"nwo"`
-	Ref      string `json:"ref"`
-	SHA      string `json:"sha"`
-	HashAlgo string `json:"hash_algo,omitempty"`
-	Direct   bool   `json:"direct"`
+	NWO        string   `json:"nwo"`
+	Ref        string   `json:"ref"`
+	SHA        string   `json:"sha"`
+	HashAlgo   string   `json:"hash_algo,omitempty"`
+	Direct     bool     `json:"direct"`
+	RequiredBy []string `json:"required_by,omitempty"`
 }
 
 type checkWorkflow struct {
@@ -106,7 +108,7 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
-	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
+	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	return cmd
@@ -251,6 +253,9 @@ func findingToJSON(f doctor.Finding) checkFinding {
 	} else if f.ActionRef != nil {
 		jf.Dependency = f.ActionRef.FullName() + "@" + f.ActionRef.Ref
 	}
+	if f.ParentNWO != "" {
+		jf.RequiredBy = f.ParentNWO
+	}
 	return jf
 }
 
@@ -284,20 +289,46 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 			return allDeps
 		}
 		allDeps = []checkDependency{}
+		// Deduplicate across workflows, merging required_by lists.
+		seen := make(map[string]*checkDependency)
+		var order []string
 		for _, wr := range report.Workflows {
-			directNWOs := make(map[string]bool)
-			for _, ref := range wr.ActionRefs {
-				directNWOs[ref.FullName()] = true
-			}
 			for _, inv := range wr.Inventory {
-				allDeps = append(allDeps, checkDependency{
-					NWO:      inv.Dep.NWO,
-					Ref:      inv.Dep.Ref,
-					SHA:      inv.Dep.SHA,
-					HashAlgo: inv.Dep.HashAlgo,
-					Direct:   inv.Direct,
-				})
+				key := inv.Dep.Key()
+				if existing, ok := seen[key]; ok {
+					// Merge required_by lists.
+					for _, p := range inv.Parents {
+						found := false
+						for _, ep := range existing.RequiredBy {
+							if ep == p {
+								found = true
+								break
+							}
+						}
+						if !found {
+							existing.RequiredBy = append(existing.RequiredBy, p)
+						}
+					}
+					// If direct in any workflow, mark as direct.
+					if inv.Direct {
+						existing.Direct = true
+					}
+					continue
+				}
+				d := checkDependency{
+					NWO:        inv.Dep.NWO,
+					Ref:        inv.Dep.Ref,
+					SHA:        inv.Dep.SHA,
+					HashAlgo:   inv.Dep.HashAlgo,
+					Direct:     inv.Direct,
+					RequiredBy: inv.Parents,
+				}
+				seen[key] = &d
+				order = append(order, key)
 			}
+		}
+		for _, key := range order {
+			allDeps = append(allDeps, *seen[key])
 		}
 		return allDeps
 	}
@@ -321,11 +352,12 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 			}
 			for _, inv := range wr.Inventory {
 				wf.Dependencies = append(wf.Dependencies, checkDependency{
-					NWO:      inv.Dep.NWO,
-					Ref:      inv.Dep.Ref,
-					SHA:      inv.Dep.SHA,
-					HashAlgo: inv.Dep.HashAlgo,
-					Direct:   inv.Direct,
+					NWO:        inv.Dep.NWO,
+					Ref:        inv.Dep.Ref,
+					SHA:        inv.Dep.SHA,
+					HashAlgo:   inv.Dep.HashAlgo,
+					Direct:     inv.Direct,
+					RequiredBy: inv.Parents,
 				})
 			}
 			allWorkflows = append(allWorkflows, wf)

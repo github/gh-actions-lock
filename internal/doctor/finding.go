@@ -66,6 +66,9 @@ type InventoryEntry struct {
 	Dep    lockfile.Dependency
 	File   string
 	Direct bool
+	// Parents lists the dep keys of parent composite actions that pull in this
+	// transitive dependency. Empty for direct dependencies.
+	Parents []string
 }
 
 // WorkflowReport aggregates all findings for a single workflow file.
