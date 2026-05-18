@@ -24,6 +24,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - name: Publish early access release
         env:
           SOURCE_TOKEN: ${{ github.token }}
@@ -31,45 +32,8 @@ jobs:
           SOURCE_REPOSITORY: ${{ github.repository }}
           TARGET_REPOSITORY: github-early-access/actions-locked-dependencies
           RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
+        run: script/sync-early-access-release "$RELEASE_TAG"
 
-          prerelease=()
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            prerelease+=(--prerelease)
-          fi
-
-          for attempt in {1..12}; do
-            if GH_TOKEN="$SOURCE_TOKEN" gh release view "$RELEASE_TAG" --repo "$SOURCE_REPOSITORY" --json name,body > release.json; then
-              break
-            fi
-
-            if [[ "$attempt" == "12" ]]; then
-              echo "Timed out waiting for ${SOURCE_REPOSITORY} release ${RELEASE_TAG} to become available."
-              exit 1
-            fi
-
-            echo "Release ${RELEASE_TAG} is not visible yet; retrying in 5 seconds."
-            sleep 5
-          done
-
-          mkdir -p dist
-          GH_TOKEN="$SOURCE_TOKEN" gh release download "$RELEASE_TAG" --repo "$SOURCE_REPOSITORY" --dir dist
-
-          release_title="$(jq -r .name release.json)"
-          jq -r .body release.json > release-notes.md
-
-          if GH_TOKEN="$TARGET_TOKEN" gh release view "$RELEASE_TAG" --repo "$TARGET_REPOSITORY" >/dev/null 2>&1; then
-            GH_TOKEN="$TARGET_TOKEN" gh release edit "$RELEASE_TAG" \
-              --repo "$TARGET_REPOSITORY" \
-              --title "$release_title" \
-              --notes-file release-notes.md
-            GH_TOKEN="$TARGET_TOKEN" gh release upload "$RELEASE_TAG" --repo "$TARGET_REPOSITORY" --clobber dist/*
-          else
-            GH_TOKEN="$TARGET_TOKEN" gh release create "$RELEASE_TAG" \
-              --repo "$TARGET_REPOSITORY" \
-              "${prerelease[@]}" \
-              --title "$release_title" \
-              --notes-file release-notes.md \
-              dist/*
-          fi
+# Automatically generated and managed by: `gh actions-pin --write <workflow-path>`
+dependencies:
+  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
