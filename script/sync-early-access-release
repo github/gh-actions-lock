@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: script/sync-early-access-release [tag]
+
+Sync a gh-actions-pin release to the early-access distribution repository.
+
+Environment:
+  SOURCE_REPOSITORY   Source repository. Defaults to github/gh-actions-pin.
+  TARGET_REPOSITORY   Target repository. Defaults to github-early-access/actions-locked-dependencies.
+  SOURCE_TOKEN        Optional token for reading the source release.
+  TARGET_TOKEN        Optional token for writing the target release.
+  ACTIONS_LOCKED_DEPENDENCIES_RELEASE_PAT
+                      Fallback token for writing the target release.
+  RELEASE_TAG         Fallback release tag when no positional tag is passed.
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: $1 is required" >&2
+    exit 1
+  fi
+}
+
+require_command gh
+require_command jq
+
+source_repository="${SOURCE_REPOSITORY:-github/gh-actions-pin}"
+target_repository="${TARGET_REPOSITORY:-github-early-access/actions-locked-dependencies}"
+tag="${1:-${RELEASE_TAG:-}}"
+
+if [[ -z "$tag" ]]; then
+  if [[ -t 0 ]]; then
+    read -r -p "Release tag to sync: " tag
+  else
+    echo "error: release tag is required" >&2
+    usage >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "$tag" ]]; then
+  echo "error: release tag is required" >&2
+  exit 1
+fi
+
+target_token="${TARGET_TOKEN:-${ACTIONS_LOCKED_DEPENDENCIES_RELEASE_PAT:-}}"
+
+gh_source() {
+  if [[ -n "${SOURCE_TOKEN:-}" ]]; then
+    GH_TOKEN="$SOURCE_TOKEN" gh "$@"
+  else
+    gh "$@"
+  fi
+}
+
+gh_target() {
+  if [[ -n "$target_token" ]]; then
+    GH_TOKEN="$target_token" gh "$@"
+  else
+    gh "$@"
+  fi
+}
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+release_json="$workdir/release.json"
+release_notes="$workdir/release-notes.md"
+dist_dir="$workdir/dist"
+mkdir -p "$dist_dir"
+
+prerelease=()
+if [[ "$tag" == *-* ]]; then
+  prerelease+=(--prerelease)
+fi
+
+for attempt in {1..12}; do
+  if gh_source release view "$tag" --repo "$source_repository" --json name,body > "$release_json"; then
+    break
+  fi
+
+  if [[ "$attempt" == "12" ]]; then
+    echo "Timed out waiting for ${source_repository} release ${tag} to become available." >&2
+    exit 1
+  fi
+
+  echo "Release ${tag} is not visible yet; retrying in 5 seconds."
+  sleep 5
+done
+
+release_title="$(jq -r .name "$release_json")"
+jq -r .body "$release_json" > "$release_notes"
+
+gh_source release download "$tag" --repo "$source_repository" --dir "$dist_dir"
+
+if [[ -t 0 && -z "${CI:-}" && "${SYNC_EARLY_ACCESS_CONFIRM:-1}" != "0" ]]; then
+  echo "Source: ${source_repository}"
+  echo "Target: ${target_repository}"
+  echo "Tag:    ${tag}"
+  echo "Title:  ${release_title}"
+  echo "Assets:"
+  for asset in "$dist_dir"/*; do
+    [[ -f "$asset" ]] || continue
+    printf '  %s\n' "$(basename "$asset")"
+  done | sort
+  read -r -p "Sync this release to early access? [Y/n] " confirm
+  case "$confirm" in
+    ""|y|Y|yes|YES) ;;
+    *) echo "cancelled"; exit 0 ;;
+  esac
+fi
+
+if gh_target release view "$tag" --repo "$target_repository" >/dev/null 2>&1; then
+  gh_target release edit "$tag" \
+    --repo "$target_repository" \
+    --title "$release_title" \
+    --notes-file "$release_notes"
+  gh_target release upload "$tag" --repo "$target_repository" --clobber "$dist_dir"/*
+else
+  gh_target release create "$tag" \
+    --repo "$target_repository" \
+    "${prerelease[@]}" \
+    --title "$release_title" \
+    --notes-file "$release_notes" \
+    "$dist_dir"/*
+fi
