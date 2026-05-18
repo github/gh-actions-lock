@@ -19,6 +19,14 @@ jobs:
           go_version_file: go.mod
           go_build_options: ./cmd/gh-actions-pin
 
+  sync-early-access-release:
+    needs: release
+    uses: ./.github/workflows/sync-early-access-release.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      ACTIONS_LOCKED_DEPENDENCIES_RELEASE_PAT: ${{ secrets.ACTIONS_LOCKED_DEPENDENCIES_RELEASE_PAT }}
+
 # Automatically generated and managed by: `gh actions-pin --write <workflow-path>`
 dependencies:
   - github.com/actions/attest-build-provenance/predicate@36fa7d009e22618ca7cd599486979b8150596c74:sha1-36fa7d009e22618ca7cd599486979b8150596c74
