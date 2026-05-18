@@ -111,6 +111,9 @@ func (r *WorkflowReport) CountByCategory(c Category) int {
 
 // IsValid returns true for findings that don't represent integrity violations.
 func (f *Finding) IsValid() bool {
+	if f.Severity == SeverityError {
+		return false
+	}
 	switch f.Category {
 	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
 		return true

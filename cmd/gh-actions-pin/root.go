@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -98,7 +100,7 @@ $ gh actions-pin upgrade --action actions/checkout
 	}
 
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
-	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
+	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	cmd.AddCommand(newCheckCmd(f))
@@ -121,7 +123,7 @@ func Execute() int {
 
 func discoverWorkflowPaths(existing []string) ([]string, error) {
 	if len(existing) > 0 {
-		return existing, nil
+		return expandWorkflowPaths(existing)
 	}
 
 	paths, err := lockfile.DiscoverWorkflows()
@@ -132,6 +134,37 @@ func discoverWorkflowPaths(existing []string) ([]string, error) {
 		return nil, fmt.Errorf("no workflow files found in .github/workflows/")
 	}
 	return paths, nil
+}
+
+func expandWorkflowPaths(paths []string) ([]string, error) {
+	var expanded []string
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			expanded = append(expanded, path)
+			continue
+		}
+		if !info.IsDir() {
+			expanded = append(expanded, path)
+			continue
+		}
+
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			ext := filepath.Ext(entry.Name())
+			if ext == ".yml" || ext == ".yaml" {
+				expanded = append(expanded, filepath.Join(path, entry.Name()))
+			}
+		}
+	}
+	sort.Strings(expanded)
+	return expanded, nil
 }
 
 func resolveHostname(override string) string {

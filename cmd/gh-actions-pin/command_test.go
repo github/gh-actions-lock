@@ -892,3 +892,59 @@ dependencies:
 	assert.Len(t, payload.Dependencies, 1, "top-level dependencies should be deduplicated across workflows")
 	assert.Equal(t, "actions/checkout", payload.Dependencies[0].NWO)
 }
+
+func TestRootCommand_JSONExpandsDirectoryArguments(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.yml")
+	second := filepath.Join(dir, "second.yaml")
+	ignored := filepath.Join(dir, "notes.txt")
+	workflow := []byte(strings.TrimSpace(`
+name: run only
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
+`) + "\n")
+	require.NoError(t, os.WriteFile(first, workflow, 0o600))
+	require.NoError(t, os.WriteFile(second, workflow, 0o600))
+	require.NoError(t, os.WriteFile(ignored, []byte("not a workflow\n"), 0o600))
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--json=valid,workflows", dir)
+	require.NoError(t, err)
+
+	var payload struct {
+		Valid     bool `json:"valid"`
+		Workflows []struct {
+			Path  string `json:"path"`
+			Valid bool   `json:"valid"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.True(t, payload.Valid)
+	require.Len(t, payload.Workflows, 2)
+	assert.Equal(t, first, payload.Workflows[0].Path)
+	assert.Equal(t, second, payload.Workflows[1].Path)
+}
+
+func TestCheckCommand_JSONLoadErrorIsInvalid(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	missingPath := filepath.Join(t.TempDir(), "missing.yml")
+	stdout, _, err := runCommandWithHTTP(t, reg, "check", "--json=valid,findings", missingPath)
+	require.ErrorIs(t, err, errSilent)
+
+	var payload struct {
+		Valid    bool           `json:"valid"`
+		Findings []checkFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.False(t, payload.Valid)
+	require.Len(t, payload.Findings, 1)
+	assert.Equal(t, "error", payload.Findings[0].Severity)
+}
