@@ -62,7 +62,7 @@ func TestDependencyStringRoundTrip(t *testing.T) {
 				SHA:      "11bd71901bbe5b1630ceea73d27597364c9af683",
 				HashAlgo: "sha1",
 			},
-			want: "github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683",
+			want: "actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683",
 		},
 		{
 			name: "sha256 dependency",
@@ -72,7 +72,7 @@ func TestDependencyStringRoundTrip(t *testing.T) {
 				SHA:      "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
 				HashAlgo: "sha256",
 			},
-			want: "github.com/actions/checkout@v4:sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+			want: "actions/checkout@v4:sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
 		},
 		{
 			name: "auto-detect sha1 from length",
@@ -81,7 +81,7 @@ func TestDependencyStringRoundTrip(t *testing.T) {
 				Ref: "v4",
 				SHA: "11bd71901bbe5b1630ceea73d27597364c9af683",
 			},
-			want: "github.com/actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683",
+			want: "actions/checkout@v4:sha1-11bd71901bbe5b1630ceea73d27597364c9af683",
 		},
 	}
 
@@ -105,7 +105,7 @@ func TestParseDependencyStringErrors(t *testing.T) {
 		input string
 	}{
 		{name: "no hash prefix", input: "actions/checkout@v4:abc123"},
-		{name: "no @ separator", input: "github.com/actions/checkout:sha1-abc123"},
+		{name: "no @ separator", input: "actions/checkout:sha1-abc123"},
 		{name: "empty string", input: ""},
 	}
 

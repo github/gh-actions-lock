@@ -61,8 +61,8 @@ func TestShowDiffIncludesCompareLinkForRefReplacement(t *testing.T) {
 
 	for _, want := range []string{
 		"~ actions/checkout",
-		"- github.com/actions/checkout@v6:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"+ github.com/actions/checkout@v5:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"- actions/checkout@v6:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"+ actions/checkout@v5:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"compare: https://github.com/actions/checkout/compare/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	} {
 		if !strings.Contains(got, want) {

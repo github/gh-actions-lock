@@ -99,18 +99,17 @@ func (d Dependency) HashAlgoOrDetect() string {
 func (d Dependency) String() string {
 	pin, err := dependencyToPin(d)
 	if err != nil {
-		return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, d.HashAlgoOrDetect(), d.SHA)
+		return fmt.Sprintf("%s@%s:%s-%s", d.NWO, d.Ref, d.HashAlgoOrDetect(), d.SHA)
 	}
-	return "github.com/" + pin.String()
+	return pin.String()
 }
 
-// ParseDependencyString parses a dependency entry string back into a Dependency.
+// ParseDependencyString parses a dependency entry string back into a
+// Dependency. A leading "github.com/" host prefix is tolerated for
+// backwards compatibility with legacy lockfiles but is no longer emitted.
 func ParseDependencyString(s string) (Dependency, error) {
-	const prefix = "github.com/"
-	if !strings.HasPrefix(strings.ToLower(s), prefix) {
-		return Dependency{}, fmt.Errorf("invalid dependency format (expected github.com/ prefix): %q", s)
-	}
-	s = s[len(prefix):]
+	s = strings.TrimPrefix(s, "github.com/")
+	s = strings.TrimPrefix(s, "GitHub.com/")
 
 	colonIdx := strings.LastIndex(s, ":")
 	if colonIdx < 0 {

@@ -7,17 +7,6 @@ import (
 	parserlock "github.com/github/actions-workflow-parser/go/lockfile"
 )
 
-// dependencyPinKey returns the canonical lockfile pin key for d:
-// "OWNER/REPO[/PATH]@REF:ALGO-HEX". Canonicalization (lowercasing of
-// owner/repo/algo/hex) is delegated to parserlock.Pin.String().
-func dependencyPinKey(d Dependency) (string, error) {
-	pin, err := dependencyToPin(d)
-	if err != nil {
-		return "", err
-	}
-	return pin.String(), nil
-}
-
 // dependencyToPin converts a Dependency into a parserlock.Pin without any
 // case-normalization — callers should rely on Pin.String / Pin.Canonical for
 // the canonical form.
