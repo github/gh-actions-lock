@@ -24,6 +24,7 @@ type Remediator struct {
 	prompter  Prompter
 	resolver  *resolver.Resolver
 	tagLister *TagLister
+	store     *lockfile.Store
 	output    *ui.UI
 	opts      RemediateOptions
 
@@ -41,11 +42,12 @@ type Remediator struct {
 }
 
 // NewRemediator creates a new Remediator.
-func NewRemediator(p Prompter, r *resolver.Resolver, client *api.RESTClient, out *ui.UI, opts RemediateOptions) *Remediator {
+func NewRemediator(p Prompter, r *resolver.Resolver, client *api.RESTClient, store *lockfile.Store, out *ui.UI, opts RemediateOptions) *Remediator {
 	return &Remediator{
 		prompter:  p,
 		resolver:  r,
 		tagLister: NewTagLister(client),
+		store:     store,
 		output:    out,
 		opts:      opts,
 		state:     newSessionState(),

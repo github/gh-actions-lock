@@ -7,9 +7,10 @@ require (
 	github.com/MakeNowJust/heredoc v1.0.0
 	github.com/briandowns/spinner v1.23.2
 	github.com/cli/go-gh/v2 v2.13.0
+	github.com/github/actions-workflow-parser/go v0.0.0-00010101000000-000000000000
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.1
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.8.4
 	golang.org/x/term v0.30.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -54,3 +55,5 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 )
+
+replace github.com/github/actions-workflow-parser/go => /Users/nodeselector/ghq/github.com/github/actions-workflow-parser/go

@@ -62,6 +62,7 @@ type Resolver struct {
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
 	bcCache           map[string]bcCacheEntry // owner/repo/sha → cached branch_commits result
+	repoIDsCache      map[string][2]int64     // owner/repo → [ownerID, repoID]
 	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
 	parentMap map[string][]string
 	// checkReachFn overrides the default REST-based reachability check (for tests).
@@ -145,7 +146,33 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		latestRefCache:    make(map[string]string),
 		reachCache:        make(map[string]ReachabilityStatus),
 		bcCache:           make(map[string]bcCacheEntry),
+		repoIDsCache:      make(map[string][2]int64),
 	}, nil
+}
+
+// RepoIDs returns the numeric owner ID and repo ID for a NWO, querying
+// the GitHub REST API on cache miss. Results are cached for the lifetime of
+// the resolver.
+func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
+	key := owner + "/" + repo
+	if ids, ok := r.repoIDsCache[key]; ok {
+		return ids[0], ids[1], nil
+	}
+	var resp struct {
+		ID    int64 `json:"id"`
+		Owner struct {
+			ID int64 `json:"id"`
+		} `json:"owner"`
+	}
+	path := fmt.Sprintf("repos/%s/%s", owner, repo)
+	if err := r.restClient.Get(path, &resp); err != nil {
+		return 0, 0, fmt.Errorf("fetching %s: %w", path, err)
+	}
+	if resp.ID == 0 || resp.Owner.ID == 0 {
+		return 0, 0, fmt.Errorf("%s returned zero IDs (owner=%d repo=%d)", path, resp.Owner.ID, resp.ID)
+	}
+	r.repoIDsCache[key] = [2]int64{resp.Owner.ID, resp.ID}
+	return resp.Owner.ID, resp.ID, nil
 }
 
 // NewWithTransport creates a resolver with a custom HTTP transport and a

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -97,7 +96,7 @@ func (d Dependency) HashAlgoOrDetect() string {
 
 // String formats the dependency as a YAML list entry.
 func (d Dependency) String() string {
-	return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, d.HashAlgoOrDetect(), strings.ToLower(d.SHA))
+	return fmt.Sprintf("github.com/%s@%s:%s-%s", strings.ToLower(d.NWO), d.Ref, d.HashAlgoOrDetect(), strings.ToLower(d.SHA))
 }
 
 // ParseDependencyString parses a dependency entry string back into a Dependency.
@@ -235,8 +234,8 @@ func ParseActionRef(uses string) *ActionRef {
 	}
 
 	actionRef := &ActionRef{
-		Owner: segments[0],
-		Repo:  segments[1],
+		Owner: strings.ToLower(segments[0]),
+		Repo:  strings.ToLower(segments[1]),
 		Ref:   ref,
 		Raw:   uses,
 	}
@@ -394,257 +393,6 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 	return refs, localPaths, warnings
 }
 
-// ReadDependencies extracts the current dependencies: section from the workflow.
-// Exact duplicate entries (same key and SHA) are silently deduped.
-// Conflicting duplicates (same key, different SHA) produce an error.
-func (f *File) ReadDependencies() ([]Dependency, error) {
-	var deps []Dependency
-	seen := make(map[string]Dependency)
-
-	doc := docNode(&f.root)
-	if doc == nil {
-		return nil, nil
-	}
-
-	for i := 0; i < len(doc.Content)-1; i += 2 {
-		if doc.Content[i].Value != "dependencies" {
-			continue
-		}
-		seq := doc.Content[i+1]
-		if seq.Kind != yaml.SequenceNode {
-			return nil, fmt.Errorf("dependencies: must be a sequence")
-		}
-		for _, item := range seq.Content {
-			if containsControlChars(item.Value) {
-				return nil, fmt.Errorf("dependency entry contains control characters (possible injection)")
-			}
-			dep, err := ParseDependencyString(item.Value)
-			if err != nil {
-				return nil, fmt.Errorf("parsing dependency entry: %w", err)
-			}
-			if prev, exists := seen[dep.Key()]; exists {
-				if !strings.EqualFold(prev.SHA, dep.SHA) || prev.HashAlgo != dep.HashAlgo {
-					return nil, fmt.Errorf("conflicting dependency entries for %s", dep.Key())
-				}
-				// Exact duplicate — skip silently.
-				continue
-			}
-			seen[dep.Key()] = dep
-			deps = append(deps, dep)
-		}
-		return deps, nil
-	}
-
-	return nil, nil
-}
-
-// WriteDependencies returns the workflow content with an updated dependencies: section.
-// When parentMap is non-nil, transitive dependencies are grouped by the parent
-// composite action that brings them in — the same dep may appear under multiple
-// parents. The parser silently deduplicates exact duplicate entries.
-func (f *File) WriteDependencies(deps []Dependency, parentMap map[string][]string) ([]byte, error) {
-	content := string(f.Content)
-	directRefs, _, _ := f.ExtractActionRefs()
-	directKeys := make(map[string]bool, len(directRefs))
-	for _, ref := range directRefs {
-		directKeys[ref.FullName()+"@"+ref.Ref] = true
-	}
-
-	directDepsByKey := make(map[string]Dependency)
-	var transitiveDeps []Dependency
-	for _, dep := range deps {
-		key := dep.Key()
-		if directKeys[key] {
-			directDepsByKey[key] = dep
-			continue
-		}
-		if _, exists := directDepsByKey[key]; exists {
-			continue
-		}
-		transitiveDeps = append(transitiveDeps, dep)
-	}
-
-	// Dedup transitive deps list.
-	seenTransitive := make(map[string]bool)
-	var dedupedTransitive []Dependency
-	for _, dep := range transitiveDeps {
-		if !seenTransitive[dep.Key()] {
-			seenTransitive[dep.Key()] = true
-			dedupedTransitive = append(dedupedTransitive, dep)
-		}
-	}
-	transitiveDeps = dedupedTransitive
-
-	directDeps := make([]Dependency, 0, len(directDepsByKey))
-	for _, dep := range directDepsByKey {
-		directDeps = append(directDeps, dep)
-	}
-
-	sort.Slice(directDeps, func(i, j int) bool {
-		return directDeps[i].String() < directDeps[j].String()
-	})
-
-	var sb strings.Builder
-	sb.WriteString("\n# Automatically generated and managed by gh-actions-pin\n")
-	sb.WriteString("dependencies:\n")
-	for _, dep := range directDeps {
-		sb.WriteString("  - " + dep.String() + "\n")
-	}
-
-	if len(transitiveDeps) > 0 {
-		writeTransitiveDeps(&sb, transitiveDeps, directDeps, parentMap)
-	}
-
-	content = removeDependenciesSection(content)
-	content = strings.TrimRight(content, "\n") + "\n"
-	content += sb.String()
-
-	return []byte(content), nil
-}
-
-// writeTransitiveDeps writes the transitive dependencies section, grouped by
-// parent composite action when parentMap is available.
-func writeTransitiveDeps(sb *strings.Builder, transitiveDeps []Dependency, directDeps []Dependency, parentMap map[string][]string) {
-	if len(directDeps) > 0 {
-		sb.WriteString("\n")
-	}
-
-	// If no parent map or all transitive deps are unmapped, use flat format.
-	if len(parentMap) == 0 {
-		sb.WriteString("  # Transitive dependencies\n")
-		sort.Slice(transitiveDeps, func(i, j int) bool {
-			return transitiveDeps[i].String() < transitiveDeps[j].String()
-		})
-		for _, dep := range transitiveDeps {
-			sb.WriteString("  - " + dep.String() + "\n")
-		}
-		return
-	}
-
-	// Group transitive deps by parent. A dep can appear under multiple parents.
-	type parentGroup struct {
-		parentKey string
-		deps      []Dependency
-	}
-	groupMap := make(map[string]*parentGroup)
-	var groupOrder []string
-	var orphans []Dependency
-
-	for _, dep := range transitiveDeps {
-		parents, ok := parentMap[dep.Key()]
-		if !ok || len(parents) == 0 {
-			orphans = append(orphans, dep)
-			continue
-		}
-		for _, pKey := range parents {
-			g, exists := groupMap[pKey]
-			if !exists {
-				g = &parentGroup{parentKey: pKey}
-				groupMap[pKey] = g
-				groupOrder = append(groupOrder, pKey)
-			}
-			g.deps = append(g.deps, dep)
-		}
-	}
-
-	sort.Strings(groupOrder)
-
-	for i, pKey := range groupOrder {
-		if i > 0 {
-			sb.WriteString("\n")
-		}
-		g := groupMap[pKey]
-		sort.Slice(g.deps, func(a, b int) bool {
-			return g.deps[a].String() < g.deps[b].String()
-		})
-		sb.WriteString("  # Transitive dependencies (via " + pKey + ")\n")
-		for _, dep := range g.deps {
-			sb.WriteString("  - " + dep.String() + "\n")
-		}
-	}
-
-	if len(orphans) > 0 {
-		if len(groupOrder) > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString("  # Transitive dependencies\n")
-		sort.Slice(orphans, func(i, j int) bool {
-			return orphans[i].String() < orphans[j].String()
-		})
-		for _, dep := range orphans {
-			sb.WriteString("  - " + dep.String() + "\n")
-		}
-	}
-}
-
-// reTransitiveVia matches the "# Transitive dependencies (via <dep-key>)" comment.
-var reTransitiveVia = regexp.MustCompile(`#\s*Transitive dependencies\s*\(via\s+(.+?)\)`)
-
-// ReadParentMap extracts the transitive dependency parent mapping from the
-// dependencies: section comments. It parses "# Transitive dependencies (via X)"
-// lines and associates subsequent dependency entries with the parent key.
-// Returns child dep key → parent dep keys.
-func (f *File) ReadParentMap() map[string][]string {
-	parentMap := make(map[string][]string)
-	lines := strings.Split(string(f.Content), "\n")
-
-	inDeps := false
-	var currentParent string
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Detect start of dependencies section.
-		if trimmed == "dependencies:" {
-			inDeps = true
-			continue
-		}
-		if !inDeps {
-			continue
-		}
-
-		// Exit dependencies section on non-indented, non-empty line.
-		if trimmed != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
-		}
-
-		// Check for transitive group comment.
-		if m := reTransitiveVia.FindStringSubmatch(trimmed); len(m) == 2 {
-			currentParent = m[1]
-			continue
-		}
-
-		// Plain "# Transitive dependencies" comment (no via) clears parent.
-		if strings.Contains(trimmed, "# Transitive dependencies") && !strings.Contains(trimmed, "(via") {
-			currentParent = ""
-			continue
-		}
-
-		// Parse dependency entry.
-		if strings.HasPrefix(trimmed, "- ") {
-			depStr := strings.TrimPrefix(trimmed, "- ")
-			dep, err := ParseDependencyString(depStr)
-			if err != nil {
-				continue
-			}
-			if currentParent != "" {
-				parentMap[dep.Key()] = appendUnique(parentMap[dep.Key()], currentParent)
-			}
-		}
-	}
-
-	return parentMap
-}
-
-func appendUnique(slice []string, s string) []string {
-	for _, v := range slice {
-		if v == s {
-			return slice
-		}
-	}
-	return append(slice, s)
-}
-
 // RewriteActionRefs rewrites targeted uses: refs in the original workflow
 // content while preserving the surrounding formatting and comments.
 func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, error) {
@@ -677,17 +425,6 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 	})
 
 	return []byte(strings.Join(lines, "\n")), changed, nil
-}
-
-var (
-	reDepsSectionWithComment = regexp.MustCompile(`(?ms)^\n?# Automatically generated and managed by[^\n]*\ndependencies:\n(?:  (?:#.*|- .*)\n|\n)*`)
-	reDepsSectionBare        = regexp.MustCompile(`(?ms)^dependencies:\n(?:  (?:#.*|- .*)\n|\n)*`)
-)
-
-func removeDependenciesSection(content string) string {
-	content = reDepsSectionWithComment.ReplaceAllString(content, "")
-	content = reDepsSectionBare.ReplaceAllString(content, "")
-	return content
 }
 
 func walkYAML(node *yaml.Node, fn func(key, value string)) {

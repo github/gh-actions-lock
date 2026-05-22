@@ -102,19 +102,10 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		if err := os.WriteFile(wr.Path, content, 0o644); err != nil {
 			return fmt.Errorf("writing file: %w", err)
 		}
-		// Re-load after rewrite so WriteDependencies sees the updated content.
-		wf, err = lockfile.Load(wr.Path)
-		if err != nil {
-			return err
-		}
 	}
 
-	written, err := wf.WriteDependencies(deps, rem.resolver.ParentMap())
-	if err != nil {
-		return fmt.Errorf("writing dependencies: %w", err)
-	}
-	if err := os.WriteFile(wr.Path, written, 0o644); err != nil {
-		return fmt.Errorf("writing file: %w", err)
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps); err != nil {
+		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Pinned %d dependencies in %s", len(deps), wr.Path)
@@ -148,7 +139,7 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 		return fmt.Errorf("writing file: %w", err)
 	}
 
-	// Re-load, re-extract, re-resolve, re-write lockfile.
+	// Re-load, re-extract, re-resolve, write to store.
 	wf2, err := lockfile.Load(wr.Path)
 	if err != nil {
 		return err
@@ -158,12 +149,8 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	if err != nil {
 		return fmt.Errorf("re-resolving after ref change: %w", err)
 	}
-	written, err := wf2.WriteDependencies(deps, rem.resolver.ParentMap())
-	if err != nil {
-		return fmt.Errorf("writing dependencies: %w", err)
-	}
-	if err := os.WriteFile(wr.Path, written, 0o644); err != nil {
-		return fmt.Errorf("writing file: %w", err)
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps); err != nil {
+		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Converted %s from SHA to %s and re-pinned", dep.NWO, tag)
@@ -184,12 +171,8 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 		return fmt.Errorf("resolving actions: %w", err)
 	}
 
-	written, err := wf.WriteDependencies(deps, rem.resolver.ParentMap())
-	if err != nil {
-		return fmt.Errorf("writing dependencies: %w", err)
-	}
-	if err := os.WriteFile(wr.Path, written, 0o644); err != nil {
-		return fmt.Errorf("writing file: %w", err)
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps); err != nil {
+		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Updated %s to latest resolution", dep.Key())

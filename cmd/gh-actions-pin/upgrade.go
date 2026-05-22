@@ -122,15 +122,26 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 		return err
 	}
 
+	store, err := lockfile.OpenStore(".", r)
+	if err != nil {
+		return fmt.Errorf("opening lockfile: %w", err)
+	}
+
 	var hadError bool
 	var allChanges []jsonUpgradeChange
 	for _, workflowPath := range opts.WorkflowPaths {
-		changes, err := upgradeOneFile(f, opts, workflowPath, r, targets)
+		changes, err := upgradeOneFile(f, opts, workflowPath, r, store, targets)
 		if err != nil {
 			f.UI.Error("%s: %s", workflowPath, err)
 			hadError = true
 		}
 		allChanges = append(allChanges, changes...)
+	}
+
+	if opts.Write {
+		if err := store.Save(); err != nil {
+			return fmt.Errorf("saving lockfile: %w", err)
+		}
 	}
 
 	if opts.JSONFields != "" {
@@ -159,13 +170,14 @@ func writeUpgradeJSON(w io.Writer, changes []jsonUpgradeChange) error {
 	return enc.Encode(result)
 }
 
-func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
+func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
 	}
 
-	existingDeps, err := wf.ReadDependencies()
+	wfKey := lockfile.WorkflowKeyFromPath(workflowPath)
+	existingDeps, err := store.Get(wfKey)
 	if err != nil {
 		return nil, err
 	}
@@ -300,12 +312,12 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return changes, nil
 	}
 
-	written, err := upgradedWF.WriteDependencies(deps, r.ParentMap())
-	if err != nil {
-		return nil, fmt.Errorf("writing dependencies: %w", err)
-	}
-	if err := os.WriteFile(workflowPath, written, 0o644); err != nil {
+	if err := os.WriteFile(workflowPath, updatedContent, 0o644); err != nil {
 		return nil, fmt.Errorf("writing file: %w", err)
+	}
+
+	if err := store.Set(wfKey, deps); err != nil {
+		return nil, fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	f.UI.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)

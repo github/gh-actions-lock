@@ -1,0 +1,287 @@
+package lockfile
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	parserlock "github.com/github/actions-workflow-parser/go/lockfile"
+	"gopkg.in/yaml.v3"
+)
+
+// Path is the repo-relative location of the dependency lockfile, as declared
+// by the parser package.
+const Path = parserlock.Path
+
+// MetadataResolver fetches the owner/repo numeric IDs for a NWO. The store
+// requires these to populate the actions: section on every write.
+type MetadataResolver interface {
+	RepoIDs(owner, repo string) (ownerID, repoID int64, err error)
+}
+
+// Store wraps the on-disk dependency lockfile and tracks which workflow keys
+// have been modified by the current invocation. Save garbage-collects orphan
+// actions: entries — entries still referenced by an out-of-scope workflow are
+// preserved, so partial invocations (e.g. `upgrade workflows/foo.yml`) stay
+// noop on unrelated workflows.
+type Store struct {
+	repoRoot string
+	file     parserlock.File
+	meta     MetadataResolver
+	idCache  map[string][2]int64
+	dirty    bool
+}
+
+// OpenStore reads the lockfile at repoRoot, returning an empty in-memory file
+// when none exists on disk.
+func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
+	full := filepath.Join(repoRoot, Path)
+	contents, err := os.ReadFile(full)
+
+	var file parserlock.File
+	switch {
+	case err == nil:
+		file, err = parserlock.Parse(contents)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", Path, err)
+		}
+	case errors.Is(err, os.ErrNotExist):
+		file = parserlock.File{Version: parserlock.Version}
+	default:
+		return nil, fmt.Errorf("reading %s: %w", Path, err)
+	}
+
+	if file.Version == "" {
+		file.Version = parserlock.Version
+	}
+	if file.Actions == nil {
+		file.Actions = map[string]parserlock.Action{}
+	}
+	if file.Workflows == nil {
+		file.Workflows = map[string]parserlock.Workflow{}
+	}
+
+	s := &Store{
+		repoRoot: repoRoot,
+		file:     file,
+		meta:     meta,
+		idCache:  map[string][2]int64{},
+	}
+	// Seed the ID cache from on-disk action entries so re-writes of the same
+	// NWO don't re-resolve metadata.
+	for pinKey, action := range file.Actions {
+		pin, ok := parserlock.ParsePin(pinKey)
+		if !ok || action.OwnerID == 0 || action.RepoID == 0 {
+			continue
+		}
+		s.idCache[pin.Owner+"/"+pin.Repo] = [2]int64{action.OwnerID, action.RepoID}
+	}
+	return s, nil
+}
+
+// Get returns the dependencies recorded for workflowKey (e.g.
+// ".github/workflows/ci.yml"). Returns nil when the workflow has no entry.
+func (s *Store) Get(workflowKey string) ([]Dependency, error) {
+	wf, ok := s.file.Workflows[workflowKey]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]Dependency, 0, len(wf.Dependencies))
+	for _, raw := range wf.Dependencies {
+		pin, ok := parserlock.ParsePin(raw)
+		if !ok {
+			return nil, fmt.Errorf("invalid pin %q in %s for workflow %q", raw, Path, workflowKey)
+		}
+		out = append(out, pinToDependency(pin))
+	}
+	return out, nil
+}
+
+// Set replaces the dependency list for workflowKey and upserts the action
+// metadata for every pin. Resolution of owner/repo numeric IDs happens lazily
+// per NWO and is cached for the lifetime of the store.
+func (s *Store) Set(workflowKey string, deps []Dependency) error {
+	pins := make([]string, 0, len(deps))
+	seen := map[string]bool{}
+	for _, d := range deps {
+		pinKey, err := dependencyPinKey(d)
+		if err != nil {
+			return err
+		}
+		if seen[pinKey] {
+			continue
+		}
+		seen[pinKey] = true
+		pins = append(pins, pinKey)
+
+		owner, repo := d.OwnerRepo()
+		ids, err := s.lookupIDs(owner, repo)
+		if err != nil {
+			return fmt.Errorf("resolving repo IDs for %s/%s: %w", owner, repo, err)
+		}
+		s.file.Actions[pinKey] = parserlock.Action{
+			Ref:     d.Ref,
+			SHA:     d.HashAlgoOrDetect() + "-" + strings.ToLower(d.SHA),
+			OwnerID: ids[0],
+			RepoID:  ids[1],
+		}
+	}
+	sort.Strings(pins)
+	s.file.Workflows[workflowKey] = parserlock.Workflow{Dependencies: pins}
+	s.dirty = true
+	return nil
+}
+
+// Save persists the lockfile to disk, garbage-collecting orphan action
+// entries (pins referenced by no workflow). When the in-memory file is empty
+// after GC, the on-disk file is removed.
+func (s *Store) Save() error {
+	used := map[string]bool{}
+	for _, wf := range s.file.Workflows {
+		for _, dep := range wf.Dependencies {
+			used[dep] = true
+		}
+	}
+	for key := range s.file.Actions {
+		if !used[key] {
+			delete(s.file.Actions, key)
+		}
+	}
+
+	full := filepath.Join(s.repoRoot, Path)
+
+	if len(s.file.Actions) == 0 && len(s.file.Workflows) == 0 {
+		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+
+	out, err := marshalDeterministic(s.file)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	tmp := full + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, full)
+}
+
+func (s *Store) lookupIDs(owner, repo string) ([2]int64, error) {
+	key := owner + "/" + repo
+	if ids, ok := s.idCache[key]; ok {
+		return ids, nil
+	}
+	if s.meta == nil {
+		return [2]int64{}, fmt.Errorf("metadata resolver not configured")
+	}
+	ownerID, repoID, err := s.meta.RepoIDs(owner, repo)
+	if err != nil {
+		return [2]int64{}, err
+	}
+	if ownerID == 0 || repoID == 0 {
+		return [2]int64{}, fmt.Errorf("metadata resolver returned zero IDs for %s", key)
+	}
+	ids := [2]int64{ownerID, repoID}
+	s.idCache[key] = ids
+	return ids, nil
+}
+
+// WorkflowKeyFromPath converts a workflow path discovered on disk (relative
+// to the repo root or cwd) into the repo-relative key used inside the
+// lockfile.
+func WorkflowKeyFromPath(workflowPath string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(workflowPath))
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	return cleaned
+}
+
+// marshalDeterministic emits YAML with stable key ordering. Map keys in Go
+// maps are randomized; for a lockfile we want byte-stable output across runs.
+func marshalDeterministic(file parserlock.File) ([]byte, error) {
+	root := &yaml.Node{Kind: yaml.MappingNode}
+	addStringField(root, "version", file.Version)
+
+	if len(file.Actions) > 0 {
+		keys := make([]string, 0, len(file.Actions))
+		for k := range file.Actions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		actionsNode := &yaml.Node{Kind: yaml.MappingNode}
+		for _, k := range keys {
+			a := file.Actions[k]
+			entry := &yaml.Node{Kind: yaml.MappingNode}
+			if a.Ref != "" {
+				addStringField(entry, "ref", a.Ref)
+			}
+			if a.SHA != "" {
+				addStringField(entry, "sha", a.SHA)
+			}
+			addIntField(entry, "owner_id", a.OwnerID)
+			addIntField(entry, "repo_id", a.RepoID)
+			actionsNode.Content = append(actionsNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Value: k},
+				entry,
+			)
+		}
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "actions"},
+			actionsNode,
+		)
+	}
+
+	if len(file.Workflows) > 0 {
+		keys := make([]string, 0, len(file.Workflows))
+		for k := range file.Workflows {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		workflowsNode := &yaml.Node{Kind: yaml.MappingNode}
+		for _, k := range keys {
+			wf := file.Workflows[k]
+			deps := append([]string(nil), wf.Dependencies...)
+			sort.Strings(deps)
+			seq := &yaml.Node{Kind: yaml.SequenceNode}
+			for _, d := range deps {
+				seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: d})
+			}
+			entry := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+				{Kind: yaml.ScalarNode, Value: "dependencies"},
+				seq,
+			}}
+			workflowsNode.Content = append(workflowsNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Value: k},
+				entry,
+			)
+		}
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "workflows"},
+			workflowsNode,
+		)
+	}
+
+	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
+	return yaml.Marshal(doc)
+}
+
+func addStringField(parent *yaml.Node, key, value string) {
+	parent.Content = append(parent.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+	)
+}
+
+func addIntField(parent *yaml.Node, key string, value int64) {
+	parent.Content = append(parent.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprintf("%d", value)},
+	)
+}

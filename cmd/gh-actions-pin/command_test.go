@@ -80,7 +80,8 @@ dependencies:
 	assert.Contains(t, got, "uses: actions/checkout@v4")
 	assert.Contains(t, got, "uses: actions/checkout@v6")
 	assert.NotContains(t, got, "uses: actions/checkout@v5")
-	assert.Contains(t, got, "github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd")
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd")
 }
 
 func TestCheckCommand_JSONWithHTTPMocks(t *testing.T) {
@@ -169,9 +170,74 @@ func writeTempWorkflow(t *testing.T, body string) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "workflow.yml")
-	require.NoError(t, os.WriteFile(path, []byte(strings.TrimSpace(body)+"\n"), 0o600))
-	return path
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+
+	body = strings.TrimSpace(body) + "\n"
+
+	// Split out any inline "dependencies:" block (legacy fixture format) and
+	// transparently materialize it into the canonical actions.lock file.
+	var depPins []string
+	if idx := strings.Index(body, "\ndependencies:"); idx >= 0 {
+		head := body[:idx]
+		rest := body[idx+1:]
+		// Drop the auto-generated comment line above the dependencies block
+		// if present, plus any trailing blank lines.
+		head = strings.TrimRight(head, "\n")
+		if i := strings.LastIndex(head, "\n"); i >= 0 {
+			lastLine := strings.TrimSpace(head[i+1:])
+			if strings.HasPrefix(lastLine, "# Automatically generated") {
+				head = head[:i]
+			}
+		}
+		body = strings.TrimRight(head, "\n") + "\n"
+		for _, line := range strings.Split(rest, "\n") {
+			l := strings.TrimSpace(line)
+			if strings.HasPrefix(l, "- ") {
+				pin := strings.TrimSpace(strings.TrimPrefix(l, "- "))
+				pin = strings.TrimPrefix(pin, "github.com/")
+				depPins = append(depPins, pin)
+			}
+		}
+	}
+
+	wfRel := filepath.Join(".github", "workflows", "workflow.yml")
+	wfPath := filepath.Join(dir, wfRel)
+	require.NoError(t, os.WriteFile(wfPath, []byte(body), 0o600))
+
+	if len(depPins) > 0 {
+		writeTempLockfile(t, dir, "workflow.yml", depPins)
+	}
+
+	t.Chdir(dir)
+	return filepath.ToSlash(wfRel)
+}
+
+// writeTempLockfile writes a minimal v1 actions.lock fixture so the Store can
+// read deps for the given workflow. Owner/repo IDs are stubbed; the read path
+// doesn't validate them.
+func writeTempLockfile(t *testing.T, repoDir, wfName string, pinStrings []string) {
+	t.Helper()
+	var sb strings.Builder
+	sb.WriteString("version: v0.0.1\nactions:\n")
+	for _, pin := range pinStrings {
+		sb.WriteString("  " + pin + ":\n    owner_id: 1\n    repo_id: 1\n")
+	}
+	sb.WriteString("workflows:\n  .github/workflows/" + wfName + ":\n    dependencies:\n")
+	for _, pin := range pinStrings {
+		sb.WriteString("      - " + pin + "\n")
+	}
+	p := filepath.Join(repoDir, ".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(p, []byte(sb.String()), 0o600))
+}
+
+// readTempLockfilePins returns the raw pin strings from the actions.lock file
+// in the current working directory. Useful for assertions in write/upgrade
+// tests that previously inspected the workflow YAML directly.
+func readTempLockfilePins(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(".github", "workflows", "actions.lock"))
+	require.NoError(t, err)
+	return string(b)
 }
 
 func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (string, string, error) {
@@ -872,11 +938,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-# Automatically generated and managed by gh-actions-pin
-dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
 `)+"\n"), 0o600))
+
+	// Add wf2's deps to the lockfile (writeTempWorkflow only seeded wf1).
+	writeTempLockfile(t, ".", "workflow.yml",
+		[]string{"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd"})
+	// Replace with a multi-workflow lockfile.
+	lockYAML := "version: v0.0.1\n" +
+		"actions:\n" +
+		"  actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd:\n" +
+		"    owner_id: 1\n    repo_id: 1\n" +
+		"workflows:\n" +
+		"  .github/workflows/workflow.yml:\n" +
+		"    dependencies:\n" +
+		"      - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n" +
+		"  .github/workflows/workflow2.yml:\n" +
+		"    dependencies:\n" +
+		"      - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=dependencies", wf1, wf2Path,

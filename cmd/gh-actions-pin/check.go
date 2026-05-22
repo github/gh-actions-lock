@@ -12,6 +12,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/internal/doctor"
+	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -129,14 +130,17 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	if !r.HasReachabilityFunc() {
 		r.DisableReachability = !doctor.ReachabilityEnabled()
 	}
-
+	store, err := lockfile.OpenStore(".", r)
+	if err != nil {
+		return fmt.Errorf("opening lockfile: %w", err)
+	}
 	// Single pass: doctor.Diagnose handles all validation.
 	total := len(opts.WorkflowPaths)
 	if opts.JSONFields == "" && total > 1 {
 		f.UI.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
-	report := doctor.Diagnose(opts.WorkflowPaths, r)
+	report := doctor.Diagnose(opts.WorkflowPaths, r, store)
 
 	f.UI.StopProgress()
 
@@ -181,7 +185,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			repoOwner = currentRepo.Owner
 		}
 
-		rem := doctor.NewRemediator(prompter, r, restClient, f.UI, doctor.RemediateOptions{
+		rem := doctor.NewRemediator(prompter, r, restClient, store, f.UI, doctor.RemediateOptions{
 			Interactive: interactive,
 			RepoOwner:   repoOwner,
 		})
@@ -193,6 +197,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 				return nil
 			}
 			return err
+		}
+
+		if err := store.Save(); err != nil {
+			return fmt.Errorf("saving lockfile: %w", err)
 		}
 
 		f.UI.Blank()

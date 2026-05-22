@@ -10,16 +10,16 @@ import (
 
 // Diagnose scans a set of workflows and produces findings for each.
 // It performs no output — purely analytical.
-func Diagnose(paths []string, r *resolver.Resolver) *Report {
+func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store) *Report {
 	report := &Report{}
 	for _, path := range paths {
-		wr := diagnoseOneWorkflow(path, r)
+		wr := diagnoseOneWorkflow(path, r, store)
 		report.Workflows = append(report.Workflows, wr)
 	}
 	return report
 }
 
-func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
+func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
 	wr := WorkflowReport{Path: path}
 
 	wf, err := lockfile.Load(path)
@@ -48,7 +48,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 		return wr
 	}
 
-	existingDeps, depsErr := wf.ReadDependencies()
+	existingDeps, depsErr := store.Get(lockfile.WorkflowKeyFromPath(path))
 	if depsErr != nil {
 		// Malformed dependencies: section — report as error, don't fold into "not pinned".
 		wr.Findings = append(wr.Findings, Finding{
@@ -114,15 +114,13 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver) WorkflowReport {
 	}
 
 	// Build dependency inventory with direct/transitive classification.
-	commentParents := wf.ReadParentMap()
+	// Transitive-dep parent attribution is populated below via the resolver's
+	// in-memory parent map; the lockfile itself stores a flat list.
 	for _, dep := range existingDeps {
 		entry := InventoryEntry{
 			Dep:    dep,
 			File:   path,
 			Direct: directNWOs[dep.NWO],
-		}
-		if !entry.Direct {
-			entry.Parents = commentParents[dep.Key()]
 		}
 		wr.Inventory = append(wr.Inventory, entry)
 	}
