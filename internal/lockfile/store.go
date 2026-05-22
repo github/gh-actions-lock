@@ -136,24 +136,25 @@ func (s *Store) Set(workflowKey string, deps []Dependency) error {
 	pins := make([]string, 0, len(deps))
 	seen := map[string]bool{}
 	for _, d := range deps {
-		pinKey, err := dependencyPinKey(d)
+		pin, err := dependencyToPin(d)
 		if err != nil {
 			return err
 		}
+		pin = pin.Canonical()
+		pinKey := pin.String()
 		if seen[pinKey] {
 			continue
 		}
 		seen[pinKey] = true
 		pins = append(pins, pinKey)
 
-		owner, repo := d.OwnerRepo()
-		ids, err := s.lookupIDs(owner, repo)
+		ids, err := s.lookupIDs(pin.Owner, pin.Repo)
 		if err != nil {
-			return fmt.Errorf("resolving repo IDs for %s/%s: %w", owner, repo, err)
+			return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
 		}
 		s.file.Actions[pinKey] = parserlock.Action{
-			Ref:     d.Ref,
-			SHA:     d.HashAlgoOrDetect() + "-" + strings.ToLower(d.SHA),
+			Ref:     pin.Ref,
+			SHA:     pin.Algo + "-" + pin.Hex,
 			OwnerID: ids[0],
 			RepoID:  ids[1],
 		}

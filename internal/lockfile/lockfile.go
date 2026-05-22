@@ -94,9 +94,14 @@ func (d Dependency) HashAlgoOrDetect() string {
 	return detectHashAlgo(d.SHA)
 }
 
-// String formats the dependency as a YAML list entry.
+// String formats the dependency as a YAML list entry using the canonical
+// (lowercased) pin form produced by the parser package.
 func (d Dependency) String() string {
-	return fmt.Sprintf("github.com/%s@%s:%s-%s", strings.ToLower(d.NWO), d.Ref, d.HashAlgoOrDetect(), strings.ToLower(d.SHA))
+	pin, err := dependencyToPin(d)
+	if err != nil {
+		return fmt.Sprintf("github.com/%s@%s:%s-%s", d.NWO, d.Ref, d.HashAlgoOrDetect(), d.SHA)
+	}
+	return "github.com/" + pin.String()
 }
 
 // ParseDependencyString parses a dependency entry string back into a Dependency.
@@ -234,8 +239,8 @@ func ParseActionRef(uses string) *ActionRef {
 	}
 
 	actionRef := &ActionRef{
-		Owner: strings.ToLower(segments[0]),
-		Repo:  strings.ToLower(segments[1]),
+		Owner: segments[0],
+		Repo:  segments[1],
 		Ref:   ref,
 		Raw:   uses,
 	}

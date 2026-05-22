@@ -8,40 +8,52 @@ import (
 )
 
 // dependencyPinKey returns the canonical lockfile pin key for d:
-// "OWNER/REPO[/PATH]@REF:ALGO-HEX".
+// "OWNER/REPO[/PATH]@REF:ALGO-HEX". Canonicalization (lowercasing of
+// owner/repo/algo/hex) is delegated to parserlock.Pin.String().
 func dependencyPinKey(d Dependency) (string, error) {
+	pin, err := dependencyToPin(d)
+	if err != nil {
+		return "", err
+	}
+	return pin.String(), nil
+}
+
+// dependencyToPin converts a Dependency into a parserlock.Pin without any
+// case-normalization — callers should rely on Pin.String / Pin.Canonical for
+// the canonical form.
+func dependencyToPin(d Dependency) (parserlock.Pin, error) {
 	owner, repo := d.OwnerRepo()
 	if owner == "" || repo == "" {
-		return "", fmt.Errorf("invalid NWO %q", d.NWO)
+		return parserlock.Pin{}, fmt.Errorf("invalid NWO %q", d.NWO)
 	}
 	if d.Ref == "" {
-		return "", fmt.Errorf("missing ref for %s", d.NWO)
+		return parserlock.Pin{}, fmt.Errorf("missing ref for %s", d.NWO)
 	}
 	if d.SHA == "" {
-		return "", fmt.Errorf("missing SHA for %s@%s", d.NWO, d.Ref)
+		return parserlock.Pin{}, fmt.Errorf("missing SHA for %s@%s", d.NWO, d.Ref)
 	}
 	path := ""
 	if rest := strings.TrimPrefix(d.NWO, owner+"/"+repo); rest != "" {
 		path = strings.TrimPrefix(rest, "/")
 	}
-	pin := parserlock.Pin{
+	return parserlock.Pin{
 		Owner: owner,
 		Repo:  repo,
 		Path:  path,
 		Ref:   d.Ref,
 		Algo:  d.HashAlgoOrDetect(),
-		Hex:   strings.ToLower(d.SHA),
-	}
-	return pin.String(), nil
+		Hex:   d.SHA,
+	}, nil
 }
 
 // pinToDependency converts a parser Pin back into the gh-actions-pin
-// internal Dependency type.
+// internal Dependency type. Pin fields produced by parserlock.ParsePin are
+// already canonical, so no extra normalization is needed here.
 func pinToDependency(p parserlock.Pin) Dependency {
 	return Dependency{
 		NWO:      p.FullName(),
 		Ref:      p.Ref,
-		SHA:      strings.ToLower(p.Hex),
+		SHA:      p.Hex,
 		HashAlgo: p.Algo,
 	}
 }
