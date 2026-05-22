@@ -70,14 +70,43 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 		meta:     meta,
 		idCache:  map[string][2]int64{},
 	}
-	// Seed the ID cache from on-disk action entries so re-writes of the same
-	// NWO don't re-resolve metadata.
+	// Normalize on-disk entries to the canonical (lowercased) pin form so any
+	// legacy mixed-case keys are rewritten on the next Save.
+	normalizedActions := make(map[string]parserlock.Action, len(file.Actions))
 	for pinKey, action := range file.Actions {
 		pin, ok := parserlock.ParsePin(pinKey)
-		if !ok || action.OwnerID == 0 || action.RepoID == 0 {
+		if !ok {
+			normalizedActions[pinKey] = action
 			continue
 		}
-		s.idCache[pin.Owner+"/"+pin.Repo] = [2]int64{action.OwnerID, action.RepoID}
+		canon := pin.String()
+		if canon != pinKey {
+			s.dirty = true
+		}
+		normalizedActions[canon] = action
+		if action.OwnerID != 0 && action.RepoID != 0 {
+			s.idCache[pin.Owner+"/"+pin.Repo] = [2]int64{action.OwnerID, action.RepoID}
+		}
+	}
+	s.file.Actions = normalizedActions
+	for wfKey, wf := range s.file.Workflows {
+		changed := false
+		normalized := make([]string, len(wf.Dependencies))
+		for i, raw := range wf.Dependencies {
+			if pin, ok := parserlock.ParsePin(raw); ok {
+				canon := pin.String()
+				if canon != raw {
+					changed = true
+				}
+				normalized[i] = canon
+			} else {
+				normalized[i] = raw
+			}
+		}
+		if changed {
+			s.file.Workflows[wfKey] = parserlock.Workflow{Dependencies: normalized}
+			s.dirty = true
+		}
 	}
 	return s, nil
 }
