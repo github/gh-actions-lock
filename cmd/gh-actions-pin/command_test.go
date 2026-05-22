@@ -60,9 +60,9 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
-  - github.com/actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd
-  - github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
+  - actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+  - actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd
+  - actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
 `)
 
 	stdout, stderr, err := runCommandWithHTTP(t, reg,
@@ -110,8 +110,8 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-  - github.com/actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
+  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  - actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -174,7 +174,7 @@ func writeTempWorkflow(t *testing.T, body string) string {
 
 	body = strings.TrimSpace(body) + "\n"
 
-	// Split out any inline "dependencies:" block (legacy fixture format) and
+	// Split out any inline "dependencies:" block from the fixture body and
 	// transparently materialize it into the canonical actions.lock file.
 	var depPins []string
 	if idx := strings.Index(body, "\ndependencies:"); idx >= 0 {
@@ -194,7 +194,6 @@ func writeTempWorkflow(t *testing.T, body string) string {
 			l := strings.TrimSpace(line)
 			if strings.HasPrefix(l, "- ") {
 				pin := strings.TrimSpace(strings.TrimPrefix(l, "- "))
-				pin = strings.TrimPrefix(pin, "github.com/")
 				depPins = append(depPins, pin)
 			}
 		}
@@ -332,7 +331,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+pinnedSHA+`
+  - example/action@v1:sha1-`+pinnedSHA+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
@@ -383,7 +382,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+sha+`
+  - example/action@v1:sha1-`+sha+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
@@ -435,7 +434,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+sha+`
+  - example/action@v1:sha1-`+sha+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
@@ -487,7 +486,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+sha+`
+  - example/action@v1:sha1-`+sha+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -555,7 +554,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+pinnedSHA+`
+  - example/action@v1:sha1-`+pinnedSHA+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -619,7 +618,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+pinnedSHA+`
+  - example/action@v1:sha1-`+pinnedSHA+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -677,7 +676,7 @@ jobs:
 
 # Automatically generated and managed by: gh actions-pin --write <workflow-path>
 dependencies:
-  - github.com/example/action@v1:sha1-`+pinnedSHA+`
+  - example/action@v1:sha1-`+pinnedSHA+`
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -745,11 +744,11 @@ jobs:
 
 # Automatically generated and managed by gh-actions-pin
 dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-  - github.com/actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  - actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
 
   # Transitive dependencies (via actions/setup-go@v6)
-  - github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
+  - actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
 `)
 
 	// Test per-workflow dependencies view
@@ -826,8 +825,8 @@ jobs:
 
 # Automatically generated and managed by gh-actions-pin
 dependencies:
-  - github.com/actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
-  - github.com/actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
+  - actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+  - actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
 `)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -879,7 +878,7 @@ jobs:
 
 # Automatically generated and managed by gh-actions-pin
 dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
 `)
 
 	// --json with no value should use the default fields (valid,findings,workflows)
@@ -926,7 +925,7 @@ jobs:
 
 # Automatically generated and managed by gh-actions-pin
 dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
 `)
 
 	wf2Path := filepath.Join(filepath.Dir(wf1), "workflow2.yml")

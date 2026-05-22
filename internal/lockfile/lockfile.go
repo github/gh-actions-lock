@@ -105,11 +105,8 @@ func (d Dependency) String() string {
 }
 
 // ParseDependencyString parses a dependency entry string back into a
-// Dependency. A leading "github.com/" host prefix is tolerated for
-// backwards compatibility with legacy lockfiles but is no longer emitted.
+// Dependency.
 func ParseDependencyString(s string) (Dependency, error) {
-	s = strings.TrimPrefix(s, "github.com/")
-	s = strings.TrimPrefix(s, "GitHub.com/")
 
 	colonIdx := strings.LastIndex(s, ":")
 	if colonIdx < 0 {

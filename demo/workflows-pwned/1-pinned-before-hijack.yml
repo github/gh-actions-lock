@@ -57,6 +57,6 @@ jobs:
 
 # Automatically generated and managed by: `gh actions pin <workflow-path>`
 dependencies:
-  - github.com/actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+  - actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
   # Pinned at the real HEAD (ea53476) before the attacker moved the tag
-  - github.com/nodeselector/actions-test-fixtures/nested-composite@tampered:sha1-ea53476fdc172d8552df5af9658a45a367e4f41d
+  - nodeselector/actions-test-fixtures/nested-composite@tampered:sha1-ea53476fdc172d8552df5af9658a45a367e4f41d

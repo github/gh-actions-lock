@@ -36,4 +36,4 @@ jobs:
 
 # Automatically generated and managed by: `gh actions-pin --write <workflow-path>`
 dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
+  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd

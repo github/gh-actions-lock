@@ -78,8 +78,6 @@ if m:
         s = line.strip()
         if s.startswith("- "):
             pin = s[2:].strip()
-            if pin.startswith("github.com/"):
-                pin = pin[len("github.com/"):]
             pins.append(pin)
     body = body[:m.start()].rstrip() + "\n"
 dst.write_text(body)
@@ -335,8 +333,6 @@ for fix in fixtures:
             s = line.strip()
             if s.startswith("- "):
                 pin = s[2:].strip()
-                if pin.startswith("github.com/"):
-                    pin = pin[len("github.com/"):]
                 pins.append(pin)
                 actions[pin] = (1, 1)
     wf_map[fix.name] = pins
