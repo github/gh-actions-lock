@@ -1,11 +1,12 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/github/actions-workflow-parser/go/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
-	"github.com/github/gh-actions-pin/internal/ui"
 )
 
 // Diagnose scans a set of workflows and produces findings for each.
@@ -37,7 +38,6 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 	wr.ActionRefs = refs
 	wr.ParseWarnings = parseWarnings
 
-	// No action refs → run-only workflow, nothing to do.
 	if len(refs) == 0 {
 		wr.Findings = append(wr.Findings, Finding{
 			WorkflowPath: path,
@@ -48,9 +48,9 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 		return wr
 	}
 
-	existingDeps, depsErr := store.Get(lockfile.WorkflowKeyFromPath(path))
+	wfKey := lockfile.WorkflowKeyFromPath(path)
+	existingDeps, depsErr := store.Get(wfKey)
 	if depsErr != nil {
-		// Malformed dependencies: section — report as error, don't fold into "not pinned".
 		wr.Findings = append(wr.Findings, Finding{
 			WorkflowPath: path,
 			Category:     CategoryNotPinned,
@@ -60,254 +60,78 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 		})
 		return wr
 	}
-
-	if len(existingDeps) == 0 {
-		// No lockfile. Check if any action refs are already SHA-pinned —
-		// those should be SHAAsRef, not NotPinned.
-		var shaRefs, tagRefs []lockfile.ActionRef
-		for _, ref := range refs {
-			if lockfile.IsFullSHA(ref.Ref) {
-				shaRefs = append(shaRefs, ref)
-			} else {
-				tagRefs = append(tagRefs, ref)
-			}
-		}
-
-		for _, ref := range shaRefs {
-			nwo := ref.NWO()
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategorySHAAsRef,
-				Severity:     SeverityWarning,
-				ActionRef:    &ref,
-				Dependency: &lockfile.Dependency{
-					NWO: nwo,
-					Ref: ref.Ref,
-					SHA: ref.Ref,
-				},
-				Detail: "pinned to a bare SHA without a tag ref — weakens supply-chain security",
-				Remediation: fmt.Sprintf(
-					"pin to a tag instead: https://github.com/%s/releases", nwo),
-			})
-		}
-
-		if len(tagRefs) > 0 {
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategoryNotPinned,
-				Severity:     SeverityError,
-				Detail:       fmt.Sprintf("%d %s not pinned", len(tagRefs), ui.Pluralize(len(tagRefs), "action", "actions")),
-				Remediation:  "pin with `gh actions-pin`",
-			})
-		}
-
-		if len(wr.Findings) == 0 {
-			return wr
-		}
-	}
 	wr.Deps = existingDeps
 
-	// Build direct NWO set from workflow uses: lines.
-	directNWOs := make(map[string]bool)
+	directNWOs := make(map[string]bool, len(refs))
 	for _, ref := range refs {
 		directNWOs[ref.NWO()] = true
 	}
 
-	// Build dependency inventory with direct/transitive classification.
-	// Transitive-dep parent attribution is populated below via the resolver's
-	// in-memory parent map; the lockfile itself stores a flat list.
+	// Resolve live state: used to populate the inventory parent map and to
+	// prime the engine adapter. Failure degrades to structural-only checks.
+	var liveDeps []lockfile.Dependency
+	if r != nil {
+		var resolveErr error
+		liveDeps, resolveErr = r.ResolveAllRecursive(refs)
+		if resolveErr != nil {
+			wr.Findings = append(wr.Findings, Finding{
+				WorkflowPath: path,
+				Category:     CategoryValid,
+				Severity:     SeverityWarning,
+				Detail:       fmt.Sprintf("could not re-resolve actions: %s", resolveErr),
+			})
+			liveDeps = nil
+		}
+	}
+
 	for _, dep := range existingDeps {
-		entry := InventoryEntry{
+		wr.Inventory = append(wr.Inventory, InventoryEntry{
 			Dep:    dep,
 			File:   path,
 			Direct: directNWOs[dep.NWO],
-		}
-		wr.Inventory = append(wr.Inventory, entry)
-	}
-
-	// Check for SHA-as-ref anti-pattern in existing deps (direct only).
-	for i := range existingDeps {
-		dep := &existingDeps[i]
-		if !directNWOs[dep.NWO] {
-			continue
-		}
-		if lockfile.IsFullSHA(dep.Ref) {
-			owner, repo := dep.OwnerRepo()
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategorySHAAsRef,
-				Severity:     SeverityWarning,
-				Dependency:   dep,
-				Detail:       "pinned to a bare SHA without a tag ref — weakens supply-chain security",
-				Remediation: fmt.Sprintf(
-					"pin to a tag instead: https://github.com/%s/%s/releases", owner, repo),
-			})
-		}
-	}
-
-	// Re-resolve to check for staleness and tampering.
-	liveDeps, err := r.ResolveAllRecursive(refs)
-	if err != nil {
-		wr.Findings = append(wr.Findings, Finding{
-			WorkflowPath: path,
-			Category:     CategoryValid,
-			Severity:     SeverityWarning,
-			Detail:       fmt.Sprintf("could not re-resolve actions: %s", err),
-		})
-		return wr
-	}
-	populateInventoryParents(wr.Inventory, r.ParentMap())
-
-	// MISLEADING_SHA: detect refs that look like SHAs but resolve to different commits.
-	for _, mismatch := range lockfile.CheckSHARefMismatches(liveDeps) {
-		wr.Findings = append(wr.Findings, Finding{
-			WorkflowPath: path,
-			Category:     CategoryMisleadingSHA,
-			Severity:     SeverityError,
-			Dependency:   &mismatch.Dep,
-			Detail:       fmt.Sprintf("ref %s resolved to %s", mismatch.Dep.Ref, mismatch.ResolvedAs),
 		})
 	}
-
-	// Compare pinned deps against live resolution.
-	wr.Findings = append(wr.Findings, compareSnapshots(path, existingDeps, liveDeps, directNWOs)...)
-
-	// LOCKFILE_FORGERY: for each REF_MOVED finding, check if the pinned SHA
-	// is actually an ancestor of the live SHA. If not, the lockfile entry was
-	// likely injected or tampered with (or upstream rewrote history).
-	liveByKey := make(map[string]lockfile.Dependency, len(liveDeps))
-	for _, dep := range liveDeps {
-		liveByKey[dep.Key()] = dep
+	parentMap := map[string][]string{}
+	if r != nil {
+		parentMap = r.ParentMap()
+		populateInventoryParents(wr.Inventory, parentMap)
 	}
-	for i := range wr.Findings {
-		f := &wr.Findings[i]
-		if f.Category != CategoryRefMoved || f.Dependency == nil {
+
+	// Run the portable diagnostics engine.
+	wfInput := buildEngineWorkflowInput(wfKey, refs)
+	var reach []resolver.ReachabilityResult
+	if r != nil && !r.DisableReachability && len(existingDeps) > 0 {
+		reach = r.CheckReachabilityAll(existingDeps)
+	}
+	var engineRes diagnostics.Resolver
+	if r != nil && liveDeps != nil {
+		engineRes = newEngineResolver(r, liveDeps, reach)
+	}
+	engineFindings := diagnostics.Run(
+		context.Background(),
+		store.File(),
+		[]diagnostics.WorkflowInput{wfInput},
+		diagnostics.Options{Resolver: engineRes},
+	)
+
+	refByKey := indexRefs(refs)
+	depByKey := indexDeps(existingDeps)
+	for _, ef := range engineFindings {
+		// Engine's stale check doesn't know about composite-expanded
+		// transitive deps — suppress those false positives here.
+		if ef.Code == diagnostics.CodeStale && isTransitivePin(ef, depByKey, parentMap) {
 			continue
 		}
-		live, ok := liveByKey[f.Dependency.Key()]
-		if !ok {
-			continue
-		}
-		owner, repo := f.Dependency.OwnerRepo()
-		status, detail := r.CheckAncestry(owner, repo, f.Dependency.SHA, live.SHA)
-		switch status {
-		case resolver.AncestryNotAncestor:
-			f.Category = CategoryLockfileForgery
-			f.Severity = SeverityError
-			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — %s",
-				f.Dependency.SHA[:12], live.SHA[:12], detail)
-			f.Remediation = "investigate immediately — the lockfile may have been tampered with"
-		case resolver.AncestryUnknown:
-			// Fail open: keep as REF_MOVED, add a note about the ancestry check.
-			f.Detail += fmt.Sprintf(" (ancestry check inconclusive: %s)", detail)
-		}
-		// AncestryConfirmed: leave as REF_MOVED — legitimate tag movement.
+		wr.Findings = append(wr.Findings, translateFinding(path, ef, refByKey, depByKey, directNWOs, parentMap))
 	}
 
-	// Build set of dep keys already promoted to LOCKFILE_FORGERY so we don't
-	// also flag them as IMPOSTER_COMMIT — the two are mutually exclusive.
-	forgeryKeys := make(map[string]bool)
-	for _, f := range wr.Findings {
-		if f.Category == CategoryLockfileForgery && f.Dependency != nil {
-			forgeryKeys[f.Dependency.Key()] = true
-		}
+	// Reachability complement: engine emits imposter for direct uses only,
+	// and stays silent on Unknown. Cover transitive deps + Unknown for all.
+	if len(reach) > 0 {
+		wr.Findings = append(wr.Findings, reachabilityComplementFindings(path, reach, existingDeps, directNWOs, parentMap, wr.Findings)...)
 	}
 
-	// Build set of NWOs with ref-changed findings to avoid duplicate "not pinned" findings.
-	refChangedNWOs := make(map[string]bool)
-	for _, f := range wr.Findings {
-		if f.Category == CategoryRefChanged && f.Dependency != nil {
-			refChangedNWOs[f.Dependency.NWO] = true
-		}
-	}
-
-	// Check for missing deps (action in workflow but not pinned).
-	depsByKey := make(map[string]lockfile.Dependency, len(existingDeps))
-	for _, dep := range existingDeps {
-		depsByKey[dep.Key()] = dep
-	}
-	for _, ref := range refs {
-		key := ref.FullName() + "@" + ref.Ref
-		if _, ok := depsByKey[key]; !ok {
-			if refChangedNWOs[ref.NWO()] {
-				continue
-			}
-			refCopy := ref
-			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
-				Category:     CategoryNotPinned,
-				Severity:     SeverityError,
-				ActionRef:    &refCopy,
-				Detail:       "used in workflow but not pinned",
-				Remediation:  "pin with `gh actions-pin`",
-			})
-		}
-	}
-
-	// Reachability checks (skip entirely when disabled — no warnings, no findings).
-	if !r.DisableReachability {
-		reachResults := r.CheckReachabilityAll(existingDeps)
-		// Build dep lookup by key for attaching to reachability findings.
-		depByKey := make(map[string]lockfile.Dependency, len(existingDeps))
-		for _, d := range existingDeps {
-			depByKey[d.Key()] = d
-		}
-		for _, rr := range reachResults {
-			var depPtr *lockfile.Dependency
-			if d, ok := depByKey[rr.DepKey]; ok {
-				depPtr = &d
-			}
-			switch rr.Status {
-			case resolver.Unreachable:
-				if forgeryKeys[rr.DepKey] {
-					continue // already flagged as LOCKFILE_FORGERY — reachability is implied
-				}
-				wr.Findings = append(wr.Findings, Finding{
-					WorkflowPath: path,
-					Category:     CategoryImposterCommit,
-					Severity:     SeverityError,
-					Dependency:   depPtr,
-					Detail:       rr.Detail,
-				})
-			case resolver.ReachabilityUnknown:
-				isTransitive := !directNWOs[rr.Owner+"/"+rr.Repo]
-				parentNWO := ""
-				if isTransitive {
-					if parents := r.ParentMap()[rr.DepKey]; len(parents) > 0 {
-						parentNWO = parents[0]
-					}
-				}
-				wr.Findings = append(wr.Findings, Finding{
-					WorkflowPath: path,
-					Category:     CategoryValid,
-					Severity:     SeverityWarning,
-					Detail:       rr.Detail,
-					Dependency: &lockfile.Dependency{
-						NWO: rr.Owner + "/" + rr.Repo,
-						Ref: rr.Ref,
-						SHA: rr.SHA,
-					},
-					ParentNWO: parentNWO,
-					Remediation: func() string {
-						if isTransitive {
-							return "transitive dependency pinned to a bare SHA — reachability cannot be verified"
-						}
-						return "reachability check inconclusive"
-					}(),
-				})
-			}
-		}
-	}
-
-	// If no issues found, mark as valid.
-	hasIssues := false
-	for _, f := range wr.Findings {
-		if f.Severity == SeverityError || (f.Category != CategoryValid && f.Category != CategoryRunOnly && f.Severity == SeverityWarning) {
-			hasIssues = true
-			break
-		}
-	}
-	if !hasIssues {
+	if !hasIssues(wr.Findings) {
 		wr.Findings = append(wr.Findings, Finding{
 			WorkflowPath: path,
 			Category:     CategoryValid,
@@ -317,6 +141,203 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 	}
 
 	return wr
+}
+
+func buildEngineWorkflowInput(wfKey string, refs []lockfile.ActionRef) diagnostics.WorkflowInput {
+	uses := make([]diagnostics.UsesRef, 0, len(refs))
+	for _, ref := range refs {
+		uses = append(uses, diagnostics.UsesRef{
+			Owner: ref.Owner,
+			Repo:  ref.Repo,
+			Path:  ref.Path,
+			Ref:   ref.Ref,
+		})
+	}
+	return diagnostics.WorkflowInput{Path: wfKey, Uses: uses}
+}
+
+func indexRefs(refs []lockfile.ActionRef) map[string]lockfile.ActionRef {
+	out := make(map[string]lockfile.ActionRef, len(refs))
+	for _, ref := range refs {
+		out[ref.FullName()+"@"+ref.Ref] = ref
+	}
+	return out
+}
+
+func indexDeps(deps []lockfile.Dependency) map[string]lockfile.Dependency {
+	out := make(map[string]lockfile.Dependency, len(deps))
+	for _, dep := range deps {
+		out[dep.Key()] = dep
+	}
+	return out
+}
+
+// translateFinding converts an engine diagnostic into a doctor Finding,
+// re-attaching the source ActionRef/Dependency pointers the CLI needs for
+// rendering.
+func translateFinding(
+	path string,
+	ef diagnostics.Finding,
+	refByKey map[string]lockfile.ActionRef,
+	depByKey map[string]lockfile.Dependency,
+	directNWOs map[string]bool,
+	parentMap map[string][]string,
+) Finding {
+	df := Finding{
+		WorkflowPath: path,
+		Category:     Category(ef.Code),
+		Severity:     mapEngineSeverity(ef.Severity),
+		Detail:       ef.Message,
+		Remediation:  ef.Remediation,
+		LiveSHA:      ef.LiveSha,
+	}
+
+	fullName := ef.Owner + "/" + ef.Repo
+	if ef.Path != "" {
+		fullName += "/" + ef.Path
+	}
+	key := fullName + "@" + ef.Ref
+
+	if ref, ok := refByKey[key]; ok {
+		refCopy := ref
+		df.ActionRef = &refCopy
+	}
+	if dep, ok := depByKey[key]; ok {
+		depCopy := dep
+		df.Dependency = &depCopy
+	} else if ef.LockedSha != "" {
+		df.Dependency = &lockfile.Dependency{
+			NWO: fullName,
+			Ref: ef.Ref,
+			SHA: ef.LockedSha,
+		}
+	}
+
+	if df.Dependency != nil && !directNWOs[ef.Owner+"/"+ef.Repo] {
+		if parents := parentMap[df.Dependency.Key()]; len(parents) > 0 {
+			df.ParentNWO = parents[0]
+		}
+	}
+
+	return df
+}
+
+func mapEngineSeverity(s diagnostics.Severity) Severity {
+	switch s {
+	case diagnostics.SeverityError:
+		return SeverityError
+	case diagnostics.SeverityWarning:
+		return SeverityWarning
+	case diagnostics.SeverityInfo:
+		return SeverityInfo
+	default:
+		return SeverityInfo
+	}
+}
+
+// isTransitivePin reports whether the engine finding refers to a dep
+// reached via composite expansion (i.e. has parents in the parent map).
+func isTransitivePin(ef diagnostics.Finding, depByKey map[string]lockfile.Dependency, parentMap map[string][]string) bool {
+	fullName := ef.Owner + "/" + ef.Repo
+	if ef.Path != "" {
+		fullName += "/" + ef.Path
+	}
+	key := fullName + "@" + ef.Ref
+	dep, ok := depByKey[key]
+	if !ok {
+		return false
+	}
+	return len(parentMap[dep.Key()]) > 0
+}
+
+// reachabilityComplementFindings covers the cases the engine doesn't:
+//   - Imposter for transitive (composite-expanded) deps the engine never
+//     visits because they aren't in workflow uses.
+//   - Reachability-Unknown warnings for all deps (engine fails open on
+//     Unknown). Direct + transitive both get a warning so the user knows
+//     the check was inconclusive.
+func reachabilityComplementFindings(
+	path string,
+	reach []resolver.ReachabilityResult,
+	deps []lockfile.Dependency,
+	directNWOs map[string]bool,
+	parentMap map[string][]string,
+	existing []Finding,
+) []Finding {
+	if len(reach) == 0 {
+		return nil
+	}
+
+	forgeryKeys := map[string]bool{}
+	for _, f := range existing {
+		if f.Category == CategoryLockfileForgery && f.Dependency != nil {
+			forgeryKeys[f.Dependency.Key()] = true
+		}
+	}
+
+	depByKey := make(map[string]lockfile.Dependency, len(deps))
+	for _, d := range deps {
+		depByKey[d.Key()] = d
+	}
+
+	var out []Finding
+	for _, rr := range reach {
+		dep, ok := depByKey[rr.DepKey]
+		if !ok {
+			continue
+		}
+		depCopy := dep
+		direct := directNWOs[dep.NWO]
+		parent := ""
+		if parents := parentMap[rr.DepKey]; len(parents) > 0 {
+			parent = parents[0]
+		}
+		switch rr.Status {
+		case resolver.Unreachable:
+			if direct {
+				continue // engine emits imposter for direct uses
+			}
+			if forgeryKeys[rr.DepKey] {
+				continue
+			}
+			out = append(out, Finding{
+				WorkflowPath: path,
+				Category:     CategoryImposterCommit,
+				Severity:     SeverityError,
+				Dependency:   &depCopy,
+				ParentNWO:    parent,
+				Detail:       rr.Detail,
+				Remediation:  "investigate immediately — the lockfile entry may have been injected",
+			})
+		case resolver.ReachabilityUnknown:
+			remediation := "transitive dependency pinned to a bare SHA — reachability cannot be verified"
+			if direct {
+				remediation = "reachability check inconclusive — retry when network/API is available"
+			}
+			out = append(out, Finding{
+				WorkflowPath: path,
+				Category:     CategoryValid,
+				Severity:     SeverityWarning,
+				Dependency:   &depCopy,
+				ParentNWO:    parent,
+				Detail:       rr.Detail,
+				Remediation:  remediation,
+			})
+		}
+	}
+	return out
+}
+
+func hasIssues(findings []Finding) bool {
+	for _, f := range findings {
+		if f.Severity == SeverityError {
+			return true
+		}
+		if f.Category != CategoryValid && f.Category != CategoryRunOnly && f.Severity == SeverityWarning {
+			return true
+		}
+	}
+	return false
 }
 
 func populateInventoryParents(inventory []InventoryEntry, parentMap map[string][]string) {

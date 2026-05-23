@@ -18,11 +18,11 @@ type pickerTag struct {
 type pickerAction int
 
 const (
-	pickerApply        pickerAction = iota // user selected a tag
-	pickerSkip                             // user chose "Skip"
-	pickerShowAll                          // user chose "Show all tags"
-	pickerOpenReleases                     // user chose "Open releases"
-	pickerDefaultBranch                    // user chose the default branch
+	pickerApply         pickerAction = iota // user selected a tag
+	pickerSkip                              // user chose "Skip"
+	pickerShowAll                           // user chose "Show all tags"
+	pickerOpenReleases                      // user chose "Open releases"
+	pickerDefaultBranch                     // user chose the default branch
 )
 
 // pickerResult holds the outcome of a picker prompt.

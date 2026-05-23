@@ -111,6 +111,13 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 	return s, nil
 }
 
+// File returns the in-memory parser-level lockfile snapshot. Intended for
+// consumers that drive the workflow-parser diagnostics engine directly and
+// need the whole file (workflow keys + actions metadata) in one shot.
+func (s *Store) File() parserlock.File {
+	return s.file
+}
+
 // Get returns the dependencies recorded for workflowKey (e.g.
 // ".github/workflows/ci.yml"). Returns nil when the workflow has no entry.
 func (s *Store) Get(workflowKey string) ([]Dependency, error) {
