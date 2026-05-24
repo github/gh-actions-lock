@@ -181,6 +181,19 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			}
 		}
 
+		// Alerted-only categories (Imposter/Forgery/Misleading) were already
+		// fully presented by presentCheckResults in non-interactive mode.
+		// Just register the alert here without re-printing the per-workflow
+		// header or finding details.
+		if !rem.prompter.IsInteractive() {
+			switch finding.Category {
+			case CategoryImposterCommit, CategoryLockfileForgery, CategoryMisleadingSHA:
+				rem.Alerted++
+				rem.addAlertedDep(finding)
+				continue
+			}
+		}
+
 		ensureHeader()
 		if !first {
 			rem.output.Blank()
@@ -244,6 +257,9 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 
 func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	rem.output.Warning("%d %s found but not pinned", len(wr.ActionRefs), ui.Pluralize(len(wr.ActionRefs), "action", "actions"))
+	if docURL := DocURLFor(CategoryNotPinned); docURL != "" {
+		rem.output.Detail("  see: %s", rem.output.Dim(rem.output.Hyperlink("docs", docURL)))
+	}
 
 	if !rem.prompter.IsInteractive() {
 		// Non-interactive: auto-pin all refs (ref→SHA is deterministic).
@@ -275,7 +291,11 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 		// Prior choice — auto-apply without prompting.
 		if rem.state.approvedRefs[refKey(ref)] {
-			sha := shaByKey[key]
+			sha, ok := shaByKey[key]
+			if !ok || sha == "" {
+				rem.output.Detail("  %s  (could not resolve)", key)
+				continue
+			}
 			rem.output.Detail("  %s → %s  %s", key, sha[:12], rem.output.Dim("↩ prior choice"))
 			approved = append(approved, ref)
 			continue
@@ -283,7 +303,11 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 		// Internal (same-owner) action — auto-apply without prompting.
 		if rem.isSameOwner(ref.Owner) {
-			sha := shaByKey[key]
+			sha, ok := shaByKey[key]
+			if !ok || sha == "" {
+				rem.output.Detail("  %s  (could not resolve)", key)
+				continue
+			}
 			label := ""
 			if info, err := rem.tagLister.GetRepoInfo(ref.Owner, ref.Repo); err == nil {
 				label = info.VisibilityLabel()
@@ -702,25 +726,20 @@ func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) erro
 	}
 	rem.output.Warning("%s: %s", dep.Key(), finding.Detail)
 
-	if !rem.prompter.IsInteractive() {
-		// Non-interactive: auto-apply ref change — deterministic re-resolve.
-		return rem.applyReResolve(wr, dep)
-	}
-
-	prompt := fmt.Sprintf("Re-pin %s to %s?", dep.NWO, newRef)
-	ok, err := rem.prompter.Confirm(prompt, true)
-	if err != nil {
-		if errors.Is(err, ErrAborted) {
-			return ErrAborted
+	// If the workflow's new ref no longer exists upstream (e.g. someone
+	// typo'd or pointed at a deleted tag), don't silently re-resolve to a
+	// missing ref. Divert into the full tag picker so the user can choose
+	// a real tag, open the releases page, or skip.
+	owner, repo := dep.OwnerRepo()
+	if rem.prompter.IsInteractive() && owner != "" && newRef != "" && !lockfile.IsFullSHA(newRef) {
+		if rem.tagLister.LookupTag(owner, repo, newRef) == nil {
+			rem.output.Detail("  ref %q no longer exists upstream — pick a valid tag instead", newRef)
+			return rem.handleSHATagPicker(wr, finding, owner, repo)
 		}
-		rem.Skipped++
-		return nil
-	}
-	if !ok {
-		rem.Skipped++
-		return nil
 	}
 
+	// The workflow is the source of truth: just pin what it asks for,
+	// without prompting the user to confirm a "more specific" version.
 	return rem.applyReResolve(wr, dep)
 }
 
