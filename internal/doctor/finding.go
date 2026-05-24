@@ -59,6 +59,10 @@ type Finding struct {
 	Remediation string
 	// LiveSHA is the current upstream SHA when it differs from the pinned SHA (e.g. REF_MOVED).
 	LiveSHA string
+	// DocURL points to docs explaining the finding. Populated by the
+	// engine adapter so it's parity-aligned with the editor's
+	// codeDescription link; "" when no URL is mapped.
+	DocURL string
 }
 
 // InventoryEntry describes a single dependency with context.
@@ -115,7 +119,7 @@ func (f *Finding) IsValid() bool {
 		return false
 	}
 	switch f.Category {
-	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
+	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved, CategoryNonImmutableReleases:
 		return true
 	case CategoryNotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
@@ -130,6 +134,8 @@ func (f *Finding) IsWarning() bool {
 	case f.Category == CategorySHAAsRef:
 		return true
 	case f.Category == CategoryRefMoved:
+		return true
+	case f.Category == CategoryNonImmutableReleases:
 		return true
 	case f.Category == CategoryValid && f.Severity == SeverityWarning:
 		return true
@@ -154,12 +160,20 @@ func (f *Finding) DepKey() string {
 // Report aggregates all workflow reports for a doctor run.
 type Report struct {
 	Workflows []WorkflowReport
+	// RepoFindings are findings that apply to the repository as a whole
+	// (not to any individual workflow), e.g. non-immutable releases.
+	RepoFindings []Finding
 }
 
 // IsValid returns true if all workflows in the report pass validation.
 func (r *Report) IsValid() bool {
 	for _, wr := range r.Workflows {
 		if !wr.IsValid() {
+			return false
+		}
+	}
+	for _, f := range r.RepoFindings {
+		if !f.IsValid() {
 			return false
 		}
 	}

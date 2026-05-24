@@ -556,10 +556,14 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 		}
 
 		deps, actionYMLs, err := r.resolveWithActionYML(toResolve)
-		if err != nil {
-			return allDeps, err
-		}
+		// Keep partial results: per-ref failures are surfaced via err, but
+		// successful resolutions in `deps` should not be discarded — downstream
+		// renderers degrade gracefully per-ref instead of marking everything
+		// unresolved.
 		allDeps = append(allDeps, deps...)
+		if err != nil {
+			return dedup(allDeps), err
+		}
 
 		var nextPending []lockfile.ActionRef
 		for i := range deps {
@@ -629,37 +633,49 @@ func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.D
 
 	var freshDeps []lockfile.Dependency
 	var freshYMLs []string
+	var batchErr error
 	for i := 0; i < len(uncached); i += MaxBatchSize {
 		end := i + MaxBatchSize
 		if end > len(uncached) {
 			end = len(uncached)
 		}
 		deps, ymls, err := r.resolveWithActionYMLBatch(uncached[i:end])
-		if err != nil {
-			return allDeps, allYMLs, err
-		}
+		// Keep partial batch results: per-ref failures shouldn't discard
+		// successful resolutions from the same batch.
 		freshDeps = append(freshDeps, deps...)
 		freshYMLs = append(freshYMLs, ymls...)
+		if err != nil {
+			batchErr = err
+			break
+		}
 	}
 
 	for i, dep := range freshDeps {
 		r.cache[dep.Key()] = resolvedEntry{dep: dep, actionYML: freshYMLs[i]}
 	}
 
-	freshIdx := 0
+	// Build allDeps from cached refs + freshly-resolved ones. Refs that failed
+	// to resolve are simply absent — callers see them missing rather than
+	// receiving an empty slice for the whole workflow.
+	resolvedFresh := make(map[string]int, len(freshDeps))
+	for i, dep := range freshDeps {
+		resolvedFresh[dep.Key()] = i
+	}
 	for i, ref := range refs {
+		key := cacheKey(ref)
 		if cachedIdx[i] {
-			entry := r.cache[cacheKey(ref)]
+			entry := r.cache[key]
 			allDeps = append(allDeps, entry.dep)
 			allYMLs = append(allYMLs, entry.actionYML)
-		} else {
-			allDeps = append(allDeps, freshDeps[freshIdx])
-			allYMLs = append(allYMLs, freshYMLs[freshIdx])
-			freshIdx++
+			continue
+		}
+		if fi, ok := resolvedFresh[key]; ok {
+			allDeps = append(allDeps, freshDeps[fi])
+			allYMLs = append(allYMLs, freshYMLs[fi])
 		}
 	}
 
-	return allDeps, allYMLs, nil
+	return allDeps, allYMLs, batchErr
 }
 
 type repoResponse struct {

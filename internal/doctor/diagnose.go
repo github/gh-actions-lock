@@ -30,6 +30,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 			Category:     CategoryNotPinned,
 			Severity:     SeverityError,
 			Detail:       fmt.Sprintf("failed to load workflow: %s", err),
+			DocURL:       DocURLFor(CategoryNotPinned),
 		})
 		return wr
 	}
@@ -57,6 +58,7 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 			Severity:     SeverityError,
 			Detail:       fmt.Sprintf("failed to read dependencies: %s", depsErr),
 			Remediation:  "fix or regenerate the dependencies: section with `gh actions-pin`",
+			DocURL:       DocURLFor(CategoryNotPinned),
 		})
 		return wr
 	}
@@ -68,7 +70,8 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 	}
 
 	// Resolve live state: used to populate the inventory parent map and to
-	// prime the engine adapter. Failure degrades to structural-only checks.
+	// prime the engine adapter. Failure degrades to structural-only checks
+	// for any refs that couldn't be resolved — partial results are kept.
 	var liveDeps []lockfile.Dependency
 	if r != nil {
 		var resolveErr error
@@ -80,15 +83,15 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 				Severity:     SeverityWarning,
 				Detail:       fmt.Sprintf("could not re-resolve actions: %s", resolveErr),
 			})
-			liveDeps = nil
 		}
 	}
 
 	for _, dep := range existingDeps {
+		owner, repo := dep.OwnerRepo()
 		wr.Inventory = append(wr.Inventory, InventoryEntry{
 			Dep:    dep,
 			File:   path,
-			Direct: directNWOs[dep.NWO],
+			Direct: directNWOs[owner+"/"+repo],
 		})
 	}
 	parentMap := map[string][]string{}
@@ -190,6 +193,7 @@ func translateFinding(
 		Detail:       ef.Message,
 		Remediation:  ef.Remediation,
 		LiveSHA:      ef.LiveSha,
+		DocURL:       DocURLFor(Category(ef.Code)),
 	}
 
 	fullName := ef.Owner + "/" + ef.Repo
@@ -287,7 +291,8 @@ func reachabilityComplementFindings(
 			continue
 		}
 		depCopy := dep
-		direct := directNWOs[dep.NWO]
+		owner, repo := dep.OwnerRepo()
+		direct := directNWOs[owner+"/"+repo]
 		parent := ""
 		if parents := parentMap[rr.DepKey]; len(parents) > 0 {
 			parent = parents[0]
@@ -308,6 +313,7 @@ func reachabilityComplementFindings(
 				ParentNWO:    parent,
 				Detail:       rr.Detail,
 				Remediation:  "investigate immediately — the lockfile entry may have been injected",
+				DocURL:       DocURLFor(CategoryImposterCommit),
 			})
 		case resolver.ReachabilityUnknown:
 			remediation := "transitive dependency pinned to a bare SHA — reachability cannot be verified"

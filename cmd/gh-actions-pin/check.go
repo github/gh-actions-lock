@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
@@ -34,6 +35,7 @@ type checkFinding struct {
 	RequiredBy  string `json:"required_by,omitempty"`
 	Detail      string `json:"detail"`
 	Remediation string `json:"remediation,omitempty"`
+	DocURL      string `json:"doc_url,omitempty"`
 }
 
 type checkDependency struct {
@@ -142,6 +144,19 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 	report := doctor.Diagnose(opts.WorkflowPaths, r, store)
 
+	// Repo-level checks: warn if this repo defines actions but doesn't
+	// publish them via immutable releases. Best-effort — failures here
+	// (no remote, API errors, etc.) silently produce no findings.
+	if currentRepo, repoErr := repository.Current(); repoErr == nil {
+		hostname := resolveHostname(opts.Hostname)
+		if restClient, clientErr := api.NewRESTClient(api.ClientOptions{Host: hostname}); clientErr == nil {
+			report.RepoFindings = append(
+				report.RepoFindings,
+				doctor.CheckRepoImmutableReleases(restClient, ".", currentRepo.Owner, currentRepo.Name)...,
+			)
+		}
+	}
+
 	f.UI.StopProgress()
 
 	// Compute validity from findings.
@@ -149,7 +164,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 	// JSON output — always before any human-readable output.
 	if opts.JSONFields != "" {
-		return writeCheckJSON(f.Out, report, valid, opts.JSONFields)
+		return writeCheckJSON(f.Out, report, valid, opts.JSONFields, store.File().Version)
 	}
 
 	// Determine if interactive remediation will follow.
@@ -211,9 +226,6 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if uniqueSkipped > 0 {
 			f.UI.Skip("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
 		}
-		if rem.Alerted > 0 {
-			f.UI.Warning("%d %s %s manual attention", rem.Alerted, ui.Pluralize(rem.Alerted, "issue", "issues"), ui.Pluralize(rem.Alerted, "needs", "need"))
-		}
 		fixedCount = rem.Fixed
 		skippedCount = uniqueSkipped
 		alertedCount = rem.Alerted
@@ -232,6 +244,9 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
 			for _, dep := range alertedDeps {
 				f.UI.Detail("  %s", dep)
+				for _, path := range workflowsForDep(report, dep) {
+					f.UI.Detail("    %s %s", f.UI.Dim("└─"), f.UI.Dim(path))
+				}
 			}
 		}
 		if skippedCount > 0 {
@@ -255,6 +270,7 @@ func findingToJSON(f doctor.Finding) checkFinding {
 		Severity:    string(f.Severity),
 		Detail:      f.Detail,
 		Remediation: f.Remediation,
+		DocURL:      f.DocURL,
 	}
 	if f.Dependency != nil {
 		jf.Dependency = f.Dependency.Key()
@@ -268,7 +284,7 @@ func findingToJSON(f doctor.Finding) checkFinding {
 }
 
 // writeCheckJSON writes the unified JSON output.
-func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV string) error {
+func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV, lockfileVersion string) error {
 	fields := strings.Split(fieldsCSV, ",")
 
 	// Build all data lazily.
@@ -281,6 +297,9 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 			return allFindings
 		}
 		allFindings = []checkFinding{}
+		for _, f := range report.RepoFindings {
+			allFindings = append(allFindings, findingToJSON(f))
+		}
 		for _, wr := range report.Workflows {
 			for _, f := range wr.Findings {
 				if f.Category == doctor.CategoryRunOnly || (f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityOK) {
@@ -373,7 +392,10 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 		return allWorkflows
 	}
 
-	payload := map[string]interface{}{}
+	payload := map[string]interface{}{
+		"cli_version":      cliVersion(),
+		"lockfile_version": lockfileVersion,
+	}
 	for _, field := range fields {
 		field = strings.TrimSpace(field)
 		switch field {
@@ -403,6 +425,13 @@ func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV st
 
 // presentCheckResults renders human-readable output from a doctor report.
 func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate bool) {
+	for _, f := range report.RepoFindings {
+		out.Warning("%s", f.Detail)
+		if f.DocURL != "" {
+			out.Detail("  see: %s", out.Dim(out.Hyperlink("docs", f.DocURL)))
+		}
+	}
+
 	var validCount, failedCount int
 	for _, wr := range report.Workflows {
 		if wr.IsValid() {
@@ -462,15 +491,23 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 					continue // skip NOT_PINNED lines in mixed groups too
 				}
 				label := strings.ToUpper(string(f.Category))
-				out.Detail("! %s %s", out.Dim(label), dep)
+				icon := "!"
+				if isAlertedCategory(f.Category) {
+					icon = "✗"
+				}
+				out.Detail("%s %s %s", icon, out.Dim(label), dep)
 				out.Detail("  %s", f.Detail)
 				if f.Category == doctor.CategoryLockfileForgery && f.Dependency != nil {
 					owner, repo := f.Dependency.OwnerRepo()
-					out.Detail("  %s", out.Bold("⚠ The pinned SHA was never in this ref's history."))
-					out.Detail("  %s", "This lockfile entry may have been injected maliciously.")
 					if owner != "" {
 						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
 					}
+				}
+				if isAlertedCategory(f.Category) && f.Remediation != "" {
+					out.Detail("  %s %s", out.Bold("⚠"), f.Remediation)
+				}
+				if f.DocURL != "" {
+					out.Detail("  see: %s", out.Dim(out.Hyperlink("docs", f.DocURL)))
 				}
 			}
 		}
@@ -610,4 +647,41 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 			out.Warning("%s: %s", label, f.Detail)
 		}
 	}
+}
+
+// isAlertedCategory reports whether a finding category has no auto-fix and
+// requires human investigation (already surfaced in presentCheckResults — the
+// remediator should not re-print it in non-interactive mode).
+func isAlertedCategory(c doctor.Category) bool {
+	switch c {
+	case doctor.CategoryImposterCommit, doctor.CategoryLockfileForgery, doctor.CategoryMisleadingSHA:
+		return true
+	}
+	return false
+}
+
+// workflowsForDep returns workflow paths whose findings reference the given
+// dependency key (ordered as they appear in the report, deduplicated).
+func workflowsForDep(report *doctor.Report, depKey string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.DepKey() == depKey && !seen[wr.Path] {
+				seen[wr.Path] = true
+				out = append(out, wr.Path)
+			}
+		}
+	}
+	return out
+}
+
+// cliVersion returns the gh-actions-pin extension version embedded by the Go
+// build system. Returns "(devel)" for local `go build` and a real version
+// like "v0.1.2" when installed via `gh extension install`.
+func cliVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "unknown"
 }

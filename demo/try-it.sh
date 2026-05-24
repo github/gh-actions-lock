@@ -112,6 +112,8 @@ scenarios=(
   "upgrade-latest"
   "upgrade-version"
   "edit-repin"
+  "ref-changed"
+  "stale"
   "ref-moved"
   "imposter-commit"
   "lockfile-forgery"
@@ -135,6 +137,8 @@ usage() {
   echo "    edit-repin         Edit ref + re-pin (Dependabot workflow)"
   echo ""
   echo "  Change detection"
+  echo "    ref-changed        Workflow ref edited; lockfile pins different ref"
+  echo "    stale              Lockfile entry orphaned (no uses: references it)"
   echo "    ref-moved          Tag moved forward (routine release)"
   echo "    imposter-commit    Tag hijacked to fork-network commit (fork injection)"
   echo "    lockfile-forgery   Lockfile entry replaced with fork commit SHA"
@@ -247,6 +251,79 @@ scenario_edit_repin() {
   run show_lockfile "$scratch/$wf"
 }
 
+scenario_ref_changed() {
+  banner "Ref changed — workflow edited, lockfile still pins old ref"
+  bash "$RESET"
+  local scratch wf
+  scratch="$(mktemp -d /tmp/gh-actions-pin-demo-XXXXXX)"
+  mkdir -p "$scratch/.github/workflows"
+  wf=".github/workflows/ci.yml"
+  cat > "$scratch/$wf" <<'YML'
+name: CI
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+YML
+  comment "Bootstrap a fresh lockfile with current upstream SHAs"
+  ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" >/dev/null 2>&1 ) || true
+  run grep checkout "$scratch/.github/workflows/actions.lock"
+  comment "Developer (or Dependabot) edits the workflow ref"
+  run sed -i '' 's/checkout@v4.2.0/checkout@v4.3.0/g' "$scratch/$wf"
+  run grep checkout "$scratch/$wf"
+  comment "Check surfaces a REF_CHANGED diagnostic (note the docs hyperlink)"
+  ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" ) || true
+  echo
+  comment "After auto-fix, lockfile pins the new ref"
+  run grep checkout "$scratch/.github/workflows/actions.lock"
+}
+
+scenario_stale() {
+  banner "Stale — lockfile pins an entry no workflow references"
+  bash "$RESET"
+  local scratch wf
+  scratch="$(mktemp -d /tmp/gh-actions-pin-demo-XXXXXX)"
+  mkdir -p "$scratch/.github/workflows"
+  wf=".github/workflows/ci.yml"
+  cat > "$scratch/$wf" <<'YML'
+name: CI
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.0
+YML
+  comment "Bootstrap a clean lockfile from the workflow"
+  ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" >/dev/null 2>&1 ) || true
+  comment "Inject a dangling actions/cache@v4.0.0 lockfile entry"
+  python3 - "$scratch/.github/workflows/actions.lock" "$wf" <<'PY'
+import sys, pathlib
+lock, wfname = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = lock.read_text()
+pin = "actions/cache@v4.0.0:sha1-0000000000000000000000000000000000000000"
+inject = (
+  f"    {pin}:\n"
+  "        ref: v4.0.0\n"
+  "        sha: sha1-0000000000000000000000000000000000000000\n"
+  "        owner_id: 1\n"
+  "        repo_id: 1\n"
+)
+text = text.replace("actions:\n", "actions:\n" + inject, 1)
+text = text.replace(
+  f"    .github/workflows/{pathlib.Path(wfname).name}:\n        dependencies:\n",
+  f"    .github/workflows/{pathlib.Path(wfname).name}:\n        dependencies:\n            - {pin}\n",
+  1,
+)
+lock.write_text(text)
+PY
+  run grep -E "actions/cache" "$scratch/.github/workflows/actions.lock"
+  comment "Check surfaces only the STALE diagnostic (note the docs hyperlink)"
+  ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" ) || true
+}
+
 scenario_ref_moved() {
   banner "Ref moved — routine update"
   bash "$RESET"
@@ -336,7 +413,7 @@ for fix in fixtures:
                 pins.append(pin)
                 actions[pin] = (1, 1)
     wf_map[fix.name] = pins
-lines = ["version: v1", "actions:"]
+lines = ["version: v0.0.1", "actions:"]
 for pin in sorted(actions):
     o, r = actions[pin]
     lines += [f"  {pin}:", f"    owner_id: {o}", f"    repo_id: {r}"]
@@ -362,6 +439,8 @@ run_all() {
   scenario_upgrade_latest
   scenario_upgrade_version
   scenario_edit_repin
+  scenario_ref_changed
+  scenario_stale
   scenario_ref_moved
   scenario_imposter_commit
   scenario_lockfile_forgery
@@ -380,6 +459,8 @@ case "${1}" in
   upgrade-latest)     scenario_upgrade_latest ;;
   upgrade-version)    scenario_upgrade_version ;;
   edit-repin)         scenario_edit_repin ;;
+  ref-changed)        scenario_ref_changed ;;
+  stale)              scenario_stale ;;
   ref-moved)          scenario_ref_moved ;;
   imposter-commit|imposter) scenario_imposter_commit ;;
   lockfile-forgery|forgery) scenario_lockfile_forgery ;;
