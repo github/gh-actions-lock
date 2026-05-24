@@ -37,7 +37,7 @@ func (rem *Remediator) tagLabel(owner, repo string, tag pickerTag, recommend boo
 	tagURL := TagURL(owner, repo, tag.Name)
 	label := rem.output.Hyperlink(tag.Name, tagURL)
 	if tag.IsInstalled {
-		label += "  📌 current"
+		label += "  📌 in lockfile"
 	}
 	if !rem.isSameOwner(owner) {
 		if tag.IsImmutable {
