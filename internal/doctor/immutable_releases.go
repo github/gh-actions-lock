@@ -66,8 +66,9 @@ func CheckRepoImmutableReleases(client *api.RESTClient, root, owner, repo string
 		preview = preview[:5]
 	}
 	detail := fmt.Sprintf(
-		"%s/%s defines %s but publishes %d non-immutable release(s) (e.g. %s); enable immutable releases so consumers can pin to verifiable tags",
-		owner, repo, display, len(mutableTags), strings.Join(preview, ", "),
+		"%s/%s publishes %d of %d action release(s) without immutable tags (e.g. %s). "+
+			"Republish %s as immutable releases so downstream consumers can pin to verifiable, tamper-proof versions.",
+		owner, repo, len(mutableTags), len(releases), strings.Join(preview, ", "), display,
 	)
 	return []Finding{{
 		Category: CategoryNonImmutableReleases,
