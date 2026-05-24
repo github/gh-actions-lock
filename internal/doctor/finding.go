@@ -63,6 +63,9 @@ type Finding struct {
 	// engine adapter so it's parity-aligned with the editor's
 	// codeDescription link; "" when no URL is mapped.
 	DocURL string
+	// ImmutableReleasesData carries release metadata for CategoryNonImmutableReleases
+	// findings so the remediator can flip the repo setting and republish releases.
+	ImmutableReleasesData *ImmutableReleasesData
 }
 
 // InventoryEntry describes a single dependency with context.

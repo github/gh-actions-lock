@@ -17,6 +17,7 @@ import (
 type RemediateOptions struct {
 	Interactive bool   // true when stderr is a TTY
 	RepoOwner   string // owner of the repo being scanned (for same-owner detection)
+	RepoName    string // name of the repo being scanned (used for repo-level remediations)
 }
 
 // Remediator walks through findings and applies fixes interactively.
@@ -24,6 +25,7 @@ type Remediator struct {
 	prompter  Prompter
 	resolver  *resolver.Resolver
 	tagLister *TagLister
+	client    *api.RESTClient
 	store     *lockfile.Store
 	output    *ui.UI
 	opts      RemediateOptions
@@ -59,6 +61,7 @@ func NewRemediator(p Prompter, r *resolver.Resolver, client *api.RESTClient, sto
 		prompter:  p,
 		resolver:  r,
 		tagLister: NewTagLister(client),
+		client:    client,
 		store:     store,
 		output:    out,
 		opts:      opts,
@@ -89,9 +92,6 @@ func (rem *Remediator) offerApplyAll(dep *lockfile.Dependency, tag string) {
 // Remediate walks through a report and handles each workflow that needs attention.
 func (rem *Remediator) Remediate(report *Report) error {
 	actionable := report.WorkflowsNeedingAttention()
-	if len(actionable) == 0 {
-		return nil
-	}
 
 	// Pre-scan: count how many times each dep appears so we can offer "apply to all".
 	rem.remaining = make(map[string]int)
@@ -106,6 +106,15 @@ func (rem *Remediator) Remediate(report *Report) error {
 	for _, wr := range actionable {
 		if err := rem.remediateWorkflow(wr); err != nil {
 			return err
+		}
+	}
+
+	// Repo-level findings (e.g. non-immutable releases).
+	for _, f := range report.RepoFindings {
+		if f.Category == CategoryNonImmutableReleases {
+			if err := rem.handleNonImmutableReleases(f); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

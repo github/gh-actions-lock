@@ -202,14 +202,16 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			prompter = doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
 		}
 
-		var repoOwner string
+		var repoOwner, repoName string
 		if currentRepo, err := repository.Current(); err == nil {
 			repoOwner = currentRepo.Owner
+			repoName = currentRepo.Name
 		}
 
 		rem := doctor.NewRemediator(prompter, r, restClient, store, f.UI, doctor.RemediateOptions{
 			Interactive: interactive,
 			RepoOwner:   repoOwner,
+			RepoName:    repoName,
 		})
 
 		if err := rem.Remediate(report); err != nil {
