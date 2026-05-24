@@ -34,11 +34,23 @@ type Remediator struct {
 	remaining map[string]int
 
 	// Counters for summary.
-	Fixed       int
-	Skipped     int
-	Alerted     int
-	SkippedDeps []string // unique dep keys that were skipped (for summary)
-	AlertedDeps []string // dep keys that triggered security alerts (deduplicated)
+	Fixed          int
+	Skipped        int
+	Alerted        int
+	Unresolved     int
+	SkippedDeps    []string // unique dep keys that were skipped (for summary)
+	AlertedDeps    []string // dep keys that triggered security alerts (deduplicated)
+	UnresolvedDeps []string // dep keys whose ref could not be resolved (e.g. bad tag)
+}
+
+func (rem *Remediator) markUnresolved(key string) {
+	for _, k := range rem.UnresolvedDeps {
+		if k == key {
+			return
+		}
+	}
+	rem.UnresolvedDeps = append(rem.UnresolvedDeps, key)
+	rem.Unresolved++
 }
 
 // NewRemediator creates a new Remediator.
@@ -294,6 +306,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 			sha, ok := shaByKey[key]
 			if !ok || sha == "" {
 				rem.output.Detail("  %s  (could not resolve)", key)
+				rem.markUnresolved(key)
 				continue
 			}
 			rem.output.Detail("  %s → %s  %s", key, sha[:12], rem.output.Dim("↩ prior choice"))
@@ -306,6 +319,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 			sha, ok := shaByKey[key]
 			if !ok || sha == "" {
 				rem.output.Detail("  %s  (could not resolve)", key)
+				rem.markUnresolved(key)
 				continue
 			}
 			label := ""
@@ -327,6 +341,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		sha, ok := shaByKey[key]
 		if !ok {
 			rem.output.Detail("  %s  (could not resolve)", key)
+			rem.markUnresolved(key)
 			continue
 		}
 

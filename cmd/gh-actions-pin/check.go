@@ -185,8 +185,8 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
-	var fixedCount, skippedCount, alertedCount int
-	var skippedDeps, alertedDeps []string
+	var fixedCount, skippedCount, alertedCount, unresolvedCount int
+	var skippedDeps, alertedDeps, unresolvedDeps []string
 
 	if willRemediate && len(actionable) > 0 {
 		hostname := resolveHostname(opts.Hostname)
@@ -233,16 +233,21 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if uniqueSkipped > 0 {
 			f.UI.Skip("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
 		}
+		if rem.Unresolved > 0 {
+			f.UI.Skip("%d %s could not be resolved", rem.Unresolved, ui.Pluralize(rem.Unresolved, "action", "actions"))
+		}
 		fixedCount = rem.Fixed
 		skippedCount = uniqueSkipped
 		alertedCount = rem.Alerted
+		unresolvedCount = rem.Unresolved
 		skippedDeps = rem.SkippedDeps
 		alertedDeps = rem.AlertedDeps
+		unresolvedDeps = rem.UnresolvedDeps
 	}
 
-	if !valid || skippedCount > 0 || alertedCount > 0 {
-		// Exit 0 only if everything was resolved — nothing skipped or alerted.
-		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 {
+	if !valid || skippedCount > 0 || alertedCount > 0 || unresolvedCount > 0 {
+		// Exit 0 only if everything was resolved — nothing skipped, alerted, or unresolved.
+		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
 			return nil
 		}
 		if alertedCount > 0 {
@@ -261,6 +266,14 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.Error("%d %s %s interactive resolution — run `gh actions-pin` locally:",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
+				f.UI.Detail("  %s", dep)
+			}
+		}
+		if unresolvedCount > 0 {
+			f.UI.Blank()
+			f.UI.Error("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
+				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
+			for _, dep := range unresolvedDeps {
 				f.UI.Detail("  %s", dep)
 			}
 		}
