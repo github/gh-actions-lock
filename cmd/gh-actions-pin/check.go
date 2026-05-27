@@ -156,8 +156,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	}
 	// Single pass: doctor.Diagnose handles all validation.
 	total := len(opts.WorkflowPaths)
-	if opts.JSONFields == "" && total > 1 {
-		f.UI.StartProgress(fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
+	if opts.JSONFields == "" {
+		label := fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
+		f.UI.StartProgress(label)
+		r.ProgressFn = func(detail string) { f.UI.UpdateProgress(detail) }
 	}
 
 	report := doctor.Diagnose(opts.WorkflowPaths, r, store)

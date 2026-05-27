@@ -149,6 +149,9 @@ func (s *Store) Set(workflowKey string, deps []Dependency) error {
 	pins := make([]string, 0, len(deps))
 	seen := map[string]bool{}
 	for _, d := range deps {
+		if d.Branch == "" {
+			return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
+		}
 		pin, err := dependencyToPin(d)
 		if err != nil {
 			return err

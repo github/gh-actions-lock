@@ -98,25 +98,21 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// Discover containing tag/branch for every resolved commit and rewrite
 	// uses: lines to the canonical ref (tag-if-present-else-branch). Fails
 	// closed if a SHA has no containing branch — that's the impostor signal.
-	// Skipped when reachability is disabled (the same gate disables the
-	// underlying branch_commits endpoint).
-	if !rem.resolver.DisableReachability {
-		preNormKeys := make([]string, len(deps))
-		for i, d := range deps {
-			preNormKeys[i] = d.Key()
-		}
-		normRewrites, err := rem.resolver.NormalizeContaining(deps)
-		if err != nil {
-			rem.Alerted++
-			return fmt.Errorf("normalizing containing refs: %w", err)
-		}
-		for k, v := range normRewrites {
-			rewrites[k] = v
-		}
-		for i := range deps {
-			if newKey := deps[i].Key(); newKey != preNormKeys[i] {
-				parentRewrites[preNormKeys[i]] = newKey
-			}
+	preNormKeys := make([]string, len(deps))
+	for i, d := range deps {
+		preNormKeys[i] = d.Key()
+	}
+	normRewrites, err := rem.resolver.NormalizeContaining(deps)
+	if err != nil {
+		rem.Alerted++
+		return fmt.Errorf("normalizing containing refs: %w", err)
+	}
+	for k, v := range normRewrites {
+		rewrites[k] = v
+	}
+	for i := range deps {
+		if newKey := deps[i].Key(); newKey != preNormKeys[i] {
+			parentRewrites[preNormKeys[i]] = newKey
 		}
 	}
 
@@ -219,12 +215,9 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 
 // normalizeAndRewrite runs containing-ref discovery against deps, mutates
 // dep.Tag/Branch/Ref in place, and rewrites the workflow file's uses: lines
-// to the canonical refs. No-op when reachability is disabled. Returns an
-// error if any commit has no containing branch (impostor signal).
+// to the canonical refs. Returns an error if any commit has no containing
+// branch (impostor signal).
 func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency) error {
-	if rem.resolver.DisableReachability {
-		return nil
-	}
 	normRewrites, err := rem.resolver.NormalizeContaining(deps)
 	if err != nil {
 		rem.Alerted++

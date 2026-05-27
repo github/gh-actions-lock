@@ -243,6 +243,20 @@ func (u *UI) StopProgress() {
 	}
 }
 
+// UpdateProgress sets a detail string appended after the spinner label
+// (e.g. the current action being scanned). No-op when no spinner is
+// active or when running without color (non-TTY).
+func (u *UI) UpdateProgress(detail string) {
+	if u.spinner == nil {
+		return
+	}
+	if detail == "" {
+		u.spinner.Suffix = ""
+		return
+	}
+	u.spinner.Suffix = " — " + detail
+}
+
 // Pluralize returns singular when n==1, plural otherwise.
 func Pluralize(n int, singular, plural string) string {
 	if n == 1 {

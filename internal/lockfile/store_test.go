@@ -116,3 +116,29 @@ func actionKeys[V any](m map[string]V) []string {
 	}
 	return keys
 }
+
+func TestStore_SetRejectsEmptyBranch(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+
+	deps := []Dependency{
+		{
+			NWO:      "actions/checkout",
+			Ref:      "v4",
+			SHA:      "abc123abc123abc123abc123abc123abc123abc1",
+			HashAlgo: "sha1",
+			// Branch intentionally empty — should be rejected.
+		},
+	}
+
+	err = store.Set(".github/workflows/ci.yml", deps)
+	if err == nil {
+		t.Fatal("expected error for dep with empty Branch, got nil")
+	}
+	if !strings.Contains(err.Error(), "branch is required") {
+		t.Errorf("expected 'branch is required' in error, got: %v", err)
+	}
+}

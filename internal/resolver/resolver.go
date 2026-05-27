@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -54,23 +55,38 @@ type ReachabilityResult struct {
 type Resolver struct {
 	client            *api.GraphQLClient
 	restClient        *api.RESTClient
-	httpTransport     http.RoundTripper // raw transport for non-API requests (branch_commits)
-	authToken         string            // auth token for non-API requests
 	hostname          string
 	MaxRecursionDepth int
 	cache             map[string]resolvedEntry
 	latestRefCache    map[string]string
 	reachCache        map[string]ReachabilityStatus
-	bcCache           map[string]bcCacheEntry // owner/repo/sha → cached branch_commits result
+	branchListCache   map[string][]branchHead // "owner/repo" → cached branch list
+	tagListCache      map[string][]tagEntry   // "owner/repo" → cached tag list
 	repoIDsCache      map[string][2]int64     // owner/repo → [ownerID, repoID]
+	defaultBranchCache map[string]string      // "owner/repo" → cached default branch name ("" = lookup failed / unknown)
 	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
 	parentMap map[string][]string
-	// checkReachFn overrides the default REST-based reachability check (for tests).
+	// checkReachFn overrides the default branch-discovery check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
 
-	// DisableReachability skips the branch_commits reachability check entirely.
+	// DisableReachability skips the CheckReachability security audit entirely.
 	// When true, CheckReachability returns ReachabilityUnknown immediately.
+	// Branch discovery for lockfile metadata (NormalizeContaining) is unaffected.
 	DisableReachability bool
+
+	// ProgressFn, if set, is invoked with a short human-readable status
+	// string when a slow operation begins (per-dependency discovery,
+	// per-branch Compare scan). Used by the CLI to update an active
+	// spinner so users get feedback during long scans. Safe to leave nil.
+	ProgressFn func(detail string)
+}
+
+// progress fires ProgressFn with a formatted message when set.
+func (r *Resolver) progress(format string, args ...any) {
+	if r.ProgressFn == nil {
+		return
+	}
+	r.ProgressFn(fmt.Sprintf(format, args...))
 }
 
 // ParentMap returns the child dep key → parent dep keys mapping from the last ResolveAllRecursive call.
@@ -138,15 +154,15 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	return &Resolver{
 		client:            client,
 		restClient:        restClient,
-		httpTransport:     opts.Transport,
-		authToken:         opts.AuthToken,
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		cache:             make(map[string]resolvedEntry),
 		latestRefCache:    make(map[string]string),
 		reachCache:        make(map[string]ReachabilityStatus),
-		bcCache:           make(map[string]bcCacheEntry),
+		branchListCache:   make(map[string][]branchHead),
+		tagListCache:      make(map[string][]tagEntry),
 		repoIDsCache:      make(map[string][2]int64),
+		defaultBranchCache: make(map[string]string),
 	}, nil
 }
 
@@ -202,17 +218,16 @@ func (r *Resolver) HasReachabilityFunc() bool {
 	return r.checkReachFn != nil
 }
 
-// CheckReachability verifies that a resolved SHA is on the lineage of the
-// given ref within the repository. This catches fork-network injection where
-// a SHA exists in GitHub's shared object store but is not actually part of
-// the canonical repository's history.
+// CheckReachability verifies that the pinned SHA is reachable from at least
+// one branch of owner/repo, using the documented REST APIs (list-branches +
+// compare for ancestry). This catches fork-network injection where a SHA
+// exists in GitHub's shared object store but is not part of the canonical
+// repository's history.
 //
-// CheckReachability verifies that a dependency's commit is reachable from a
-// branch in the repository, catching fork-network injection attacks.
-//
-// Uses the undocumented branch_commits endpoint (same approach as zizmor):
-// resolve ref → SHA, then check if that SHA appears on any branch. Fork
-// commits have branches=[] in the upstream repo.
+// DisableReachability bypasses the check entirely (useful for GHES instances
+// or environments where the additional API calls are undesirable). When
+// bypassed, the result status is ReachabilityUnknown. Branch discovery for
+// lockfile metadata (NormalizeContaining) is unaffected by this flag.
 //
 // See: https://docs.zizmor.sh/audits/#impostor-commit
 func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityResult {
@@ -230,14 +245,13 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		return result
 	}
 
-	// Allow tests to inject a fake implementation
+	// Allow tests to inject a fake implementation.
 	if r.checkReachFn != nil {
 		result.Status, result.Detail = r.checkReachFn(owner, repo, sha, ref)
 		r.reachCache[cacheKey] = result.Status
 		return result
 	}
 
-	// Feature-flagged: skip branch_commits when disabled.
 	if r.DisableReachability {
 		result.Status = ReachabilityUnknown
 		result.Detail = "reachability check disabled via config"
@@ -245,243 +259,343 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		return result
 	}
 
-	// For bare-SHA refs, check the SHA directly. For named refs, resolve
-	// the ref to its current SHA first.
-	checkRef := ref
-	if lockfile.IsFullSHA(ref) {
-		checkRef = sha
+	branches, err := r.listBranches(owner, repo)
+	if err != nil {
+		result.Status = ReachabilityUnknown
+		result.Detail = fmt.Sprintf("could not list branches for %s/%s: %s", owner, repo, err)
+		r.reachCache[cacheKey] = result.Status
+		return result
+	}
+	protectedBranches := make([]branchHead, 0, len(branches))
+	for _, b := range branches {
+		if b.Protected {
+			protectedBranches = append(protectedBranches, b)
+		}
+	}
+	defaultBranch := r.getDefaultBranch(owner, repo)
+
+	// Walk protected first, then fall back to all branches.
+	foundBranch := r.reachabilityScan(owner, repo, sha, ref, protectedBranches, defaultBranch)
+	if foundBranch == "" {
+		foundBranch = r.reachabilityScan(owner, repo, sha, ref, branches, defaultBranch)
 	}
 
-	result.Status, result.Detail = r.branchCommitsCheck(owner, repo, checkRef)
-
-	// Annotate bare-SHA refs with guidance to prefer tags.
-	if lockfile.IsFullSHA(ref) {
-		switch result.Status {
-		case Reachable:
-			result.Detail = "pinned to a bare SHA; commit is on a branch but origin cannot be verified at job runtime — prefer pinning to a tag"
-		case Unreachable:
+	if foundBranch != "" {
+		result.Status = Reachable
+		if lockfile.IsFullSHA(ref) {
+			result.Detail = fmt.Sprintf("pinned to a bare SHA; commit is on branch %s but origin cannot be verified at job runtime — prefer pinning to a tag", foundBranch)
+		} else {
+			result.Detail = fmt.Sprintf("commit is on branch %s", foundBranch)
+		}
+	} else {
+		result.Status = Unreachable
+		if lockfile.IsFullSHA(ref) {
 			result.Detail = "pinned to a bare SHA; commit is NOT on any branch — possible fork-network commit"
-		case ReachabilityUnknown:
-			result.Detail = fmt.Sprintf(
-				"pinned to a bare SHA — unable to verify commit origin (%s); pin to a tag instead: https://github.com/%s/%s/releases",
-				result.Detail, owner, repo)
+		} else {
+			result.Detail = fmt.Sprintf("commit %s not found on any branch of %s/%s — possible fork-network injection",
+				shortSha(sha), owner, repo)
 		}
 	}
 
-	// Cache all results including Unknown — within a single CLI run, re-hitting
-	// the same endpoint after a 429 just makes the rate limit worse.
 	r.reachCache[cacheKey] = result.Status
 	return result
 }
 
-// branchCommitsResponse is the subset of the undocumented branch_commits
-// endpoint response we need. The endpoint lives on the web host (not the
-// API host) and returns which branches and tags contain a given commit.
-type branchCommitsResponse struct {
-	Branches []struct {
-		Branch string `json:"branch"`
-	} `json:"branches"`
-	Tags []string `json:"tags"`
+// reachabilityScan walks candidates (in orderedBranches tier order),
+// returning the first branch whose HEAD is sha or whose lineage contains
+// sha as an ancestor via the Compare API. Compare errors (e.g.
+// rate-limited, 5xx) are non-fatal: the branch is skipped.
+func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []branchHead, defaultBranch string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	// Fast path: exact HEAD match.
+	for _, b := range candidates {
+		if strings.EqualFold(b.SHA, sha) {
+			return b.Name
+		}
+	}
+	// Slow path: ancestry via Compare API in tier order.
+	for _, b := range orderedBranches(candidates, ref, defaultBranch) {
+		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
+		ok, err := r.branchContainsCommit(owner, repo, sha, b.SHA)
+		if err != nil {
+			continue
+		}
+		if ok {
+			return b.Name
+		}
+	}
+	return ""
 }
 
-// bcCacheEntry holds a cached branch_commits result. A nil resp with a non-empty
-// errDetail indicates a failed request (429, 500, network error, decode error).
-type bcCacheEntry struct {
-	resp      *branchCommitsResponse
-	errDetail string
+// branchHead holds a branch name, the SHA of its HEAD commit, and whether
+// the branch has branch-protection rules enabled in the upstream repo.
+type branchHead struct {
+	Name      string
+	SHA       string
+	Protected bool
 }
 
-// branchCommitsCheck uses the undocumented branch_commits endpoint (same
-// approach as zizmor) to verify that a ref's current target is contained in
-// at least one branch of the repository. Fork-network commits appear in the
-// fork network's commit graph but have branches=[] in the upstream repo.
-//
-// Why not the documented Compare API? Compare requires a known base ref
-// (e.g. refs/heads/main...{sha}), and for tags — the common pinning target —
-// the tag itself is the attack vector (comparing a tampered tag against its
-// own commit is trivially "identical"). You'd need to enumerate all branches
-// and compare each one, which is O(branches) API calls.
-//
-// branch_commits answers "is this SHA on ANY branch?" in a single call.
-// It wraps spokesd ListReferences with RefListOptions.contains under the hood.
-//
-// To stop relying on this undocumented endpoint, GitHub would need to expose
-// a documented "commit contains" API (e.g. GET /repos/{owner}/{repo}/commits/{sha}/refs
-// or a `contains` parameter on the existing list-branches endpoint).
-// See: https://docs.zizmor.sh/audits/#impostor-commit
-//
-// Flow: resolve ref → SHA via REST API, then GET /{owner}/{repo}/branch_commits/{sha}.
-func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStatus, string) {
-	// Step 1: resolve ref to its current SHA
-	var commitResp struct {
-		SHA string `json:"sha"`
-	}
-	commitPath := fmt.Sprintf("repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
-	if err := r.restClient.Get(commitPath, &commitResp); err != nil {
-		return ReachabilityUnknown, fmt.Sprintf("could not resolve ref %s: %s", ref, err)
-	}
-	if commitResp.SHA == "" {
-		return ReachabilityUnknown, fmt.Sprintf("could not resolve ref %s: empty SHA", ref)
-	}
-
-	// Step 2: check bcCache for this SHA to avoid duplicate HTTP calls.
-	bcKey := owner + "/" + repo + "/" + commitResp.SHA
-	if cached, ok := r.bcCache[bcKey]; ok {
-		if cached.resp == nil {
-			return ReachabilityUnknown, cached.errDetail
-		}
-		if len(cached.resp.Branches) == 0 {
-			return Unreachable, fmt.Sprintf(
-				"ref %s resolves to %s which is not on any branch in %s/%s — possible fork-network injection",
-				ref, commitResp.SHA[:12], owner, repo)
-		}
-		branchNames := make([]string, len(cached.resp.Branches))
-		for i, b := range cached.resp.Branches {
-			branchNames[i] = b.Branch
-		}
-		return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
-	}
-
-	// Step 3: call branch_commits on the web host (not the API host)
-	webHost := r.hostname
-	bcURL := fmt.Sprintf("https://%s/%s/%s/branch_commits/%s", webHost, owner, repo, commitResp.SHA)
-
-	req, err := http.NewRequest("GET", bcURL, nil)
-	if err != nil {
-		return ReachabilityUnknown, fmt.Sprintf("could not build branch_commits request: %s", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	if r.authToken != "" {
-		req.Header.Set("Authorization", "token "+r.authToken)
-	}
-
-	transport := r.httpTransport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		detail := fmt.Sprintf("branch_commits request failed: %s", err)
-		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
-		return ReachabilityUnknown, detail
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		detail := fmt.Sprintf("branch_commits returned HTTP %d", resp.StatusCode)
-		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
-		return ReachabilityUnknown, detail
-	}
-
-	var bcResp branchCommitsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&bcResp); err != nil {
-		detail := fmt.Sprintf("could not decode branch_commits response: %s", err)
-		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
-		return ReachabilityUnknown, detail
-	}
-	r.bcCache[bcKey] = bcCacheEntry{resp: &bcResp}
-
-	if len(bcResp.Branches) == 0 {
-		return Unreachable, fmt.Sprintf(
-			"ref %s resolves to %s which is not on any branch in %s/%s — possible fork-network injection",
-			ref, commitResp.SHA[:12], owner, repo)
-	}
-
-	branchNames := make([]string, len(bcResp.Branches))
-	for i, b := range bcResp.Branches {
-		branchNames[i] = b.Branch
-	}
-	return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
+// tagEntry holds a tag name and the commit SHA it points at.
+type tagEntry struct {
+	Name string
+	SHA  string
 }
 
-// DiscoverContaining returns a (tag, branch) pair for sha in owner/repo,
-// using the branch_commits endpoint (results are cached for the lifetime of
-// the resolver).
+// listBranches returns all branches with their HEAD SHAs for a repo, using
+// the documented REST API (GET /repos/{owner}/{repo}/branches). Results are
+// cached per owner/repo. Paginates up to 3 pages (300 branches) to bound
+// the number of API calls.
+func (r *Resolver) listBranches(owner, repo string) ([]branchHead, error) {
+	key := owner + "/" + repo
+	if cached, ok := r.branchListCache[key]; ok {
+		return cached, nil
+	}
+	var all []branchHead
+	for page := 1; page <= 3; page++ {
+		path := fmt.Sprintf("repos/%s/%s/branches?per_page=100&page=%d",
+			url.PathEscape(owner), url.PathEscape(repo), page)
+		var resp []struct {
+			Name   string `json:"name"`
+			Commit struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+			Protected bool `json:"protected"`
+		}
+		if err := r.restClient.Get(path, &resp); err != nil {
+			return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, err)
+		}
+		for _, b := range resp {
+			all = append(all, branchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: b.Protected})
+		}
+		if len(resp) < 100 {
+			break // last page
+		}
+	}
+	r.branchListCache[key] = all
+	return all, nil
+}
+
+// listTagsForRepo returns all tags with their commit SHAs for a repo, using
+// the documented REST API (GET /repos/{owner}/{repo}/tags). Results are
+// cached per owner/repo.
+func (r *Resolver) listTagsForRepo(owner, repo string) ([]tagEntry, error) {
+	key := owner + "/" + repo
+	if cached, ok := r.tagListCache[key]; ok {
+		return cached, nil
+	}
+	path := fmt.Sprintf("repos/%s/%s/tags?per_page=100",
+		url.PathEscape(owner), url.PathEscape(repo))
+	var resp []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := r.restClient.Get(path, &resp); err != nil {
+		return nil, fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)
+	}
+	tags := make([]tagEntry, 0, len(resp))
+	for _, t := range resp {
+		tags = append(tags, tagEntry{Name: t.Name, SHA: t.Commit.SHA})
+	}
+	r.tagListCache[key] = tags
+	return tags, nil
+}
+
+// branchContainsCommit reports whether sha is on the lineage of branchHeadSHA
+// using the documented Compare API. A 404 or 422 response (unrelated histories
+// or missing commit) is treated as a non-error false return.
+func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) (bool, error) {
+	if strings.EqualFold(sha, branchHeadSHA) {
+		return true, nil
+	}
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
+		owner, repo, url.PathEscape(sha), url.PathEscape(branchHeadSHA))
+	var resp compareResponse
+	if err := r.restClient.Get(path, &resp); err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) &&
+			(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {
+			return false, nil // unrelated histories or missing commit
+		}
+		return false, err
+	}
+	// sha is an ancestor of branchHeadSHA iff the merge base IS sha.
+	return strings.EqualFold(resp.MergeBaseCommit.SHA, sha), nil
+}
+
+// orderedBranches returns branches in tiered order so the most
+// trust-bearing candidates are compared first when walking the slow path:
+//
+//  1. hintRef (the ref the user literally wrote in the workflow)
+//  2. defaultBranch (e.g. main / master)
+//  3. protected branches (branch-protection rules in upstream), lex within tier
+//  4. unprotected branches, lex within tier
+//
+// Tiers 1 and 2 are skipped when empty or absent from branches.
+func orderedBranches(branches []branchHead, hintRef, defaultBranch string) []branchHead {
+	priority := make(map[string]bool)
+	var result []branchHead
+	for _, name := range []string{hintRef, defaultBranch} {
+		if name == "" || priority[name] {
+			continue
+		}
+		for _, b := range branches {
+			if b.Name == name {
+				result = append(result, b)
+				priority[b.Name] = true
+				break
+			}
+		}
+	}
+	protected := make([]branchHead, 0, len(branches))
+	unprotected := make([]branchHead, 0, len(branches))
+	for _, b := range branches {
+		if priority[b.Name] {
+			continue
+		}
+		if b.Protected {
+			protected = append(protected, b)
+		} else {
+			unprotected = append(unprotected, b)
+		}
+	}
+	sort.Slice(protected, func(i, j int) bool { return protected[i].Name < protected[j].Name })
+	sort.Slice(unprotected, func(i, j int) bool { return unprotected[i].Name < unprotected[j].Name })
+	result = append(result, protected...)
+	result = append(result, unprotected...)
+	return result
+}
+
+// getDefaultBranch returns the repo's default branch name (e.g. "main"),
+// looked up via GET /repos/{owner}/{repo} and cached for the lifetime of
+// the resolver. On lookup failure an empty string is cached so subsequent
+// callers don't retry.
+func (r *Resolver) getDefaultBranch(owner, repo string) string {
+	key := owner + "/" + repo
+	if name, ok := r.defaultBranchCache[key]; ok {
+		return name
+	}
+	var resp struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
+	if err := r.restClient.Get(path, &resp); err != nil {
+		r.defaultBranchCache[key] = ""
+		return ""
+	}
+	r.defaultBranchCache[key] = resp.DefaultBranch
+	return resp.DefaultBranch
+}
+
+// DiscoverContaining returns (tag, branch) for sha in owner/repo, using
+// the documented REST APIs: list-branches (with compare for ancestry) and
+// list-tags. Results are cached for the lifetime of the resolver.
 //
 // Selection rules:
 //   - If hintRef is one of the discovered tags it wins; otherwise the first
-//     tag (lexicographic) is picked. tag may be empty when no tag points at
-//     sha.
-//   - If hintRef is one of the discovered branches it wins; otherwise the
-//     repo's default branch wins if it appears, falling back to the first
-//     branch (lexicographic). branch is REQUIRED to be non-empty — an error
-//     is returned otherwise because a commit not on any branch is a
-//     fork-network / impostor signal.
+//     tag (lexicographic) is picked. tag may be empty when no tag points at sha.
+//   - Protected branches are searched first (hintRef → default → lex).
+//     If no protected branch contains sha, the search falls back to all
+//     branches in the same tier order.
+//   - branch is REQUIRED to be non-empty; an error is returned otherwise
+//     (impostor / fork-network signal).
 //
-// hintRef may be empty (e.g. for bare-SHA pins). DiscoverContaining does not
-// call the GitHub API to learn the default branch; callers that have one
-// available may pass it via DiscoverContainingDefault.
+// hintRef may be empty (e.g. for bare-SHA pins). The repo's default branch
+// is discovered automatically via GET /repos/{owner}/{repo} (cached).
 func (r *Resolver) DiscoverContaining(owner, repo, sha, hintRef string) (tag, branch string, err error) {
-	return r.DiscoverContainingDefault(owner, repo, sha, hintRef, "")
+	return r.DiscoverContainingDefault(owner, repo, sha, hintRef, r.getDefaultBranch(owner, repo))
 }
 
 // DiscoverContainingDefault is DiscoverContaining with an explicit hint at
 // the repository's default branch (e.g. "main"). When the discovered branch
 // set contains defaultBranch it is preferred over lexicographic ordering.
+//
+// Branch search is protected-first: only protected branches are tried in
+// the first pass. If none contain sha, the search falls back to ALL
+// branches.
 func (r *Resolver) DiscoverContainingDefault(owner, repo, sha, hintRef, defaultBranch string) (tag, branch string, err error) {
-	bc, err := r.fetchBranchCommits(owner, repo, sha)
+	branches, err := r.listBranches(owner, repo)
 	if err != nil {
 		return "", "", err
-	}
-	tags := make([]string, len(bc.Tags))
-	copy(tags, bc.Tags)
-	branches := make([]string, len(bc.Branches))
-	for i, b := range bc.Branches {
-		branches[i] = b.Branch
 	}
 	if len(branches) == 0 {
 		return "", "", fmt.Errorf("%s/%s@%s is not on any branch — fork-network / impostor signal; refusing to pin", owner, repo, shortSha(sha))
 	}
-	tag = pickPreferred(tags, hintRef, "")
-	branch = pickPreferred(branches, hintRef, defaultBranch)
+	protectedBranches := make([]branchHead, 0, len(branches))
+	for _, b := range branches {
+		if b.Protected {
+			protectedBranches = append(protectedBranches, b)
+		}
+	}
+
+	// First pass: protected branches only.
+	branch, err = r.findContainingBranch(owner, repo, sha, hintRef, defaultBranch, protectedBranches)
+	if err != nil {
+		return "", "", err
+	}
+	if branch == "" {
+		// Fallback: relax to all branches.
+		branch, err = r.findContainingBranch(owner, repo, sha, hintRef, defaultBranch, branches)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	if branch == "" {
+		return "", "", fmt.Errorf("%s/%s@%s is not on any branch — fork-network / impostor signal; refusing to pin", owner, repo, shortSha(sha))
+	}
+
+	// Discover tags pointing at sha.
+	allTags, err := r.listTagsForRepo(owner, repo)
+	if err != nil {
+		return "", "", err
+	}
+	var tagNames []string
+	for _, t := range allTags {
+		if strings.EqualFold(t.SHA, sha) {
+			tagNames = append(tagNames, t.Name)
+		}
+	}
+	tag = pickPreferred(tagNames, hintRef, "")
+
 	return tag, branch, nil
 }
 
-// fetchBranchCommits returns the cached branch_commits response for the
-// given SHA, populating the cache on miss.
-func (r *Resolver) fetchBranchCommits(owner, repo, sha string) (*branchCommitsResponse, error) {
-	bcKey := owner + "/" + repo + "/" + sha
-	if cached, ok := r.bcCache[bcKey]; ok {
-		if cached.resp == nil {
-			return nil, fmt.Errorf("branch_commits unavailable for %s/%s@%s: %s", owner, repo, shortSha(sha), cached.errDetail)
+// findContainingBranch returns the name of the first branch (from the given
+// candidate set, in orderedBranches tier order) whose HEAD is sha or which
+// contains sha as an ancestor via the Compare API. Returns "" if none
+// match. Returns a non-nil error only for unexpected transport failures
+// from the Compare API (404/422 are treated as "not contained").
+func (r *Resolver) findContainingBranch(owner, repo, sha, hintRef, defaultBranch string, candidates []branchHead) (string, error) {
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	// Fast path: exact HEAD match.
+	var exact []string
+	for _, b := range candidates {
+		if strings.EqualFold(b.SHA, sha) {
+			exact = append(exact, b.Name)
 		}
-		return cached.resp, nil
 	}
-
-	webHost := r.hostname
-	bcURL := fmt.Sprintf("https://%s/%s/%s/branch_commits/%s", webHost, owner, repo, sha)
-	req, err := http.NewRequest("GET", bcURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building branch_commits request: %w", err)
+	if len(exact) > 0 {
+		return pickPreferred(exact, hintRef, defaultBranch), nil
 	}
-	req.Header.Set("Accept", "application/json")
-	if r.authToken != "" {
-		req.Header.Set("Authorization", "token "+r.authToken)
+	// Slow path: ancestry via Compare API in tier order.
+	for _, b := range orderedBranches(candidates, hintRef, defaultBranch) {
+		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
+		ok, err := r.branchContainsCommit(owner, repo, sha, b.SHA)
+		if err != nil {
+			return "", fmt.Errorf("comparing %s with %s/%s branch %s: %w",
+				shortSha(sha), owner, repo, b.Name, err)
+		}
+		if ok {
+			return b.Name, nil
+		}
 	}
-	transport := r.httpTransport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		detail := err.Error()
-		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
-		return nil, fmt.Errorf("branch_commits request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		detail := fmt.Sprintf("HTTP %d", resp.StatusCode)
-		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
-		return nil, fmt.Errorf("branch_commits returned %s for %s/%s@%s", detail, owner, repo, shortSha(sha))
-	}
-	var bc branchCommitsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&bc); err != nil {
-		detail := "decode: " + err.Error()
-		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
-		return nil, fmt.Errorf("decoding branch_commits response: %w", err)
-	}
-	r.bcCache[bcKey] = bcCacheEntry{resp: &bc}
-	return &bc, nil
+	return "", nil
 }
 
 // pickPreferred returns hintRef if it appears in candidates, else
@@ -520,25 +634,22 @@ func shortSha(s string) string {
 }
 
 // NormalizeContaining runs DiscoverContaining for every entry in deps,
-// populates dep.Tag and dep.Branch, and computes the canonical @ref as
-// "tag if non-empty else branch". When the canonical ref differs from
-// dep.Ref the change is recorded in the returned rewrites map (keyed by
-// "owner/repo[/path]@old-ref" → "owner/repo[/path]@new-ref") and dep.Ref
-// is updated in place. Callers should pass the resulting map to
-// lockfile.File.RewriteActionRefs to mutate the workflow uses: lines.
+// populates dep.Tag and dep.Branch, and computes the canonical @ref.
+// When the canonical ref differs from dep.Ref the change is recorded in
+// the returned rewrites map (keyed by "owner/repo[/path]@old-ref" →
+// "owner/repo[/path]@new-ref") and dep.Ref is updated in place. Callers
+// should pass the resulting map to lockfile.File.RewriteActionRefs to
+// mutate the workflow uses: lines.
+//
+// Ref selection: if the original ref was itself a discovered branch (user
+// wrote e.g. @main), that branch is preserved as the key ref. Otherwise
+// the discovered tag wins (if any), falling back to the containing branch.
 //
 // Returns an error from the first dep whose discovery fails (e.g. commit
 // not on any branch — fail closed). On error rewrites is nil and earlier
 // in-place mutations may have already happened; the caller should treat
 // the deps slice as tainted.
-//
-// No-op when reachability is disabled or a test reachability stub is
-// installed (NormalizeContaining shares the branch_commits transport with
-// CheckReachability; if that transport is bypassed, discovery is too).
 func (r *Resolver) NormalizeContaining(deps []lockfile.Dependency) (map[string]string, error) {
-	if r.DisableReachability || r.checkReachFn != nil {
-		return nil, nil
-	}
 	rewrites := map[string]string{}
 	for i := range deps {
 		d := &deps[i]
@@ -546,13 +657,22 @@ func (r *Resolver) NormalizeContaining(deps []lockfile.Dependency) (map[string]s
 		if owner == "" || repo == "" {
 			continue
 		}
+		r.progress("resolving %s@%s", d.NWO, d.Ref)
 		tag, branch, err := r.DiscoverContaining(owner, repo, d.SHA, d.Ref)
 		if err != nil {
 			return nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
 		}
 		d.Tag = tag
 		d.Branch = branch
+		// Prefer the user's explicit branch ref when the workflow file
+		// already names a branch (e.g. @main stays @main even when tags
+		// also exist). Otherwise prefer the discovered tag, falling back
+		// to the containing branch.
 		newRef := tag
+		if branch == d.Ref {
+			// hintRef matched a branch — user wrote a branch ref.
+			newRef = branch
+		}
 		if newRef == "" {
 			newRef = branch
 		}
@@ -639,6 +759,7 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 		}
 		seen[key] = true
 
+		r.progress("checking reachability %s@%s", dep.NWO, dep.Ref)
 		result := r.CheckReachability(owner, repo, dep.SHA, dep.Ref)
 		result.DepKey = dep.Key()
 		results = append(results, result)

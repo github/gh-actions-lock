@@ -444,22 +444,10 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 
 	t.Run("on a branch", func(t *testing.T) {
 		reg := &httpmock.Registry{}
-		// Resolve SHA (ref == sha, so checkRef == sha)
+		// Bare-SHA ref: main HEAD == sha → exact match → Reachable.
 		reg.Register(
-			httpmock.REST("GET", "repos/actions/checkout/commits/abc123"),
-			httpmock.JSONResponse(map[string]any{
-				"sha": sha,
-			}),
-		)
-		// branch_commits — commit is on main
-		reg.Register(
-			httpmock.REST("GET", "actions/checkout/branch_commits/abc123"),
-			httpmock.JSONResponse(map[string]any{
-				"branches": []map[string]any{
-					{"branch": "main", "prs": []any{}},
-				},
-				"tags": []string{},
-			}),
+			httpmock.REST("GET", `repos/actions/checkout/branches`),
+			httpmock.JSONResponse(branchListResponse("main", sha)),
 		)
 		r, err := NewWithTransport("github.com", reg)
 		if err != nil {
@@ -478,17 +466,8 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 	t.Run("not on any branch", func(t *testing.T) {
 		reg := &httpmock.Registry{}
 		reg.Register(
-			httpmock.REST("GET", "repos/actions/checkout/commits/abc123"),
-			httpmock.JSONResponse(map[string]any{
-				"sha": sha,
-			}),
-		)
-		reg.Register(
-			httpmock.REST("GET", "actions/checkout/branch_commits/abc123"),
-			httpmock.JSONResponse(map[string]any{
-				"branches": []any{},
-				"tags":     []string{},
-			}),
+			httpmock.REST("GET", `repos/actions/checkout/branches`),
+			httpmock.JSONResponse(branchListResponse()),
 		)
 		r, err := NewWithTransport("github.com", reg)
 		if err != nil {
@@ -505,24 +484,13 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 	})
 }
 
-func TestBranchCommitsCheck_Reachable(t *testing.T) {
+func TestCheckReachability_OnBranch_Reachable(t *testing.T) {
+	sha := "abc123abc123abc123abc123abc123abc123abc1"
 	reg := &httpmock.Registry{}
-	// Resolve ref to SHA
+	// Fast path: releases/v6 HEAD == sha → exact match → Reachable.
 	reg.Register(
-		httpmock.REST("GET", "repos/actions/checkout/commits/v6"),
-		httpmock.JSONResponse(map[string]any{
-			"sha": "def456def456def456def456def456def456def4",
-		}),
-	)
-	// branch_commits — commit is on a branch
-	reg.Register(
-		httpmock.REST("GET", "actions/checkout/branch_commits/def456"),
-		httpmock.JSONResponse(map[string]any{
-			"branches": []map[string]any{
-				{"branch": "releases/v6", "prs": []any{}},
-			},
-			"tags": []string{"v6"},
-		}),
+		httpmock.REST("GET", `repos/actions/checkout/branches`),
+		httpmock.JSONResponse(branchListResponse("releases/v6", sha)),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -530,33 +498,23 @@ func TestBranchCommitsCheck_Reachable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	result := r.CheckReachability("actions", "checkout", sha, "v6")
 	if result.Status != Reachable {
 		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
 	}
 	reg.Verify(t)
 }
 
-// TestBranchCommitsCheck_ForkInjection tests that a fork-network commit
-// (no branches in the upstream repo) is detected as Unreachable.
-func TestBranchCommitsCheck_ForkInjection(t *testing.T) {
+// TestCheckReachability_ForkInjection_Unreachable verifies that a fork-network
+// commit (not on any branch of the canonical repo) is detected as Unreachable.
+func TestCheckReachability_ForkInjection_Unreachable(t *testing.T) {
 	forkSHA := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 	reg := &httpmock.Registry{}
-	// Resolve ref to the fork commit SHA
+	// Empty branch list: fork commits have no branches in the upstream repo.
 	reg.Register(
-		httpmock.REST("GET", "repos/actions/checkout/commits/tampered"),
-		httpmock.JSONResponse(map[string]any{
-			"sha": forkSHA,
-		}),
-	)
-	// branch_commits: fork commit has NO branches
-	reg.Register(
-		httpmock.REST("GET", "actions/checkout/branch_commits/deadbeefdead"),
-		httpmock.JSONResponse(map[string]any{
-			"branches": []any{},
-			"tags":     []string{"tampered"},
-		}),
+		httpmock.REST("GET", `repos/actions/checkout/branches`),
+		httpmock.JSONResponse(branchListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -564,7 +522,7 @@ func TestBranchCommitsCheck_ForkInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "tampered")
+	result := r.CheckReachability("actions", "checkout", forkSHA, "tampered")
 	if result.Status != Unreachable {
 		t.Fatalf("expected Unreachable for fork injection, got %s (%s)", result.Status, result.Detail)
 	}
@@ -574,20 +532,12 @@ func TestBranchCommitsCheck_ForkInjection(t *testing.T) {
 	reg.Verify(t)
 }
 
-// TestBranchCommitsCheck_Unknown_KeepsUnknown verifies that when the
-// branch_commits endpoint fails, we return Unknown (not a false positive).
-func TestBranchCommitsCheck_Unknown_KeepsUnknown(t *testing.T) {
+// TestCheckReachability_BranchListError_ReturnsUnknown verifies graceful
+// degradation when the branches endpoint fails.
+func TestCheckReachability_BranchListError_ReturnsUnknown(t *testing.T) {
 	reg := &httpmock.Registry{}
-	// Resolve ref to SHA
 	reg.Register(
-		httpmock.REST("GET", "repos/actions/checkout/commits/v6"),
-		httpmock.JSONResponse(map[string]any{
-			"sha": "def456def456def456def456def456def456def4",
-		}),
-	)
-	// branch_commits fails
-	reg.Register(
-		httpmock.REST("GET", "actions/checkout/branch_commits/def456"),
+		httpmock.REST("GET", `repos/actions/checkout/branches`),
 		httpmock.StatusResponse(500),
 	)
 
@@ -598,31 +548,24 @@ func TestBranchCommitsCheck_Unknown_KeepsUnknown(t *testing.T) {
 
 	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
 	if result.Status != ReachabilityUnknown {
-		t.Fatalf("expected Unknown when branch_commits fails, got %s (%s)", result.Status, result.Detail)
+		t.Fatalf("expected Unknown when branches API fails, got %s (%s)", result.Status, result.Detail)
 	}
 	reg.Verify(t)
 }
 
-// TestBranchCommitsCheck_RefResolveFails verifies graceful degradation
-// when the ref can't be resolved to a SHA.
-func TestBranchCommitsCheck_RefResolveFails(t *testing.T) {
-	reg := &httpmock.Registry{}
-	// Resolve ref fails with 404
-	reg.Register(
-		httpmock.REST("GET", "repos/actions/checkout/commits/nonexistent"),
-		httpmock.StatusResponse(404),
-	)
-
-	r, err := NewWithTransport("github.com", reg)
+// TestCheckReachability_Disabled_ReturnsUnknown verifies that
+// DisableReachability=true bypasses the security check and returns Unknown.
+func TestCheckReachability_Disabled_ReturnsUnknown(t *testing.T) {
+	r, err := NewWithTransport("github.com", &httpmock.Registry{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.DisableReachability = true
 
-	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "nonexistent")
+	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
 	if result.Status != ReachabilityUnknown {
-		t.Fatalf("expected Unknown when ref resolve fails, got %s (%s)", result.Status, result.Detail)
+		t.Fatalf("expected Unknown when disabled, got %s (%s)", result.Status, result.Detail)
 	}
-	reg.Verify(t)
 }
 
 func TestCheckAncestry_Confirmed(t *testing.T) {

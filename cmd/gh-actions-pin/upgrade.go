@@ -131,6 +131,13 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 
 	var hadError bool
 	var allChanges []jsonUpgradeChange
+	total := len(opts.WorkflowPaths)
+	if opts.JSONFields == "" {
+		label := fmt.Sprintf("Upgrading across %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
+		f.UI.StartProgress(label)
+		r.ProgressFn = func(detail string) { f.UI.UpdateProgress(detail) }
+		defer f.UI.StopProgress()
+	}
 	for _, workflowPath := range opts.WorkflowPaths {
 		changes, err := upgradeOneFile(f, opts, workflowPath, r, store, targets)
 		if err != nil {
@@ -293,30 +300,28 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	// Discover containing tag/branch for every resolved commit and merge
 	// any further rewrites (typically @sha → @tag) into updatedContent.
 	// Fails closed when a commit has no containing branch.
-	if !r.DisableReachability {
-		preNormKeys := make([]string, len(deps))
-		for i, d := range deps {
-			preNormKeys[i] = d.Key()
-		}
-		normRewrites, err := r.NormalizeContaining(deps)
-		if err != nil {
-			return nil, fmt.Errorf("normalizing containing refs: %w", err)
-		}
-		if len(normRewrites) > 0 {
-			normedContent, _, err := upgradedWF.RewriteActionRefs(normRewrites)
-			if err != nil {
-				return nil, fmt.Errorf("rewriting refs to canonical tag/branch: %w", err)
-			}
-			updatedContent = normedContent
-		}
-		normParentRewrites := make(map[string]string)
-		for i := range deps {
-			if newKey := deps[i].Key(); newKey != preNormKeys[i] {
-				normParentRewrites[preNormKeys[i]] = newKey
-			}
-		}
-		r.RekeyParentMap(normParentRewrites)
+	preNormKeys := make([]string, len(deps))
+	for i, d := range deps {
+		preNormKeys[i] = d.Key()
 	}
+	normRewrites, err := r.NormalizeContaining(deps)
+	if err != nil {
+		return nil, fmt.Errorf("normalizing containing refs: %w", err)
+	}
+	if len(normRewrites) > 0 {
+		normedContent, _, err := upgradedWF.RewriteActionRefs(normRewrites)
+		if err != nil {
+			return nil, fmt.Errorf("rewriting refs to canonical tag/branch: %w", err)
+		}
+		updatedContent = normedContent
+	}
+	normParentRewrites := make(map[string]string)
+	for i := range deps {
+		if newKey := deps[i].Key(); newKey != preNormKeys[i] {
+			normParentRewrites[preNormKeys[i]] = newKey
+		}
+	}
+	r.RekeyParentMap(normParentRewrites)
 
 	diff := lockfile.DiffDeps(existingDeps, deps)
 	var changes []jsonUpgradeChange
