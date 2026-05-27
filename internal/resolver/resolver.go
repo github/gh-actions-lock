@@ -394,6 +394,177 @@ func (r *Resolver) branchCommitsCheck(owner, repo, ref string) (ReachabilityStat
 	return Reachable, fmt.Sprintf("commit is on branch(es): %s", strings.Join(branchNames, ", "))
 }
 
+// DiscoverContaining returns a (tag, branch) pair for sha in owner/repo,
+// using the branch_commits endpoint (results are cached for the lifetime of
+// the resolver).
+//
+// Selection rules:
+//   - If hintRef is one of the discovered tags it wins; otherwise the first
+//     tag (lexicographic) is picked. tag may be empty when no tag points at
+//     sha.
+//   - If hintRef is one of the discovered branches it wins; otherwise the
+//     repo's default branch wins if it appears, falling back to the first
+//     branch (lexicographic). branch is REQUIRED to be non-empty — an error
+//     is returned otherwise because a commit not on any branch is a
+//     fork-network / impostor signal.
+//
+// hintRef may be empty (e.g. for bare-SHA pins). DiscoverContaining does not
+// call the GitHub API to learn the default branch; callers that have one
+// available may pass it via DiscoverContainingDefault.
+func (r *Resolver) DiscoverContaining(owner, repo, sha, hintRef string) (tag, branch string, err error) {
+	return r.DiscoverContainingDefault(owner, repo, sha, hintRef, "")
+}
+
+// DiscoverContainingDefault is DiscoverContaining with an explicit hint at
+// the repository's default branch (e.g. "main"). When the discovered branch
+// set contains defaultBranch it is preferred over lexicographic ordering.
+func (r *Resolver) DiscoverContainingDefault(owner, repo, sha, hintRef, defaultBranch string) (tag, branch string, err error) {
+	bc, err := r.fetchBranchCommits(owner, repo, sha)
+	if err != nil {
+		return "", "", err
+	}
+	tags := make([]string, len(bc.Tags))
+	copy(tags, bc.Tags)
+	branches := make([]string, len(bc.Branches))
+	for i, b := range bc.Branches {
+		branches[i] = b.Branch
+	}
+	if len(branches) == 0 {
+		return "", "", fmt.Errorf("%s/%s@%s is not on any branch — fork-network / impostor signal; refusing to pin", owner, repo, shortSha(sha))
+	}
+	tag = pickPreferred(tags, hintRef, "")
+	branch = pickPreferred(branches, hintRef, defaultBranch)
+	return tag, branch, nil
+}
+
+// fetchBranchCommits returns the cached branch_commits response for the
+// given SHA, populating the cache on miss.
+func (r *Resolver) fetchBranchCommits(owner, repo, sha string) (*branchCommitsResponse, error) {
+	bcKey := owner + "/" + repo + "/" + sha
+	if cached, ok := r.bcCache[bcKey]; ok {
+		if cached.resp == nil {
+			return nil, fmt.Errorf("branch_commits unavailable for %s/%s@%s: %s", owner, repo, shortSha(sha), cached.errDetail)
+		}
+		return cached.resp, nil
+	}
+
+	webHost := r.hostname
+	bcURL := fmt.Sprintf("https://%s/%s/%s/branch_commits/%s", webHost, owner, repo, sha)
+	req, err := http.NewRequest("GET", bcURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building branch_commits request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if r.authToken != "" {
+		req.Header.Set("Authorization", "token "+r.authToken)
+	}
+	transport := r.httpTransport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		detail := err.Error()
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return nil, fmt.Errorf("branch_commits request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		detail := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return nil, fmt.Errorf("branch_commits returned %s for %s/%s@%s", detail, owner, repo, shortSha(sha))
+	}
+	var bc branchCommitsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&bc); err != nil {
+		detail := "decode: " + err.Error()
+		r.bcCache[bcKey] = bcCacheEntry{errDetail: detail}
+		return nil, fmt.Errorf("decoding branch_commits response: %w", err)
+	}
+	r.bcCache[bcKey] = bcCacheEntry{resp: &bc}
+	return &bc, nil
+}
+
+// pickPreferred returns hintRef if it appears in candidates, else
+// defaultPick if non-empty and present, else the lexicographically-first
+// candidate, else "".
+func pickPreferred(candidates []string, hintRef, defaultPick string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	for _, c := range candidates {
+		if c == hintRef && hintRef != "" {
+			return c
+		}
+	}
+	if defaultPick != "" {
+		for _, c := range candidates {
+			if c == defaultPick {
+				return c
+			}
+		}
+	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c < best {
+			best = c
+		}
+	}
+	return best
+}
+
+func shortSha(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}
+
+// NormalizeContaining runs DiscoverContaining for every entry in deps,
+// populates dep.Tag and dep.Branch, and computes the canonical @ref as
+// "tag if non-empty else branch". When the canonical ref differs from
+// dep.Ref the change is recorded in the returned rewrites map (keyed by
+// "owner/repo[/path]@old-ref" → "owner/repo[/path]@new-ref") and dep.Ref
+// is updated in place. Callers should pass the resulting map to
+// lockfile.File.RewriteActionRefs to mutate the workflow uses: lines.
+//
+// Returns an error from the first dep whose discovery fails (e.g. commit
+// not on any branch — fail closed). On error rewrites is nil and earlier
+// in-place mutations may have already happened; the caller should treat
+// the deps slice as tainted.
+//
+// No-op when reachability is disabled or a test reachability stub is
+// installed (NormalizeContaining shares the branch_commits transport with
+// CheckReachability; if that transport is bypassed, discovery is too).
+func (r *Resolver) NormalizeContaining(deps []lockfile.Dependency) (map[string]string, error) {
+	if r.DisableReachability || r.checkReachFn != nil {
+		return nil, nil
+	}
+	rewrites := map[string]string{}
+	for i := range deps {
+		d := &deps[i]
+		owner, repo := d.OwnerRepo()
+		if owner == "" || repo == "" {
+			continue
+		}
+		tag, branch, err := r.DiscoverContaining(owner, repo, d.SHA, d.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
+		}
+		d.Tag = tag
+		d.Branch = branch
+		newRef := tag
+		if newRef == "" {
+			newRef = branch
+		}
+		if newRef == "" || newRef == d.Ref {
+			continue
+		}
+		rewrites[d.NWO+"@"+d.Ref] = d.NWO + "@" + newRef
+		d.Ref = newRef
+	}
+	return rewrites, nil
+}
+
 // AncestryStatus represents whether a pinned SHA is a legitimate ancestor of the live SHA.
 type AncestryStatus int
 

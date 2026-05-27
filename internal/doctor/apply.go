@@ -61,6 +61,11 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// so that REF_MOVED signals are meaningful — patch tags should never move.
 	// Skip narrowing for same-owner internal repos — broad tags are fine
 	// within your own org's private actions. Public repos always narrow.
+	//
+	// Narrowing happens BEFORE containing-discovery so that the canonical
+	// ref recorded by NormalizeContaining reflects the post-narrow tag, and
+	// so any rewrite NormalizeContaining adds (for SHA pins) doesn't collide
+	// with the narrowing rewrite chain.
 	rewrites := make(map[string]string)
 	parentRewrites := make(map[string]string)
 	for i := range deps {
@@ -88,6 +93,31 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		parentRewrites[dep.Key()] = dep.NWO + "@" + patchTag
 		rem.output.Detail("  %s → %s (pinning to patch version)", dep.Ref, patchTag)
 		dep.Ref = patchTag
+	}
+
+	// Discover containing tag/branch for every resolved commit and rewrite
+	// uses: lines to the canonical ref (tag-if-present-else-branch). Fails
+	// closed if a SHA has no containing branch — that's the impostor signal.
+	// Skipped when reachability is disabled (the same gate disables the
+	// underlying branch_commits endpoint).
+	if !rem.resolver.DisableReachability {
+		preNormKeys := make([]string, len(deps))
+		for i, d := range deps {
+			preNormKeys[i] = d.Key()
+		}
+		normRewrites, err := rem.resolver.NormalizeContaining(deps)
+		if err != nil {
+			rem.Alerted++
+			return fmt.Errorf("normalizing containing refs: %w", err)
+		}
+		for k, v := range normRewrites {
+			rewrites[k] = v
+		}
+		for i := range deps {
+			if newKey := deps[i].Key(); newKey != preNormKeys[i] {
+				parentRewrites[preNormKeys[i]] = newKey
+			}
+		}
 	}
 
 	// Update parent map keys to reflect narrowed refs.
@@ -149,6 +179,9 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	if err != nil {
 		return fmt.Errorf("re-resolving after ref change: %w", err)
 	}
+	if err := rem.normalizeAndRewrite(wr.Path, deps); err != nil {
+		return err
+	}
 	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
@@ -171,11 +204,45 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 		return fmt.Errorf("resolving actions: %w", err)
 	}
 
+	if err := rem.normalizeAndRewrite(wr.Path, deps); err != nil {
+		return err
+	}
+
 	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Updated %s to latest resolution", dep.Key())
 	rem.Fixed++
+	return nil
+}
+
+// normalizeAndRewrite runs containing-ref discovery against deps, mutates
+// dep.Tag/Branch/Ref in place, and rewrites the workflow file's uses: lines
+// to the canonical refs. No-op when reachability is disabled. Returns an
+// error if any commit has no containing branch (impostor signal).
+func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency) error {
+	if rem.resolver.DisableReachability {
+		return nil
+	}
+	normRewrites, err := rem.resolver.NormalizeContaining(deps)
+	if err != nil {
+		rem.Alerted++
+		return fmt.Errorf("normalizing containing refs: %w", err)
+	}
+	if len(normRewrites) == 0 {
+		return nil
+	}
+	wf, err := lockfile.Load(workflowPath)
+	if err != nil {
+		return err
+	}
+	content, _, err := wf.RewriteActionRefs(normRewrites)
+	if err != nil {
+		return fmt.Errorf("rewriting refs to canonical tag/branch: %w", err)
+	}
+	if err := os.WriteFile(workflowPath, content, 0o644); err != nil {
+		return fmt.Errorf("writing file: %w", err)
+	}
 	return nil
 }

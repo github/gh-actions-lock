@@ -70,6 +70,13 @@ type Dependency struct {
 	Ref      string // resolved ref as given in uses:
 	SHA      string // full commit hash
 	HashAlgo string // "sha1" or "sha256"
+	// Tag is the discovered release/tag pointing at SHA, if any. Optional.
+	// Populated by the pin-time discovery pass; not read from `uses:`.
+	Tag string
+	// Branch is the discovered branch containing SHA. Required at write
+	// time — a commit not on any branch is an impostor / fork-network
+	// signal. Populated by the pin-time discovery pass.
+	Branch string
 }
 
 // Key returns the dependency key for deduplication.
