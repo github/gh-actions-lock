@@ -166,7 +166,6 @@ func (s *Store) Set(workflowKey string, deps []Dependency) error {
 			return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
 		}
 		s.file.Actions[pinKey] = parserlock.Action{
-			Ref:     pin.Ref,
 			Tag:     d.Tag,
 			Branch:  d.Branch,
 			Commit:  pin.Algo + "-" + pin.Hex,
@@ -265,9 +264,6 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		for _, k := range keys {
 			a := file.Actions[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
-			if a.Ref != "" {
-				addStringField(entry, "ref", a.Ref)
-			}
 			if a.Tag != "" {
 				addStringField(entry, "tag", a.Tag)
 			}
