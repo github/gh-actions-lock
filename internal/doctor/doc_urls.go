@@ -25,7 +25,6 @@ var docURLs = map[Category]string{
 	CategoryRefMoved:        securityHardeningBase + "#using-third-party-actions",
 	CategoryLockfileForgery: securityHardeningBase + "#using-third-party-actions",
 	CategoryImposterCommit:  securityHardeningBase + "#using-third-party-actions",
-	CategoryNonImmutableReleases: "https://docs.github.com/en/actions/sharing-automations/creating-actions/about-immutable-releases-for-actions",
 }
 
 // DocURLFor returns the documentation URL for a finding category, or ""

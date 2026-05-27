@@ -118,26 +118,8 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 }
 
 func runCheck(f *pinFactory, opts *checkOptions) error {
-	// Repo-level checks run independently of workflow discovery so action
-	// repos with no workflows of their own still get the immutable-releases
-	// nudge.
-	var repoFindings []doctor.Finding
-	if currentRepo, repoErr := repository.Current(); repoErr == nil {
-		hostname := resolveHostname(opts.Hostname)
-		if restClient, clientErr := api.NewRESTClient(api.ClientOptions{Host: hostname}); clientErr == nil {
-			repoFindings = doctor.CheckRepoImmutableReleases(restClient, ".", currentRepo.Owner, currentRepo.Name)
-		}
-	}
-
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
-		// No workflows is fine when we still have repo-level guidance to
-		// share — print it and exit cleanly so action-only repos get the
-		// nudge instead of an unrelated error.
-		if len(repoFindings) > 0 && opts.JSONFields == "" {
-			presentCheckResults(f.UI, &doctor.Report{RepoFindings: repoFindings}, true, false)
-			return nil
-		}
 		return err
 	}
 	opts.WorkflowPaths = paths
@@ -154,6 +136,9 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	if err != nil {
 		return fmt.Errorf("opening lockfile: %w", err)
 	}
+	// Seed branch hints from the existing lockfile so repeat scans short-circuit
+	// the per-branch Compare walk when the recorded branch still contains the SHA.
+	r.SeedBranchHints(store.AllDeps())
 	// Single pass: doctor.Diagnose handles all validation.
 	total := len(opts.WorkflowPaths)
 	if opts.JSONFields == "" {
@@ -163,8 +148,6 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	}
 
 	report := doctor.Diagnose(opts.WorkflowPaths, r, store)
-
-	report.RepoFindings = append(report.RepoFindings, repoFindings...)
 
 	f.UI.StopProgress()
 

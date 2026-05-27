@@ -64,6 +64,16 @@ type Resolver struct {
 	tagListCache      map[string][]tagEntry   // "owner/repo" → cached tag list
 	repoIDsCache      map[string][2]int64     // owner/repo → [ownerID, repoID]
 	defaultBranchCache map[string]string      // "owner/repo" → cached default branch name ("" = lookup failed / unknown)
+	// compareCache memoizes branchContainsCommit results, keyed by
+	// "owner/repo|sha|branchHeadSHA". Compare API responses are deterministic
+	// for an immutable (commit, branch-head) pair, so within a single CLI
+	// invocation we never need to repeat the call.
+	compareCache      map[string]bool
+	// branchHintBySHA records the branch we believe contains a given commit,
+	// keyed by "owner/repo|sha" (sha lowercased). Populated by SeedBranchHints
+	// from the existing lockfile so reruns can short-circuit the full branch
+	// scan when the recorded branch still contains the commit.
+	branchHintBySHA   map[string]string
 	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
 	parentMap map[string][]string
 	// checkReachFn overrides the default branch-discovery check (for tests).
@@ -87,6 +97,29 @@ func (r *Resolver) progress(format string, args ...any) {
 		return
 	}
 	r.ProgressFn(fmt.Sprintf(format, args...))
+}
+
+// SeedBranchHints records a branch-of-record for each (owner, repo, sha) in
+// deps so subsequent containing-branch scans try that branch first via the
+// Compare API. Hints come from a previously-written lockfile and are purely
+// advisory: a missed hint just falls through to a full branch scan. Empty
+// Branch values are ignored. Safe to call multiple times; later calls
+// overwrite earlier hints for the same key.
+func (r *Resolver) SeedBranchHints(deps []lockfile.Dependency) {
+	for _, d := range deps {
+		if d.Branch == "" || d.SHA == "" {
+			continue
+		}
+		owner, repo := d.OwnerRepo()
+		if owner == "" || repo == "" {
+			continue
+		}
+		r.branchHintBySHA[hintKey(owner, repo, d.SHA)] = d.Branch
+	}
+}
+
+func hintKey(owner, repo, sha string) string {
+	return owner + "/" + repo + "|" + strings.ToLower(sha)
 }
 
 // ParentMap returns the child dep key → parent dep keys mapping from the last ResolveAllRecursive call.
@@ -163,6 +196,8 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		tagListCache:      make(map[string][]tagEntry),
 		repoIDsCache:      make(map[string][2]int64),
 		defaultBranchCache: make(map[string]string),
+		compareCache:      make(map[string]bool),
+		branchHintBySHA:   make(map[string]string),
 	}, nil
 }
 
@@ -316,7 +351,8 @@ func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []b
 		}
 	}
 	// Slow path: ancestry via Compare API in tier order.
-	for _, b := range orderedBranches(candidates, ref, defaultBranch) {
+	hintBranch := r.branchHintBySHA[hintKey(owner, repo, sha)]
+	for _, b := range orderedBranches(candidates, hintBranch, ref, defaultBranch) {
 		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
 		ok, err := r.branchContainsCommit(owner, repo, sha, b.SHA)
 		if err != nil {
@@ -406,10 +442,15 @@ func (r *Resolver) listTagsForRepo(owner, repo string) ([]tagEntry, error) {
 
 // branchContainsCommit reports whether sha is on the lineage of branchHeadSHA
 // using the documented Compare API. A 404 or 422 response (unrelated histories
-// or missing commit) is treated as a non-error false return.
+// or missing commit) is treated as a non-error false return. Results are
+// memoized in compareCache for the lifetime of the Resolver.
 func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) (bool, error) {
 	if strings.EqualFold(sha, branchHeadSHA) {
 		return true, nil
+	}
+	key := owner + "/" + repo + "|" + strings.ToLower(sha) + "|" + strings.ToLower(branchHeadSHA)
+	if v, ok := r.compareCache[key]; ok {
+		return v, nil
 	}
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
 		owner, repo, url.PathEscape(sha), url.PathEscape(branchHeadSHA))
@@ -418,27 +459,31 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) &&
 			(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {
+			r.compareCache[key] = false
 			return false, nil // unrelated histories or missing commit
 		}
 		return false, err
 	}
 	// sha is an ancestor of branchHeadSHA iff the merge base IS sha.
-	return strings.EqualFold(resp.MergeBaseCommit.SHA, sha), nil
+	contains := strings.EqualFold(resp.MergeBaseCommit.SHA, sha)
+	r.compareCache[key] = contains
+	return contains, nil
 }
 
 // orderedBranches returns branches in tiered order so the most
 // trust-bearing candidates are compared first when walking the slow path:
 //
-//  1. hintRef (the ref the user literally wrote in the workflow)
-//  2. defaultBranch (e.g. main / master)
-//  3. protected branches (branch-protection rules in upstream), lex within tier
-//  4. unprotected branches, lex within tier
+//  1. hintBranch (the branch previously recorded in the lockfile for this commit)
+//  2. hintRef (the ref the user literally wrote in the workflow)
+//  3. defaultBranch (e.g. main / master)
+//  4. protected branches (branch-protection rules in upstream), lex within tier
+//  5. unprotected branches, lex within tier
 //
-// Tiers 1 and 2 are skipped when empty or absent from branches.
-func orderedBranches(branches []branchHead, hintRef, defaultBranch string) []branchHead {
+// Tiers 1–3 are skipped when empty or absent from branches.
+func orderedBranches(branches []branchHead, hintBranch, hintRef, defaultBranch string) []branchHead {
 	priority := make(map[string]bool)
 	var result []branchHead
-	for _, name := range []string{hintRef, defaultBranch} {
+	for _, name := range []string{hintBranch, hintRef, defaultBranch} {
 		if name == "" || priority[name] {
 			continue
 		}
@@ -584,7 +629,8 @@ func (r *Resolver) findContainingBranch(owner, repo, sha, hintRef, defaultBranch
 		return pickPreferred(exact, hintRef, defaultBranch), nil
 	}
 	// Slow path: ancestry via Compare API in tier order.
-	for _, b := range orderedBranches(candidates, hintRef, defaultBranch) {
+	hintBranch := r.branchHintBySHA[hintKey(owner, repo, sha)]
+	for _, b := range orderedBranches(candidates, hintBranch, hintRef, defaultBranch) {
 		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
 		ok, err := r.branchContainsCommit(owner, repo, sha, b.SHA)
 		if err != nil {

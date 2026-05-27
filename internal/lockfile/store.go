@@ -142,6 +142,25 @@ func (s *Store) Get(workflowKey string) ([]Dependency, error) {
 	return out, nil
 }
 
+// AllDeps returns every action entry in the lockfile as a Dependency,
+// populated with Tag and Branch from the action metadata block. Order is
+// undefined. Intended for callers that need the union of recorded pins
+// across all workflows (e.g. seeding resolver caches on startup).
+func (s *Store) AllDeps() []Dependency {
+	out := make([]Dependency, 0, len(s.file.Actions))
+	for raw, action := range s.file.Actions {
+		pin, ok := parserlock.ParsePin(raw)
+		if !ok {
+			continue
+		}
+		d := pinToDependency(pin)
+		d.Tag = action.Tag
+		d.Branch = action.Branch
+		out = append(out, d)
+	}
+	return out
+}
+
 // Set replaces the dependency list for workflowKey and upserts the action
 // metadata for every pin. Resolution of owner/repo numeric IDs happens lazily
 // per NWO and is cached for the lifetime of the store.

@@ -63,9 +63,6 @@ type Finding struct {
 	// engine adapter so it's parity-aligned with the editor's
 	// codeDescription link; "" when no URL is mapped.
 	DocURL string
-	// ImmutableReleasesData carries release metadata for CategoryNonImmutableReleases
-	// findings so the remediator can flip the repo setting and republish releases.
-	ImmutableReleasesData *ImmutableReleasesData
 }
 
 // InventoryEntry describes a single dependency with context.
@@ -122,7 +119,7 @@ func (f *Finding) IsValid() bool {
 		return false
 	}
 	switch f.Category {
-	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved, CategoryNonImmutableReleases:
+	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
 		return true
 	case CategoryNotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
@@ -137,8 +134,6 @@ func (f *Finding) IsWarning() bool {
 	case f.Category == CategorySHAAsRef:
 		return true
 	case f.Category == CategoryRefMoved:
-		return true
-	case f.Category == CategoryNonImmutableReleases:
 		return true
 	case f.Category == CategoryValid && f.Severity == SeverityWarning:
 		return true
@@ -164,7 +159,7 @@ func (f *Finding) DepKey() string {
 type Report struct {
 	Workflows []WorkflowReport
 	// RepoFindings are findings that apply to the repository as a whole
-	// (not to any individual workflow), e.g. non-immutable releases.
+	// (not to any individual workflow).
 	RepoFindings []Finding
 }
 

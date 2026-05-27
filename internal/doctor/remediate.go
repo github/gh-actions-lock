@@ -109,14 +109,6 @@ func (rem *Remediator) Remediate(report *Report) error {
 		}
 	}
 
-	// Repo-level findings (e.g. non-immutable releases).
-	for _, f := range report.RepoFindings {
-		if f.Category == CategoryNonImmutableReleases {
-			if err := rem.handleNonImmutableReleases(f); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 

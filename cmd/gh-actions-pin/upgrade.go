@@ -128,6 +128,9 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	if err != nil {
 		return fmt.Errorf("opening lockfile: %w", err)
 	}
+	// Seed branch hints from the existing lockfile so repeat scans short-circuit
+	// the per-branch Compare walk when the recorded branch still contains the SHA.
+	r.SeedBranchHints(store.AllDeps())
 
 	var hadError bool
 	var allChanges []jsonUpgradeChange
