@@ -300,11 +300,12 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	// actions silently; prompt for each external action.
 	var approved []lockfile.ActionRef
 	for _, ref := range wr.ActionRefs {
-		key := ref.FullName() + "@" + ref.Ref
+		key := ref.FullName() + "@" + ref.Ref // display key (preserves sub-action path)
+		depKey := ref.NWO() + "@" + ref.Ref   // dep.Key() format (OWNER/REPO@REF, no path)
 
 		// Prior choice — auto-apply without prompting.
 		if rem.state.approvedRefs[refKey(ref)] {
-			sha, ok := shaByKey[key]
+			sha, ok := shaByKey[depKey]
 			if !ok || sha == "" {
 				rem.output.Detail("  %s  (could not resolve)", key)
 				rem.markUnresolved(key)
@@ -317,7 +318,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 		// Internal (same-owner) action — auto-apply without prompting.
 		if rem.isSameOwner(ref.Owner) {
-			sha, ok := shaByKey[key]
+			sha, ok := shaByKey[depKey]
 			if !ok || sha == "" {
 				rem.output.Detail("  %s  (could not resolve)", key)
 				rem.markUnresolved(key)
@@ -339,7 +340,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		}
 
 		// External action — auto-pin when there's a clear default, prompt otherwise.
-		sha, ok := shaByKey[key]
+		sha, ok := shaByKey[depKey]
 		if !ok {
 			rem.output.Detail("  %s  (could not resolve)", key)
 			rem.markUnresolved(key)

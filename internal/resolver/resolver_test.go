@@ -66,7 +66,7 @@ func TestParseResolveWithFileResponse(t *testing.T) {
 		"a1": json.RawMessage(`{"nameWithOwner":"actions/cache","object":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","fileYaml":{"object":{"text":"name: Cache Save\nruns:\n  using: composite\n  steps:\n    - uses: actions/upload-artifact@v4\n"}}}}`),
 	}
 
-	deps, ymls, err := parseResolveWithFileResponse(data, refs, aliases)
+	deps, ymls, _, err := parseResolveWithFileResponse(data, refs, aliases)
 	if err != nil {
 		t.Fatalf("parseResolveWithFileResponse returned error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestParseResolveWithFileResponse(t *testing.T) {
 	for _, dep := range deps {
 		keys[dep.Key()] = true
 	}
-	if !keys["actions/checkout@v6"] || !keys["actions/cache/save@v4"] {
+	if !keys["actions/checkout@v6"] || !keys["actions/cache@v4"] {
 		t.Fatalf("unexpected deps: %+v", deps)
 	}
 	foundFallback := false
@@ -104,7 +104,7 @@ func TestParseResolveWithFileResponseErrors(t *testing.T) {
 		"a1": json.RawMessage(`{"nameWithOwner":"actions/setup-go","object":{"oid":""}}`),
 	}
 
-	_, _, err := parseResolveWithFileResponse(data, refs, aliases)
+	_, _, _, err := parseResolveWithFileResponse(data, refs, aliases)
 	if err == nil {
 		t.Fatal("expected parseResolveWithFileResponse to return aggregated errors")
 	}

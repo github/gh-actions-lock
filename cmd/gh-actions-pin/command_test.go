@@ -841,12 +841,12 @@ dependencies:
 	// Find the transitive dep
 	var transitiveDep *checkDependency
 	for i := range wf.Dependencies {
-		if wf.Dependencies[i].NWO == "actions/cache/save" {
+		if wf.Dependencies[i].NWO == "actions/cache" {
 			transitiveDep = &wf.Dependencies[i]
 			break
 		}
 	}
-	require.NotNil(t, transitiveDep, "transitive dep actions/cache/save should be present")
+	require.NotNil(t, transitiveDep, "transitive dep actions/cache should be present")
 	assert.False(t, transitiveDep.Direct)
 	assert.Equal(t, []string{"actions/setup-go@v6"}, transitiveDep.RequiredBy)
 
@@ -911,12 +911,12 @@ dependencies:
 
 	var transitiveDep *checkDependency
 	for i := range payload.Workflows[0].Dependencies {
-		if payload.Workflows[0].Dependencies[i].NWO == "actions/cache/save" {
+		if payload.Workflows[0].Dependencies[i].NWO == "actions/cache" {
 			transitiveDep = &payload.Workflows[0].Dependencies[i]
 			break
 		}
 	}
-	require.NotNil(t, transitiveDep, "transitive dep actions/cache/save should be present")
+	require.NotNil(t, transitiveDep, "transitive dep actions/cache should be present")
 	assert.False(t, transitiveDep.Direct)
 	assert.Equal(t, []string{"actions/setup-go@v6"}, transitiveDep.RequiredBy)
 }

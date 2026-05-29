@@ -53,27 +53,27 @@ type ReachabilityResult struct {
 
 // Resolver resolves action refs to commit SHAs.
 type Resolver struct {
-	client            *api.GraphQLClient
-	restClient        *api.RESTClient
-	hostname          string
-	MaxRecursionDepth int
-	cache             map[string]resolvedEntry
-	latestRefCache    map[string]string
-	reachCache        map[string]ReachabilityStatus
-	branchListCache   map[string][]branchHead // "owner/repo" → cached branch list
-	tagListCache      map[string][]tagEntry   // "owner/repo" → cached tag list
-	repoIDsCache      map[string][2]int64     // owner/repo → [ownerID, repoID]
-	defaultBranchCache map[string]string      // "owner/repo" → cached default branch name ("" = lookup failed / unknown)
+	client             *api.GraphQLClient
+	restClient         *api.RESTClient
+	hostname           string
+	MaxRecursionDepth  int
+	cache              map[string]resolvedEntry
+	latestRefCache     map[string]string
+	reachCache         map[string]ReachabilityStatus
+	branchListCache    map[string][]branchHead // "owner/repo" → cached branch list
+	tagListCache       map[string][]tagEntry   // "owner/repo" → cached tag list
+	repoIDsCache       map[string][2]int64     // owner/repo → [ownerID, repoID]
+	defaultBranchCache map[string]string       // "owner/repo" → cached default branch name ("" = lookup failed / unknown)
 	// compareCache memoizes branchContainsCommit results, keyed by
 	// "owner/repo|sha|branchHeadSHA". Compare API responses are deterministic
 	// for an immutable (commit, branch-head) pair, so within a single CLI
 	// invocation we never need to repeat the call.
-	compareCache      map[string]bool
+	compareCache map[string]bool
 	// branchHintBySHA records the branch we believe contains a given commit,
 	// keyed by "owner/repo|sha" (sha lowercased). Populated by SeedBranchHints
 	// from the existing lockfile so reruns can short-circuit the full branch
 	// scan when the recorded branch still contains the commit.
-	branchHintBySHA   map[string]string
+	branchHintBySHA map[string]string
 	// parentMap tracks child dep key → parent dep keys from last ResolveAllRecursive call.
 	parentMap map[string][]string
 	// checkReachFn overrides the default branch-discovery check (for tests).
@@ -185,19 +185,19 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	}
 
 	return &Resolver{
-		client:            client,
-		restClient:        restClient,
-		hostname:          hostname,
-		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache:             make(map[string]resolvedEntry),
-		latestRefCache:    make(map[string]string),
-		reachCache:        make(map[string]ReachabilityStatus),
-		branchListCache:   make(map[string][]branchHead),
-		tagListCache:      make(map[string][]tagEntry),
-		repoIDsCache:      make(map[string][2]int64),
+		client:             client,
+		restClient:         restClient,
+		hostname:           hostname,
+		MaxRecursionDepth:  DefaultMaxRecursionDepth,
+		cache:              make(map[string]resolvedEntry),
+		latestRefCache:     make(map[string]string),
+		reachCache:         make(map[string]ReachabilityStatus),
+		branchListCache:    make(map[string][]branchHead),
+		tagListCache:       make(map[string][]tagEntry),
+		repoIDsCache:       make(map[string][2]int64),
 		defaultBranchCache: make(map[string]string),
-		compareCache:      make(map[string]bool),
-		branchHintBySHA:   make(map[string]string),
+		compareCache:       make(map[string]bool),
+		branchHintBySHA:    make(map[string]string),
 	}, nil
 }
 
@@ -918,7 +918,7 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
 				if actionRef := lockfile.ParseActionRef(use); actionRef != nil {
-					childKey := actionRef.FullName() + "@" + actionRef.Ref
+					childKey := actionRef.NWO() + "@" + actionRef.Ref
 					// Track all parents, deduplicating.
 					parents := r.parentMap[childKey]
 					found := false
@@ -971,33 +971,38 @@ func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.D
 
 	var freshDeps []lockfile.Dependency
 	var freshYMLs []string
+	var freshKeys []string
 	var batchErr error
 	for i := 0; i < len(uncached); i += MaxBatchSize {
 		end := i + MaxBatchSize
 		if end > len(uncached) {
 			end = len(uncached)
 		}
-		deps, ymls, err := r.resolveWithActionYMLBatch(uncached[i:end])
+		deps, ymls, keys, err := r.resolveWithActionYMLBatch(uncached[i:end])
 		// Keep partial batch results: per-ref failures shouldn't discard
 		// successful resolutions from the same batch.
 		freshDeps = append(freshDeps, deps...)
 		freshYMLs = append(freshYMLs, ymls...)
+		freshKeys = append(freshKeys, keys...)
 		if err != nil {
 			batchErr = err
 			break
 		}
 	}
 
+	// Store fresh resolutions in the cache keyed by cacheKey (FullName@Ref).
+	// This preserves per-sub-action entries (e.g. actions/cache/save vs
+	// actions/cache/restore) since their action.yml paths differ.
 	for i, dep := range freshDeps {
-		r.cache[dep.Key()] = resolvedEntry{dep: dep, actionYML: freshYMLs[i]}
+		r.cache[freshKeys[i]] = resolvedEntry{dep: dep, actionYML: freshYMLs[i]}
 	}
 
 	// Build allDeps from cached refs + freshly-resolved ones. Refs that failed
 	// to resolve are simply absent — callers see them missing rather than
 	// receiving an empty slice for the whole workflow.
 	resolvedFresh := make(map[string]int, len(freshDeps))
-	for i, dep := range freshDeps {
-		resolvedFresh[dep.Key()] = i
+	for i := range freshDeps {
+		resolvedFresh[freshKeys[i]] = i
 	}
 	for i, ref := range refs {
 		key := cacheKey(ref)
@@ -1033,7 +1038,7 @@ type repoResponse struct {
 	} `json:"object"`
 }
 
-func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, []string, error) {
 	query, aliasMap := buildResolveWithFileQuery(refs)
 
 	var data map[string]json.RawMessage
@@ -1041,7 +1046,7 @@ func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockf
 	if err != nil {
 		var gqlErr *api.GraphQLError
 		if !errors.As(err, &gqlErr) {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
@@ -1079,9 +1084,10 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 	return sb.String(), aliasMap
 }
 
-func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfile.ActionRef, aliasMap map[string]int) ([]lockfile.Dependency, []string, error) {
+func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfile.ActionRef, aliasMap map[string]int) ([]lockfile.Dependency, []string, []string, error) {
 	var deps []lockfile.Dependency
 	var ymls []string
+	var keys []string
 	var errs []string
 
 	for alias, idx := range aliasMap {
@@ -1108,11 +1114,12 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 		}
 
 		dep := lockfile.Dependency{
-			NWO: ref.FullName(),
+			NWO: ref.NWO(),
 			Ref: ref.Ref,
 			SHA: repo.Object.OID,
 		}
 		deps = append(deps, dep)
+		keys = append(keys, cacheKey(ref))
 
 		var yml string
 		if repo.Object.File != nil && repo.Object.File.Object != nil {
@@ -1124,10 +1131,10 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 	}
 
 	if len(errs) > 0 {
-		return deps, ymls, fmt.Errorf("resolution errors:\n  %s", strings.Join(errs, "\n  "))
+		return deps, ymls, keys, fmt.Errorf("resolution errors:\n  %s", strings.Join(errs, "\n  "))
 	}
 
-	return deps, ymls, nil
+	return deps, ymls, keys, nil
 }
 
 func selectLatestTag(tags []string) string {

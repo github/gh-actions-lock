@@ -66,7 +66,7 @@ func (a ActionRef) FullName() string {
 
 // Dependency represents a pinned dependency entry in the dependencies: section.
 type Dependency struct {
-	NWO      string // owner/repo or owner/repo/path
+	NWO      string // owner/repo only — path is not part of the resolution key
 	Ref      string // resolved ref as given in uses:
 	SHA      string // full commit hash
 	HashAlgo string // "sha1" or "sha256"
@@ -151,7 +151,7 @@ func ParseDependencyString(s string) (Dependency, error) {
 	}
 
 	return Dependency{
-		NWO:      nwoRef[0],
+		NWO:      pathParts[0] + "/" + pathParts[1],
 		Ref:      nwoRef[1],
 		SHA:      sha,
 		HashAlgo: algo,
