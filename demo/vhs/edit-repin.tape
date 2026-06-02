@@ -26,7 +26,7 @@ Type "echo '# Remove stale lockfile so check can re-resolve'"
 Enter
 Sleep 1s
 
-Type "sed -i '' '/# Automatically generated/,\$d' demo/workflows-upgrade/ci.yml"
+Type "rm -f .github/workflows/actions.lock"
 Enter
 Sleep 1s
 
@@ -42,6 +42,6 @@ Type "echo '# New lockfile written'"
 Enter
 Sleep 1s
 
-Type "tail -5 demo/workflows-upgrade/ci.yml"
+Type "cat .github/workflows/actions.lock"
 Enter
 Sleep 3s

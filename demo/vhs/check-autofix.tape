@@ -30,6 +30,6 @@ Type "echo '# Lockfile groups transitive deps by parent composite action'"
 Enter
 Sleep 1s
 
-Type "awk '/^# Automatically generated/{d=1} d&&(/^#/||/^dep/||/^  /||/^$/)' demo/workflows-check/ci.yml"
+Type "cat .github/workflows/actions.lock"
 Enter
 Sleep 3s

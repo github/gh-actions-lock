@@ -55,8 +55,10 @@ show_lockfile() {
 
 # stage_workflow copies a demo fixture into a per-scenario scratch dir laid out
 # like a real repo: `<scratch>/.github/workflows/<name>.yml`. If the fixture
-# embeds a legacy inline `dependencies:` block, the helper splits it out into
-# `<scratch>/.github/workflows/actions.lock` (v0.0.1 schema, stub owner/repo IDs).
+# ships a `<name>.yml.pins` sidecar, the helper materializes a companion
+# `<scratch>/.github/workflows/actions.lock` (v0.0.1 schema, stub owner/repo IDs)
+# whose `dependencies:` map records each pin and whose `workflows:` entry lists
+# the closure as a flat list of pin keys.
 # Pin strings carrying a sub-action path (`owner/repo/path@ref:...`) are
 # collapsed to repo grain (`owner/repo@ref:...`) — the lockfile keys at
 # repository granularity per the dependency-pinning ADR.
@@ -101,7 +103,7 @@ if pins:
         seen.add(p)
         uniq.append(p)
     pins = uniq
-    out = ["version: 'v0.0.1'", "actions:"]
+    out = ["version: 'v0.0.1'", "dependencies:"]
     for p in pins:
         # Split "owner/repo@ref:algo-hex" to surface tag + commit lines.
         at = p.index("@")
@@ -116,9 +118,8 @@ if pins:
         out.append("    repo_id: 1")
     out.append("workflows:")
     out.append(f"  '.github/workflows/{dst.name}':")
-    out.append("    dependencies:")
     for p in pins:
-        out.append(f"      - '{p}'")
+        out.append(f"    - '{p}'")
     lockpath.write_text("\n".join(out) + "\n")
 PY
   echo "$scratch"
@@ -320,25 +321,27 @@ YML
   ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" >/dev/null 2>&1 ) || true
   comment "Inject a dangling actions/cache@v4.0.0 lockfile entry"
   python3 - "$scratch/.github/workflows/actions.lock" "$wf" <<'PY'
-import sys, pathlib
+import sys, pathlib, yaml
 lock, wfname = pathlib.Path(sys.argv[1]), sys.argv[2]
-text = lock.read_text()
+if not lock.exists():
+    sys.exit(0)
+data = yaml.safe_load(lock.read_text()) or {}
 pin = "actions/cache@v4.0.0:sha1-0000000000000000000000000000000000000000"
-inject = (
-  f"    '{pin}':\n"
-  "        tag: 'v4.0.0'\n"
-  "        branch: 'main'\n"
-  "        commit: 'sha1-0000000000000000000000000000000000000000'\n"
-  "        owner_id: 1\n"
-  "        repo_id: 1\n"
-)
-text = text.replace("actions:\n", "actions:\n" + inject, 1)
-text = text.replace(
-  f"    '.github/workflows/{pathlib.Path(wfname).name}':\n        dependencies:\n",
-  f"    '.github/workflows/{pathlib.Path(wfname).name}':\n        dependencies:\n            - '{pin}'\n",
-  1,
-)
-lock.write_text(text)
+# Record the dangling action's metadata under the top-level dependencies: map.
+data.setdefault("dependencies", {})[pin] = {
+    "tag": "v4.0.0",
+    "branch": "main",
+    "commit": "sha1-0000000000000000000000000000000000000000",
+    "owner_id": 1,
+    "repo_id": 1,
+}
+# Add it to the workflow's flat pin closure even though no uses: references
+# it — that mismatch is exactly what the STALE diagnostic flags.
+wfkey = f".github/workflows/{pathlib.Path(wfname).name}"
+deps = data.setdefault("workflows", {}).setdefault(wfkey, [])
+if pin not in deps:
+    deps.append(pin)
+lock.write_text(yaml.safe_dump(data, sort_keys=True, default_flow_style=False))
 PY
   run grep -E "actions/cache" "$scratch/.github/workflows/actions.lock"
   comment "Check surfaces only the STALE diagnostic (note the docs hyperlink)"
@@ -435,7 +438,7 @@ for fix in fixtures:
                 pins.append(pin)
             actions[pin] = (1, 1)
     wf_map[fix.name] = pins
-lines = ["version: 'v0.0.1'", "actions:"]
+lines = ["version: 'v0.0.1'", "dependencies:"]
 for pin in sorted(actions):
     o, r = actions[pin]
     at = pin.index("@")
@@ -453,9 +456,8 @@ for pin in sorted(actions):
 lines.append("workflows:")
 for name in sorted(wf_map):
     lines.append(f"  '.github/workflows/{name}':")
-    lines.append("    dependencies:")
     for pin in wf_map[name]:
-        lines.append(f"      - '{pin}'")
+        lines.append(f"    - '{pin}'")
 (outdir / "actions.lock").write_text("\n".join(lines) + "\n")
 PY
   comment "Machine-readable output for CI pipelines"
