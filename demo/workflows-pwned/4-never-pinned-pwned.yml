@@ -52,11 +52,3 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: nodeselector/actions-test-fixtures/nested-composite@tampered
-
-# Automatically generated and managed by: `gh actions pin <workflow-path>`
-# Simulates: you ran `gh actions-pin` for the first time AFTER the attack.
-# The lockfile recorded the attacker's SHA because that's what the tag resolved to.
-dependencies:
-  - actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
-  # Pinned AFTER the attack — attacker's fork-network SHA is all you've ever known
-  - nodeselector/actions-test-fixtures/nested-composite@tampered:sha1-7b403c9ec14bd3ae0bbf793c2bee8815a7ac920a

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/github/actions-workflow-parser/go/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
@@ -242,11 +242,7 @@ func mapEngineSeverity(s diagnostics.Severity) Severity {
 // isTransitivePin reports whether the engine finding refers to a dep
 // reached via composite expansion (i.e. has parents in the parent map).
 func isTransitivePin(ef diagnostics.Finding, depByKey map[string]lockfile.Dependency, parentMap map[string][]string) bool {
-	fullName := ef.Owner + "/" + ef.Repo
-	if ef.Path != "" {
-		fullName += "/" + ef.Path
-	}
-	key := fullName + "@" + ef.Ref
+	key := ef.Owner + "/" + ef.Repo + "@" + ef.Ref
 	dep, ok := depByKey[key]
 	if !ok {
 		return false

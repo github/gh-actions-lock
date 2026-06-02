@@ -57,12 +57,12 @@ jobs:
       - uses: golangci/golangci-lint-action@v6.3.0
         with:
           version: latest
+EOF
 
-# Automatically generated and managed by gh-actions-pin
-dependencies:
-  - actions/checkout@v4.2.0:sha1-d631b412a1b64f6193a3f0e66939e2ee43570fdc
-  - actions/setup-go@v5.3.0:sha1-f111f3307d8850f501ac008e886eec1fd1932a34
-  - golangci/golangci-lint-action@v6.3.0:sha1-a4dca80b52c4d4be1eee7deb2e0d6c045e0ef49a
+cat > demo/workflows-upgrade/ci.yml.pins << 'EOF'
+actions/checkout@v4.2.0:sha1-d631b412a1b64f6193a3f0e66939e2ee43570fdc
+actions/setup-go@v5.3.0:sha1-f111f3307d8850f501ac008e886eec1fd1932a34
+golangci/golangci-lint-action@v6.3.0:sha1-a4dca80b52c4d4be1eee7deb2e0d6c045e0ef49a
 EOF
 
 # --- sha-as-ref: bare SHA, no tag ---

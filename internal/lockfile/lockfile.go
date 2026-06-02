@@ -66,7 +66,15 @@ func (a ActionRef) FullName() string {
 
 // Dependency represents a pinned dependency entry in the dependencies: section.
 type Dependency struct {
-	NWO      string // owner/repo only — path is not part of the resolution key
+	NWO string // owner/repo (no path)
+	// Path is the optional sub-action subpath as written in `uses:`
+	// (e.g. "save" for actions/cache/save). It is preserved on the
+	// in-memory dep so resolver-time graph traversal can fetch the
+	// correct sub-action.yml, but it is NOT part of the lockfile pin
+	// identity (the runner downloads at repo+sha granularity) and is
+	// dropped at serialization time. Distinct subpaths in the same
+	// repo+ref collapse to one lockfile entry.
+	Path     string
 	Ref      string // resolved ref as given in uses:
 	SHA      string // full commit hash
 	HashAlgo string // "sha1" or "sha256"
@@ -79,7 +87,21 @@ type Dependency struct {
 	Branch string
 }
 
-// Key returns the dependency key for deduplication.
+// FullName returns owner/repo or owner/repo/path. Used for human-facing
+// display and for resolver-internal graph traversal where distinct
+// subpaths must be treated as distinct nodes.
+func (d Dependency) FullName() string {
+	if d.Path != "" {
+		return d.NWO + "/" + d.Path
+	}
+	return d.NWO
+}
+
+// Key returns the dependency key for deduplication: NWO@Ref. This matches
+// what the runner downloads (one tarball per repo+ref) so distinct
+// subpaths in the same repo+ref collapse to a single lockfile entry.
+// Resolver-internal graph code that needs to differentiate subpaths uses
+// FullName()+"@"+Ref directly.
 func (d Dependency) Key() string {
 	return d.NWO + "@" + d.Ref
 }
@@ -131,6 +153,12 @@ func ParseDependencyString(s string) (Dependency, error) {
 	pathParts := strings.SplitN(nwoRef[0], "/", 3)
 	if len(pathParts) < 2 || pathParts[0] == "" || pathParts[1] == "" {
 		return Dependency{}, fmt.Errorf("invalid dependency owner/repo: %q", nwoRef[0])
+	}
+	if len(pathParts) == 3 {
+		// Sub-action paths are not part of the lockfile pin grammar — the
+		// runner downloads at repo+sha granularity. Reject hand-edited
+		// entries that include a path component.
+		return Dependency{}, fmt.Errorf("dependency key must be owner/repo@ref (no sub-path): %q", nwoRef[0])
 	}
 
 	dashIdx := strings.Index(algoHashPart, "-")

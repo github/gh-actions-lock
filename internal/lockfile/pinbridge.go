@@ -3,13 +3,14 @@ package lockfile
 import (
 	"fmt"
 
-	parserlock "github.com/github/actions-workflow-parser/go/lockfile"
+	"github.com/github/gh-actions-pin/internal/lockfile/parserlock"
 )
 
 // dependencyToPin converts a Dependency into a parserlock.Pin without any
 // case-normalization — callers should rely on Pin.String / Pin.Canonical for
-// the canonical form. Path is not included in the pin — the resolution unit
-// is the repository.
+// the canonical form. Sub-action path is intentionally dropped: the lockfile
+// pin grammar identifies a downloaded tarball at repo+sha granularity, and
+// distinct subpaths in the same repo+ref collapse to one entry.
 func dependencyToPin(d Dependency) (parserlock.Pin, error) {
 	owner, repo := d.OwnerRepo()
 	if owner == "" || repo == "" {
@@ -31,7 +32,9 @@ func dependencyToPin(d Dependency) (parserlock.Pin, error) {
 }
 
 // pinToDependency converts a parser Pin back into the gh-actions-pin
-// internal Dependency type. Pin.NWO is always owner/repo (no path).
+// internal Dependency type. The lockfile-serialized Pin carries no Path,
+// so the resulting Dependency has Path="" — sub-action paths are
+// reconstructed at resolve time from workflow `uses:` strings.
 func pinToDependency(p parserlock.Pin) Dependency {
 	return Dependency{
 		NWO:      p.NWO,

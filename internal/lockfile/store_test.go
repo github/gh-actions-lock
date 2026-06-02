@@ -43,7 +43,7 @@ func TestStore_PersistsTagAndBranch(t *testing.T) {
 		},
 	}
 
-	if err := store.Set(WorkflowKeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps); err != nil {
+	if err := store.Set(WorkflowKeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps, nil); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -56,10 +56,10 @@ func TestStore_PersistsTagAndBranch(t *testing.T) {
 	}
 	got := string(raw)
 	for _, want := range []string{
-		"actions/checkout@v4.2.1:sha1-",
-		"tag: v4.2.1",
-		"branch: main",
-		"internal/branch-only@main:sha1-",
+		"'actions/checkout@v4.2.1:sha1-",
+		"tag: 'v4.2.1'",
+		"branch: 'main'",
+		"'internal/branch-only@main:sha1-",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lockfile missing %q\n--- contents ---\n%s", want, got)
@@ -72,7 +72,7 @@ func TestStore_PersistsTagAndBranch(t *testing.T) {
 		t.Fatalf("expected branch-only entry in lockfile")
 	}
 	branchSection := got[branchOnlyIdx:]
-	nextEntryIdx := strings.Index(branchSection[1:], "  actions/")
+	nextEntryIdx := strings.Index(branchSection[1:], "  'actions/")
 	if nextEntryIdx >= 0 {
 		branchSection = branchSection[:nextEntryIdx+1]
 	}
@@ -134,7 +134,7 @@ func TestStore_SetRejectsEmptyBranch(t *testing.T) {
 		},
 	}
 
-	err = store.Set(".github/workflows/ci.yml", deps)
+	err = store.Set(".github/workflows/ci.yml", deps, nil)
 	if err == nil {
 		t.Fatal("expected error for dep with empty Branch, got nil")
 	}

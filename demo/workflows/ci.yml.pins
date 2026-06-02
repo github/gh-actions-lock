@@ -1,0 +1,3 @@
+actions/checkout@v4.3.1:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+actions/setup-go@v5.6.0:sha1-40f1582b2485089dde7abd97c1529aa768e1baff
+golangci/golangci-lint-action@v6.5.2:sha1-55c2c1448f86e01eaae002a5a3a9624417608d84

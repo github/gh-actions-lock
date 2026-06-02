@@ -62,9 +62,9 @@ from supply chain attacks.
 
 Actions are resolved by mutable tags and branches at runtime. This
 extension pins every direct and transitive dependency to an immutable
-commit SHA in an inline dependencies: section, so changes are visible
-in pull request diffs and tampered or hijacked actions are caught
-before they run.
+commit SHA in a per-repo lockfile at .github/workflows/actions.lock,
+so changes are visible in pull request diffs and tampered or hijacked
+actions are caught before they run.
 
 Scans all workflows under .github/workflows/ by default. When run
 interactively it offers to fix any issues it finds.

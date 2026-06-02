@@ -42,7 +42,7 @@ func TestBuildResolveWithFileQuery(t *testing.T) {
 	}
 	for _, want := range []string{
 		`a0: repository(owner: "actions", name: "checkout")`,
-		`object(expression: "v6")`,
+		`object(expression: "v6^{commit}")`,
 		`file(path: "action.yml")`,
 		`a1: repository(owner: "actions", name: "cache")`,
 		`file(path: "save/action.yml")`,
@@ -89,6 +89,68 @@ func TestParseResolveWithFileResponse(t *testing.T) {
 	}
 	if !foundFallback {
 		t.Fatalf("expected yaml content from fileYaml fallback, got %#v", ymls)
+	}
+}
+
+// TestBuildResolveWithFileQueryPeelsAnnotatedTags verifies that the GraphQL
+// query unconditionally peels every ref through `^{commit}`. Without the peel,
+// `object(expression: "v1")` returns a Tag object for an annotated tag and the
+// `... on Commit { oid }` fragment misses, leaving oid empty and the resolver
+// reporting `ref "v1" does not exist`. Live fixture:
+// nodeselector/actions-test-fixtures has annotated tag `annotated-v1`.
+func TestBuildResolveWithFileQueryPeelsAnnotatedTags(t *testing.T) {
+	refs := []lockfile.ActionRef{
+		{Owner: "nodeselector", Repo: "actions-test-fixtures", Ref: "annotated-v1"},
+		{Owner: "actions", Repo: "checkout", Ref: "main"},
+		{Owner: "actions", Repo: "cache", Ref: "abc123abc123abc123abc123abc123abc1234567"},
+	}
+	query, _ := buildResolveWithFileQuery(refs)
+	for _, want := range []string{
+		`object(expression: "annotated-v1^{commit}")`,
+		`object(expression: "main^{commit}")`,
+		`object(expression: "abc123abc123abc123abc123abc123abc1234567^{commit}")`,
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("query missing peel %q:\n%s", want, query)
+		}
+	}
+	for _, bad := range []string{
+		`object(expression: "annotated-v1")`,
+		`object(expression: "main")`,
+	} {
+		if strings.Contains(query, bad) {
+			t.Fatalf("query still contains unpeeled ref %q:\n%s", bad, query)
+		}
+	}
+}
+
+// TestParseResolveWithFileResponse_AnnotatedTagPeeled mirrors the GraphQL
+// response GitHub returns when an annotated tag is peeled with `^{commit}`:
+// the peel reaches through the Tag object to the underlying Commit so the
+// `... on Commit { oid }` fragment matches normally and the resolver records
+// the original ref name alongside the peeled commit SHA.
+func TestParseResolveWithFileResponse_AnnotatedTagPeeled(t *testing.T) {
+	refs := []lockfile.ActionRef{
+		{Owner: "nodeselector", Repo: "actions-test-fixtures", Ref: "annotated-v1"},
+	}
+	aliases := map[string]int{"a0": 0}
+	data := map[string]json.RawMessage{
+		"a0": json.RawMessage(`{"nameWithOwner":"nodeselector/actions-test-fixtures","object":{"oid":"ea53476fdc172d8552df5af9658a45a367e4f41d","file":{"object":{"text":"name: Fixture\nruns:\n  using: node20\n"}}}}`),
+	}
+
+	deps, _, _, err := parseResolveWithFileResponse(data, refs, aliases)
+	if err != nil {
+		t.Fatalf("parseResolveWithFileResponse returned error: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected one dep, got %d", len(deps))
+	}
+	got := deps[0]
+	if got.Ref != "annotated-v1" {
+		t.Fatalf("expected dep.Ref preserved as %q, got %q", "annotated-v1", got.Ref)
+	}
+	if got.SHA != "ea53476fdc172d8552df5af9658a45a367e4f41d" {
+		t.Fatalf("expected peeled commit oid, got %q", got.SHA)
 	}
 }
 
@@ -243,6 +305,81 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 	_, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err == nil || !strings.Contains(err.Error(), "exceeded max depth 1") {
 		t.Fatalf("expected recursion depth error, got %v", err)
+	}
+}
+
+// TestResolveAllRecursiveDeepNestedComposites verifies a 3-level chain
+// A → B → C produces a properly threaded parentMap so the lockfile writer
+// can emit `uses:` at every level.
+func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
+	r := &Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+		cache: map[string]resolvedEntry{
+			"owner/a@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: owner/b@v1\n",
+			},
+			"owner/b@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+				actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: owner/c@v1\n",
+			},
+			"owner/c@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/c", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+				actionYML: "name: C\nruns:\n  using: node20\n",
+			},
+		},
+		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
+	}
+
+	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+	if len(deps) != 3 {
+		t.Fatalf("expected 3 deps, got %d: %+v", len(deps), deps)
+	}
+
+	pm := r.ParentMap()
+	if got := pm["owner/b@v1"]; len(got) != 1 || got[0] != "owner/a@v1" {
+		t.Errorf("expected owner/b@v1 parent = [owner/a@v1], got %v", got)
+	}
+	if got := pm["owner/c@v1"]; len(got) != 1 || got[0] != "owner/b@v1" {
+		t.Errorf("expected owner/c@v1 parent = [owner/b@v1], got %v", got)
+	}
+	// Root has no parents (workflow-direct).
+	if _, ok := pm["owner/a@v1"]; ok {
+		t.Errorf("expected owner/a@v1 to have no parents, got %v", pm["owner/a@v1"])
+	}
+}
+
+// TestResolveAllRecursiveSkipsSelfReference verifies that a composite action
+// whose `uses:` names its own host repo+ref (a same-tarball routing concern)
+// is not recorded as its own transitive dependency.
+func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
+	r := &Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+		cache: map[string]resolvedEntry{
+			"owner/repo@main": {
+				dep: lockfile.Dependency{NWO: "owner/repo", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				// Self-ref: composite's uses points back at its own NWO@Ref.
+				actionYML: "name: Self\nruns:\n  using: composite\n  steps:\n    - uses: owner/repo@main\n",
+			},
+		},
+		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
+	}
+
+	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected single dep (no self-loop expansion), got %d: %+v", len(deps), deps)
+	}
+	pm := r.ParentMap()
+	if parents, ok := pm["owner/repo@main"]; ok {
+		t.Errorf("expected no self-parent for owner/repo@main, got %v", parents)
 	}
 }
 

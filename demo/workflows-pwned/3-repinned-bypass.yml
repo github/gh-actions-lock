@@ -50,9 +50,3 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: nodeselector/actions-test-fixtures/nested-composite@bypassed
-
-# Automatically generated and managed by: `gh actions pin <workflow-path>`
-dependencies:
-  - actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
-  # Re-pinned after tag move — attacker's SHA is now the pinned SHA
-  - nodeselector/actions-test-fixtures/nested-composite@bypassed:sha1-38b3412adcb7afb4a061c519513e45cbaf4a1cec

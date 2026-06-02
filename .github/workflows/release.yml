@@ -26,12 +26,3 @@ jobs:
       tag: ${{ github.ref_name }}
     secrets:
       ACTIONS_LOCKED_DEPENDENCIES_RELEASE_PAT: ${{ secrets.ACTIONS_LOCKED_DEPENDENCIES_RELEASE_PAT }}
-
-# Automatically generated and managed by: `gh actions-pin --write <workflow-path>`
-dependencies:
-  - actions/attest-build-provenance/predicate@36fa7d009e22618ca7cd599486979b8150596c74:sha1-36fa7d009e22618ca7cd599486979b8150596c74
-  - actions/attest-build-provenance@v1:sha1-ef244123eb79f2f7a7e75d99086184180e6d0018
-  - actions/attest@67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d:sha1-67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d
-  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-  - actions/setup-go@v5:sha1-40f1582b2485089dde7abd97c1529aa768e1baff
-  - cli/gh-extension-precompile@v2:sha1-9e2237c30f869ad3bcaed6a4be2cd43564dd421b

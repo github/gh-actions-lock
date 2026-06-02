@@ -3,7 +3,8 @@
 // Integration tests for reachability checks using the GitHub Compare API.
 // Requires: network access, GH_TOKEN or gh CLI auth.
 // Fixtures:
-//   - nodeselector/actions-test-fixtures: tag v1 on HEAD (ea53476), orphan-poison branch (614a37a)
+//   - nodeselector/actions-test-fixtures: tag v1 on HEAD (ea53476), orphan-poison branch (614a37a),
+//     annotated tag `annotated-v1` whose tag object peels to ea53476
 //   - choam-io/actions-test-fixtures-fork: fork with attacker-payload branch (7b403c9)
 //
 // Run: go test -tags integration -run TestIntegration ./internal/resolver/
@@ -14,6 +15,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -168,4 +170,33 @@ func TestIntegration_CacheConsistency(t *testing.T) {
 	r2 := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
 	assert.Equal(t, r1.Status, r2.Status)
 	assert.Equal(t, "cached", r2.Detail, "second call should come from cache")
+}
+
+// TestIntegration_AnnotatedTagPeeling verifies that an annotated tag resolves
+// to its underlying commit SHA, not the tag-object SHA. The fixture repo has
+// annotated tag `annotated-v1` whose tag object peels to v1SHA (ea53476).
+//
+// Without the `^{commit}` peel in buildResolveWithFileQuery, GraphQL returns
+// a Tag object for `object(expression: "annotated-v1")` and the
+// `... on Commit { oid }` fragment misses, leaving SHA empty.
+func TestIntegration_AnnotatedTagPeeling(t *testing.T) {
+	skipWithoutAuth(t)
+	r := newLiveResolver(t)
+
+	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+		{Owner: fixtureOwner, Repo: fixtureRepo, Ref: "annotated-v1"},
+	})
+	require.NoError(t, err, "annotated tag must resolve through the peel")
+	require.NotEmpty(t, deps)
+
+	var found *lockfile.Dependency
+	for i := range deps {
+		if deps[i].NWO == fixtureOwner+"/"+fixtureRepo && deps[i].Ref == "annotated-v1" {
+			found = &deps[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "expected annotated-v1 dep in results: %+v", deps)
+	assert.Equal(t, v1SHA, found.SHA,
+		"annotated tag must peel to the underlying commit SHA, not the tag-object SHA")
 }

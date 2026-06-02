@@ -915,10 +915,22 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 				continue
 			}
 
+			// parentMap is keyed at runner-download granularity (NWO@Ref =
+			// Dependency.Key()). BFS traversal above is path-aware via
+			// cacheKey/seen{} so we visit every sub-action's action.yml,
+			// but the recorded edges flatten subpaths back into one node
+			// per tarball — same model the runner uses.
 			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
 				if actionRef := lockfile.ParseActionRef(use); actionRef != nil {
 					childKey := actionRef.NWO() + "@" + actionRef.Ref
+					// Skip same-tarball edges: a composite whose `uses:`
+					// names another subpath in its own repo+ref is a
+					// routing concern inside the already-downloaded tree,
+					// not a transitive dep at the runner level.
+					if childKey == parentKey {
+						continue
+					}
 					// Track all parents, deduplicating.
 					parents := r.parentMap[childKey]
 					found := false
@@ -1071,7 +1083,12 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 
 		fmt.Fprintf(&sb, " %s: repository(owner: %q, name: %q) {", alias, ref.Owner, ref.Repo)
 		sb.WriteString(" nameWithOwner")
-		fmt.Fprintf(&sb, " object(expression: %q) {", ref.Ref)
+		// Peel through annotated tags with `^{commit}`. Without it, an
+		// annotated tag's `object(expression:)` returns a Tag object, not a
+		// Commit — the `... on Commit` fragment doesn't match and `oid` comes
+		// back empty. The peel is a no-op for branches, SHAs, and lightweight
+		// tags, so we can apply it unconditionally.
+		fmt.Fprintf(&sb, " object(expression: %q) {", ref.Ref+"^{commit}")
 		sb.WriteString(" ... on Commit { oid")
 		fmt.Fprintf(&sb, " file: file(path: %q) { object { ... on Blob { text } } }", ymlPath)
 		fmt.Fprintf(&sb, " fileYaml: file(path: %q) { object { ... on Blob { text } } }", yamlPath)
@@ -1114,9 +1131,10 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 		}
 
 		dep := lockfile.Dependency{
-			NWO: ref.NWO(),
-			Ref: ref.Ref,
-			SHA: repo.Object.OID,
+			NWO:  ref.NWO(),
+			Path: ref.Path,
+			Ref:  ref.Ref,
+			SHA:  repo.Object.OID,
 		}
 		deps = append(deps, dep)
 		keys = append(keys, cacheKey(ref))

@@ -57,6 +57,9 @@ show_lockfile() {
 # like a real repo: `<scratch>/.github/workflows/<name>.yml`. If the fixture
 # embeds a legacy inline `dependencies:` block, the helper splits it out into
 # `<scratch>/.github/workflows/actions.lock` (v0.0.1 schema, stub owner/repo IDs).
+# Pin strings carrying a sub-action path (`owner/repo/path@ref:...`) are
+# collapsed to repo grain (`owner/repo@ref:...`) — the lockfile keys at
+# repository granularity per the dependency-pinning ADR.
 # Emits the staged workflow path on stdout; the caller should `cd` to the
 # scratch dir before invoking the CLI.
 stage_workflow() {
@@ -68,37 +71,54 @@ stage_workflow() {
   name="$(basename "$fixture")"
   local staged="$scratch/.github/workflows/$name"
   python3 - "$fixture" "$staged" "$scratch/.github/workflows/actions.lock" <<'PY'
-import re, sys, pathlib
+import sys, pathlib
 src, dst, lockpath = (pathlib.Path(p) for p in sys.argv[1:])
-body = src.read_text()
-m = re.search(r"\n(?:# Automatically generated[^\n]*\n)?dependencies:\n((?:[ \t]+#[^\n]*\n|[ \t]*-[^\n]*\n)+)", body)
+dst.write_text(src.read_text())
+sidecar = src.with_suffix(src.suffix + ".pins")
 pins = []
-if m:
-    for line in m.group(1).splitlines():
+if sidecar.exists():
+    for line in sidecar.read_text().splitlines():
         s = line.strip()
-        if s.startswith("- "):
-            pin = s[2:].strip()
-            pins.append(pin)
-    body = body[:m.start()].rstrip() + "\n"
-dst.write_text(body)
+        if not s or s.startswith("#"):
+            continue
+        # Collapse owner/repo/sub/path@ref:... -> owner/repo@ref:...
+        # The lockfile pins at repo grain per the dependency-pinning ADR.
+        at = s.index("@")
+        head = s[:at]
+        if head.count("/") > 1:
+            first = head.index("/")
+            second = head.index("/", first + 1)
+            head = head[:second]
+        pins.append(head + s[at:])
 if pins:
-    out = ["version: v0.0.1", "actions:"]
+    # Deduplicate while preserving order — sub-path collapse can produce
+    # duplicate repo-grain pins from sibling sub-actions.
+    seen = set()
+    uniq = []
     for p in pins:
-        # Split "owner/repo[/path]@ref:algo-hex" to surface ref + sha lines.
+        if p in seen:
+            continue
+        seen.add(p)
+        uniq.append(p)
+    pins = uniq
+    out = ["version: 'v0.0.1'", "actions:"]
+    for p in pins:
+        # Split "owner/repo@ref:algo-hex" to surface tag + commit lines.
         at = p.index("@")
         colon = p.rindex(":")
         ref = p[at+1:colon]
-        sha = p[colon+1:]
-        out.append(f"  {p}:")
-        out.append(f"    ref: {ref}")
-        out.append(f"    sha: {sha}")
+        digest = p[colon+1:]
+        out.append(f"  '{p}':")
+        out.append(f"    tag: '{ref}'")
+        out.append(f"    branch: 'main'")
+        out.append(f"    commit: '{digest}'")
         out.append("    owner_id: 1")
         out.append("    repo_id: 1")
     out.append("workflows:")
-    out.append(f"  .github/workflows/{dst.name}:")
+    out.append(f"  '.github/workflows/{dst.name}':")
     out.append("    dependencies:")
     for p in pins:
-        out.append(f"      - {p}")
+        out.append(f"      - '{p}'")
     lockpath.write_text("\n".join(out) + "\n")
 PY
   echo "$scratch"
@@ -305,16 +325,17 @@ lock, wfname = pathlib.Path(sys.argv[1]), sys.argv[2]
 text = lock.read_text()
 pin = "actions/cache@v4.0.0:sha1-0000000000000000000000000000000000000000"
 inject = (
-  f"    {pin}:\n"
-  "        ref: v4.0.0\n"
-  "        sha: sha1-0000000000000000000000000000000000000000\n"
+  f"    '{pin}':\n"
+  "        tag: 'v4.0.0'\n"
+  "        branch: 'main'\n"
+  "        commit: 'sha1-0000000000000000000000000000000000000000'\n"
   "        owner_id: 1\n"
   "        repo_id: 1\n"
 )
 text = text.replace("actions:\n", "actions:\n" + inject, 1)
 text = text.replace(
-  f"    .github/workflows/{pathlib.Path(wfname).name}:\n        dependencies:\n",
-  f"    .github/workflows/{pathlib.Path(wfname).name}:\n        dependencies:\n            - {pin}\n",
+  f"    '.github/workflows/{pathlib.Path(wfname).name}':\n        dependencies:\n",
+  f"    '.github/workflows/{pathlib.Path(wfname).name}':\n        dependencies:\n            - '{pin}'\n",
   1,
 )
 lock.write_text(text)
@@ -377,52 +398,64 @@ scenario_json_output() {
   scratch="$(mktemp -d /tmp/gh-actions-pin-demo-XXXXXX)"
   mkdir -p "$scratch/.github/workflows"
   local lock="$scratch/.github/workflows/actions.lock"
-  {
-    echo "version: v1"
-    echo "actions:"
-  } > "$lock"
   local -a wf_args=()
   for f in demo/workflows-pwned/*.yml; do
     local one_scratch
     one_scratch="$(stage_workflow "$f")"
     cp "$one_scratch/.github/workflows/$(basename "$f")" "$scratch/.github/workflows/"
     wf_args+=(".github/workflows/$(basename "$f")")
-    if [[ -f "$one_scratch/.github/workflows/actions.lock" ]]; then
-      # Concatenate; duplicates resolved by last-write-wins on simple union
-      grep -E '^  [^ ]' "$one_scratch/.github/workflows/actions.lock" 2>/dev/null \
-        | grep -v '^  - ' \
-        >> "$lock" || true
-    fi
   done
-  # Build a clean union lockfile.
+  # Build a clean union lockfile (sub-action paths collapse to repo grain).
   python3 - "$scratch/.github/workflows" demo/workflows-pwned/*.yml <<'PY'
-import os, sys, re, pathlib
+import sys, pathlib
 outdir = pathlib.Path(sys.argv[1])
 fixtures = [pathlib.Path(p) for p in sys.argv[2:]]
+
+def collapse(pin: str) -> str:
+    at = pin.index("@")
+    head = pin[:at]
+    if head.count("/") > 1:
+        first = head.index("/")
+        second = head.index("/", first + 1)
+        head = head[:second]
+    return head + pin[at:]
+
 actions = {}
 wf_map = {}
 for fix in fixtures:
-    body = fix.read_text()
-    m = re.search(r"\n(?:# Automatically generated[^\n]*\n)?dependencies:\n((?:[ \t]+#[^\n]*\n|[ \t]*-[^\n]*\n)+)", body)
+    sidecar = fix.with_suffix(fix.suffix + ".pins")
     pins = []
-    if m:
-        for line in m.group(1).splitlines():
+    if sidecar.exists():
+        for line in sidecar.read_text().splitlines():
             s = line.strip()
-            if s.startswith("- "):
-                pin = s[2:].strip()
+            if not s or s.startswith("#"):
+                continue
+            pin = collapse(s)
+            if pin not in pins:
                 pins.append(pin)
-                actions[pin] = (1, 1)
+            actions[pin] = (1, 1)
     wf_map[fix.name] = pins
-lines = ["version: v0.0.1", "actions:"]
+lines = ["version: 'v0.0.1'", "actions:"]
 for pin in sorted(actions):
     o, r = actions[pin]
-    lines += [f"  {pin}:", f"    owner_id: {o}", f"    repo_id: {r}"]
+    at = pin.index("@")
+    colon = pin.rindex(":")
+    ref = pin[at+1:colon]
+    digest = pin[colon+1:]
+    lines += [
+        f"  '{pin}':",
+        f"    tag: '{ref}'",
+        f"    branch: 'main'",
+        f"    commit: '{digest}'",
+        f"    owner_id: {o}",
+        f"    repo_id: {r}",
+    ]
 lines.append("workflows:")
 for name in sorted(wf_map):
-    lines.append(f"  .github/workflows/{name}:")
+    lines.append(f"  '.github/workflows/{name}':")
     lines.append("    dependencies:")
     for pin in wf_map[name]:
-        lines.append(f"      - {pin}")
+        lines.append(f"      - '{pin}'")
 (outdir / "actions.lock").write_text("\n".join(lines) + "\n")
 PY
   comment "Machine-readable output for CI pipelines"

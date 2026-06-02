@@ -45,9 +45,3 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: nodeselector/actions-test-fixtures/nested-composite@bypassed
-
-# Automatically generated and managed by: `gh actions pin <workflow-path>`
-dependencies:
-  - actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
-  # Pinned at the real HEAD (ea53476) — tag was moved to ancestor 38b3412
-  - nodeselector/actions-test-fixtures/nested-composite@bypassed:sha1-ea53476fdc172d8552df5af9658a45a367e4f41d

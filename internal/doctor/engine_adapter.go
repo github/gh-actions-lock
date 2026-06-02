@@ -3,8 +3,8 @@ package doctor
 import (
 	"context"
 
-	"github.com/github/actions-workflow-parser/go/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	parserlock "github.com/github/actions-workflow-parser/go/lockfile"
+	"github.com/github/gh-actions-pin/internal/lockfile/parserlock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -67,7 +67,7 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 		file.Actions = map[string]parserlock.Action{}
 	}
 	if file.Workflows == nil {
-		file.Workflows = map[string]parserlock.Workflow{}
+		file.Workflows = map[string][]string{}
 	}
 
 	s := &Store{
@@ -95,10 +95,10 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 		}
 	}
 	s.file.Actions = normalizedActions
-	for wfKey, wf := range s.file.Workflows {
+	for wfKey, deps := range s.file.Workflows {
 		changed := false
-		normalized := make([]string, len(wf.Dependencies))
-		for i, raw := range wf.Dependencies {
+		normalized := make([]string, len(deps))
+		for i, raw := range deps {
 			if pin, ok := parserlock.ParsePin(raw); ok {
 				canon := pin.String()
 				if canon != raw {
@@ -110,7 +110,7 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 			}
 		}
 		if changed {
-			s.file.Workflows[wfKey] = parserlock.Workflow{Dependencies: normalized}
+			s.file.Workflows[wfKey] = normalized
 			s.dirty = true
 		}
 	}
@@ -127,12 +127,12 @@ func (s *Store) File() parserlock.File {
 // Get returns the dependencies recorded for workflowKey (e.g.
 // ".github/workflows/ci.yml"). Returns nil when the workflow has no entry.
 func (s *Store) Get(workflowKey string) ([]Dependency, error) {
-	wf, ok := s.file.Workflows[workflowKey]
+	deps, ok := s.file.Workflows[workflowKey]
 	if !ok {
 		return nil, nil
 	}
-	out := make([]Dependency, 0, len(wf.Dependencies))
-	for _, raw := range wf.Dependencies {
+	out := make([]Dependency, 0, len(deps))
+	for _, raw := range deps {
 		pin, ok := parserlock.ParsePin(raw)
 		if !ok {
 			return nil, fmt.Errorf("invalid pin %q in %s for workflow %q", raw, Path, workflowKey)
@@ -161,12 +161,26 @@ func (s *Store) AllDeps() []Dependency {
 	return out
 }
 
-// Set replaces the dependency list for workflowKey and upserts the action
-// metadata for every pin. Resolution of owner/repo numeric IDs happens lazily
-// per NWO and is cached for the lifetime of the store.
-func (s *Store) Set(workflowKey string, deps []Dependency) error {
-	pins := make([]string, 0, len(deps))
-	seen := map[string]bool{}
+// Set replaces the workflow's direct-dependency entry and upserts the
+// per-action metadata for every pin in the resolved closure. The workflow
+// entry holds only the action refs that appear in the workflow file itself
+// (its direct uses); per-action `uses:` lists encode the transitive graph,
+// so a reader walks from each direct pin to reconstruct the full closure —
+// the npm/cargo lockfile model.
+//
+// parentMap is the resolver's child → []parent map (Dependency.Key() form:
+// NWO@Ref, without the SHA suffix), as returned by Resolver.ParentMap. Set
+// uses it both to (1) identify workflow-direct deps (deps with no parents
+// in this resolution) and (2) build per-action `uses:` lists by inversion.
+// Both sides are translated into canonical pin keys (NWO@Ref:algo-hex).
+//
+// Resolution of owner/repo numeric IDs happens lazily per NWO and is cached
+// for the lifetime of the store.
+func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string][]string) error {
+	directPins := make([]string, 0)
+	seenDirect := map[string]bool{}
+	// keyToPin: Dependency.Key() (NWO@Ref) → canonical pin (NWO@Ref:algo-hex).
+	keyToPin := make(map[string]string, len(deps))
 	for _, d := range deps {
 		if d.Branch == "" {
 			return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
@@ -177,15 +191,59 @@ func (s *Store) Set(workflowKey string, deps []Dependency) error {
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
-		if seen[pinKey] {
+		keyToPin[d.Key()] = pinKey
+		// Workflow-direct deps are those with no recorded parents in
+		// parentMap. Composite-transitive deps always have at least one
+		// parent (the composite that pulled them in).
+		if _, hasParent := parentMap[d.Key()]; !hasParent && !seenDirect[pinKey] {
+			seenDirect[pinKey] = true
+			directPins = append(directPins, pinKey)
+		}
+	}
+
+	// Invert parentMap (child → parents) into parent → children, in canonical
+	// pin-key form. Translate both sides via keyToPin; entries that don't
+	// resolve to a known dep are skipped (they were filtered out before
+	// reaching the writer).
+	parentToChildren := make(map[string]map[string]bool)
+	for childDepKey, parents := range parentMap {
+		childPin, ok := keyToPin[childDepKey]
+		if !ok {
 			continue
 		}
-		seen[pinKey] = true
-		pins = append(pins, pinKey)
+		for _, parentDepKey := range parents {
+			parentPin, ok := keyToPin[parentDepKey]
+			if !ok {
+				continue
+			}
+			children, exists := parentToChildren[parentPin]
+			if !exists {
+				children = make(map[string]bool)
+				parentToChildren[parentPin] = children
+			}
+			children[childPin] = true
+		}
+	}
 
+	// Now upsert action entries with their per-pin uses lists.
+	for _, d := range deps {
+		pin, err := dependencyToPin(d)
+		if err != nil {
+			return err
+		}
+		pin = pin.Canonical()
+		pinKey := pin.String()
 		ids, err := s.lookupIDs(pin.Owner, pin.Repo)
 		if err != nil {
 			return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
+		}
+		var uses []string
+		if children, ok := parentToChildren[pinKey]; ok && len(children) > 0 {
+			uses = make([]string, 0, len(children))
+			for c := range children {
+				uses = append(uses, c)
+			}
+			sort.Strings(uses)
 		}
 		s.file.Actions[pinKey] = parserlock.Action{
 			Tag:     d.Tag,
@@ -193,10 +251,11 @@ func (s *Store) Set(workflowKey string, deps []Dependency) error {
 			Commit:  pin.Algo + "-" + pin.Hex,
 			OwnerID: ids[0],
 			RepoID:  ids[1],
+			Uses:    uses,
 		}
 	}
-	sort.Strings(pins)
-	s.file.Workflows[workflowKey] = parserlock.Workflow{Dependencies: pins}
+	sort.Strings(directPins)
+	s.file.Workflows[workflowKey] = directPins
 	s.dirty = true
 	return nil
 }
@@ -205,10 +264,25 @@ func (s *Store) Set(workflowKey string, deps []Dependency) error {
 // entries (pins referenced by no workflow). When the in-memory file is empty
 // after GC, the on-disk file is removed.
 func (s *Store) Save() error {
+	// Mark transitive closure reachable from any workflow as used. Walk the
+	// per-action `uses:` graph so deduplicated transitive entries don't get
+	// GC'd as orphans.
 	used := map[string]bool{}
-	for _, wf := range s.file.Workflows {
-		for _, dep := range wf.Dependencies {
-			used[dep] = true
+	var walk func(key string)
+	walk = func(key string) {
+		if used[key] {
+			return
+		}
+		used[key] = true
+		if a, ok := s.file.Actions[key]; ok {
+			for _, child := range a.Uses {
+				walk(child)
+			}
+		}
+	}
+	for _, deps := range s.file.Workflows {
+		for _, dep := range deps {
+			walk(dep)
 		}
 	}
 	for key := range s.file.Actions {
@@ -272,41 +346,17 @@ func WorkflowKeyFromPath(workflowPath string) string {
 
 // marshalDeterministic emits YAML with stable key ordering. Map keys in Go
 // maps are randomized; for a lockfile we want byte-stable output across runs.
+//
+// All string keys and values whose content is user-supplied (pin strings,
+// workflow paths, tag/branch/commit, version) are emitted single-quoted so
+// the file round-trips identically regardless of YAML scalar-resolution
+// quirks: pin keys carry colons, tags can look like floats ("1.0"), refs
+// can collide with YAML 1.1 booleans ("y", "no", "on", "off"). Schema
+// field names (version, actions, workflows, tag, branch, …) stay
+// unquoted because they're hardcoded and trivially safe.
 func marshalDeterministic(file parserlock.File) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
-	addStringField(root, "version", file.Version)
-
-	if len(file.Actions) > 0 {
-		keys := make([]string, 0, len(file.Actions))
-		for k := range file.Actions {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		actionsNode := &yaml.Node{Kind: yaml.MappingNode}
-		for _, k := range keys {
-			a := file.Actions[k]
-			entry := &yaml.Node{Kind: yaml.MappingNode}
-			if a.Tag != "" {
-				addStringField(entry, "tag", a.Tag)
-			}
-			if a.Branch != "" {
-				addStringField(entry, "branch", a.Branch)
-			}
-			if a.Commit != "" {
-				addStringField(entry, "commit", a.Commit)
-			}
-			addIntField(entry, "owner_id", a.OwnerID)
-			addIntField(entry, "repo_id", a.RepoID)
-			actionsNode.Content = append(actionsNode.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Value: k},
-				entry,
-			)
-		}
-		root.Content = append(root.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "actions"},
-			actionsNode,
-		)
-	}
+	addQuotedField(root, "version", file.Version)
 
 	if len(file.Workflows) > 0 {
 		keys := make([]string, 0, len(file.Workflows))
@@ -316,25 +366,64 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		sort.Strings(keys)
 		workflowsNode := &yaml.Node{Kind: yaml.MappingNode}
 		for _, k := range keys {
-			wf := file.Workflows[k]
-			deps := append([]string(nil), wf.Dependencies...)
+			deps := append([]string(nil), file.Workflows[k]...)
 			sort.Strings(deps)
 			seq := &yaml.Node{Kind: yaml.SequenceNode}
 			for _, d := range deps {
-				seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: d})
+				seq.Content = append(seq.Content, quotedScalar(d))
 			}
-			entry := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Value: "dependencies"},
-				seq,
-			}}
 			workflowsNode.Content = append(workflowsNode.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Value: k},
+				quotedScalar(k),
+				seq,
+			)
+		}
+		root.Content = append(root.Content,
+			plainScalar("workflows"),
+			workflowsNode,
+		)
+	}
+
+	if len(file.Actions) > 0 {
+		keys := make([]string, 0, len(file.Actions))
+		for k := range file.Actions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		depsNode := &yaml.Node{Kind: yaml.MappingNode}
+		for _, k := range keys {
+			a := file.Actions[k]
+			entry := &yaml.Node{Kind: yaml.MappingNode}
+			if a.Tag != "" {
+				addQuotedField(entry, "tag", a.Tag)
+			}
+			if a.Branch != "" {
+				addQuotedField(entry, "branch", a.Branch)
+			}
+			if a.Commit != "" {
+				addQuotedField(entry, "commit", a.Commit)
+			}
+			addIntField(entry, "owner_id", a.OwnerID)
+			addIntField(entry, "repo_id", a.RepoID)
+			if len(a.Uses) > 0 {
+				uses := append([]string(nil), a.Uses...)
+				sort.Strings(uses)
+				usesSeq := &yaml.Node{Kind: yaml.SequenceNode}
+				for _, u := range uses {
+					usesSeq.Content = append(usesSeq.Content, quotedScalar(u))
+				}
+				entry.Content = append(entry.Content,
+					plainScalar("uses"),
+					usesSeq,
+				)
+			}
+			depsNode.Content = append(depsNode.Content,
+				quotedScalar(k),
 				entry,
 			)
 		}
 		root.Content = append(root.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "workflows"},
-			workflowsNode,
+			plainScalar("dependencies"),
+			depsNode,
 		)
 	}
 
@@ -342,16 +431,27 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 	return yaml.Marshal(doc)
 }
 
-func addStringField(parent *yaml.Node, key, value string) {
+// plainScalar is for hardcoded schema field names (version, actions, …).
+func plainScalar(name string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Value: name}
+}
+
+// quotedScalar single-quotes user-supplied string values so YAML
+// auto-typing can never reinterpret them as numbers, booleans, dates, etc.
+func quotedScalar(value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Style: yaml.SingleQuotedStyle, Value: value}
+}
+
+func addQuotedField(parent *yaml.Node, key, value string) {
 	parent.Content = append(parent.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+		plainScalar(key),
+		quotedScalar(value),
 	)
 }
 
 func addIntField(parent *yaml.Node, key string, value int64) {
 	parent.Content = append(parent.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		plainScalar(key),
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprintf("%d", value)},
 	)
 }

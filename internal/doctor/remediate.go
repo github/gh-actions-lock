@@ -301,7 +301,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	var approved []lockfile.ActionRef
 	for _, ref := range wr.ActionRefs {
 		key := ref.FullName() + "@" + ref.Ref // display key (preserves sub-action path)
-		depKey := ref.NWO() + "@" + ref.Ref   // dep.Key() format (OWNER/REPO@REF, no path)
+		depKey := ref.NWO() + "@" + ref.Ref   // dep.Key() form (NWO@Ref, runner-flat)
 
 		// Prior choice — auto-apply without prompting.
 		if rem.state.approvedRefs[refKey(ref)] {

@@ -124,13 +124,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
-  - actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd
-  - actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
-`)
+`,
+		"actions/checkout@v4:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5",
+		"actions/checkout@v5:sha1-93cb6efe18208431cddfb8368fd83d5badbf9bfd",
+		"actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c",
+	)
 
 	stdout, stderr, err := runCommandWithHTTP(t, reg,
 		"upgrade", "--action", "actions/checkout", "--from", "v5", "--write", workflowPath,
@@ -174,12 +172,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-  - actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c
-`)
+`,
+		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+		"actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c",
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -233,64 +229,50 @@ func testRepoResponse(nameWithOwner, oid, actionYAML string) map[string]any {
 	}
 }
 
-func writeTempWorkflow(t *testing.T, body string) string {
+// writeTempWorkflow writes a workflow YAML body to a scratch repo at
+// .github/workflows/workflow.yml and (if pins are provided) materializes the
+// detached lockfile at .github/workflows/actions.lock. The fixture body must
+// NOT carry an embedded `dependencies:` block — pin metadata lives in the
+// detached lockfile per the per-repo dependency-pinning architecture.
+// Returns the relative workflow path; the test's working directory is
+// chdir'd to the scratch repo.
+func writeTempWorkflow(t *testing.T, body string, pins ...string) string {
 	t.Helper()
 
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
 
 	body = strings.TrimSpace(body) + "\n"
-
-	// Split out any inline "dependencies:" block from the fixture body and
-	// transparently materialize it into the canonical actions.lock file.
-	var depPins []string
-	if idx := strings.Index(body, "\ndependencies:"); idx >= 0 {
-		head := body[:idx]
-		rest := body[idx+1:]
-		// Drop the auto-generated comment line above the dependencies block
-		// if present, plus any trailing blank lines.
-		head = strings.TrimRight(head, "\n")
-		if i := strings.LastIndex(head, "\n"); i >= 0 {
-			lastLine := strings.TrimSpace(head[i+1:])
-			if strings.HasPrefix(lastLine, "# Automatically generated") {
-				head = head[:i]
-			}
-		}
-		body = strings.TrimRight(head, "\n") + "\n"
-		for _, line := range strings.Split(rest, "\n") {
-			l := strings.TrimSpace(line)
-			if strings.HasPrefix(l, "- ") {
-				pin := strings.TrimSpace(strings.TrimPrefix(l, "- "))
-				depPins = append(depPins, pin)
-			}
-		}
+	if strings.Contains(body, "\ndependencies:") {
+		t.Fatalf("writeTempWorkflow: workflow body contains embedded `dependencies:` block; pass pins as the variadic argument instead")
 	}
 
 	wfRel := filepath.Join(".github", "workflows", "workflow.yml")
 	wfPath := filepath.Join(dir, wfRel)
 	require.NoError(t, os.WriteFile(wfPath, []byte(body), 0o600))
 
-	if len(depPins) > 0 {
-		writeTempLockfile(t, dir, "workflow.yml", depPins)
+	if len(pins) > 0 {
+		writeTempLockfile(t, dir, "workflow.yml", pins)
 	}
 
 	t.Chdir(dir)
 	return filepath.ToSlash(wfRel)
 }
 
-// writeTempLockfile writes a minimal v1 actions.lock fixture so the Store can
-// read deps for the given workflow. Owner/repo IDs are stubbed; the read path
-// doesn't validate them.
+// writeTempLockfile writes a v0.0.1 actions.lock fixture covering the given
+// workflow file. Owner/repo IDs are stubbed; the read path doesn't validate
+// them. All user-supplied scalars are single-quoted to mirror the
+// production emitter (see internal/lockfile/store.go::marshalDeterministic).
 func writeTempLockfile(t *testing.T, repoDir, wfName string, pinStrings []string) {
 	t.Helper()
 	var sb strings.Builder
-	sb.WriteString("version: v0.0.1\nactions:\n")
+	sb.WriteString("version: 'v0.0.1'\ndependencies:\n")
 	for _, pin := range pinStrings {
-		sb.WriteString("  " + pin + ":\n    owner_id: 1\n    repo_id: 1\n")
+		sb.WriteString("  '" + pin + "':\n    owner_id: 1\n    repo_id: 1\n")
 	}
-	sb.WriteString("workflows:\n  .github/workflows/" + wfName + ":\n    dependencies:\n")
+	sb.WriteString("workflows:\n  '.github/workflows/" + wfName + "':\n")
 	for _, pin := range pinStrings {
-		sb.WriteString("      - " + pin + "\n")
+		sb.WriteString("    - '" + pin + "'\n")
 	}
 	p := filepath.Join(repoDir, ".github", "workflows", "actions.lock")
 	require.NoError(t, os.WriteFile(p, []byte(sb.String()), 0o600))
@@ -395,11 +377,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+pinnedSHA+`
-`)
+`,
+		"example/action@v1:sha1-"+pinnedSHA,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -446,11 +426,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+sha+`
-`)
+`,
+		"example/action@v1:sha1-"+sha,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -498,11 +476,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+sha+`
-`)
+`,
+		"example/action@v1:sha1-"+sha,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -550,11 +526,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+sha+`
-`)
+`,
+		"example/action@v1:sha1-"+sha,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -618,11 +592,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+pinnedSHA+`
-`)
+`,
+		"example/action@v1:sha1-"+pinnedSHA,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -682,11 +654,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+pinnedSHA+`
-`)
+`,
+		"example/action@v1:sha1-"+pinnedSHA,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -740,11 +710,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@v1
-
-# Automatically generated and managed by: gh actions-pin --write <workflow-path>
-dependencies:
-  - example/action@v1:sha1-`+pinnedSHA+`
-`)
+`,
+		"example/action@v1:sha1-"+pinnedSHA,
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=valid,findings", workflowPath,
@@ -808,15 +776,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-
-# Automatically generated and managed by gh-actions-pin
-dependencies:
-  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-  - actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
-
-  # Transitive dependencies (via actions/setup-go@v6)
-  - actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
-`)
+`,
+		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+		"actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5",
+		// Transitive dependency (via actions/setup-go@v6).
+		"actions/cache@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684",
+	)
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -889,12 +854,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-go@v6
-
-# Automatically generated and managed by gh-actions-pin
-dependencies:
-  - actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5
-  - actions/cache/save@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684
-`)
+`,
+		"actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5",
+		"actions/cache@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684",
+	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--json=workflows", workflowPath,
@@ -942,11 +905,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-# Automatically generated and managed by gh-actions-pin
-dependencies:
-  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-`)
+`,
+		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+	)
 
 	// --json with no value should use the default fields (valid,findings,workflows)
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
@@ -989,11 +950,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-# Automatically generated and managed by gh-actions-pin
-dependencies:
-  - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
-`)
+`,
+		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+	)
 
 	wf2Path := filepath.Join(filepath.Dir(wf1), "workflow2.yml")
 	require.NoError(t, os.WriteFile(wf2Path, []byte(strings.TrimSpace(`
@@ -1011,16 +970,14 @@ jobs:
 		[]string{"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd"})
 	// Replace with a multi-workflow lockfile.
 	lockYAML := "version: v0.0.1\n" +
-		"actions:\n" +
+		"dependencies:\n" +
 		"  actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd:\n" +
 		"    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  .github/workflows/workflow.yml:\n" +
-		"    dependencies:\n" +
-		"      - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n" +
+		"    - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n" +
 		"  .github/workflows/workflow2.yml:\n" +
-		"    dependencies:\n" +
-		"      - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n"
+		"    - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n"
 	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),

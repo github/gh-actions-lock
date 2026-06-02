@@ -354,7 +354,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return nil, fmt.Errorf("writing file: %w", err)
 	}
 
-	if err := store.Set(wfKey, deps); err != nil {
+	if err := store.Set(wfKey, deps, r.ParentMap()); err != nil {
 		return nil, fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
