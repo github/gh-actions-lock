@@ -3,6 +3,7 @@ package doctor
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -458,7 +459,7 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 		}
 
 		// Bare SHA → swap to default branch. Named refs stay as-is.
-		if isSHARef(ref.Ref) {
+		if lockfile.IsFullSHA(ref.Ref) {
 			rem.output.Detail("  %s: using %s (default branch) instead of %s",
 				ref.FullName(), info.DefaultBranch, ref.Ref)
 			ref.Ref = info.DefaultBranch
@@ -768,15 +769,23 @@ func (rem *Remediator) handleStale(wr WorkflowReport, finding Finding) error {
 	return rem.applyReResolve(wr, dep)
 }
 
-// openBrowser attempts to open a URL in the user's browser.
-func openBrowser(url string) {
-	// Use the open command on macOS, xdg-open on Linux.
-	// Best-effort — don't fail the doctor flow if it doesn't work.
+// openBrowser attempts to open a URL in the user's browser. The URL is
+// validated to ensure it's a well-formed https:// link before being
+// passed to the platform launcher; this matters because the URL is
+// constructed from action owner/repo strings that originate in workflow
+// YAML (i.e. user input). We also pin the launcher to a hardcoded literal
+// so the command is never shell-interpreted.
+func openBrowser(rawURL string) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return
+	}
 	cmd := "open"
 	if _, err := os.Stat("/usr/bin/xdg-open"); err == nil {
 		cmd = "xdg-open"
 	}
-	// #nosec G204 — URL is constructed from known repo owner/name, not user input.
-	proc := exec.Command(cmd, url)
+	// #nosec G204 — cmd is a hardcoded literal (open / xdg-open); the URL
+	// is parsed and required to be https with a non-empty host above.
+	proc := exec.Command(cmd, u.String())
 	_ = proc.Start()
 }

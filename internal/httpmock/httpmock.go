@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -97,12 +98,80 @@ func GraphQL(q string) Matcher {
 		}
 
 		var body struct {
-			Query string `json:"query"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		_ = decodeJSONBody(req, &body)
 
-		return re.MatchString(body.Query)
+		// Match against the query string. Older callers wrote regexes
+		// over inlined `repository(owner: "actions", ...)` literals;
+		// queries that use GraphQL variables also expose those values
+		// in the variables map, so we synthesize a deterministic
+		// "varKey=varValue" haystack and let the regex search both.
+		if re.MatchString(body.Query) {
+			return true
+		}
+		return re.MatchString(varsHaystack(body.Variables))
 	}
+}
+
+// GraphQLForRepo matches any GraphQL request whose query or variables
+// reference the given repository owner/name. This is the preferred matcher
+// for queries that pass owner/name through GraphQL `$variables` rather
+// than interpolating them as string literals.
+func GraphQLForRepo(owner, repo string) Matcher {
+	return func(req *http.Request) bool {
+		if !strings.EqualFold(req.Method, http.MethodPost) {
+			return false
+		}
+		if req.URL.Path != "/graphql" && req.URL.Path != "/api/graphql" {
+			return false
+		}
+
+		var body struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = decodeJSONBody(req, &body)
+
+		// Inline literal form: e.g. `owner: "actions", name: "checkout"`.
+		inline := fmt.Sprintf(`owner: %q, name: %q`, owner, repo)
+		if strings.Contains(body.Query, inline) {
+			return true
+		}
+		// Variable form: pair an owner var with the matching name var
+		// (owner0/name0, owner1/name1, ...). This avoids a false match
+		// when one repo's owner happens to equal another repo's name.
+		for k, v := range body.Variables {
+			if !strings.HasPrefix(k, "owner") {
+				continue
+			}
+			if vs, _ := v.(string); vs != owner {
+				continue
+			}
+			suffix := strings.TrimPrefix(k, "owner")
+			if name, ok := body.Variables["name"+suffix].(string); ok && name == repo {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func varsHaystack(vars map[string]any) string {
+	if len(vars) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&sb, "%s=%v\n", k, vars[k])
+	}
+	return sb.String()
 }
 
 // JSONResponse turns a value into a 200 JSON response.

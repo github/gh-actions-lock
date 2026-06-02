@@ -3,6 +3,7 @@ package lockfile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,14 @@ func TestParseActionRef(t *testing.T) {
 		{name: "reusable workflow yaml", input: "owner/repo/.github/workflows/called.yaml@main", wantNil: true},
 		{name: "path action that is not a reusable workflow", input: "owner/repo/some/path@v1", wantNWO: "owner/repo", wantPath: "some/path", wantRef: "v1"},
 		{name: "whitespace trimmed", input: "  actions/checkout@v4  ", wantNWO: "actions/checkout", wantRef: "v4"},
+		{name: "empty owner segment", input: "/repo@v1", wantNil: true},
+		{name: "empty name segment", input: "owner/@v1", wantNil: true},
+		{name: "leading slash both empty", input: "/@v1", wantNil: true},
+		{name: "owner with newline injection", input: "actions\n/checkout@v1", wantNil: true},
+		{name: "owner with quote", input: `actions"/checkout@v1`, wantNil: true},
+		{name: "owner with space", input: "actions /checkout@v1", wantNil: true},
+		{name: "control char tab embedded", input: "actions/check\tout@v1", wantNil: true},
+		{name: "nested folder containing reusable workflow path is not reusable", input: "owner/repo/tools/.github/workflows/x.yml@v1", wantNWO: "owner/repo", wantPath: "tools/.github/workflows/x.yml", wantRef: "v1"},
 	}
 
 	for _, tt := range tests {
@@ -224,6 +233,74 @@ jobs:
 	assert.Contains(t, s, "uses: actions/checkout@v4.2.1")
 	// The comment should NOT be rewritten
 	assert.Contains(t, s, "# DO NOT USE actions/checkout@v4 - see docs")
+}
+
+// TestRewriteActionRefs_AnchoredAtColumn verifies the rewrite uses the YAML
+// node's reported column rather than scanning the line for the first
+// occurrence of the old value. Without column anchoring, a same-line
+// in-document comment that mentions the old ref would be rewritten in
+// place of the actual value.
+func TestRewriteActionRefs_AnchoredAtColumn(t *testing.T) {
+	// Note: the in-line comment textually precedes the value on the
+	// same line by referring to it. yaml.v3 reports the value's column
+	// after the comment.
+	content := []byte("jobs:\n  a:\n    steps:\n      # bumped from actions/checkout@v3 \u2014 do not revert\n      - uses: actions/checkout@v3\n")
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "anchor.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	output, changed, err := f.RewriteActionRefs(map[string]string{
+		"actions/checkout@v3": "actions/checkout@v4",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed)
+
+	s := string(output)
+	assert.Contains(t, s, "      - uses: actions/checkout@v4\n")
+	assert.Contains(t, s, "# bumped from actions/checkout@v3 \u2014 do not revert")
+}
+
+// TestRewriteActionRefs_SkipsAnchorsAndAliases ensures we never rewrite a
+// scalar that is part of an anchor/alias relationship: replacing one site
+// would silently affect every other use of the same anchor.
+func TestRewriteActionRefs_SkipsAnchorsAndAliases(t *testing.T) {
+	content := []byte("jobs:\n  a:\n    steps:\n      - uses: &pinned actions/checkout@v3\n  b:\n    steps:\n      - uses: *pinned\n")
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "anchored.yml")
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+
+	f, err := Load(path)
+	require.NoError(t, err)
+
+	_, changed, err := f.RewriteActionRefs(map[string]string{
+		"actions/checkout@v3": "actions/checkout@v4",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, changed)
+}
+
+// TestExtractLocalCompositeRefs_RejectsPathTraversal confirms that a
+// `uses: ./../../etc/passwd` style local path is refused rather than
+// reading outside the discovered repo root.
+func TestExtractLocalCompositeRefs_RejectsPathTraversal(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.WriteFile(workflowPath, []byte("name: ci\n"), 0o644))
+
+	_, warnings := ExtractLocalCompositeRefs(workflowPath, []string{"./../../etc"})
+
+	var sawRefusal bool
+	for _, w := range warnings {
+		if strings.Contains(w, "refusing to read action file outside repo root") {
+			sawRefusal = true
+		}
+	}
+	assert.True(t, sawRefusal, "expected refusal warning, got: %#v", warnings)
 }
 
 func TestParseActionMeta(t *testing.T) {

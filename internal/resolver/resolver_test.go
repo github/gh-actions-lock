@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -36,20 +37,30 @@ func TestBuildResolveWithFileQuery(t *testing.T) {
 		{Owner: "actions", Repo: "cache", Path: "save", Ref: "v4"},
 	}
 
-	query, aliases := buildResolveWithFileQuery(refs)
+	query, vars, aliases := buildResolveWithFileQuery(refs)
 	if len(aliases) != 2 {
 		t.Fatalf("expected two aliases, got %+v", aliases)
 	}
 	for _, want := range []string{
-		`a0: repository(owner: "actions", name: "checkout")`,
-		`object(expression: "v6^{commit}")`,
-		`file(path: "action.yml")`,
-		`a1: repository(owner: "actions", name: "cache")`,
-		`file(path: "save/action.yml")`,
-		`fileYaml: file(path: "save/action.yaml")`,
+		`$owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!`,
+		`a0: repository(owner: $owner0, name: $name0)`,
+		`object(expression: $expr0)`,
+		`file: file(path: $yml0)`,
+		`a1: repository(owner: $owner1, name: $name1)`,
+		`fileYaml: file(path: $yaml1)`,
 	} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("query missing %q:\n%s", want, query)
+		}
+	}
+	for k, want := range map[string]any{
+		"owner0": "actions", "name0": "checkout", "expr0": "v6^{commit}",
+		"yml0": "action.yml", "yaml0": "action.yaml",
+		"owner1": "actions", "name1": "cache", "expr1": "v4^{commit}",
+		"yml1": "save/action.yml", "yaml1": "save/action.yaml",
+	} {
+		if vars[k] != want {
+			t.Fatalf("vars[%q]=%v, want %v", k, vars[k], want)
 		}
 	}
 }
@@ -104,22 +115,23 @@ func TestBuildResolveWithFileQueryPeelsAnnotatedTags(t *testing.T) {
 		{Owner: "actions", Repo: "checkout", Ref: "main"},
 		{Owner: "actions", Repo: "cache", Ref: "abc123abc123abc123abc123abc123abc1234567"},
 	}
-	query, _ := buildResolveWithFileQuery(refs)
-	for _, want := range []string{
-		`object(expression: "annotated-v1^{commit}")`,
-		`object(expression: "main^{commit}")`,
-		`object(expression: "abc123abc123abc123abc123abc123abc1234567^{commit}")`,
+	_, vars, _ := buildResolveWithFileQuery(refs)
+	for i, want := range []string{
+		"annotated-v1^{commit}",
+		"main^{commit}",
+		"abc123abc123abc123abc123abc123abc1234567^{commit}",
 	} {
-		if !strings.Contains(query, want) {
-			t.Fatalf("query missing peel %q:\n%s", want, query)
+		key := fmt.Sprintf("expr%d", i)
+		if got := vars[key]; got != want {
+			t.Fatalf("vars[%q]=%v, want %q", key, got, want)
 		}
 	}
-	for _, bad := range []string{
-		`object(expression: "annotated-v1")`,
-		`object(expression: "main")`,
-	} {
-		if strings.Contains(query, bad) {
-			t.Fatalf("query still contains unpeeled ref %q:\n%s", bad, query)
+	for _, bad := range []any{"annotated-v1", "main"} {
+		for i := 0; i < len(refs); i++ {
+			key := fmt.Sprintf("expr%d", i)
+			if vars[key] == bad {
+				t.Fatalf("vars[%q]=%v should have been peeled", key, bad)
+			}
 		}
 	}
 }
@@ -435,7 +447,7 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 	defer reg.Verify(t)
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "owner", name: "composite"\)`),
+		httpmock.GraphQLForRepo("owner", "composite"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": map[string]any{
@@ -453,7 +465,7 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 		}),
 	)
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": map[string]any{

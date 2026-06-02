@@ -467,4 +467,3 @@ func TestNormalizeContaining_PreservesBranchRefOverTag(t *testing.T) {
 	}
 	reg.Verify(t)
 }
-

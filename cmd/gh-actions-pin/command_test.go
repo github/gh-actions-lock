@@ -73,7 +73,7 @@ func TestUpgradeCommand_WriteWithHTTPMocks(t *testing.T) {
 		}),
 	)
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/checkout", "34e114876b0b11c390a56381ad16ebd13914f8d5", nodeActionYAML),
@@ -154,7 +154,7 @@ func TestCheckCommand_JSONWithHTTPMocks(t *testing.T) {
 	defer reg.Verify(t)
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
@@ -361,7 +361,7 @@ func TestCheck_TamperedAndUnreachable(t *testing.T) {
 	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
@@ -410,7 +410,7 @@ func TestCheck_UnreachableOnly(t *testing.T) {
 	sha := "cccccccccccccccccccccccccccccccccccccccc"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
@@ -460,7 +460,7 @@ func TestCheck_ReachabilityUnknown(t *testing.T) {
 	sha := "dddddddddddddddddddddddddddddddddddddddd"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
@@ -511,7 +511,7 @@ func TestCheck_Reachable(t *testing.T) {
 	sha := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
@@ -565,7 +565,7 @@ func TestCheck_LockfileForgery_NotAncestor(t *testing.T) {
 
 	// GraphQL resolution returns the live SHA (different from pinned).
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
@@ -627,7 +627,7 @@ func TestCheck_LockfileForgery_LegitAncestor(t *testing.T) {
 	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
@@ -688,7 +688,7 @@ func TestCheck_LockfileForgery_RateLimited(t *testing.T) {
 	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "example", name: "action"\)`),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
@@ -749,7 +749,7 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 
 	// First query: direct refs (checkout + setup-go).
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
@@ -759,7 +759,7 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 	)
 	// Second query: transitive dep discovered from composite (cache/save).
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "cache"\)`),
+		httpmock.GraphQLForRepo("actions", "cache"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
@@ -830,7 +830,7 @@ func TestCheckCommand_JSONDependenciesInfersRequiredByWithoutComments(t *testing
 	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "setup-go"\)`),
+		httpmock.GraphQLForRepo("actions", "setup-go"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
@@ -838,7 +838,7 @@ func TestCheckCommand_JSONDependenciesInfersRequiredByWithoutComments(t *testing
 		}),
 	)
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "cache"\)`),
+		httpmock.GraphQLForRepo("actions", "cache"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
@@ -889,7 +889,7 @@ func TestCheckCommand_JSONDefaultFieldsExcludesDependencies(t *testing.T) {
 	defer reg.Verify(t)
 
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
@@ -934,7 +934,7 @@ func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
 
 	// Single mock — the resolver caches, so both workflows resolve via one query.
 	reg.Register(
-		httpmock.GraphQL(`repository\(owner: "actions", name: "checkout"\)`),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),

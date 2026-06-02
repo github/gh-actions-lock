@@ -215,7 +215,7 @@ func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
 			ID int64 `json:"id"`
 		} `json:"owner"`
 	}
-	path := fmt.Sprintf("repos/%s/%s", owner, repo)
+	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
 	if err := r.restClient.Get(path, &resp); err != nil {
 		return 0, 0, fmt.Errorf("fetching %s: %w", path, err)
 	}
@@ -309,10 +309,15 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	}
 	defaultBranch := r.getDefaultBranch(owner, repo)
 
-	// Walk protected first, then fall back to all branches.
-	foundBranch := r.reachabilityScan(owner, repo, sha, ref, protectedBranches, defaultBranch)
+	// Walk protected first, then fall back to all branches. Track whether
+	// any Compare lookup succeeded so we can distinguish `Unreachable`
+	// (definitively not on any branch) from `Unknown` (every Compare
+	// errored, e.g. under rate-limit) — the latter must NOT be reported
+	// as an impostor verdict.
+	foundBranch, protectedAnyChecked := r.reachabilityScan(owner, repo, sha, ref, protectedBranches, defaultBranch)
+	var allAnyChecked bool
 	if foundBranch == "" {
-		foundBranch = r.reachabilityScan(owner, repo, sha, ref, branches, defaultBranch)
+		foundBranch, allAnyChecked = r.reachabilityScan(owner, repo, sha, ref, branches, defaultBranch)
 	}
 
 	if foundBranch != "" {
@@ -322,6 +327,10 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		} else {
 			result.Detail = fmt.Sprintf("commit is on branch %s", foundBranch)
 		}
+	} else if !protectedAnyChecked && !allAnyChecked && len(branches) > 0 {
+		// Every Compare lookup errored — don't claim impostor.
+		result.Status = ReachabilityUnknown
+		result.Detail = fmt.Sprintf("could not verify commit reachability for %s/%s — every Compare lookup failed (rate limit or transient error); try again later", owner, repo)
 	} else {
 		result.Status = Unreachable
 		if lockfile.IsFullSHA(ref) {
@@ -338,16 +347,20 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 
 // reachabilityScan walks candidates (in orderedBranches tier order),
 // returning the first branch whose HEAD is sha or whose lineage contains
-// sha as an ancestor via the Compare API. Compare errors (e.g.
-// rate-limited, 5xx) are non-fatal: the branch is skipped.
-func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []branchHead, defaultBranch string) string {
+// sha as an ancestor via the Compare API. Returns the matched branch name
+// and a boolean indicating whether at least one Compare lookup succeeded
+// (regardless of result). When every Compare call errored (e.g. fully
+// rate-limited / 5xx storm) we cannot conclude `Unreachable`; the caller
+// should surface that as `ReachabilityUnknown` instead of an impostor
+// verdict.
+func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []branchHead, defaultBranch string) (matched string, anyChecked bool) {
 	if len(candidates) == 0 {
-		return ""
+		return "", false
 	}
 	// Fast path: exact HEAD match.
 	for _, b := range candidates {
 		if strings.EqualFold(b.SHA, sha) {
-			return b.Name
+			return b.Name, true
 		}
 	}
 	// Slow path: ancestry via Compare API in tier order.
@@ -358,11 +371,12 @@ func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []b
 		if err != nil {
 			continue
 		}
+		anyChecked = true
 		if ok {
-			return b.Name
+			return b.Name, true
 		}
 	}
-	return ""
+	return "", anyChecked
 }
 
 // branchHead holds a branch name, the SHA of its HEAD commit, and whether
@@ -453,7 +467,8 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 		return v, nil
 	}
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
-		owner, repo, url.PathEscape(sha), url.PathEscape(branchHeadSHA))
+		url.PathEscape(owner), url.PathEscape(repo),
+		url.PathEscape(sha), url.PathEscape(branchHeadSHA))
 	var resp compareResponse
 	if err := r.restClient.Get(path, &resp); err != nil {
 		var httpErr *api.HTTPError
@@ -756,7 +771,8 @@ type compareResponse struct {
 // never in the ref's lineage, merge_base(pinned, live) ≠ pinned.
 func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (AncestryStatus, string) {
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
-		owner, repo, url.PathEscape(pinnedSHA), url.PathEscape(liveSHA))
+		url.PathEscape(owner), url.PathEscape(repo),
+		url.PathEscape(pinnedSHA), url.PathEscape(liveSHA))
 
 	var resp compareResponse
 	err := r.restClient.Get(path, &resp)
@@ -1051,10 +1067,10 @@ type repoResponse struct {
 }
 
 func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, []string, error) {
-	query, aliasMap := buildResolveWithFileQuery(refs)
+	query, vars, aliasMap := buildResolveWithFileQuery(refs)
 
 	var data map[string]json.RawMessage
-	err := r.client.Do(query, nil, &data)
+	err := r.client.Do(query, vars, &data)
 	if err != nil {
 		var gqlErr *api.GraphQLError
 		if !errors.As(err, &gqlErr) {
@@ -1065,14 +1081,30 @@ func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockf
 	return parseResolveWithFileResponse(data, refs, aliasMap)
 }
 
-func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]int) {
-	aliasMap := make(map[string]int)
-	var sb strings.Builder
-	sb.WriteString("query {")
+// buildResolveWithFileQuery emits a GraphQL query that resolves each ref's
+// commit OID and action.{yml,yaml} blob in a single round-trip. All
+// untrusted inputs (owner, repo, ref, path) are passed via GraphQL
+// variables rather than interpolated with %q so that a YAML-supplied
+// value like `"\n  malicious: query { viewer { login } }"` cannot escape
+// the string literal and inject sibling fields.
+func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]any, map[string]int) {
+	aliasMap := make(map[string]int, len(refs))
+	vars := make(map[string]any, len(refs)*5)
+
+	var decl strings.Builder
+	var body strings.Builder
+	decl.WriteString("query(")
+	body.WriteString(") {")
 
 	for i, ref := range refs {
 		alias := fmt.Sprintf("a%d", i)
 		aliasMap[alias] = i
+
+		ownerVar := fmt.Sprintf("owner%d", i)
+		nameVar := fmt.Sprintf("name%d", i)
+		exprVar := fmt.Sprintf("expr%d", i)
+		ymlVar := fmt.Sprintf("yml%d", i)
+		yamlVar := fmt.Sprintf("yaml%d", i)
 
 		ymlPath := "action.yml"
 		yamlPath := "action.yaml"
@@ -1081,24 +1113,36 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]in
 			yamlPath = ref.Path + "/action.yaml"
 		}
 
-		fmt.Fprintf(&sb, " %s: repository(owner: %q, name: %q) {", alias, ref.Owner, ref.Repo)
-		sb.WriteString(" nameWithOwner")
+		vars[ownerVar] = ref.Owner
+		vars[nameVar] = ref.Repo
 		// Peel through annotated tags with `^{commit}`. Without it, an
 		// annotated tag's `object(expression:)` returns a Tag object, not a
 		// Commit — the `... on Commit` fragment doesn't match and `oid` comes
 		// back empty. The peel is a no-op for branches, SHAs, and lightweight
 		// tags, so we can apply it unconditionally.
-		fmt.Fprintf(&sb, " object(expression: %q) {", ref.Ref+"^{commit}")
-		sb.WriteString(" ... on Commit { oid")
-		fmt.Fprintf(&sb, " file: file(path: %q) { object { ... on Blob { text } } }", ymlPath)
-		fmt.Fprintf(&sb, " fileYaml: file(path: %q) { object { ... on Blob { text } } }", yamlPath)
-		sb.WriteString(" }")
-		sb.WriteString(" }")
-		sb.WriteString(" }")
+		vars[exprVar] = ref.Ref + "^{commit}"
+		vars[ymlVar] = ymlPath
+		vars[yamlVar] = yamlPath
+
+		if i > 0 {
+			decl.WriteString(", ")
+		}
+		fmt.Fprintf(&decl, "$%s: String!, $%s: String!, $%s: String!, $%s: String!, $%s: String!",
+			ownerVar, nameVar, exprVar, ymlVar, yamlVar)
+
+		fmt.Fprintf(&body, " %s: repository(owner: $%s, name: $%s) {", alias, ownerVar, nameVar)
+		body.WriteString(" nameWithOwner")
+		fmt.Fprintf(&body, " object(expression: $%s) {", exprVar)
+		body.WriteString(" ... on Commit { oid")
+		fmt.Fprintf(&body, " file: file(path: $%s) { object { ... on Blob { text } } }", ymlVar)
+		fmt.Fprintf(&body, " fileYaml: file(path: $%s) { object { ... on Blob { text } } }", yamlVar)
+		body.WriteString(" }")
+		body.WriteString(" }")
+		body.WriteString(" }")
 	}
 
-	sb.WriteString(" }")
-	return sb.String(), aliasMap
+	body.WriteString(" }")
+	return decl.String() + body.String(), vars, aliasMap
 }
 
 func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfile.ActionRef, aliasMap map[string]int) ([]lockfile.Dependency, []string, []string, error) {

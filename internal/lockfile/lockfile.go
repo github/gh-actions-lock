@@ -136,6 +136,9 @@ func (d Dependency) String() string {
 // ParseDependencyString parses a dependency entry string back into a
 // Dependency.
 func ParseDependencyString(s string) (Dependency, error) {
+	if containsControlChars(s) {
+		return Dependency{}, fmt.Errorf("dependency string contains control characters")
+	}
 
 	colonIdx := strings.LastIndex(s, ":")
 	if colonIdx < 0 {
@@ -244,10 +247,16 @@ func CheckSHARefMismatches(deps []Dependency) []SHARefMismatch {
 	return mismatches
 }
 
-// ParseActionRef parses a uses: string into an ActionRef.
+// ParseActionRef parses a uses: string into an ActionRef. Returns nil for
+// expressions, local paths, docker images, reusable workflows, malformed
+// owner/repo segments, or any input containing control characters that
+// would otherwise reach downstream URL/GraphQL builders.
 func ParseActionRef(uses string) *ActionRef {
 	uses = strings.TrimSpace(uses)
 
+	if uses == "" || containsControlChars(uses) {
+		return nil
+	}
 	if strings.HasPrefix(uses, "./") {
 		return nil
 	}
@@ -265,7 +274,10 @@ func ParseActionRef(uses string) *ActionRef {
 	ref := atParts[1]
 
 	segments := strings.SplitN(atParts[0], "/", 3)
-	if len(segments) < 2 {
+	if len(segments) < 2 || segments[0] == "" || segments[1] == "" {
+		return nil
+	}
+	if !isValidOwnerOrRepo(segments[0]) || !isValidOwnerOrRepo(segments[1]) {
 		return nil
 	}
 
@@ -286,6 +298,27 @@ func ParseActionRef(uses string) *ActionRef {
 	return actionRef
 }
 
+// isValidOwnerOrRepo enforces the GitHub owner/repo character set. GitHub
+// allows alphanumerics, hyphens, underscores, and periods; we reject
+// anything else to keep these values safe for use in URL paths and GraphQL
+// string literals without per-call escaping bugs.
+func isValidOwnerOrRepo(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func isYAMLFile(path string) bool {
 	return strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
 }
@@ -294,7 +327,12 @@ func isReusableWorkflow(actionRef *ActionRef) bool {
 	if actionRef.Path == "" {
 		return false
 	}
-	if !strings.Contains(actionRef.Path, ".github/workflows/") {
+	// Anchor on prefix: a reusable workflow is keyed by
+	// `<owner>/<repo>/.github/workflows/<name>.yml`, so the relative
+	// Path must START with `.github/workflows/`. Substring matching
+	// would misclassify composite actions whose nested folder
+	// happens to contain that segment (e.g. `tools/.github/workflows/`).
+	if !strings.HasPrefix(actionRef.Path, ".github/workflows/") {
 		return false
 	}
 	return isYAMLFile(actionRef.Path)
@@ -443,6 +481,11 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 		if keyNode == nil || valueNode == nil || keyNode.Value != "uses" || valueNode.Kind != yaml.ScalarNode {
 			return
 		}
+		// Skip aliases / nodes that came from anchors. Replacing one
+		// anchor reference would silently change every other use site.
+		if valueNode.Alias != nil || valueNode.Anchor != "" {
+			return
+		}
 
 		oldValue := strings.TrimSpace(valueNode.Value)
 		newValue, ok := replacements[oldValue]
@@ -450,14 +493,38 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 			return
 		}
 
+		// Anchor the rewrite at the YAML node's reported (line, column)
+		// rather than scanning the line for the first occurrence of
+		// oldValue. The previous strings.Index(...) approach would
+		// happily substitute matching text inside a YAML comment that
+		// preceded the value (e.g. `uses: foo/bar@v1  # bumped from foo/bar@v1`).
 		lineIndex := valueNode.Line - 1
-		if lineIndex >= 0 && lineIndex < len(lines) {
-			if idx := strings.Index(lines[lineIndex], oldValue); idx >= 0 {
-				// Replace only the matched ref, preserving any trailing content.
-				lines[lineIndex] = lines[lineIndex][:idx] + newValue + lines[lineIndex][idx+len(oldValue):]
-				changed++
-			}
+		colIndex := valueNode.Column - 1
+		if lineIndex < 0 || lineIndex >= len(lines) || colIndex < 0 {
+			return
 		}
+		line := lines[lineIndex]
+		if colIndex+len(oldValue) > len(line) {
+			return
+		}
+		// Quoted scalars report Column at the opening quote; the actual
+		// value sits one byte further in.
+		if valueNode.Style == yaml.SingleQuotedStyle || valueNode.Style == yaml.DoubleQuotedStyle {
+			if colIndex+1+len(oldValue) > len(line) {
+				return
+			}
+			if line[colIndex+1:colIndex+1+len(oldValue)] != oldValue {
+				return
+			}
+			lines[lineIndex] = line[:colIndex+1] + newValue + line[colIndex+1+len(oldValue):]
+			changed++
+			return
+		}
+		if line[colIndex:colIndex+len(oldValue)] != oldValue {
+			return
+		}
+		lines[lineIndex] = line[:colIndex] + newValue + line[colIndex+len(oldValue):]
+		changed++
 	})
 
 	return []byte(strings.Join(lines, "\n")), changed, nil
@@ -471,25 +538,35 @@ func walkYAML(node *yaml.Node, fn func(key, value string)) {
 	})
 }
 
+// maxYAMLWalkDepth bounds recursion in walkYAMLNodes so a hostile or
+// pathological workflow tree cannot stack-overflow the parser. yaml.v3 has
+// its own document-parse limit; this is the post-parse-tree walker's own
+// safety net.
+const maxYAMLWalkDepth = 100
+
 func walkYAMLNodes(node *yaml.Node, fn func(keyNode, valueNode *yaml.Node)) {
-	if node == nil {
+	walkYAMLNodesDepth(node, fn, 0)
+}
+
+func walkYAMLNodesDepth(node *yaml.Node, fn func(keyNode, valueNode *yaml.Node), depth int) {
+	if node == nil || depth > maxYAMLWalkDepth {
 		return
 	}
 	switch node.Kind {
 	case yaml.DocumentNode:
 		for _, child := range node.Content {
-			walkYAMLNodes(child, fn)
+			walkYAMLNodesDepth(child, fn, depth+1)
 		}
 	case yaml.MappingNode:
 		for i := 0; i < len(node.Content)-1; i += 2 {
 			key := node.Content[i]
 			val := node.Content[i+1]
 			fn(key, val)
-			walkYAMLNodes(val, fn)
+			walkYAMLNodesDepth(val, fn, depth+1)
 		}
 	case yaml.SequenceNode:
 		for _, child := range node.Content {
-			walkYAMLNodes(child, fn)
+			walkYAMLNodesDepth(child, fn, depth+1)
 		}
 	}
 }
@@ -523,6 +600,15 @@ func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]Acti
 	for _, localPath := range localPaths {
 		relPath := strings.TrimPrefix(localPath, "./")
 		actionDir := filepath.Join(repoRoot, relPath)
+		// Defense against `uses: ./../../etc/foo` style traversal: the
+		// resolved directory must remain inside the discovered repo root.
+		// Marginal blast radius (we only read action.yml + extract uses
+		// strings) but the value here is an attacker-controlled string
+		// from workflow YAML, so we treat it as untrusted.
+		if !isWithinRoot(repoRoot, actionDir) {
+			warnings = append(warnings, fmt.Sprintf("refusing to read action file outside repo root: %s", localPath))
+			continue
+		}
 
 		actionContent, err := os.ReadFile(filepath.Join(actionDir, "action.yml"))
 		if err != nil {
@@ -569,6 +655,29 @@ func findRepoRoot(startPath string) string {
 		}
 		absPath = parent
 	}
+}
+
+// isWithinRoot reports whether candidate resolves to a path inside root
+// (or root itself). Both inputs are cleaned and made absolute before
+// comparison so that `..` traversal and symlink-free relative paths are
+// caught uniformly.
+func isWithinRoot(root, candidate string) bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absCandidate)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
 }
 
 func parseActionYAMLForUses(content []byte) ([]string, error) {

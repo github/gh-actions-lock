@@ -8,19 +8,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
-// isSHARef returns true if ref looks like a full commit SHA (40 or 64 hex chars).
-func isSHARef(ref string) bool {
-	return lockfile.IsFullSHA(ref)
-}
-
-// LooksLikeVersion returns true if ref starts with "v" followed by a digit.
-func LooksLikeVersion(ref string) bool {
-	if len(ref) < 2 {
-		return false
-	}
-	return ref[0] == 'v' && ref[1] >= '0' && ref[1] <= '9'
-}
-
 // applyPin runs the full pin flow on an unpinned workflow.
 func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	wf, err := lockfile.Load(wr.Path)
