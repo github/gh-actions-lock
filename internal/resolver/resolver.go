@@ -837,15 +837,15 @@ func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 		return ref, nil
 	}
 
-	query := fmt.Sprintf(`query {
-  repository(owner: %q, name: %q) {
+	query := `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
     refs(refPrefix: "refs/tags/", first: 100) {
       nodes {
         name
       }
     }
   }
-}`, owner, repo)
+}`
 
 	var data struct {
 		Repository *struct {
@@ -856,7 +856,7 @@ func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 			} `json:"refs"`
 		} `json:"repository"`
 	}
-	if err := r.client.Do(query, nil, &data); err != nil {
+	if err := r.client.Do(query, map[string]any{"owner": owner, "name": repo}, &data); err != nil {
 		return "", err
 	}
 	if data.Repository == nil {
