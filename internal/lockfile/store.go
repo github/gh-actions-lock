@@ -28,8 +28,8 @@ type MetadataResolver interface {
 	RepoIDs(owner, repo string) (ownerID, repoID int64, err error)
 }
 
-// Store wraps the on-disk dependency lockfile and tracks which workflow keys
-// have been modified by the current invocation. Save garbage-collects orphan
+// Store wraps the on-disk dependency lockfile for the current invocation.
+// Save garbage-collects orphan
 // dependencies: entries — entries still referenced by an out-of-scope workflow are
 // preserved, so partial invocations (e.g. `upgrade workflows/foo.yml`) stay
 // noop on unrelated workflows.
@@ -38,7 +38,6 @@ type Store struct {
 	file     parserlock.File
 	meta     MetadataResolver
 	idCache  map[string][2]int64
-	dirty    bool
 }
 
 // OpenStore reads the lockfile at repoRoot, returning an empty in-memory file
@@ -86,9 +85,6 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 			continue
 		}
 		canon := pin.String()
-		if canon != pinKey {
-			s.dirty = true
-		}
 		normalizedActions[canon] = action
 		if action.OwnerID != 0 && action.RepoID != 0 {
 			s.idCache[pin.Owner+"/"+pin.Repo] = [2]int64{action.OwnerID, action.RepoID}
@@ -111,7 +107,6 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 		}
 		if changed {
 			s.file.Workflows[wfKey] = normalized
-			s.dirty = true
 		}
 	}
 	return s, nil
@@ -256,7 +251,6 @@ func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string]
 	}
 	sort.Strings(directPins)
 	s.file.Workflows[workflowKey] = directPins
-	s.dirty = true
 	return nil
 }
 

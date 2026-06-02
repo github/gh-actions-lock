@@ -112,7 +112,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		if err != nil {
 			return fmt.Errorf("rewriting refs to patch versions: %w", err)
 		}
-		if err := os.WriteFile(wr.Path, content, 0o644); err != nil {
+		if err := writeWorkflowFile(wr.Path, content); err != nil {
 			return fmt.Errorf("writing file: %w", err)
 		}
 	}
@@ -148,7 +148,7 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	}
 
 	// Write the rewritten content, then re-parse and re-resolve to get correct lockfile.
-	if err := os.WriteFile(wr.Path, content, 0o644); err != nil {
+	if err := writeWorkflowFile(wr.Path, content); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
 
@@ -221,8 +221,20 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	if err != nil {
 		return fmt.Errorf("rewriting refs to canonical tag/branch: %w", err)
 	}
-	if err := os.WriteFile(workflowPath, content, 0o644); err != nil {
+	if err := writeWorkflowFile(workflowPath, content); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
 	return nil
+}
+
+// writeWorkflowFile overwrites an existing workflow file, preserving its
+// current permission bits. Pinning must not silently widen a restrictive
+// mode (e.g. 0600 → 0644). Falls back to 0o644 when the file's mode can't
+// be determined (e.g. it doesn't yet exist).
+func writeWorkflowFile(path string, content []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	return os.WriteFile(path, content, mode)
 }
