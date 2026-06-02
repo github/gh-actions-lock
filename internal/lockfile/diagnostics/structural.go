@@ -3,7 +3,7 @@ package diagnostics
 import (
 	"fmt"
 
-	"github.com/github/gh-actions-pin/internal/lockfile/parserlock"
+	"github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // formatUseName renders "owner/repo" or "owner/repo/path" for a uses:

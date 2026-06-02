@@ -3,7 +3,7 @@ package lockfile
 import (
 	"fmt"
 
-	"github.com/github/gh-actions-pin/internal/lockfile/parserlock"
+	"github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // dependencyToPin converts a Dependency into a parserlock.Pin without any

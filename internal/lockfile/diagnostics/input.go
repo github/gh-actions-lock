@@ -1,6 +1,6 @@
 package diagnostics
 
-import "github.com/github/gh-actions-pin/internal/lockfile/parserlock"
+import "github.com/github/gh-actions-pin/pkg/lockfile"
 
 // UsesRef is a single `uses:` reference extracted from a workflow. How the
 // caller derived it (regex, parser walk, anything else) is its own

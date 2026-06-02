@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/lockfile/parserlock"
+	"github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // stubResolver scripts every Resolver call from test fixtures. Missing
