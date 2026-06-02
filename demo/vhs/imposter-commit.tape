@@ -1,4 +1,4 @@
-Output imposter-commit.gif
+Output demo/vhs/out/imposter-commit.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

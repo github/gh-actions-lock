@@ -1,4 +1,4 @@
-Output edit-repin.gif
+Output demo/vhs/out/edit-repin.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

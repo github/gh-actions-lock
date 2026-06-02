@@ -1,4 +1,4 @@
-Output ci-failure.gif
+Output demo/vhs/out/ci-failure.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

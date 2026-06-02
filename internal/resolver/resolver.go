@@ -619,7 +619,7 @@ func (r *Resolver) DiscoverContainingDefault(owner, repo, sha, hintRef, defaultB
 			tagNames = append(tagNames, t.Name)
 		}
 	}
-	tag = pickPreferred(tagNames, hintRef, "")
+	tag = pickPreferredTag(tagNames, hintRef)
 
 	return tag, branch, nil
 }
@@ -685,6 +685,70 @@ func pickPreferred(candidates []string, hintRef, defaultPick string) string {
 		}
 	}
 	return best
+}
+
+// pickPreferredTag selects the canonical tag from the set of tags pointing at
+// a SHA. Selection order:
+//
+//  1. hintRef — if the workflow's original ref is itself one of the tags, it
+//     wins (preserve author intent).
+//  2. Highest semantic version (e.g. v1.4.4 beats v1, and 1.1.4 beats
+//     non-semver tags like "latest" or monorepo tags like "predicate@1.1.4").
+//     Both v-prefixed (v1.4.4) and bare (1.4.4) forms qualify; a v-prefixed
+//     tag wins ties against the same bare version.
+//  3. Lexicographically-first of whatever remains.
+//
+// This keeps oddly-named monorepo sub-action tags (which can contain '@' and
+// collide with the pin grammar) from being chosen when a clean version tag
+// points at the same commit.
+func pickPreferredTag(candidates []string, hintRef string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	for _, c := range candidates {
+		if c == hintRef && hintRef != "" {
+			return c
+		}
+	}
+	var best string
+	var bestVer lockfile.Semver
+	haveSemver := false
+	for _, c := range candidates {
+		sv, ok := lockfile.ParseSemver(c)
+		if !ok {
+			continue
+		}
+		if !haveSemver || semverGreater(sv, bestVer) {
+			best, bestVer, haveSemver = c, sv, true
+		}
+	}
+	if haveSemver {
+		return best
+	}
+	return pickPreferred(candidates, hintRef, "")
+}
+
+// semverGreater reports whether a should be preferred over b: higher
+// major.minor.patch wins; on a tie a stable version beats a pre-release, a
+// v-prefixed tag beats the same bare version, then the more specific (longer)
+// raw tag wins, with a lexicographic final tie-break for determinism.
+func semverGreater(a, b lockfile.Semver) bool {
+	av, bv := a.Version(), b.Version()
+	for i := 0; i < 3; i++ {
+		if av[i] != bv[i] {
+			return av[i] > bv[i]
+		}
+	}
+	if a.IsStable() != b.IsStable() {
+		return a.IsStable()
+	}
+	if (a.Prefix == "v") != (b.Prefix == "v") {
+		return a.Prefix == "v"
+	}
+	if len(a.Raw) != len(b.Raw) {
+		return len(a.Raw) > len(b.Raw)
+	}
+	return a.Raw > b.Raw
 }
 
 func shortSha(s string) string {

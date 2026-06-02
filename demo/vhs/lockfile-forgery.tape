@@ -1,4 +1,4 @@
-Output lockfile-forgery.gif
+Output demo/vhs/out/lockfile-forgery.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

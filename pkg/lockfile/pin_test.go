@@ -37,6 +37,22 @@ func TestParsePin(t *testing.T) {
 				Hex:   "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
 			},
 		},
+		{
+			// Monorepo sub-action tags (e.g. attest-build-provenance's
+			// predicate/) embed an '@' in the ref, producing a double-'@'
+			// key. The first '@' bounds the NWO and the last ':' bounds the
+			// digest, so the ref survives intact.
+			name:  "ref containing at (monorepo sub-action tag)",
+			entry: "actions/attest-build-provenance@predicate@1.1.4:sha1-36fa7d009e22618ca7cd599486979b8150596c74",
+			want: Pin{
+				NWO:   "actions/attest-build-provenance",
+				Owner: "actions",
+				Repo:  "attest-build-provenance",
+				Ref:   "predicate@1.1.4",
+				Algo:  "sha1",
+				Hex:   "36fa7d009e22618ca7cd599486979b8150596c74",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -45,6 +61,8 @@ func TestParsePin(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tt.want, got)
 			assert.True(t, IsValidPin(tt.entry))
+			// Round-trip: serializing the parsed pin reproduces the entry.
+			assert.Equal(t, tt.entry, got.String())
 		})
 	}
 }

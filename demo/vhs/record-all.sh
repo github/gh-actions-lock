@@ -27,9 +27,10 @@ done
 
 echo ""
 echo "=== All recordings complete ==="
+echo "GIFs written to demo/vhs/out/ (gitignored)."
 echo "Publish with:"
 for tape in "${TAPES[@]}"; do
   gif="${tape##*/}"
   gif="${gif%.tape}.gif"
-  echo "  vhs publish $gif"
+  echo "  vhs publish demo/vhs/out/$gif"
 done

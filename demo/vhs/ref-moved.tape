@@ -1,4 +1,4 @@
-Output ref-moved.gif
+Output demo/vhs/out/ref-moved.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

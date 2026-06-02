@@ -1,4 +1,4 @@
-Output check-autofix.gif
+Output demo/vhs/out/check-autofix.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

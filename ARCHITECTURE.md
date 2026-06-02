@@ -3,40 +3,47 @@
 > A guided tour of `gh-actions-pin` internals. Follow the links — every section points at the actual code.
 
 ```
-7,650 lines of Go across 18 source files + 11 test files
-```
-
-```
 cmd/gh-actions-pin/          ← CLI entry point, command routing, presentation
-  main.go                       7 LOC   — os.Exit(Execute())
-  root.go                     149 LOC   — pinFactory, cobra command tree
-  check.go                    564 LOC   — check command, JSON output, result presentation
-  upgrade.go                  416 LOC   — upgrade command, diff display
+  main.go                       — os.Exit(Execute())
+  root.go                       — pinFactory, cobra command tree
+  check.go                      — check command, JSON output, result presentation
+  upgrade.go                    — upgrade command, diff display
 
-internal/lockfile/           ← YAML parsing, dependency model, serialization
-  lockfile.go                 633 LOC   — ActionRef, Dependency, File, YAML read/write
-  diff.go                     137 LOC   — dependency diffing
-  version.go                   65 LOC   — semver parsing
+internal/lockfile/           ← Workflow YAML parsing, dependency model, lockfile store
+  lockfile.go                   — ActionRef, Dependency, workflow File, uses: parse/rewrite
+  store.go                      — Store: load/save the separate .github/workflows/actions.lock
+  pinbridge.go                  — bridge between internal Dependency and pkg/lockfile pins
+  diff.go                       — dependency diffing
+  version.go                    — semver parsing
+  diagnostics/                  — structural + resolver lockfile diagnostics
 
 internal/resolver/           ← GitHub API interaction, dependency resolution
-  resolver.go                 614 LOC   — GraphQL batched resolution, reachability checks
-  retry.go                     56 LOC   — exponential backoff
+  resolver.go                   — GraphQL batched resolution, reachability checks
+  retry.go                      — exponential backoff
 
 internal/doctor/             ← Diagnostic analysis + interactive remediation
-  finding.go                  191 LOC   — Finding, Report, Category types
-  diagnose.go                 361 LOC   — workflow analysis, finding generation
-  remediate.go                828 LOC   — interactive fix engine
-  apply.go                    209 LOC   — write fixes to disk
-  prompt.go                   193 LOC   — Prompter interface + implementations
-  tagging.go                  341 LOC   — tag suggestion logic
-  tags.go                     335 LOC   — tag fetching and filtering
-  version.go                   87 LOC   — mutable version helpers
+  finding.go                    — Finding, Report, Category types
+  diagnose.go                   — workflow analysis, finding generation
+  remediate.go                  — interactive fix engine
+  apply.go                      — write fixes to disk
+  prompt.go                     — Prompter interface + implementations
+  picker.go                     — interactive tag picker
+  session.go                    — cross-workflow remediation session state
+  tagging.go                    — tag suggestion logic
+  tags.go                       — tag fetching and filtering
+  version.go                    — mutable version helpers
+  config.go / doc_urls.go / engine_adapter.go — reachability config, doc links, parser adapter
 
 internal/ui/                 ← Terminal output formatting
-  ui.go                       252 LOC   — colors, progress, hyperlinks
+  ui.go                         — colors, progress, hyperlinks
 
 internal/httpmock/           ← Test utilities
-  httpmock.go                 188 LOC   — HTTP response stubbing
+  httpmock.go                   — HTTP response stubbing
+
+pkg/lockfile/                ← Standalone lockfile schema (nested Go module, v0.0.1)
+  lockfile.go                   — File{version, dependencies, workflows}, Action, Parse
+  pin.go                        — canonical pin keys (owner/repo@ref:sha1-<hex>)
+  entry.go / path.go            — lockfile entry + path helpers
 ```
 
 ---
@@ -50,28 +57,28 @@ internal/httpmock/           ← Test utilities
 └──────────┬──────────────────────┘
            │ uses
            ▼
-┌──────────────────┐     ┌──────────────────┐
-│  internal/doctor │────▶│ internal/lockfile │  YAML parsing, dependency model
-│  diagnose        │     │ ActionRef         │
-│  remediate       │     │ Dependency        │
-│  apply           │     │ File              │
-│  prompt          │     │ WriteDependencies │
-│  tagging/tags    │     └────────┬─────────┘
-└──────┬───────────┘              │
-       │ uses                     │ uses
-       ▼                          ▼
-┌──────────────────┐     ┌──────────────────┐
-│ internal/resolver│     │   internal/ui     │
-│ ResolveAll       │     │   colors, links   │
-│ CheckReachability│     │   progress        │
-│ LatestRef        │     └──────────────────┘
+┌──────────────────┐     ┌──────────────────────────────────┐
+│  internal/doctor │────▶│ internal/lockfile                 │  workflow parse + lockfile store
+│  diagnose        │     │ ActionRef  (parsed uses:)         │
+│  remediate       │     │ Dependency (resolved pin)         │
+│  apply           │     │ File       (parsed workflow YAML) │
+│  session         │     │ Store      (.github/workflows/    │
+│  tagging/tags    │     │             actions.lock)         │
+└──────┬───────────┘     └────────┬──────────────┬───────────┘
+       │ uses                     │ uses         │ serializes via
+       ▼                          ▼              ▼
+┌──────────────────┐     ┌──────────────────┐  ┌────────────────────────┐
+│ internal/resolver│     │   internal/ui     │  │ pkg/lockfile (module)  │
+│ ResolveAll       │     │   colors, links   │  │ File / Action / Pin    │
+│ CheckReachability│     │   progress        │  │ canonical pin keys     │
+│ LatestRef        │     └──────────────────┘  └────────────────────────┘
 └──────────────────┘
        │ uses
        ▼
    go-gh/v2/pkg/api (GraphQL + REST clients)
 ```
 
-**Key rule**: `lockfile` is the lowest layer (pure data + YAML). `resolver` talks to the API. `doctor` orchestrates diagnosis and remediation. `cmd` handles CLI concerns (cobra, JSON output, presentation). The `ui` package is used everywhere for formatted output.
+**Key rule**: `internal/lockfile` is the lowest layer (workflow YAML parsing + the lockfile `Store`). The lock is a **separate file** — `.github/workflows/actions.lock` — whose on-disk schema lives in the nested `pkg/lockfile` module (`File{version, dependencies, workflows}`). `resolver` talks to the API. `doctor` orchestrates diagnosis and remediation. `cmd` handles CLI concerns (cobra, JSON output, presentation). The `ui` package is used everywhere for formatted output.
 
 ---
 
@@ -83,61 +90,112 @@ The parsed form of a `uses:` line in a workflow:
 
 ```go
 type ActionRef struct {
-    Owner    string // "actions"
-    Repo     string // "checkout"
-    Path     string // "nested-composite" (optional subpath)
-    Ref      string // "v4" or "abc123..."
-    Location int    // line number in YAML
+    Owner string // "actions"
+    Repo  string // "checkout"
+    Path  string // "save" (optional sub-action subpath)
+    Ref   string // "v4" or "abc123..."
+    Raw   string // original uses: string
 }
 ```
 
-Parsed by [`ParseActionRef`](https://github.com/github/gh-actions-pin/blob/ns/primer-output-formatting/internal/lockfile/lockfile.go#L213) which filters out expressions (`${...}`), local paths (`./`), Docker refs (`docker://`), and reusable workflows.
+Parsed by [`ParseActionRef`](https://github.com/github/gh-actions-pin/blob/nodeselector/fix-pinning-refs/internal/lockfile/lockfile.go) which filters out expressions (`${...}`), local paths (`./`), Docker refs (`docker://`), and reusable workflows.
 
-### [`lockfile.Dependency`](https://github.com/github/gh-actions-pin/blob/ns/primer-output-formatting/internal/lockfile/lockfile.go#L69-L76)
+### `lockfile.Dependency`
 
-The resolved + serialized form that goes into the `dependencies:` block:
+The resolved form of a pinned dependency. It is the in-memory model; serialization to the lockfile goes through `pkg/lockfile` via `pinbridge.go`:
 
 ```go
 type Dependency struct {
-    NWO      string // "actions/checkout" (with optional /path)
+    NWO      string // "actions/checkout" (no path)
+    Path     string // "save" — kept in memory for sub-action traversal; dropped at write time
     Ref      string // "v4.3.1" (narrowed)
     SHA      string // "34e114876b0b..."
-    HashAlgo string // "sha1"
-    Direct   bool   // true = in workflow, false = transitive
+    HashAlgo string // "sha1" or "sha256"
+    Tag      string // discovered release tag at SHA, if any
+    Branch   string // branch containing SHA — required at write time (impostor signal if absent)
 }
 ```
 
-Serialized as: `github.com/actions/checkout@v4.3.1:sha1-34e114876b0b...`
+`Key()` returns `NWO@Ref` (the runner downloads one tarball per repo+ref, so distinct
+subpaths collapse to a single lock entry). The canonical **pin key** written to the
+lockfile is `owner/repo@ref:sha1-<hex>` (no `github.com/` prefix), produced by
+[`pkg/lockfile` pin encoding](https://github.com/github/gh-actions-pin/blob/nodeselector/fix-pinning-refs/pkg/lockfile/pin.go).
 
-Parsed by [`ParseDependencyString`](https://github.com/github/gh-actions-pin/blob/ns/primer-output-formatting/internal/lockfile/lockfile.go#L104) with validation for control character injection, hash algorithm, and SHA length.
+### `lockfile.Store` and `pkg/lockfile.File`
 
-### [`doctor.Finding`](https://github.com/github/gh-actions-pin/blob/ns/primer-output-formatting/internal/doctor/finding.go#L40-L58)
+The lock is a **separate file**, `.github/workflows/actions.lock`, not a block appended to
+the workflow. `internal/lockfile.Store` ([`store.go`](https://github.com/github/gh-actions-pin/blob/nodeselector/fix-pinning-refs/internal/lockfile/store.go)) loads, mutates, and
+saves it; the on-disk schema is owned by the nested `pkg/lockfile` module:
+
+```go
+// pkg/lockfile
+const Version = "v0.0.1"
+const Path    = ".github/workflows/actions.lock"
+
+type File struct {
+    Version   string              `yaml:"version"`
+    Actions   map[string]Action   `yaml:"dependencies"` // pin key → metadata
+    Workflows map[string][]string `yaml:"workflows"`    // workflow path → flat pin-key closure
+}
+
+type Action struct {
+    Tag     string   `yaml:"tag,omitempty"`
+    Branch  string   `yaml:"branch,omitempty"`
+    Commit  string   `yaml:"commit,omitempty"` // algo-prefixed: "sha1-..." / "sha256-..."
+    OwnerID int64    `yaml:"owner_id"`
+    RepoID  int64    `yaml:"repo_id"`
+    Uses    []string `yaml:"uses,omitempty"`   // direct nested deps, as pin keys
+}
+```
+
+Example `.github/workflows/actions.lock`:
+
+```yaml
+version: 'v0.0.1'
+workflows:
+    .github/workflows/ci.yml:
+        - 'actions/checkout@v4.3.1:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5'
+dependencies:
+    'actions/checkout@v4.3.1:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5':
+        tag: v4.3.1
+        branch: main
+        commit: sha1-34e114876b0b11c390a56381ad16ebd13914f8d5
+        owner_id: 44036562
+        repo_id: 197814629
+```
+
+### `doctor.Finding`
 
 A diagnostic issue found during analysis:
 
 ```go
 type Finding struct {
-    Category    Category    // REF_MOVED, MISSING, STALE, etc.
-    Severity    Severity    // Error or Warning
-    Dependency  *lockfile.Dependency
-    Detail      string
-    Remediation string
-    Workflow    string
-    ActionRef   *lockfile.ActionRef
-    NewSHA      string      // for REF_MOVED: what the ref resolves to now
+    WorkflowPath string
+    Category     Category    // ref_moved, not_pinned, stale, ...
+    Severity     Severity    // ok, info, warning, error
+    ActionRef    *lockfile.ActionRef  // the uses: ref (nil for workflow-level findings)
+    Dependency   *lockfile.Dependency // existing pinned dep, if any
+    ParentNWO    string      // dep key of the direct action pulling in a transitive dep
+    Detail       string
+    Remediation  string
+    LiveSHA      string      // current upstream SHA when it differs from the pin (e.g. ref_moved)
+    DocURL       string      // docs link for the finding, parity-aligned with the editor
 }
 ```
 
-Categories ([`finding.go:6-27`](https://github.com/github/gh-actions-pin/blob/ns/primer-output-formatting/internal/doctor/finding.go#L6-L27)):
+Categories ([`finding.go`](https://github.com/github/gh-actions-pin/blob/nodeselector/fix-pinning-refs/internal/doctor/finding.go)) — the JSON `category` value is the lowercase string:
 
-| Category | Meaning |
+| Category (JSON value) | Meaning |
 |---|---|
-| `CategoryNotPinned` | Action in workflow has no lock entry |
-| `CategoryStale` | Lock entry for action no longer in workflow |
-| `CategoryRefChanged` | Workflow ref edited; lock needs updating |
-| `CategoryRefMoved` | Upstream tag now resolves to different SHA |
-| `CategoryMisleadingSHA` | Ref looks like SHA but resolves differently |
-| `CategoryImposterCommit` | Locked SHA not in ref's git history |
+| `not_pinned` | Action in workflow has no lock entry |
+| `sha_as_ref` | Pinned to a bare SHA with no tag ref |
+| `stale` | Lock entry for action no longer in workflow |
+| `ref_changed` | Workflow ref edited; lock needs updating |
+| `ref_moved` | Upstream tag now resolves to a different SHA |
+| `misleading_sha` | Ref looks like a SHA but resolves to a different commit |
+| `imposter_commit` | Locked SHA not in the ref's git history (fork-network signal) |
+| `lockfile_forgery` | Pinned SHA is not an ancestor of the current ref — lock entry likely injected/tampered |
+| `valid` / `run_only` | Pinned + verified / workflow has no action refs |
 
 ---
 
@@ -210,11 +268,11 @@ runCheck(f, opts)
 [`diagnoseOneWorkflow`](https://github.com/github/gh-actions-pin/blob/ns/primer-output-formatting/internal/doctor/diagnose.go#L23) (361 lines) does:
 
 ```
-diagnoseOneWorkflow(path, resolver)
+diagnoseOneWorkflow(path, resolver, store)
   │
   ├─ Parse YAML ──▶ lockfile.Load(path)
   ├─ Extract action refs ──▶ file.ExtractActionRefs()
-  ├─ Read existing dependencies ──▶ file.ReadDependencies()
+  ├─ Read existing pins ──▶ store.DepsForWorkflow(path) (.github/workflows/actions.lock)
   │
   ├─ If no deps exist → all refs are NotPinned findings
   │

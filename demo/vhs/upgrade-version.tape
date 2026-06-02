@@ -1,4 +1,4 @@
-Output upgrade-version.gif
+Output demo/vhs/out/upgrade-version.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

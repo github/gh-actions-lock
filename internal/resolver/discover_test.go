@@ -459,8 +459,8 @@ func TestNormalizeContaining_PreservesBranchRefOverTag(t *testing.T) {
 	if deps[0].Ref != "main" {
 		t.Errorf("expected Ref=main (preserved), got %q", deps[0].Ref)
 	}
-	if deps[0].Tag != "v4" {
-		t.Errorf("expected Tag populated (lex-first), got %q", deps[0].Tag)
+	if deps[0].Tag != "v4.3.1" {
+		t.Errorf("expected Tag populated (highest semver), got %q", deps[0].Tag)
 	}
 	if deps[0].Branch != "main" {
 		t.Errorf("expected Branch=main, got %q", deps[0].Branch)

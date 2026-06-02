@@ -1,4 +1,4 @@
-Output tamper-warning.gif
+Output demo/vhs/out/tamper-warning.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

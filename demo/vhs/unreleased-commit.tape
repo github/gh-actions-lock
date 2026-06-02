@@ -1,4 +1,4 @@
-Output unreleased-commit.gif
+Output demo/vhs/out/unreleased-commit.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"

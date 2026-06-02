@@ -1,4 +1,4 @@
-Output sha-as-ref.gif
+Output demo/vhs/out/sha-as-ref.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"
