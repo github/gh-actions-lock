@@ -1,4 +1,4 @@
-package parserlock
+package lockfile
 
 import (
 	"fmt"

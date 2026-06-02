@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/github/gh-actions-pin/pkg/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"gopkg.in/yaml.v3"
 )
 

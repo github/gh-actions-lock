@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/github/gh-actions-pin/pkg/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // checkMisleadingSha emits MISLEADING_SHA when a uses: ref looks like a

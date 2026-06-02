@@ -3,7 +3,7 @@
 // actions-workflow-parser/go/lockfile and was extracted into this
 // repository so the format definition can be open-sourced alongside the
 // CLI that owns it.
-package parserlock
+package lockfile
 
 import (
 	"crypto/sha1"

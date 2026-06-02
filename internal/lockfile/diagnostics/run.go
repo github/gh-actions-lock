@@ -3,7 +3,7 @@ package diagnostics
 import (
 	"context"
 
-	"github.com/github/gh-actions-pin/pkg/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // Options configures a Run.
