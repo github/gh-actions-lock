@@ -208,16 +208,17 @@ func (f File) LookupWorkflow(workflowKey string) ([]string, bool) {
 //
 // Tag is the discovered release/tag at the commit, if one exists. Optional.
 //
-// Branch is the branch that contains the pinned commit. Writers MUST refuse
-// to record an Action without a Branch — a commit not on any branch is an
-// impostor / fork-network signal. Readers tolerate absence for compatibility
-// with lockfiles written before branch discovery was introduced.
+// Branch is a branch that contains the pinned commit. Required: a commit not
+// on any branch is an impostor / fork-network signal, so Parse rejects an
+// Action without one. It is the authenticity check that SHA-only pinning
+// lacks.
 //
 // Commit holds the digest in algo-prefixed form (e.g. "sha1-..." or
-// "sha256-...").
+// "sha256-..."). Required.
 //
 // Uses lists the action's direct nested dependencies (composite action
-// `uses:` steps) as canonical pin keys. Empty for leaf actions.
+// `uses:` steps) as canonical pin keys. Empty for leaf actions; required for
+// composites, a condition Parse can't enforce structurally.
 type Action struct {
 	Tag     string   `yaml:"tag,omitempty"`
 	Branch  string   `yaml:"branch,omitempty"`
@@ -265,6 +266,9 @@ func Parse(contents []byte) (File, error) {
 		}
 		return File{}, pe
 	}
+	if pe := validateKnownFields(&f); pe != nil {
+		return File{}, pe
+	}
 	if conflictKey, err := canonicalizeActions(&f); err != nil {
 		pe := &ParseError{Msg: err.Error(), err: err}
 		if l, c, ok := f.KeyPosition("dependencies", conflictKey); ok {
@@ -274,6 +278,87 @@ func Parse(contents []byte) (File, error) {
 	}
 	canonicalizeWorkflowDependencies(&f)
 	return f, nil
+}
+
+// allowedFileKeys is the set of permitted top-level lockfile keys. It mirrors
+// the document-level properties declared in lockfile-v0.0.1.json.
+var allowedFileKeys = map[string]struct{}{
+	"version":      {},
+	"workflows":    {},
+	"dependencies": {},
+}
+
+// allowedActionKeys is the set of permitted keys within a dependency's Action
+// mapping. It mirrors the $defs/action properties in lockfile-v0.0.1.json.
+var allowedActionKeys = map[string]struct{}{
+	"tag":      {},
+	"branch":   {},
+	"commit":   {},
+	"owner_id": {},
+	"repo_id":  {},
+	"uses":     {},
+}
+
+// requiredActionKeys lists the keys every dependency's Action mapping must
+// carry, in report order. It mirrors the $defs/action "required" list in
+// lockfile-v0.0.1.json. `tag` is optional (not every commit is a release) and
+// `uses` is required only for composite actions — a condition the lockfile
+// alone can't express — so neither appears here.
+var requiredActionKeys = []string{"branch", "commit", "owner_id", "repo_id"}
+
+// validateKnownFields enforces the schema's additionalProperties:false and
+// required rules on the lockfile's fixed-shape mappings — the document root and
+// each dependency's metadata block. A stray, misspelled, or missing key is a
+// positioned parse error rather than a silently dropped or defaulted field,
+// matching the stricter parsing the embedded schema describes. Map-valued
+// sections (workflow paths, dependency pin keys) carry arbitrary data keys and
+// are intentionally not constrained here.
+func validateKnownFields(f *File) *ParseError {
+	root := docMapping(f.node)
+	if root == nil {
+		return nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		k := root.Content[i]
+		if _, ok := allowedFileKeys[k.Value]; !ok {
+			return &ParseError{Line: k.Line, Column: k.Column, Msg: fmt.Sprintf("unknown lockfile field %q", k.Value)}
+		}
+	}
+	_, deps := mappingEntry(root, "dependencies")
+	if deps == nil || deps.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(deps.Content); i += 2 {
+		pinKey := deps.Content[i]
+		action := deps.Content[i+1]
+		if action.Kind != yaml.MappingNode {
+			continue
+		}
+		present := make(map[string]struct{}, len(action.Content)/2)
+		for j := 0; j+1 < len(action.Content); j += 2 {
+			ak := action.Content[j]
+			if _, ok := allowedActionKeys[ak.Value]; !ok {
+				return &ParseError{
+					Line:   ak.Line,
+					Column: ak.Column,
+					Msg:    fmt.Sprintf("unknown action field %q for dependency %q", ak.Value, pinKey.Value),
+				}
+			}
+			present[ak.Value] = struct{}{}
+		}
+		for _, req := range requiredActionKeys {
+			if _, ok := present[req]; !ok {
+				// The missing key has no node to point at; anchor the error on
+				// the dependency's pin key so callers can locate the entry.
+				return &ParseError{
+					Line:   pinKey.Line,
+					Column: pinKey.Column,
+					Msg:    fmt.Sprintf("missing required action field %q for dependency %q", req, pinKey.Value),
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // canonicalizeActions rewrites the Actions map so every key is the

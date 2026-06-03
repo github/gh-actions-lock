@@ -268,7 +268,7 @@ func writeTempLockfile(t *testing.T, repoDir, wfName string, pinStrings []string
 	var sb strings.Builder
 	sb.WriteString("version: 'v0.0.1'\ndependencies:\n")
 	for _, pin := range pinStrings {
-		sb.WriteString("  '" + pin + "':\n    owner_id: 1\n    repo_id: 1\n")
+		sb.WriteString("  '" + pin + "':\n    branch: 'main'\n    commit: 'sha1-deadbeef'\n    owner_id: 1\n    repo_id: 1\n")
 	}
 	sb.WriteString("workflows:\n  '.github/workflows/" + wfName + "':\n")
 	for _, pin := range pinStrings {
@@ -972,7 +972,7 @@ jobs:
 	lockYAML := "version: v0.0.1\n" +
 		"dependencies:\n" +
 		"  actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd:\n" +
-		"    owner_id: 1\n    repo_id: 1\n" +
+		"    branch: main\n    commit: sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  .github/workflows/workflow.yml:\n" +
 		"    - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n" +

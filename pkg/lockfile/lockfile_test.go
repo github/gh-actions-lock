@@ -107,6 +107,8 @@ func TestParse_CanonicalizesActionKeys(t *testing.T) {
 	yaml := `version: v0.0.1
 dependencies:
   Actions/Checkout@v6:SHA1-8E8C483DB84B4BEE98B60C0593521ED34D9990E8:
+    branch: main
+    commit: sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8
     owner_id: 1234
     repo_id: 5678
 workflows:
@@ -135,9 +137,13 @@ func TestParse_ConflictingActionKeyCasings(t *testing.T) {
 	yaml := `version: v0.0.1
 dependencies:
   actions/checkout@v6:sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8:
+    branch: main
+    commit: sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8
     owner_id: 1234
     repo_id: 5678
   Actions/Checkout@v6:SHA1-8E8C483DB84B4BEE98B60C0593521ED34D9990E8:
+    branch: main
+    commit: sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8
     owner_id: 9999
     repo_id: 1
 `
@@ -151,9 +157,13 @@ func TestParse_DuplicateActionKeyCasingsSameMetadataOK(t *testing.T) {
 	yaml := `version: v0.0.1
 dependencies:
   actions/checkout@v6:sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8:
+    branch: main
+    commit: sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8
     owner_id: 1234
     repo_id: 5678
   Actions/Checkout@v6:SHA1-8E8C483DB84B4BEE98B60C0593521ED34D9990E8:
+    branch: main
+    commit: sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8
     owner_id: 1234
     repo_id: 5678
 `
@@ -168,6 +178,8 @@ func TestParse_UnparseableActionKeyPreserved(t *testing.T) {
 	yaml := `version: v0.0.1
 dependencies:
   "not a pin":
+    branch: main
+    commit: sha1-8e8c483db84b4bee98b60c0593521ed34d9990e8
     owner_id: 1
     repo_id: 2
 `
