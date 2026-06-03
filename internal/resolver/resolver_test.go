@@ -510,6 +510,48 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	}
 }
 
+// TestResolveAllRecursiveTerminatesOnCycle verifies that a mutual A→B→A cycle
+// is handled gracefully: the BFS terminates via the seen set, both nodes are
+// resolved, and the parentMap reflects the edges without infinite recursion.
+func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
+	r := &Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+		cache: map[string]resolvedEntry{
+			"owner/a@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Branch: "main", HashAlgo: "sha1"},
+				actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: owner/b@v1\n",
+			},
+			"owner/b@v1": {
+				dep:       lockfile.Dependency{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Branch: "main", HashAlgo: "sha1"},
+				actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: owner/a@v1\n",
+			},
+		},
+		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
+	}
+
+	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 deps (cycle terminates without duplication), got %d: %+v", len(deps), deps)
+	}
+
+	pm := r.ParentMap()
+	// A is parent of B (A uses B).
+	if got := pm["owner/b@v1"]; len(got) != 1 || got[0] != "owner/a@v1" {
+		t.Errorf("expected owner/b@v1 parent = [owner/a@v1], got %v", got)
+	}
+	// B→A edge: B uses A, but A was already resolved at depth 0. The
+	// parentMap edge is recorded before the seen-filter discards the
+	// re-enqueue, so the back-edge exists. This is safe because Save()'s
+	// GC walk uses its own visited set to handle cycles.
+	if got := pm["owner/a@v1"]; len(got) != 1 || got[0] != "owner/b@v1" {
+		t.Errorf("expected owner/a@v1 parent = [owner/b@v1] (back-edge), got %v", got)
+	}
+}
+
 func TestNewWithTransportAndLatestRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)

@@ -17,12 +17,24 @@ func (rem *Remediator) startWork(label string) {
 	if !rem.output.IsTTY() {
 		return
 	}
+	// A session-wide spinner already owns the screen; leave it running so we
+	// don't blank the line between workflows. Its label and detail are driven
+	// by the Remediate loop and the resolver progress callback.
+	if rem.sessionProgress {
+		return
+	}
 	rem.output.StartProgress(label)
 	rem.resolver.ProgressFn = rem.output.UpdateProgress
 }
 
 func (rem *Remediator) stopWork() {
 	if !rem.output.IsTTY() {
+		return
+	}
+	if rem.sessionProgress {
+		// Keep the session spinner alive; just clear stale detail so it
+		// doesn't linger into the next workflow's label.
+		rem.output.UpdateProgress("")
 		return
 	}
 	rem.resolver.ProgressFn = nil

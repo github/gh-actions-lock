@@ -462,7 +462,7 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 	for _, f := range report.RepoFindings {
 		out.Warning("%s", f.Detail)
 		if f.DocURL != "" {
-			out.Detail("  see: %s", out.Dim(out.Hyperlink("docs", f.DocURL)))
+			out.Detail("  see: %s", out.DocLink(f.DocURL))
 		}
 	}
 
@@ -541,7 +541,7 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 					out.Detail("  %s %s", out.Bold("⚠"), f.Remediation)
 				}
 				if f.DocURL != "" {
-					out.Detail("  see: %s", out.Dim(out.Hyperlink("docs", f.DocURL)))
+					out.Detail("  see: %s", out.DocLink(f.DocURL))
 				}
 			}
 		}

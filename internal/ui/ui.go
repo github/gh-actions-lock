@@ -36,6 +36,14 @@ type UI struct {
 	noColor bool
 	isTTY   bool
 	spinner *spinner.Spinner
+
+	// progLabel and progDetail hold the two halves of the active spinner line
+	// (the per-workflow label and the resolver's current-action detail). They
+	// are recombined and truncated to one terminal row on every update so the
+	// spinner never wraps — a wrapped spinner breaks the library's
+	// backspace-based erase and causes line jumping/leftover fragments.
+	progLabel  string
+	progDetail string
 }
 
 // SetLog attaches a narration sink. Once set, narration methods write plain
@@ -58,6 +66,14 @@ func (u *UI) emit(line string) {
 		return
 	}
 	u.printLine(func() { fmt.Fprint(u.w, line) })
+}
+
+// logTagged writes one structured line to the log sink: a fixed-width status
+// column ("ok", "warn", "err", …) followed by the message. Continuation lines
+// pass an empty tag so they align as indented detail under the column. The
+// message keeps any leading whitespace it carries, preserving sub-hierarchy.
+func (u *UI) logTagged(tag, text string) {
+	fmt.Fprintf(u.logw, "%-6s%s\n", tag, text)
 }
 
 // paint applies an ANSI foreground color regardless of the log sink. Used by
@@ -152,29 +168,49 @@ func (u *UI) printLine(write func()) {
 // Success prints a green "✓" prefixed message.
 func (u *UI) Success(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
+	if u.logging() {
+		u.logTagged("ok", text)
+		return
+	}
 	u.emit(fmt.Sprintf("%s %s\n", u.Green(IconSuccess), text))
 }
 
 // Error prints a red "✗" prefixed message.
 func (u *UI) Error(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
+	if u.logging() {
+		u.logTagged("err", text)
+		return
+	}
 	u.emit(fmt.Sprintf("%s %s\n", u.Red(IconError), text))
 }
 
 // Warning prints a yellow "!" prefixed message.
 func (u *UI) Warning(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
+	if u.logging() {
+		u.logTagged("warn", text)
+		return
+	}
 	u.emit(fmt.Sprintf("%s %s\n", u.Yellow(IconWarning), text))
 }
 
 // Skip prints a gray "-" prefixed message.
 func (u *UI) Skip(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
+	if u.logging() {
+		u.logTagged("skip", text)
+		return
+	}
 	u.emit(fmt.Sprintf("%s %s\n", u.Dim(IconSkip), u.Dim(text)))
 }
 
 // Info prints a message with no prefix.
 func (u *UI) Info(msg string, args ...any) {
+	if u.logging() {
+		u.logTagged("info", fmt.Sprintf(msg, args...))
+		return
+	}
 	u.emit(fmt.Sprintf(msg+"\n", args...))
 }
 
@@ -186,17 +222,29 @@ func (u *UI) Infof(msg string, args ...any) {
 // Header prints a bold message, used for file/section headers.
 func (u *UI) Header(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
+	if u.logging() {
+		fmt.Fprintf(u.logw, "\n=== %s ===\n", text)
+		return
+	}
 	u.emit(fmt.Sprintf("\n%s\n", u.Bold(text)))
 }
 
 // Hint prints a dim, indented message — typically a suggested command.
 func (u *UI) Hint(msg string, args ...any) {
 	text := fmt.Sprintf(msg, args...)
+	if u.logging() {
+		u.logTagged("", text)
+		return
+	}
 	u.emit(fmt.Sprintf("  %s\n", u.Dim(text)))
 }
 
 // Detail prints an indented detail line (2-space indent).
 func (u *UI) Detail(msg string, args ...any) {
+	if u.logging() {
+		u.logTagged("", fmt.Sprintf(msg, args...))
+		return
+	}
 	u.emit(fmt.Sprintf("  "+msg+"\n", args...))
 }
 
@@ -289,6 +337,16 @@ func (u *UI) Hyperlink(text, url string) string {
 	return u.output.Hyperlink(url, text)
 }
 
+// DocLink renders a documentation reference: the bare URL when writing to the
+// log (so the transcript stays actionable), otherwise a dim "docs" hyperlink
+// for the terminal.
+func (u *UI) DocLink(url string) string {
+	if u.logging() {
+		return url
+	}
+	return u.Dim(u.Hyperlink("docs", url))
+}
+
 // IsTTY returns true if the output is a terminal.
 func (u *UI) IsTTY() bool {
 	return u.isTTY
@@ -309,10 +367,10 @@ func (u *UI) StartProgress(label string) {
 		opts = append(opts, spinner.WithColor("fgCyan"))
 	}
 	sp := spinner.New(spinner.CharSets[11], 120*time.Millisecond, opts...)
-	if label != "" {
-		sp.Prefix = label + " "
-	}
 	u.spinner = sp
+	u.progLabel = label
+	u.progDetail = ""
+	u.renderProgress()
 	sp.Start()
 }
 
@@ -321,6 +379,8 @@ func (u *UI) StopProgress() {
 	if u.spinner != nil {
 		u.spinner.Stop()
 		u.spinner = nil
+		u.progLabel = ""
+		u.progDetail = ""
 		// Clear the spinner line.
 		fmt.Fprintf(u.w, "\r\033[2K")
 	}
@@ -333,11 +393,8 @@ func (u *UI) UpdateProgress(detail string) {
 	if u.spinner == nil {
 		return
 	}
-	if detail == "" {
-		u.spinner.Suffix = ""
-		return
-	}
-	u.spinner.Suffix = " — " + detail
+	u.progDetail = detail
+	u.renderProgress()
 }
 
 // UpdateLabel changes the spinner prefix label (e.g. to show per-workflow
@@ -346,11 +403,67 @@ func (u *UI) UpdateLabel(label string) {
 	if u.spinner == nil {
 		return
 	}
-	if label == "" {
-		u.spinner.Prefix = ""
+	u.progLabel = label
+	u.renderProgress()
+}
+
+// renderProgress recombines the label and detail into a single line that is
+// truncated to fit the terminal width (leaving room for the spinner glyph and
+// a space). The whole string is assigned to the spinner Prefix with an empty
+// Suffix so the library always erases and redraws exactly one row — wrapping
+// would defeat its backspace-based erase and cause the line jumping the user
+// sees. The trailing space keeps the spinner glyph off the last column.
+func (u *UI) renderProgress() {
+	if u.spinner == nil {
 		return
 	}
-	u.spinner.Prefix = label + " "
+	line := u.progLabel
+	if u.progDetail != "" {
+		if line != "" {
+			line += " — "
+		}
+		line += u.progDetail
+	}
+	// Reserve 2 columns: the spinner glyph and a trailing space.
+	if width := u.termWidth(); width > 3 {
+		line = truncateRunes(line, width-2)
+	}
+	if line != "" {
+		line += " "
+	}
+	u.spinner.Prefix = line
+	u.spinner.Suffix = ""
+}
+
+// termWidth returns the terminal column count for the spinner writer, or 0 if
+// it cannot be determined (in which case callers skip truncation).
+func (u *UI) termWidth() int {
+	f, ok := u.w.(*os.File)
+	if !ok {
+		return 0
+	}
+	w, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || w <= 0 {
+		return 0
+	}
+	return w
+}
+
+// truncateRunes shortens s to at most max runes, replacing the tail with a
+// single-character ellipsis when it overflows. Operates on runes so multibyte
+// paths aren't cut mid-character.
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(r[:max-1]) + "…"
 }
 
 // Pluralize returns singular when n==1, plural otherwise.

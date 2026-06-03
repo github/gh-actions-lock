@@ -33,6 +33,12 @@ type Remediator struct {
 
 	state sessionState
 
+	// sessionProgress is true while a single continuous spinner spans the whole
+	// Remediate pass (non-interactive bulk pinning). While set, the per-workflow
+	// startWork/stopWork calls only update the spinner detail instead of
+	// stopping and restarting it, so there are no blank gaps between workflows.
+	sessionProgress bool
+
 	// How many remaining occurrences of each choiceKey across all workflows.
 	remaining map[string]int
 
@@ -104,7 +110,27 @@ func (rem *Remediator) Remediate(report *Report) error {
 		}
 	}
 
-	for _, wr := range actionable {
+	// In non-interactive mode the terminal shows only the spinner (all
+	// narration goes to the log), so run a single continuous spinner across
+	// every workflow rather than starting and stopping one per file — the
+	// latter clears the line between workflows and looks jumpy. The label is
+	// updated at the top of each iteration so forward progress stays visible.
+	if rem.output.IsTTY() && !rem.prompter.IsInteractive() {
+		rem.output.StartProgress("Pinning dependencies")
+		rem.resolver.ProgressFn = rem.output.UpdateProgress
+		rem.sessionProgress = true
+		defer func() {
+			rem.sessionProgress = false
+			rem.resolver.ProgressFn = nil
+			rem.output.StopProgress()
+		}()
+	}
+
+	for i, wr := range actionable {
+		if rem.sessionProgress {
+			rem.output.UpdateLabel(fmt.Sprintf("Pinning [%d/%d] %s", i+1, len(actionable), wr.Path))
+			rem.output.UpdateProgress("")
+		}
 		if err := rem.remediateWorkflow(wr); err != nil {
 			return err
 		}
@@ -272,7 +298,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	rem.output.Warning("%d %s found but not pinned", len(wr.ActionRefs), ui.Pluralize(len(wr.ActionRefs), "action", "actions"))
 	if docURL := DocURLFor(CategoryNotPinned); docURL != "" {
-		rem.output.Detail("  see: %s", rem.output.Dim(rem.output.Hyperlink("docs", docURL)))
+		rem.output.Detail("  see: %s", rem.output.DocLink(docURL))
 	}
 
 	if !rem.prompter.IsInteractive() {
@@ -378,9 +404,9 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 			commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", ref.Owner, ref.Repo, sha)
 			shaLabel := rem.output.Hyperlink(sha[:12], commitURL)
 			if displayTag != ref.Ref {
-				rem.output.Detail("    %s → %s → %s  %s", key, displayTag, shaLabel, tagLink)
+				rem.output.Detail("  %s → %s → %s  %s", key, displayTag, shaLabel, tagLink)
 			} else {
-				rem.output.Detail("    %s → %s  %s", key, shaLabel, tagLink)
+				rem.output.Detail("  %s → %s  %s", key, shaLabel, tagLink)
 			}
 			// Record both original and narrowed ref for cascade.
 			rem.state.approvedRefs[refKey(ref)] = true
