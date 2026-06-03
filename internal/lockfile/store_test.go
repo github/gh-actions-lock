@@ -43,7 +43,7 @@ func TestStore_PersistsTagAndBranch(t *testing.T) {
 		},
 	}
 
-	if err := store.Set(WorkflowKeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps, nil); err != nil {
+	if err := store.Set(WorkflowKeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps, nil, nil); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -134,7 +134,7 @@ func TestStore_SetRejectsEmptyBranch(t *testing.T) {
 		},
 	}
 
-	err = store.Set(".github/workflows/ci.yml", deps, nil)
+	err = store.Set(".github/workflows/ci.yml", deps, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for dep with empty Branch, got nil")
 	}

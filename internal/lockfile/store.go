@@ -156,6 +156,51 @@ func (s *Store) AllDeps() []Dependency {
 	return out
 }
 
+// DirectTracker captures, by dep index, which resolved deps correspond to a
+// workflow's direct uses: refs. Build it from the freshly resolved deps
+// (before any narrowing/normalization mutates dep.Ref), then read the final
+// NWO@Ref direct-key set back with Keys after mutation.
+//
+// Keys takes the (possibly reassigned) deps slice so callers that swap the
+// slice for an index-aligned copy — e.g. PreserveRefs — still resolve to the
+// post-mutation refs. The index alignment is the contract: every transform
+// between NewDirectTracker and Keys must preserve dep order and length.
+//
+// Directness is determined by the workflow file's own uses: refs, not by the
+// resolver parent map. A dep that is both a direct use and a composite
+// transitive dep (e.g. actions/setup-go used directly and also pulled in by a
+// composite) has a parent in the parent map but must still be recorded as a
+// workflow-direct pin — otherwise it is perpetually re-flagged as not_pinned.
+type DirectTracker struct {
+	direct []bool
+}
+
+// NewDirectTracker records which entries of deps match one of the workflow's
+// direct refs, by NWO@Ref, at the deps' current (pre-mutation) refs.
+func NewDirectTracker(refs []ActionRef, deps []Dependency) DirectTracker {
+	want := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		want[ref.NWO()+"@"+ref.Ref] = true
+	}
+	direct := make([]bool, len(deps))
+	for i, d := range deps {
+		direct[i] = want[d.Key()]
+	}
+	return DirectTracker{direct: direct}
+}
+
+// Keys returns the set of workflow-direct NWO@Ref keys, reading each dep's
+// current (post-mutation) Key() from the supplied index-aligned slice.
+func (t DirectTracker) Keys(deps []Dependency) map[string]bool {
+	out := make(map[string]bool, len(deps))
+	for i, d := range deps {
+		if i < len(t.direct) && t.direct[i] {
+			out[d.Key()] = true
+		}
+	}
+	return out
+}
+
 // Set replaces the workflow's direct-dependency entry and upserts the
 // per-action metadata for every pin in the resolved closure. The workflow
 // entry holds only the action refs that appear in the workflow file itself
@@ -165,13 +210,21 @@ func (s *Store) AllDeps() []Dependency {
 //
 // parentMap is the resolver's child → []parent map (Dependency.Key() form:
 // NWO@Ref, without the SHA suffix), as returned by Resolver.ParentMap. Set
-// uses it both to (1) identify workflow-direct deps (deps with no parents
-// in this resolution) and (2) build per-action `uses:` lists by inversion.
-// Both sides are translated into canonical pin keys (NWO@Ref:algo-hex).
+// uses it to build per-action `uses:` lists by inversion. Both sides are
+// translated into canonical pin keys (NWO@Ref:algo-hex).
+//
+// directKeys is the set of Dependency.Key() values (NWO@Ref) that the
+// workflow file uses directly. It is authoritative for the workflow's
+// direct-pin list: a dep is recorded as workflow-direct iff its key is in
+// directKeys. This correctly handles deps that are both a direct use and a
+// composite-transitive dep (e.g. actions/setup-go used directly and also
+// pulled in by a composite) — such a dep has a parent in parentMap but must
+// still appear in the workflow's direct list. When directKeys is nil, Set
+// falls back to treating any dep with no parent in parentMap as direct.
 //
 // Resolution of owner/repo numeric IDs happens lazily per NWO and is cached
 // for the lifetime of the store.
-func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string][]string) error {
+func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string][]string, directKeys map[string]bool) error {
 	directPins := make([]string, 0)
 	seenDirect := map[string]bool{}
 	// keyToPin: Dependency.Key() (NWO@Ref) → canonical pin (NWO@Ref:algo-hex).
@@ -187,10 +240,14 @@ func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string]
 		pin = pin.Canonical()
 		pinKey := pin.String()
 		keyToPin[d.Key()] = pinKey
-		// Workflow-direct deps are those with no recorded parents in
-		// parentMap. Composite-transitive deps always have at least one
-		// parent (the composite that pulled them in).
-		if _, hasParent := parentMap[d.Key()]; !hasParent && !seenDirect[pinKey] {
+		var isDirect bool
+		if directKeys != nil {
+			isDirect = directKeys[d.Key()]
+		} else {
+			_, hasParent := parentMap[d.Key()]
+			isDirect = !hasParent
+		}
+		if isDirect && !seenDirect[pinKey] {
 			seenDirect[pinKey] = true
 			directPins = append(directPins, pinKey)
 		}

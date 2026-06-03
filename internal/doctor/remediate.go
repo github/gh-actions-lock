@@ -291,7 +291,9 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 	}
 
 	// Resolve all refs to show the SHAs they'll pin to.
+	rem.startWork(fmt.Sprintf("Resolving %s", wr.Path))
 	resolved, _ := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
+	rem.stopWork()
 	shaByKey := make(map[string]string)
 	for _, dep := range resolved {
 		shaByKey[dep.Key()] = dep.SHA

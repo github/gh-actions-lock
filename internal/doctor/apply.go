@@ -8,6 +8,27 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
+// startWork shows a spinner (TTY only) for the network-heavy portion of a
+// remediation and wires the resolver's progress callback to its detail line.
+// Pair every call with stopWork (defer). On non-TTY outputs it is a no-op so
+// CI logs stay clean. Prompts never overlap a spinner: apply* runs after any
+// interactive prompt in its handler.
+func (rem *Remediator) startWork(label string) {
+	if !rem.output.IsTTY() {
+		return
+	}
+	rem.output.StartProgress(label)
+	rem.resolver.ProgressFn = rem.output.UpdateProgress
+}
+
+func (rem *Remediator) stopWork() {
+	if !rem.output.IsTTY() {
+		return
+	}
+	rem.resolver.ProgressFn = nil
+	rem.output.StopProgress()
+}
+
 // applyPin runs the full pin flow on an unpinned workflow.
 func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	wf, err := lockfile.Load(wr.Path)
@@ -15,10 +36,14 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		return err
 	}
 
+	rem.startWork(fmt.Sprintf("Pinning %s", wr.Path))
+	defer rem.stopWork()
+
 	deps, err := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
+	directTracker := lockfile.NewDirectTracker(wr.ActionRefs, deps)
 
 	// Check for impostor commits at pin time — don't let fork-network
 	// commits get pinned in the first place. Fail closed: if we can't
@@ -117,7 +142,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		}
 	}
 
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap()); err != nil {
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap(), directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
@@ -157,15 +182,18 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	if err != nil {
 		return err
 	}
+	rem.startWork(fmt.Sprintf("Re-pinning %s", dep.NWO))
+	defer rem.stopWork()
 	refs, _, _ := wf2.ExtractActionRefs()
 	deps, err := rem.resolver.ResolveAllRecursive(refs)
 	if err != nil {
 		return fmt.Errorf("re-resolving after ref change: %w", err)
 	}
+	directTracker := lockfile.NewDirectTracker(refs, deps)
 	if err := rem.normalizeAndRewrite(wr.Path, deps); err != nil {
 		return err
 	}
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap()); err != nil {
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap(), directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
@@ -182,16 +210,19 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 	}
 
 	refs, _, _ := wf.ExtractActionRefs()
+	rem.startWork(fmt.Sprintf("Re-resolving %s", dep.NWO))
+	defer rem.stopWork()
 	deps, err := rem.resolver.ResolveAllRecursive(refs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
+	directTracker := lockfile.NewDirectTracker(refs, deps)
 
 	if err := rem.normalizeAndRewrite(wr.Path, deps); err != nil {
 		return err
 	}
 
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap()); err != nil {
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap(), directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 

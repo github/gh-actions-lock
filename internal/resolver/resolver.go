@@ -856,19 +856,26 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 	var results []ReachabilityResult
 	seen := make(map[string]bool)
 
+	// Pre-filter to the unique deps we'll actually check so progress can be
+	// reported as [i/N] against a stable total.
+	unique := make([]lockfile.Dependency, 0, len(deps))
 	for _, dep := range deps {
-		owner, repo := dep.OwnerRepo()
+		owner, _ := dep.OwnerRepo()
 		if owner == "" {
 			continue
 		}
-
 		key := dep.NWO + "/" + dep.SHA + "/" + dep.Ref
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
+		unique = append(unique, dep)
+	}
 
-		r.progress("checking reachability %s@%s", dep.NWO, dep.Ref)
+	total := len(unique)
+	for i, dep := range unique {
+		owner, repo := dep.OwnerRepo()
+		r.progress("[%d/%d] checking reachability %s@%s", i+1, total, dep.NWO, dep.Ref)
 		result := r.CheckReachability(owner, repo, dep.SHA, dep.Ref)
 		result.DepKey = dep.Key()
 		results = append(results, result)
@@ -956,6 +963,12 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			break
 		}
 
+		if depth == 0 {
+			r.progress("resolving %d %s", len(toResolve), pluralizeRefs(len(toResolve)))
+		} else {
+			r.progress("resolving %d transitive %s", len(toResolve), pluralizeRefs(len(toResolve)))
+		}
+
 		deps, actionYMLs, err := r.resolveWithActionYML(toResolve)
 		// Keep partial results: per-ref failures are surfaced via err, but
 		// successful resolutions in `deps` should not be discarded — downstream
@@ -1026,6 +1039,13 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 	}
 
 	return dedup(allDeps), nil
+}
+
+func pluralizeRefs(n int) string {
+	if n == 1 {
+		return "action"
+	}
+	return "actions"
 }
 
 func dedup(deps []lockfile.Dependency) []lockfile.Dependency {

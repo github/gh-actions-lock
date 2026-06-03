@@ -14,6 +14,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -124,6 +125,18 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	}
 	opts.WorkflowPaths = paths
 
+	// Attach a run log: detailed narration is written to a file under the user
+	// cache dir, keeping the terminal to spinners, prompts, and a final summary.
+	// Skipped in --json mode, where stderr carries only progress.
+	var logger *runlog.Logger
+	if opts.JSONFields == "" {
+		if lg, lerr := runlog.Open(); lerr == nil {
+			logger = lg
+			f.UI.SetLog(logger)
+			defer logger.Close()
+		}
+	}
+
 	r, err := f.NewResolver(resolveHostname(opts.Hostname))
 	if err != nil {
 		return err
@@ -141,13 +154,18 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	r.SeedBranchHints(store.AllDeps())
 	// Single pass: doctor.Diagnose handles all validation.
 	total := len(opts.WorkflowPaths)
+	var onWorkflow func(done, total int, path string)
 	if opts.JSONFields == "" {
 		label := fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
 		f.UI.StartProgress(label)
 		r.ProgressFn = func(detail string) { f.UI.UpdateProgress(detail) }
+		onWorkflow = func(done, total int, path string) {
+			f.UI.UpdateLabel(fmt.Sprintf("[%d/%d] %s", done, total, path))
+			f.UI.UpdateProgress("")
+		}
 	}
 
-	report := doctor.Diagnose(opts.WorkflowPaths, r, store)
+	report := doctor.Diagnose(opts.WorkflowPaths, r, store, onWorkflow)
 
 	f.UI.StopProgress()
 
@@ -201,8 +219,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 
 		if err := rem.Remediate(report); err != nil {
 			if errors.Is(err, doctor.ErrAborted) {
-				f.UI.Blank()
-				f.UI.Info("Interrupted — no further changes applied")
+				f.UI.TermWarn("Interrupted — no further changes applied")
 				return nil
 			}
 			return err
@@ -212,16 +229,16 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
 
-		f.UI.Blank()
+		f.UI.TermBlank()
 		if rem.Fixed > 0 {
-			f.UI.Success("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
+			f.UI.TermSuccess("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
 		}
 		uniqueSkipped := len(rem.SkippedDeps)
 		if uniqueSkipped > 0 {
-			f.UI.Skip("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
+			f.UI.TermWarn("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
 		}
 		if rem.Unresolved > 0 {
-			f.UI.Skip("%d %s could not be resolved", rem.Unresolved, ui.Pluralize(rem.Unresolved, "action", "actions"))
+			f.UI.TermWarn("%d %s could not be resolved", rem.Unresolved, ui.Pluralize(rem.Unresolved, "action", "actions"))
 		}
 		fixedCount = rem.Fixed
 		skippedCount = uniqueSkipped
@@ -232,36 +249,46 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		unresolvedDeps = rem.UnresolvedDeps
 	}
 
+	// Terminal end-state: spinners and narration are done; print the summary.
+	if logger != nil {
+		defer func() { f.UI.TermDetail("Full log: %s", logger.Path()) }()
+	}
+
+	if valid && fixedCount == 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
+		f.UI.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
+		return nil
+	}
+
 	if !valid || skippedCount > 0 || alertedCount > 0 || unresolvedCount > 0 {
 		// Exit 0 only if everything was resolved — nothing skipped, alerted, or unresolved.
 		if fixedCount > 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
 			return nil
 		}
 		if alertedCount > 0 {
-			f.UI.Blank()
-			f.UI.Error("%d %s %s investigation — do not auto-fix:",
+			f.UI.TermBlank()
+			f.UI.TermError("%d %s %s investigation — do not auto-fix:",
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
 			for _, dep := range alertedDeps {
-				f.UI.Detail("  %s", dep)
+				f.UI.TermDetail("  %s", dep)
 				for _, path := range workflowsForDep(report, dep) {
-					f.UI.Detail("    %s %s", f.UI.Dim("└─"), f.UI.Dim(path))
+					f.UI.TermDetail("    └─ %s", path)
 				}
 			}
 		}
 		if skippedCount > 0 {
-			f.UI.Blank()
-			f.UI.Error("%d %s %s interactive resolution — run `gh actions-pin` locally:",
+			f.UI.TermBlank()
+			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally:",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
-				f.UI.Detail("  %s", dep)
+				f.UI.TermDetail("  %s", dep)
 			}
 		}
 		if unresolvedCount > 0 {
-			f.UI.Blank()
-			f.UI.Error("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
+			f.UI.TermBlank()
+			f.UI.TermError("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, dep := range unresolvedDeps {
-				f.UI.Detail("  %s", dep)
+				f.UI.TermDetail("  %s", dep)
 			}
 		}
 		return errSilent

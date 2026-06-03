@@ -10,10 +10,18 @@ import (
 )
 
 // Diagnose scans a set of workflows and produces findings for each.
-// It performs no output — purely analytical.
-func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store) *Report {
+// It performs no output — purely analytical. The optional onWorkflow callback
+// is invoked before each workflow is diagnosed, carrying 1-based progress so
+// callers can render an [i/N] indicator.
+func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
 	report := &Report{}
-	for _, path := range paths {
+	total := len(paths)
+	for i, path := range paths {
+		for _, fn := range onWorkflow {
+			if fn != nil {
+				fn(i+1, total, path)
+			}
+		}
 		wr := diagnoseOneWorkflow(path, r, store)
 		report.Workflows = append(report.Workflows, wr)
 	}

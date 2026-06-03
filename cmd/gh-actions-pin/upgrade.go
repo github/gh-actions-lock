@@ -11,6 +11,7 @@ import (
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -135,13 +136,25 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	var hadError bool
 	var allChanges []jsonUpgradeChange
 	total := len(opts.WorkflowPaths)
+
+	// Attach a run log so detailed narration goes to a file, leaving the
+	// terminal to the spinner and a final summary. Skipped in --json mode.
+	var logger *runlog.Logger
 	if opts.JSONFields == "" {
+		if lg, lerr := runlog.Open(); lerr == nil {
+			logger = lg
+			f.UI.SetLog(logger)
+			defer logger.Close()
+		}
 		label := fmt.Sprintf("Upgrading across %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
 		f.UI.StartProgress(label)
 		r.ProgressFn = func(detail string) { f.UI.UpdateProgress(detail) }
-		defer f.UI.StopProgress()
 	}
-	for _, workflowPath := range opts.WorkflowPaths {
+	for i, workflowPath := range opts.WorkflowPaths {
+		if opts.JSONFields == "" {
+			f.UI.UpdateLabel(fmt.Sprintf("[%d/%d] %s", i+1, total, workflowPath))
+			f.UI.UpdateProgress("")
+		}
 		changes, err := upgradeOneFile(f, opts, workflowPath, r, store, targets)
 		if err != nil {
 			f.UI.Error("%s: %s", workflowPath, err)
@@ -152,6 +165,7 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 
 	if opts.Write {
 		if err := store.Save(); err != nil {
+			f.UI.StopProgress()
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
 	}
@@ -160,14 +174,30 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 		return writeUpgradeJSON(f.Out, allChanges)
 	}
 
+	// Work is done — stop the spinner before printing the terminal summary.
+	f.UI.StopProgress()
+	if logger != nil {
+		defer func() { f.UI.TermDetail("Full log: %s", logger.Path()) }()
+	}
+
 	if hadError {
+		f.UI.TermError("Upgrade failed — see the log for details")
 		return errSilent
 	}
 
 	if len(allChanges) == 0 && len(opts.Actions) > 0 {
-		f.UI.Warning("no matching actions found for: %s", strings.Join(opts.Actions, ", "))
-		f.UI.Hint("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
+		f.UI.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
+		f.UI.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
 		return errSilent
+	}
+
+	verb := "Upgraded"
+	if !opts.Write {
+		verb = "Previewed"
+	}
+	f.UI.TermSuccess("%s %d action(s)", verb, len(allChanges))
+	for _, c := range allChanges {
+		f.UI.TermDetail("%s: %s -> %s", c.NWO, c.OldRef, c.NewRef)
 	}
 	return nil
 }
@@ -273,6 +303,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	if err != nil {
 		return nil, fmt.Errorf("resolving actions: %w", err)
 	}
+	directTracker := lockfile.NewDirectTracker(upgradedRefs, deps)
 
 	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
 		f.UI.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
@@ -354,7 +385,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return nil, fmt.Errorf("writing file: %w", err)
 	}
 
-	if err := store.Set(wfKey, deps, r.ParentMap()); err != nil {
+	if err := store.Set(wfKey, deps, r.ParentMap(), directTracker.Keys(deps)); err != nil {
 		return nil, fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
