@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 )
@@ -77,7 +78,7 @@ func TestParseResolveWithFileResponse(t *testing.T) {
 		"a1": json.RawMessage(`{"nameWithOwner":"actions/cache","object":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","fileYaml":{"object":{"text":"name: Cache Save\nruns:\n  using: composite\n  steps:\n    - uses: actions/upload-artifact@v4\n"}}}}`),
 	}
 
-	deps, ymls, _, err := parseResolveWithFileResponse(data, refs, aliases)
+	deps, ymls, _, err := parseResolveWithFileResponse(data, refs, aliases, nil, "")
 	if err != nil {
 		t.Fatalf("parseResolveWithFileResponse returned error: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestParseResolveWithFileResponse_AnnotatedTagPeeled(t *testing.T) {
 		"a0": json.RawMessage(`{"nameWithOwner":"nodeselector/actions-test-fixtures","object":{"oid":"ea53476fdc172d8552df5af9658a45a367e4f41d","file":{"object":{"text":"name: Fixture\nruns:\n  using: node20\n"}}}}`),
 	}
 
-	deps, _, _, err := parseResolveWithFileResponse(data, refs, aliases)
+	deps, _, _, err := parseResolveWithFileResponse(data, refs, aliases, nil, "")
 	if err != nil {
 		t.Fatalf("parseResolveWithFileResponse returned error: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestParseResolveWithFileResponseErrors(t *testing.T) {
 		"a1": json.RawMessage(`{"nameWithOwner":"actions/setup-go","object":{"oid":""}}`),
 	}
 
-	_, _, _, err := parseResolveWithFileResponse(data, refs, aliases)
+	_, _, _, err := parseResolveWithFileResponse(data, refs, aliases, nil, "")
 	if err == nil {
 		t.Fatal("expected parseResolveWithFileResponse to return aggregated errors")
 	}
@@ -190,6 +191,53 @@ func TestParseResolveWithFileResponseErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to contain %q, got %v", want, err)
 		}
+	}
+}
+
+// TestParseResolveWithFileResponse_SAMLSSO verifies that an org SAML SSO
+// enforcement failure (GraphQL FORBIDDEN with extensions.saml_failure: true
+// and a null data entry) surfaces a distinct, actionable authorization
+// message instead of being collapsed into the generic "repository not found
+// or not accessible".
+func TestParseResolveWithFileResponse_SAMLSSO(t *testing.T) {
+	refs := []lockfile.ActionRef{
+		{Owner: "actions", Repo: "checkout", Ref: "v6"},
+		{Owner: "unknownorg", Repo: "missing", Ref: "v1"},
+	}
+	aliases := map[string]int{"a0": 0, "a1": 1}
+	data := map[string]json.RawMessage{
+		"a0": json.RawMessage(`null`),
+		"a1": json.RawMessage(`null`),
+	}
+	gqlErr := &api.GraphQLError{
+		Errors: []api.GraphQLErrorItem{
+			{
+				Type:       "FORBIDDEN",
+				Message:    "Resource protected by organization SAML enforcement.",
+				Path:       []interface{}{"a0"},
+				Extensions: map[string]interface{}{"saml_failure": true},
+			},
+		},
+	}
+
+	_, _, _, err := parseResolveWithFileResponse(data, refs, aliases, gqlErr, "github.localhost")
+	if err == nil {
+		t.Fatal("expected aggregated errors")
+	}
+	msg := err.Error()
+
+	wantSSO := `actions/checkout@v6: SSO authorization required: your token is not authorized for the "actions" organization (SAML enforcement). Authorize it at https://github.localhost/orgs/actions/sso and retry`
+	if !strings.Contains(msg, wantSSO) {
+		t.Fatalf("expected SSO message %q, got %v", wantSSO, msg)
+	}
+
+	// A null entry for an org NOT flagged by SAML must keep the generic message.
+	if !strings.Contains(msg, "unknownorg/missing@v1: repository not found or not accessible") {
+		t.Fatalf("expected non-SAML null to stay generic, got %v", msg)
+	}
+	// The SAML-blocked ref must NOT also report the generic message.
+	if strings.Contains(msg, "actions/checkout@v6: repository not found or not accessible") {
+		t.Fatalf("SAML ref should not also emit generic not-found, got %v", msg)
 	}
 }
 
@@ -392,6 +440,73 @@ func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
 	pm := r.ParentMap()
 	if parents, ok := pm["owner/repo@main"]; ok {
 		t.Errorf("expected no self-parent for owner/repo@main, got %v", parents)
+	}
+}
+
+// TestResolveAllRecursiveSiblingSubpathTransitive verifies that a composite
+// whose `uses:` names a SIBLING subpath in its own repo+ref (a same-tarball
+// edge) is still traversed for its cross-repo transitive deps. Repo layout:
+//
+//	org/fixtures/nested-composite  (main)  -- uses -->
+//	org/fixtures/simple-composite  (main, same tarball) -- uses -->
+//	org/fixtures-b                 (main, different repo)
+//
+// Before the fix the same-tarball edge nested→simple was pruned, so the
+// 2-levels-deep org/fixtures-b transitive dep was never discovered or pinned.
+func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
+	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	r := &Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+		cache: map[string]resolvedEntry{
+			"org/fixtures/nested-composite@main": {
+				dep:       lockfile.Dependency{NWO: "org/fixtures", Path: "nested-composite", Ref: "main", SHA: tarballSHA},
+				actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-composite@main\n",
+			},
+			"org/fixtures/simple-composite@main": {
+				dep:       lockfile.Dependency{NWO: "org/fixtures", Path: "simple-composite", Ref: "main", SHA: tarballSHA},
+				actionYML: "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures-b@main\n",
+			},
+			"org/fixtures-b@main": {
+				dep:       lockfile.Dependency{NWO: "org/fixtures-b", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+				actionYML: "name: B\nruns:\n  using: node20\n",
+			},
+		},
+		latestRefCache: map[string]string{},
+		reachCache:     map[string]ReachabilityStatus{},
+	}
+
+	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "main"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+
+	// nested-composite + simple-composite collapse to one tarball entry
+	// (org/fixtures@main); org/fixtures-b is the second. Two unique deps.
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 unique deps, got %d: %+v", len(deps), deps)
+	}
+	foundB := false
+	for _, d := range deps {
+		if d.Key() == "org/fixtures-b@main" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("expected 2-levels-deep transitive org/fixtures-b@main to be discovered, got %+v", deps)
+	}
+
+	pm := r.ParentMap()
+	// The same-tarball edge must NOT create a self-parent on the tarball.
+	for _, p := range pm["org/fixtures@main"] {
+		if p == "org/fixtures@main" {
+			t.Errorf("unexpected same-tarball self-parent edge on org/fixtures@main: %v", pm["org/fixtures@main"])
+		}
+	}
+	// org/fixtures-b's parent is the shared tarball.
+	if got := pm["org/fixtures-b@main"]; len(got) != 1 || got[0] != "org/fixtures@main" {
+		t.Errorf("expected org/fixtures-b@main parent = [org/fixtures@main], got %v", got)
 	}
 }
 

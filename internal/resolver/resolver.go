@@ -985,29 +985,39 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			// per tarball — same model the runner uses.
 			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
-				if actionRef := lockfile.ParseActionRef(use); actionRef != nil {
-					childKey := actionRef.NWO() + "@" + actionRef.Ref
-					// Skip same-tarball edges: a composite whose `uses:`
-					// names another subpath in its own repo+ref is a
-					// routing concern inside the already-downloaded tree,
-					// not a transitive dep at the runner level.
-					if childKey == parentKey {
-						continue
-					}
-					// Track all parents, deduplicating.
-					parents := r.parentMap[childKey]
-					found := false
-					for _, p := range parents {
-						if p == parentKey {
-							found = true
-							break
-						}
-					}
-					if !found {
-						r.parentMap[childKey] = append(parents, parentKey)
-					}
-					nextPending = append(nextPending, *actionRef)
+				actionRef := lockfile.ParseActionRef(use)
+				if actionRef == nil {
+					continue
 				}
+				childKey := actionRef.NWO() + "@" + actionRef.Ref
+				// Same-tarball edge: a composite whose `uses:` names another
+				// subpath in its own repo+ref. At runner-download granularity
+				// this is not a new transitive dependency (same tarball, same
+				// SHA), so we must not record a parentMap edge — once subpaths
+				// collapse to NWO@Ref it would become a self-edge. But we must
+				// still descend into the sibling sub-action's action.yml: it
+				// can pull in cross-repo transitive deps the parent never
+				// references directly (e.g. nested-composite → simple-composite
+				// → other-repo). The path-aware seen{} set keys on FullName@Ref
+				// and so prevents re-resolving an exact self-reference, making
+				// this enqueue loop-safe.
+				if childKey == parentKey {
+					nextPending = append(nextPending, *actionRef)
+					continue
+				}
+				// Track all parents, deduplicating.
+				parents := r.parentMap[childKey]
+				found := false
+				for _, p := range parents {
+					if p == parentKey {
+						found = true
+						break
+					}
+				}
+				if !found {
+					r.parentMap[childKey] = append(parents, parentKey)
+				}
+				nextPending = append(nextPending, *actionRef)
 			}
 		}
 
@@ -1118,14 +1128,14 @@ func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockf
 
 	var data map[string]json.RawMessage
 	err := r.client.Do(query, vars, &data)
+	var gqlErr *api.GraphQLError
 	if err != nil {
-		var gqlErr *api.GraphQLError
 		if !errors.As(err, &gqlErr) {
 			return nil, nil, nil, err
 		}
 	}
 
-	return parseResolveWithFileResponse(data, refs, aliasMap)
+	return parseResolveWithFileResponse(data, refs, aliasMap, gqlErr, r.hostname)
 }
 
 // buildResolveWithFileQuery emits a GraphQL query that resolves each ref's
@@ -1192,20 +1202,30 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]an
 	return decl.String() + body.String(), vars, aliasMap
 }
 
-func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfile.ActionRef, aliasMap map[string]int) ([]lockfile.Dependency, []string, []string, error) {
+func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfile.ActionRef, aliasMap map[string]int, gqlErr *api.GraphQLError, hostname string) ([]lockfile.Dependency, []string, []string, error) {
 	var deps []lockfile.Dependency
 	var ymls []string
 	var keys []string
 	var errs []string
 
+	samlOwners := samlBlockedOwners(gqlErr, refs, aliasMap)
+
 	for alias, idx := range aliasMap {
 		ref := refs[idx]
 		raw, ok := data[alias]
 		if !ok {
+			if samlOwners[ref.Owner] {
+				errs = append(errs, fmt.Sprintf("%s@%s: %s", ref.NWO(), ref.Ref, ssoRequiredMessage(hostname, ref.Owner)))
+				continue
+			}
 			errs = append(errs, fmt.Sprintf("%s@%s: not found in response", ref.NWO(), ref.Ref))
 			continue
 		}
 		if string(raw) == "null" {
+			if samlOwners[ref.Owner] {
+				errs = append(errs, fmt.Sprintf("%s@%s: %s", ref.NWO(), ref.Ref, ssoRequiredMessage(hostname, ref.Owner)))
+				continue
+			}
 			errs = append(errs, fmt.Sprintf("%s@%s: repository not found or not accessible", ref.NWO(), ref.Ref))
 			continue
 		}
@@ -1244,6 +1264,49 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 	}
 
 	return deps, ymls, keys, nil
+}
+
+// samlBlockedOwners returns the set of repository owners whose resolution
+// failed an organization SAML SSO enforcement check. GitHub's GraphQL API
+// reports these as per-alias FORBIDDEN errors carrying
+// extensions.saml_failure == true alongside a null data entry for that
+// alias; without this mapping the null entry is indistinguishable from a
+// genuinely missing repository. The GraphQL alias in each error's Path is
+// translated back to its owner via aliasMap + refs.
+func samlBlockedOwners(gqlErr *api.GraphQLError, refs []lockfile.ActionRef, aliasMap map[string]int) map[string]bool {
+	if gqlErr == nil {
+		return nil
+	}
+	owners := make(map[string]bool)
+	for _, e := range gqlErr.Errors {
+		if blocked, _ := e.Extensions["saml_failure"].(bool); !blocked {
+			continue
+		}
+		if len(e.Path) == 0 {
+			continue
+		}
+		alias, ok := e.Path[0].(string)
+		if !ok {
+			continue
+		}
+		idx, ok := aliasMap[alias]
+		if !ok || idx < 0 || idx >= len(refs) {
+			continue
+		}
+		owners[refs[idx].Owner] = true
+	}
+	return owners
+}
+
+// ssoRequiredMessage builds an actionable error directing the user to
+// authorize their token for an SSO-protected organization, rather than
+// collapsing the failure into a generic "not found" message.
+func ssoRequiredMessage(hostname, owner string) string {
+	host := hostname
+	if host == "" {
+		host = "github.com"
+	}
+	return fmt.Sprintf("SSO authorization required: your token is not authorized for the %q organization (SAML enforcement). Authorize it at https://%s/orgs/%s/sso and retry", owner, host, owner)
 }
 
 func selectLatestTag(tags []string) string {
