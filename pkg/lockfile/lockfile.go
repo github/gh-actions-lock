@@ -10,23 +10,36 @@ import (
 
 // ParseError describes a failure to parse a dependency lockfile.
 //
-// Line, when non-zero, is the 1-indexed line within the lockfile contents that
-// the underlying YAML decoder flagged. It indexes the lockfile itself, never a
-// consumer's workflow file, so callers can anchor diagnostics on the lockfile
-// (.github/workflows/actions.lock) rather than scraping yaml.v3's error string
-// themselves. Msg is the human-readable reason with yaml.v3's "yaml:" package
-// prefix and leading position removed.
+// Line and Column, when non-zero, are the 1-indexed position within the
+// lockfile contents that the failure refers to. They index the lockfile
+// itself, never a consumer's workflow file, so callers can anchor diagnostics
+// on the lockfile (.github/workflows/actions.lock) rather than scraping
+// yaml.v3's error string themselves.
+//
+// Column is populated for semantic failures Parse detects itself (it walks the
+// retained YAML node tree to the offending key/value). It is left zero for raw
+// yaml.v3 decode failures, whose errors report only a line: a malformed
+// document has no node tree to read a column from, and yaml.v3 type errors
+// carry a line but no column.
+//
+// Msg is the human-readable reason with yaml.v3's "yaml:" package prefix and
+// leading position removed.
 type ParseError struct {
-	Line int
-	Msg  string
-	err  error
+	Line   int
+	Column int
+	Msg    string
+	err    error
 }
 
 func (e *ParseError) Error() string {
-	if e.Line > 0 {
+	switch {
+	case e.Line > 0 && e.Column > 0:
+		return fmt.Sprintf("line %d, column %d: %s", e.Line, e.Column, e.Msg)
+	case e.Line > 0:
 		return fmt.Sprintf("line %d: %s", e.Line, e.Msg)
+	default:
+		return e.Msg
 	}
-	return e.Msg
 }
 
 func (e *ParseError) Unwrap() error {
@@ -92,6 +105,94 @@ type File struct {
 	Version   string              `yaml:"version"`
 	Actions   map[string]Action   `yaml:"dependencies"`
 	Workflows map[string][]string `yaml:"workflows"`
+
+	// node retains the parsed YAML tree so callers can resolve positions for
+	// their own diagnostics via Position/KeyPosition. It is nil on the
+	// zero-value File returned alongside an error. yaml.v3 ignores this
+	// unexported field during decoding.
+	node *yaml.Node
+}
+
+// Position returns the 1-indexed line and column of the value node reached by
+// following path as a sequence of mapping keys from the lockfile root (e.g.
+// Position("version") points at the version value). ok is false when the path
+// can't be resolved or no node tree was retained.
+func (f File) Position(path ...string) (line, col int, ok bool) {
+	v := f.valueNode(path)
+	if v == nil {
+		return 0, 0, false
+	}
+	return v.Line, v.Column, true
+}
+
+// KeyPosition is like Position but resolves the position of the final path
+// segment's *key* node rather than its value. It is the right anchor for map
+// entries whose key is the meaningful token (e.g. a dependency pin key or a
+// workflow path under "workflows").
+func (f File) KeyPosition(path ...string) (line, col int, ok bool) {
+	if len(path) == 0 {
+		return 0, 0, false
+	}
+	m := docMapping(f.node)
+	for _, key := range path[:len(path)-1] {
+		_, v := mappingEntry(m, key)
+		if v == nil {
+			return 0, 0, false
+		}
+		m = v
+	}
+	k, _ := mappingEntry(m, path[len(path)-1])
+	if k == nil {
+		return 0, 0, false
+	}
+	return k.Line, k.Column, true
+}
+
+// valueNode walks path from the lockfile root mapping, returning the value
+// node of the final segment, or nil when any segment is missing.
+func (f File) valueNode(path []string) *yaml.Node {
+	m := docMapping(f.node)
+	var v *yaml.Node
+	for _, key := range path {
+		_, v = mappingEntry(m, key)
+		if v == nil {
+			return nil
+		}
+		m = v
+	}
+	return v
+}
+
+// docMapping unwraps a document node to its top-level mapping, returning nil
+// when n is not a mapping (or is absent).
+func docMapping(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == yaml.DocumentNode {
+		if len(n.Content) == 0 {
+			return nil
+		}
+		n = n.Content[0]
+	}
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	return n
+}
+
+// mappingEntry returns the key and value nodes for key within a mapping node,
+// or (nil, nil) when m is not a mapping or the key is absent.
+func mappingEntry(m *yaml.Node, key string) (k, v *yaml.Node) {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i], m.Content[i+1]
+		}
+	}
+	return nil, nil
 }
 
 // LookupWorkflow returns the dependency closure for the given repo-relative
@@ -137,18 +238,39 @@ type Action struct {
 // can flag them via diagnostics. Workflow path keys are NOT canonicalized
 // — filesystem paths are case-sensitive on the platforms we run on.
 func Parse(contents []byte) (File, error) {
-	var f File
-	if err := yaml.Unmarshal(contents, &f); err != nil {
+	var root yaml.Node
+	if err := yaml.Unmarshal(contents, &root); err != nil {
 		return File{}, newYAMLParseError(err)
 	}
+	var f File
+	if err := root.Decode(&f); err != nil {
+		return File{}, newYAMLParseError(err)
+	}
+	// Retain the tree so semantic errors below (and consumers) can resolve
+	// precise line+column positions within the lockfile.
+	f.node = &root
+
 	if f.Version == "" {
-		return File{}, &ParseError{Msg: "dependency lockfile version is required"}
+		// No version node to point at; anchor at the top of the document.
+		pe := &ParseError{Msg: "dependency lockfile version is required"}
+		if m := docMapping(f.node); m != nil {
+			pe.Line, pe.Column = m.Line, m.Column
+		}
+		return File{}, pe
 	}
 	if f.Version != Version {
-		return File{}, &ParseError{Msg: fmt.Sprintf("unsupported dependency lockfile version %q", f.Version)}
+		pe := &ParseError{Msg: fmt.Sprintf("unsupported dependency lockfile version %q", f.Version)}
+		if l, c, ok := f.Position("version"); ok {
+			pe.Line, pe.Column = l, c
+		}
+		return File{}, pe
 	}
-	if err := canonicalizeActions(&f); err != nil {
-		return File{}, &ParseError{Msg: err.Error(), err: err}
+	if conflictKey, err := canonicalizeActions(&f); err != nil {
+		pe := &ParseError{Msg: err.Error(), err: err}
+		if l, c, ok := f.KeyPosition("dependencies", conflictKey); ok {
+			pe.Line, pe.Column = l, c
+		}
+		return File{}, pe
 	}
 	canonicalizeWorkflowDependencies(&f)
 	return f, nil
@@ -157,10 +279,11 @@ func Parse(contents []byte) (File, error) {
 // canonicalizeActions rewrites the Actions map so every key is the
 // canonical form of its pin (Pin.String()). A conflict between two
 // different source casings of the same pin is a parse error — the file
-// would be ambiguous about which Action metadata applies.
-func canonicalizeActions(f *File) error {
+// would be ambiguous about which Action metadata applies. On conflict it
+// returns the offending source key so callers can locate it in the YAML tree.
+func canonicalizeActions(f *File) (string, error) {
 	if len(f.Actions) == 0 {
-		return nil
+		return "", nil
 	}
 	out := make(map[string]Action, len(f.Actions))
 	for key, action := range f.Actions {
@@ -182,14 +305,14 @@ func canonicalizeActions(f *File) error {
 		}
 		if existing, dup := out[canonical]; dup {
 			if !equalAction(existing, action) {
-				return fmt.Errorf("duplicate action key %q after canonicalization with differing metadata", canonical)
+				return key, fmt.Errorf("duplicate action key %q after canonicalization with differing metadata", canonical)
 			}
 			continue
 		}
 		out[canonical] = action
 	}
 	f.Actions = out
-	return nil
+	return "", nil
 }
 
 func equalAction(a, b Action) bool {
