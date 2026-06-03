@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,27 @@ func TestParse_UnsupportedVersion(t *testing.T) {
 	_, err := Parse([]byte("version: v9\ndependencies: {}\n"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported dependency lockfile version")
+}
+
+func TestParse_WrongShapeReportsLine(t *testing.T) {
+	// A workflow value shaped as a mapping instead of the expected sequence of
+	// pin keys fails yaml type-decoding. Parse must surface the failing line as
+	// structured data (ParseError.Line) and strip yaml.v3's "yaml:" prefix from
+	// the reason so consumers don't misattribute the position to their own file.
+	yaml := `version: v0.0.1
+dependencies: {}
+workflows:
+  .github/workflows/ci.yml:
+    dependencies:
+      - actions/checkout@v6
+`
+	_, err := Parse([]byte(yaml))
+	require.Error(t, err)
+
+	var pe *ParseError
+	require.True(t, errors.As(err, &pe), "expected a *ParseError, got %T", err)
+	assert.Greater(t, pe.Line, 0, "expected a lockfile line number")
+	assert.NotContains(t, pe.Msg, "yaml:", "yaml package prefix must be stripped from the reason")
 }
 
 func TestParse_CanonicalizesActionKeys(t *testing.T) {

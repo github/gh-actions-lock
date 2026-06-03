@@ -2,9 +2,63 @@ package lockfile
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
+
+// ParseError describes a failure to parse a dependency lockfile.
+//
+// Line, when non-zero, is the 1-indexed line within the lockfile contents that
+// the underlying YAML decoder flagged. It indexes the lockfile itself, never a
+// consumer's workflow file, so callers can anchor diagnostics on the lockfile
+// (.github/workflows/actions.lock) rather than scraping yaml.v3's error string
+// themselves. Msg is the human-readable reason with yaml.v3's "yaml:" package
+// prefix and leading position removed.
+type ParseError struct {
+	Line int
+	Msg  string
+	err  error
+}
+
+func (e *ParseError) Error() string {
+	if e.Line > 0 {
+		return fmt.Sprintf("line %d: %s", e.Line, e.Msg)
+	}
+	return e.Msg
+}
+
+func (e *ParseError) Unwrap() error {
+	return e.err
+}
+
+// yamlLinePattern matches the 1-indexed position gopkg.in/yaml.v3 embeds in its
+// error messages: "yaml: line N: ..." for syntax errors, or "  line N: ..."
+// within an "unmarshal errors:" block for type errors.
+var yamlLinePattern = regexp.MustCompile(`line (\d+):`)
+
+// leadingYAMLPosition matches yaml.v3's "yaml:" package prefix and any
+// immediately following "line N:" position.
+var leadingYAMLPosition = regexp.MustCompile(`^yaml: (line \d+: )?`)
+
+// newYAMLParseError converts a gopkg.in/yaml.v3 error into a ParseError,
+// lifting the line number out of the message so consumers receive it as
+// structured data instead of having to scrape the string themselves.
+func newYAMLParseError(err error) *ParseError {
+	msg := err.Error()
+	line := 0
+	if m := yamlLinePattern.FindStringSubmatch(msg); m != nil {
+		if n, convErr := strconv.Atoi(m[1]); convErr == nil {
+			line = n
+		}
+	}
+	return &ParseError{
+		Line: line,
+		Msg:  leadingYAMLPosition.ReplaceAllString(msg, ""),
+		err:  err,
+	}
+}
 
 // Version is the only supported lockfile schema version.
 const Version = "v0.0.1"
@@ -85,16 +139,16 @@ type Action struct {
 func Parse(contents []byte) (File, error) {
 	var f File
 	if err := yaml.Unmarshal(contents, &f); err != nil {
-		return File{}, err
+		return File{}, newYAMLParseError(err)
 	}
 	if f.Version == "" {
-		return File{}, fmt.Errorf("dependency lockfile version is required")
+		return File{}, &ParseError{Msg: "dependency lockfile version is required"}
 	}
 	if f.Version != Version {
-		return File{}, fmt.Errorf("unsupported dependency lockfile version %q", f.Version)
+		return File{}, &ParseError{Msg: fmt.Sprintf("unsupported dependency lockfile version %q", f.Version)}
 	}
 	if err := canonicalizeActions(&f); err != nil {
-		return File{}, err
+		return File{}, &ParseError{Msg: err.Error(), err: err}
 	}
 	canonicalizeWorkflowDependencies(&f)
 	return f, nil
