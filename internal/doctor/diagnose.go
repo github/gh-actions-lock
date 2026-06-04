@@ -141,21 +141,32 @@ func CollectResolvable(parsed []ParsedWorkflow) ([]lockfile.ActionRef, []lockfil
 // resolver will hit cache and stay silent). Returns a Report aggregating per-
 // workflow findings in input order.
 func DiagnoseParsed(parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) *Report {
+	return DiagnoseParsedWithTagger(parsed, r, store, nil)
+}
+
+// DiagnoseParsedWithTagger is DiagnoseParsed with an optional TagLister so
+// the engine adapter can recognize legitimate annotated-tag-object SHA pins
+// (e.g. `actions/github-script@<tag-object-sha>` for an immutable release).
+// Pass nil to disable that recognition; the engine will then treat tag-object
+// SHA pins as MISLEADING_SHA, which is the prior behavior.
+func DiagnoseParsedWithTagger(parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store, tagger *TagLister) *Report {
 	report := &Report{}
 	for _, pw := range parsed {
 		effR := r
+		effTagger := tagger
 		if pw.TrustLockfile {
 			// Disk-only validation: caller has asserted the lockfile is
 			// trusted for this workflow, so no network round-trips. Engine
 			// falls back to structural-only checks for this entry.
 			effR = nil
+			effTagger = nil
 		}
-		report.Workflows = append(report.Workflows, diagnoseOneParsed(pw, effR, store))
+		report.Workflows = append(report.Workflows, diagnoseOneParsed(pw, effR, store, effTagger))
 	}
 	return report
 }
 
-func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
+func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store, tagger *TagLister) WorkflowReport {
 	wr := WorkflowReport{Path: pw.Path}
 
 	if pw.LoadErr != nil {
@@ -244,7 +255,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	}
 	var engineRes diagnostics.Resolver
 	if r != nil && liveDeps != nil {
-		engineRes = newEngineResolver(r, liveDeps, reach)
+		engineRes = newEngineResolver(r, liveDeps, reach, tagger)
 	}
 	engineFindings := diagnostics.Run(
 		context.Background(),

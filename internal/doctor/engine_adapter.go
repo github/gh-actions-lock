@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/lockfile/diagnostics"
@@ -19,17 +20,26 @@ type engineResolver struct {
 	inner *resolver.Resolver
 	refs  map[string]string                         // owner/repo@ref -> sha
 	reach map[string]diagnostics.ReachabilityStatus // owner/repo@sha@ref -> status
+	// tagger, when non-nil, is consulted to recognize legitimate
+	// annotated-tag-object SHA pins. It is queried lazily per
+	// (owner, repo) so we only fetch tags for repos that actually appear
+	// in the workflow set being checked.
+	tagger *TagLister
 }
 
 // newEngineResolver primes the adapter with the live resolution of refs and
 // a pre-computed reachability sweep. Pass live==nil when ResolveAllRecursive
 // has failed; the engine will fall back to Unknown and skip resolver-bound
 // checks for affected refs. Pass reach==nil to disable reachability checks.
-func newEngineResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult) *engineResolver {
+// Pass tagger==nil to disable annotated-tag-object SHA recognition (the
+// engine will then treat tag-object SHA pins as MISLEADING_SHA — fine for
+// tests / disk-only modes).
+func newEngineResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult, tagger *TagLister) *engineResolver {
 	a := &engineResolver{
-		inner: r,
-		refs:  make(map[string]string, len(live)),
-		reach: map[string]diagnostics.ReachabilityStatus{},
+		inner:  r,
+		refs:   make(map[string]string, len(live)),
+		reach:  map[string]diagnostics.ReachabilityStatus{},
+		tagger: tagger,
 	}
 	for _, d := range live {
 		a.refs[d.NWO+"@"+d.Ref] = d.SHA
@@ -42,10 +52,33 @@ func newEngineResolver(r *resolver.Resolver, live []lockfile.Dependency, reach [
 }
 
 func (a *engineResolver) ResolveRef(_ context.Context, owner, repo, ref string) diagnostics.RefResult {
-	if sha, ok := a.refs[owner+"/"+repo+"@"+ref]; ok {
-		return diagnostics.RefResult{Status: diagnostics.RefStatusResolved, Sha: sha}
+	sha, ok := a.refs[owner+"/"+repo+"@"+ref]
+	if !ok {
+		return diagnostics.RefResult{Status: diagnostics.RefStatusUnknown}
 	}
-	return diagnostics.RefResult{Status: diagnostics.RefStatusUnknown}
+	res := diagnostics.RefResult{Status: diagnostics.RefStatusResolved, Sha: sha}
+	// If the input ref looks like a SHA but doesn't match the peeled
+	// commit, see if it matches an annotated tag object pointing at this
+	// commit. Pinning to a tag object SHA is a legitimate immutable-pin
+	// pattern — surface it so checkMisleadingSha doesn't fire.
+	if a.tagger != nil && !strings.EqualFold(sha, ref) {
+		if tags, err := a.tagger.ListTags(owner, repo); err == nil {
+			for _, t := range tags {
+				if t.TagObjectSHA == "" {
+					continue
+				}
+				if !strings.EqualFold(t.TagObjectSHA, ref) {
+					continue
+				}
+				if !strings.EqualFold(t.SHA, sha) {
+					continue
+				}
+				res.TagObjectSHA = t.TagObjectSHA
+				break
+			}
+		}
+	}
+	return res
 }
 
 func (a *engineResolver) CheckAncestry(_ context.Context, owner, repo, candidateSha, headSha string) diagnostics.AncestryStatus {

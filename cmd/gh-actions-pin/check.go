@@ -308,7 +308,19 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		f.UI.UpdateLabel("Analyzing")
 	}
 
-	report := doctor.DiagnoseParsed(parsed, r, store)
+	// Build a TagLister up-front so the engine adapter can recognize
+	// annotated-tag-object SHA pins (e.g. `actions/github-script@<tag-obj>`
+	// for an immutable release). The same TagLister is reused later by
+	// EnrichImposterFindings and the Remediator so we don't refetch tags.
+	hostname := resolveHostname(opts.Hostname)
+	var tagger *doctor.TagLister
+	var sharedRestClient *api.RESTClient
+	if rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
+		sharedRestClient = rc
+		tagger = doctor.NewTagLister(rc)
+	}
+
+	report := doctor.DiagnoseParsedWithTagger(parsed, r, store, tagger)
 
 	// Compute validity from findings.
 	valid := report.IsValid()
@@ -318,9 +330,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// branch in the action repo. Bounded network walk per affected action;
 	// skipped entirely when no imposter findings exist.
 	if hasImposterFindings(report) {
-		hostname := resolveHostname(opts.Hostname)
-		if restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
-			tl := doctor.NewTagLister(restClient)
+		if tagger != nil {
+			doctor.EnrichImposterFindings(report, tagger, r)
+		} else if rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
+			tl := doctor.NewTagLister(rc)
 			doctor.EnrichImposterFindings(report, tl, r)
 		}
 	}
@@ -369,10 +382,13 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	}
 
 	if willRemediate && len(actionable) > 0 {
-		hostname := resolveHostname(opts.Hostname)
-		restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
-		if err != nil {
-			return fmt.Errorf("creating REST client: %w", err)
+		restClient := sharedRestClient
+		if restClient == nil {
+			rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname})
+			if err != nil {
+				return fmt.Errorf("creating REST client: %w", err)
+			}
+			restClient = rc
 		}
 
 		var prompter doctor.Prompter

@@ -67,6 +67,12 @@ type Action struct {
 	Ref        string `json:"ref"`
 	SHA        string `json:"sha,omitempty"`
 	HashAlgo   string `json:"hash_algo,omitempty"`
+	// LiveSHA is the resolver's currently-resolved SHA for Ref, recorded
+	// when it differs from SHA (e.g. MISLEADING_SHA, REF_MOVED). It makes
+	// a finding falsifiable: a reader can compare the pinned SHA against
+	// what upstream actually resolves to right now, without re-running the
+	// resolver. Empty when the run did not surface a divergence.
+	LiveSHA    string `json:"live_sha,omitempty"`
 	Direct     bool   `json:"direct"`
 	Resolution string `json:"resolution"`
 	// How is concise, human-readable provenance ("locked ref v4 to <sha>",

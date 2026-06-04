@@ -126,6 +126,12 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 		if g.action.SHA == "" {
 			g.action.SHA = sha
 		}
+		// Record the resolver's live SHA whenever a finding surfaces one
+		// that doesn't match the recorded SHA — makes MISLEADING_SHA and
+		// REF_MOVED entries falsifiable rather than echoing the input ref.
+		if f.LiveSHA != "" && g.action.LiveSHA == "" && !equalFoldHex(f.LiveSHA, g.action.SHA) {
+			g.action.LiveSHA = f.LiveSHA
+		}
 	}
 	for _, f := range report.RepoFindings {
 		foldFinding(f)
@@ -248,6 +254,30 @@ func isHexSHA(s string) bool {
 		switch {
 		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
 		default:
+			return false
+		}
+	}
+	return true
+}
+
+// equalFoldHex reports whether two hex SHAs are equal ignoring case. Empty
+// strings never compare equal — a missing SHA isn't a match.
+func equalFoldHex(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
 			return false
 		}
 	}

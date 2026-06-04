@@ -276,6 +276,35 @@ func TestRun_MisleadingSha(t *testing.T) {
 	}
 }
 
+// TestRun_MisleadingSha_TagObjectSHA covers the legitimate annotated-tag-object
+// pin pattern (e.g. actions/github-script@<v9.0.0 tag-object sha>): the
+// resolver peels via ^{commit} so res.Sha is the underlying commit, not the
+// pinned ref, but the pin is still immutable and must not trip MISLEADING_SHA.
+func TestRun_MisleadingSha_TagObjectSHA(t *testing.T) {
+	lf := newLockfile(map[string][]string{})
+	const tagObjectSHA = "d746ffe35508b1917358783b479e04febd2b8f71"
+	const peeledCommit = shaSetupGoV5
+	wf := WorkflowInput{
+		Path: ".github/workflows/ci.yml",
+		Uses: []UsesRef{{Owner: "actions", Repo: "github-script", Ref: tagObjectSHA}},
+	}
+	r := &stubResolver{
+		refs: map[string]RefResult{
+			"actions/github-script@" + tagObjectSHA: {
+				Status:       RefStatusResolved,
+				Sha:          peeledCommit,
+				TagObjectSHA: tagObjectSHA,
+			},
+		},
+	}
+	got := Run(context.Background(), lf, []WorkflowInput{wf}, Options{Resolver: r})
+	for _, f := range got {
+		if f.Code == CodeMisleadingSha {
+			t.Fatalf("did not expect misleading_sha for tag-object SHA pin, got %v", findingCodes(got))
+		}
+	}
+}
+
 func TestRun_NoResolver_SkipsResolverChecks(t *testing.T) {
 	lf := newLockfile(map[string][]string{
 		".github/workflows/ci.yml": wfWithPins(".github/workflows/ci.yml",

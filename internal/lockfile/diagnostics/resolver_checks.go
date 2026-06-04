@@ -24,6 +24,13 @@ func checkMisleadingSha(ctx context.Context, wf WorkflowInput, r Resolver) []Fin
 		if strings.EqualFold(res.Sha, u.Ref) {
 			continue
 		}
+		// Pinning to an annotated-tag object SHA is a legitimate immutable
+		// pin: the workflow's `uses:` ref equals the tag object's own SHA,
+		// which the host peels via `^{commit}` to a different underlying
+		// commit. Accept it when the host surfaces it.
+		if res.TagObjectSHA != "" && strings.EqualFold(res.TagObjectSHA, u.Ref) {
+			continue
+		}
 		f := findingFromUse(wf, u)
 		f.Code = CodeMisleadingSha
 		f.Severity = SeverityError
