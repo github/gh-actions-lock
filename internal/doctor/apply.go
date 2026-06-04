@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
@@ -27,7 +28,7 @@ func splitNWO(nwo string) (string, string) {
 // File.RewriteActionRefs, which keys rewrites on the verbatim uses string;
 // transitive impostors (matched only via parent composite actions) return
 // "" so callers can fall back to alerting.
-func directUsesFor(refs []lockfile.ActionRef, owner, repo, ref string) string {
+func directUsesFor(refs []parserlock.ActionRef, owner, repo, ref string) string {
 	for _, ar := range refs {
 		if ar.Owner == owner && ar.Repo == repo && ar.Ref == ref {
 			return ar.Raw

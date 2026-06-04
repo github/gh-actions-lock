@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/ui"
 )
 
@@ -101,10 +102,10 @@ func TestMatchingUpgradeTargetHonorsCurrentRefSelector(t *testing.T) {
 		t.Fatalf("parseUpgradeTargets returned error: %v", err)
 	}
 
-	if _, ok := matchingUpgradeTarget(lockfile.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v4"}, targets); ok {
+	if _, ok := matchingUpgradeTarget(parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v4"}, targets); ok {
 		t.Fatal("expected v4 ref not to match v5 selector")
 	}
-	target, ok := matchingUpgradeTarget(lockfile.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v5"}, targets)
+	target, ok := matchingUpgradeTarget(parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v5"}, targets)
 	if !ok {
 		t.Fatal("expected v5 ref to match selector")
 	}

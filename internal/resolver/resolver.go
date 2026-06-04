@@ -15,6 +15,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // ReachabilityStatus represents the result of a commit reachability check.
@@ -503,7 +504,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 
 	if foundBranch != "" {
 		result.Status = Reachable
-		if lockfile.IsFullSHA(ref) {
+		if parserlock.IsFullSha(ref) {
 			result.Detail = fmt.Sprintf("pinned to a bare SHA; commit is on branch %s but origin cannot be verified at job runtime — prefer pinning to a tag", foundBranch)
 		} else {
 			result.Detail = fmt.Sprintf("commit is on branch %s", foundBranch)
@@ -514,7 +515,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		result.Detail = fmt.Sprintf("could not verify commit reachability for %s/%s — every Compare lookup failed (rate limit or transient error); try again later", owner, repo)
 	} else {
 		result.Status = Unreachable
-		if lockfile.IsFullSHA(ref) {
+		if parserlock.IsFullSha(ref) {
 			result.Detail = "pinned to a bare SHA; commit is NOT on any branch — possible fork-network commit"
 		} else {
 			result.Detail = fmt.Sprintf("commit %s not found on any branch of %s/%s — possible fork-network injection",
@@ -988,7 +989,7 @@ func (r *Resolver) likelyBranches(owner, repo, sha, ref, defaultBranch string) [
 			out = append(out, bh)
 		}
 	}
-	if ref != "" && !lockfile.IsFullSHA(ref) {
+	if ref != "" && !parserlock.IsFullSha(ref) {
 		addNamed(ref)
 	}
 	r.cacheMu.Lock()
@@ -1218,7 +1219,7 @@ func shortSha(s string) string {
 // When the canonical ref differs from dep.Ref the change is recorded in
 // the returned rewrites map (keyed by "owner/repo[/path]@old-ref" →
 // "owner/repo[/path]@new-ref") and dep.Ref is updated in place. Callers
-// should pass the resulting map to lockfile.File.RewriteActionRefs to
+// should pass the resulting map to lockfile.WorkflowFile.RewriteActionRefs to
 // mutate the workflow uses: lines.
 //
 // Ref selection: if the original ref was itself a discovered branch (user
@@ -1527,7 +1528,7 @@ func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 	return best, nil
 }
 
-func cacheKey(ref lockfile.ActionRef) string {
+func cacheKey(ref parserlock.ActionRef) string {
 	return ref.FullName() + "@" + ref.Ref
 }
 
@@ -1535,7 +1536,7 @@ func cacheKey(ref lockfile.ActionRef) string {
 // dependencies from composite actions by reading their action.yml via GraphQL.
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
 // caller and safe to mutate or hold across concurrent resolver calls.
-func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.Dependency, ParentMap, error) {
+func (r *Resolver) ResolveAllRecursive(refs []parserlock.ActionRef) ([]lockfile.Dependency, ParentMap, error) {
 	seen := make(map[string]bool)
 	var allDeps []lockfile.Dependency
 	parentMap := make(ParentMap)
@@ -1570,7 +1571,7 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			return allDeps, parentMap, fmt.Errorf("composite action recursion exceeded max depth %d", r.MaxRecursionDepth)
 		}
 
-		var toResolve []lockfile.ActionRef
+		var toResolve []parserlock.ActionRef
 		for _, ref := range pending {
 			key := ref.FullName() + "@" + ref.Ref
 			if !seen[key] {
@@ -1600,15 +1601,15 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			return dedup(allDeps), parentMap, err
 		}
 
-		var nextPending []lockfile.ActionRef
+		var nextPending []parserlock.ActionRef
 		for i := range deps {
 			yml := actionYMLs[i]
 			if yml == "" {
 				continue
 			}
 
-			meta, parseErr := lockfile.ParseActionMeta(yml)
-			if parseErr != nil || meta.Execution != lockfile.ExecComposite {
+			meta, parseErr := parserlock.ParseActionMeta(yml)
+			if parseErr != nil || meta.Execution != parserlock.ExecComposite {
 				continue
 			}
 
@@ -1619,7 +1620,7 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 			// per tarball — same model the runner uses.
 			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
-				actionRef := lockfile.ParseActionRef(use)
+				actionRef := parserlock.ParseActionRef(use)
 				if actionRef == nil {
 					continue
 				}
@@ -1681,7 +1682,7 @@ func dedup(deps []lockfile.Dependency) []lockfile.Dependency {
 // resolveDone and resolveTotal are rolling counters owned by ResolveAllRecursive
 // that span every BFS depth, so a single non-jumping progress bar can cover
 // direct + transitive resolution as one phase.
-func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth int, resolveDone, resolveTotal *atomic.Int64) ([]lockfile.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYMLParallel(refs []parserlock.ActionRef, depth int, resolveDone, resolveTotal *atomic.Int64) ([]lockfile.Dependency, []string, error) {
 	type resolveResult struct {
 		dep lockfile.Dependency
 		yml string
@@ -1745,13 +1746,13 @@ func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth
 	for _, idx := range uncachedIdx {
 		wg.Add(1)
 		slot := <-slots
-		go func(i int, ref lockfile.ActionRef, slot int) {
+		go func(i int, ref parserlock.ActionRef, slot int) {
 			defer wg.Done()
 			defer func() { slots <- slot }()
 
 			r.WorkerProgressFn(slot, "→ "+ref.NWO()+"@"+ref.Ref)
 
-			deps, ymls, keys, err := r.resolveWithActionYMLBatch([]lockfile.ActionRef{ref})
+			deps, ymls, keys, err := r.resolveWithActionYMLBatch([]parserlock.ActionRef{ref})
 			if err != nil {
 				errMu.Lock()
 				if firstErr == nil {
@@ -1779,10 +1780,10 @@ func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth
 	return deps, ymls, firstErr
 }
 
-func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYML(refs []parserlock.ActionRef) ([]lockfile.Dependency, []string, error) {
 	var allDeps []lockfile.Dependency
 	var allYMLs []string
-	var uncached []lockfile.ActionRef
+	var uncached []parserlock.ActionRef
 
 	cachedIdx := make(map[int]bool)
 	r.cacheMu.Lock()
@@ -1868,7 +1869,7 @@ type repoResponse struct {
 	} `json:"object"`
 }
 
-func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, []string, error) {
+func (r *Resolver) resolveWithActionYMLBatch(refs []parserlock.ActionRef) ([]lockfile.Dependency, []string, []string, error) {
 	query, vars, aliasMap := buildResolveWithFileQuery(refs)
 
 	var data map[string]json.RawMessage
@@ -1889,7 +1890,7 @@ func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockf
 // variables rather than interpolated with %q so that a YAML-supplied
 // value like `"\n  malicious: query { viewer { login } }"` cannot escape
 // the string literal and inject sibling fields.
-func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]any, map[string]int) {
+func buildResolveWithFileQuery(refs []parserlock.ActionRef) (string, map[string]any, map[string]int) {
 	aliasMap := make(map[string]int, len(refs))
 	vars := make(map[string]any, len(refs)*5)
 
@@ -1947,7 +1948,7 @@ func buildResolveWithFileQuery(refs []lockfile.ActionRef) (string, map[string]an
 	return decl.String() + body.String(), vars, aliasMap
 }
 
-func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfile.ActionRef, aliasMap map[string]int, gqlErr *api.GraphQLError, hostname string) ([]lockfile.Dependency, []string, []string, error) {
+func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []parserlock.ActionRef, aliasMap map[string]int, gqlErr *api.GraphQLError, hostname string) ([]lockfile.Dependency, []string, []string, error) {
 	var deps []lockfile.Dependency
 	var ymls []string
 	var keys []string
@@ -2018,7 +2019,7 @@ func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []lockfi
 // alias; without this mapping the null entry is indistinguishable from a
 // genuinely missing repository. The GraphQL alias in each error's Path is
 // translated back to its owner via aliasMap + refs.
-func samlBlockedOwners(gqlErr *api.GraphQLError, refs []lockfile.ActionRef, aliasMap map[string]int) map[string]bool {
+func samlBlockedOwners(gqlErr *api.GraphQLError, refs []parserlock.ActionRef, aliasMap map[string]int) map[string]bool {
 	if gqlErr == nil {
 		return nil
 	}

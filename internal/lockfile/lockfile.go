@@ -1,11 +1,13 @@
-// Package lockfile handles parsing and modifying workflow YAML files for action
-// dependency pinning. It extracts uses: action references, manages the
-// dependencies: section, and parses action.yml metadata for composite actions.
+// Package lockfile owns gh-actions-pin's internal workflow-file
+// representation and the resolver-time Dependency intermediate. The
+// schema-stable pieces of the lockfile/uses/action.yml grammars live in
+// the sibling public module github.com/github/gh-actions-pin/pkg/lockfile;
+// this package wraps and orchestrates them for the CLI's own use.
+//
+// Anything in this package is internal and unstable. Consumers that want
+// to parse a `uses:` ref or an action.yml should depend on pkg/lockfile
+// instead.
 package lockfile
-
-// TODO seems like we're duplicating stuff that lives in the pkg/lockfile
-// TODO split out per type maybe this file is big and complicated & we shoudl consider exporting these in pkg/lockfile
-// TODO for the workflow type we should be clear that it is only internal, that should not be somethign someoen can use because it's partial.
 
 import (
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,32 +46,12 @@ func DiscoverWorkflows() ([]string, error) {
 	return paths, nil
 }
 
-// ActionRef represents a parsed uses: reference to a repository action.
-type ActionRef struct {
-	Owner string // e.g. "actions"
-	Repo  string // e.g. "checkout"
-	Path  string // e.g. "save" for actions/cache/save@v4
-	Ref   string // e.g. "v4" - tag, branch, or full SHA
-	Raw   string // original uses: string
-}
-
-// NWO returns owner/repo (Name With Owner).
-func (a ActionRef) NWO() string {
-	if a.Owner == "" && a.Repo == "" {
-		return ""
-	}
-	return a.Owner + "/" + a.Repo
-}
-
-// FullName returns owner/repo or owner/repo/path.
-func (a ActionRef) FullName() string {
-	if a.Path != "" {
-		return a.Owner + "/" + a.Repo + "/" + a.Path
-	}
-	return a.Owner + "/" + a.Repo
-}
-
-// Dependency represents a pinned dependency entry in the dependencies: section.
+// Dependency is the resolver's in-memory view of a single pinned action:
+// the lockfile-grammar pin (NWO@Ref:Algo-SHA) plus the discovered Tag /
+// Branch / sub-action Path that the lockfile-on-disk format does not
+// carry. It is the working shape between `uses:` parsing, resolver
+// traversal, and lockfile serialization — never persisted on disk and
+// not part of any public API.
 type Dependency struct {
 	NWO string // owner/repo (no path)
 	// Path is the optional sub-action subpath as written in `uses:`
@@ -137,96 +120,11 @@ func (d Dependency) String() string {
 	return pin.String()
 }
 
-// ParseDependencyString parses a dependency entry string back into a
-// Dependency.
-func ParseDependencyString(s string) (Dependency, error) {
-	if containsControlChars(s) {
-		return Dependency{}, fmt.Errorf("dependency string contains control characters")
-	}
-
-	colonIdx := strings.LastIndex(s, ":")
-	if colonIdx < 0 {
-		return Dependency{}, fmt.Errorf("invalid dependency format (missing : separator): %q", s)
-	}
-
-	nwoRefPart := s[:colonIdx]
-	algoHashPart := s[colonIdx+1:]
-
-	nwoRef := strings.SplitN(nwoRefPart, "@", 2)
-	if len(nwoRef) != 2 || nwoRef[0] == "" || nwoRef[1] == "" {
-		return Dependency{}, fmt.Errorf("invalid dependency nwo@ref: %q", nwoRefPart)
-	}
-
-	pathParts := strings.SplitN(nwoRef[0], "/", 3)
-	if len(pathParts) < 2 || pathParts[0] == "" || pathParts[1] == "" {
-		return Dependency{}, fmt.Errorf("invalid dependency owner/repo: %q", nwoRef[0])
-	}
-	if len(pathParts) == 3 {
-		// Sub-action paths are not part of the lockfile pin grammar — the
-		// runner downloads at repo+sha granularity. Reject hand-edited
-		// entries that include a path component.
-		return Dependency{}, fmt.Errorf("dependency key must be owner/repo@ref (no sub-path): %q", nwoRef[0])
-	}
-
-	dashIdx := strings.Index(algoHashPart, "-")
-	if dashIdx <= 0 || dashIdx == len(algoHashPart)-1 {
-		return Dependency{}, fmt.Errorf("invalid dependency hash format: %q", algoHashPart)
-	}
-
-	algo := strings.ToLower(algoHashPart[:dashIdx])
-	sha := strings.ToLower(algoHashPart[dashIdx+1:])
-	if algo != "sha1" && algo != "sha256" {
-		return Dependency{}, fmt.Errorf("unsupported hash algorithm %q", algo)
-	}
-	if !isHexString(sha) {
-		return Dependency{}, fmt.Errorf("invalid %s hash: %q", algo, sha)
-	}
-	if (algo == "sha1" && len(sha) != 40) || (algo == "sha256" && len(sha) != 64) {
-		return Dependency{}, fmt.Errorf("invalid %s hash length: %d", algo, len(sha))
-	}
-
-	return Dependency{
-		NWO:      pathParts[0] + "/" + pathParts[1],
-		Ref:      nwoRef[1],
-		SHA:      sha,
-		HashAlgo: algo,
-	}, nil
-}
-
-func containsControlChars(s string) bool {
-	for _, c := range s {
-		if c <= 0x1F || c == 0x7F {
-			return true
-		}
-	}
-	return false
-}
-
 func detectHashAlgo(hash string) string {
 	if len(hash) == 64 {
 		return "sha256"
 	}
 	return "sha1"
-}
-
-// IsFullSHA reports whether s looks like a full commit hash.
-func IsFullSHA(s string) bool {
-	if len(s) != 40 && len(s) != 64 {
-		return false
-	}
-	return isHexString(s)
-}
-
-func isHexString(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
 }
 
 // SHARefMismatch describes a dependency whose uses: ref looks like a full SHA
@@ -254,7 +152,7 @@ type TagObjectPeeler interface {
 func CheckSHARefMismatches(deps []Dependency, peeler TagObjectPeeler) []SHARefMismatch {
 	var mismatches []SHARefMismatch
 	for _, dep := range deps {
-		if !IsFullSHA(dep.Ref) || strings.EqualFold(dep.Ref, dep.SHA) {
+		if !parserlock.IsFullSha(dep.Ref) || strings.EqualFold(dep.Ref, dep.SHA) {
 			continue
 		}
 		if peeler != nil {
@@ -271,165 +169,22 @@ func CheckSHARefMismatches(deps []Dependency, peeler TagObjectPeeler) []SHARefMi
 	return mismatches
 }
 
-// ParseActionRef parses a uses: string into an ActionRef. Returns nil for
-// expressions, local paths, docker images, reusable workflows, malformed
-// owner/repo segments, or any input containing control characters that
-// would otherwise reach downstream URL/GraphQL builders.
-func ParseActionRef(uses string) *ActionRef {
-	uses = strings.TrimSpace(uses)
-
-	if uses == "" || containsControlChars(uses) {
-		return nil
-	}
-	if strings.HasPrefix(uses, "./") {
-		return nil
-	}
-	if strings.HasPrefix(uses, "docker://") {
-		return nil
-	}
-	if strings.Contains(uses, "${") {
-		return nil
-	}
-
-	atParts := strings.SplitN(uses, "@", 2)
-	if len(atParts) != 2 || atParts[1] == "" {
-		return nil
-	}
-	ref := atParts[1]
-
-	segments := strings.SplitN(atParts[0], "/", 3)
-	if len(segments) < 2 || segments[0] == "" || segments[1] == "" {
-		return nil
-	}
-	if !isValidOwnerOrRepo(segments[0]) || !isValidOwnerOrRepo(segments[1]) {
-		return nil
-	}
-
-	actionRef := &ActionRef{
-		Owner: segments[0],
-		Repo:  segments[1],
-		Ref:   ref,
-		Raw:   uses,
-	}
-	if len(segments) == 3 {
-		actionRef.Path = segments[2]
-	}
-
-	if isReusableWorkflow(actionRef) {
-		return nil
-	}
-
-	return actionRef
-}
-
-// isValidOwnerOrRepo enforces the GitHub owner/repo character set. GitHub
-// allows alphanumerics, hyphens, underscores, and periods; we reject
-// anything else to keep these values safe for use in URL paths and GraphQL
-// string literals without per-call escaping bugs.
-func isValidOwnerOrRepo(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '-' || r == '_' || r == '.':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func isYAMLFile(path string) bool {
-	return strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
-}
-
-func isReusableWorkflow(actionRef *ActionRef) bool {
-	if actionRef.Path == "" {
-		return false
-	}
-	// Anchor on prefix: a reusable workflow is keyed by
-	// `<owner>/<repo>/.github/workflows/<name>.yml`, so the relative
-	// Path must START with `.github/workflows/`. Substring matching
-	// would misclassify composite actions whose nested folder
-	// happens to contain that segment (e.g. `tools/.github/workflows/`).
-	if !strings.HasPrefix(actionRef.Path, ".github/workflows/") {
-		return false
-	}
-	return isYAMLFile(actionRef.Path)
-}
-
-func isLocalReusableWorkflow(localPath string) bool {
-	return isYAMLFile(localPath)
-}
-
-// ExecutionType describes how an action runs.
-type ExecutionType string
-
-const (
-	ExecNode      ExecutionType = "node"
-	ExecDocker    ExecutionType = "docker"
-	ExecComposite ExecutionType = "composite"
-	ExecUnknown   ExecutionType = "unknown"
-)
-
-// ActionMeta is the parsed subset of action.yml relevant to dependency resolution.
-type ActionMeta struct {
-	Name       string
-	Execution  ExecutionType
-	NestedUses []string
-}
-
-// ParseActionMeta parses an action.yml content string.
-func ParseActionMeta(content string) (*ActionMeta, error) {
-	var raw struct {
-		Name string `yaml:"name"`
-		Runs struct {
-			Using string `yaml:"using"`
-			Steps []struct {
-				Uses string `yaml:"uses"`
-			} `yaml:"steps"`
-		} `yaml:"runs"`
-	}
-
-	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
-		return nil, fmt.Errorf("parsing action.yml: %w", err)
-	}
-
-	meta := &ActionMeta{Name: raw.Name}
-
-	using := strings.ToLower(raw.Runs.Using)
-	switch {
-	case using == "composite":
-		meta.Execution = ExecComposite
-		for _, step := range raw.Runs.Steps {
-			if step.Uses != "" {
-				meta.NestedUses = append(meta.NestedUses, step.Uses)
-			}
-		}
-	case using == "docker":
-		meta.Execution = ExecDocker
-	case strings.HasPrefix(using, "node"):
-		meta.Execution = ExecNode
-	default:
-		meta.Execution = ExecUnknown
-	}
-
-	return meta, nil
-}
-
-// File represents a parsed workflow file with its raw content.
-type File struct {
+// WorkflowFile is the parsed workflow YAML the CLI rewrites in-place.
+// It carries the original byte content alongside the parsed node tree so
+// RewriteActionRefs can do anchored, comment-preserving substitution.
+//
+// This type is intentionally internal: it owns how this CLI loads and
+// rewrites workflow YAML, which is not stable schema. The schema-level
+// `uses:` and action.yml shapes live in pkg/lockfile (ActionRef,
+// ActionMeta) for downstream consumers.
+type WorkflowFile struct {
 	Path    string
 	Content []byte
 	root    yaml.Node
 }
 
 // Load reads and parses a workflow file.
-func Load(path string) (*File, error) {
+func Load(path string) (*WorkflowFile, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading workflow: %w", err)
@@ -438,9 +193,9 @@ func Load(path string) (*File, error) {
 	return Parse(path, content)
 }
 
-// Parse builds a File from already-loaded workflow content.
-func Parse(path string, content []byte) (*File, error) {
-	f := &File{
+// Parse builds a WorkflowFile from already-loaded workflow content.
+func Parse(path string, content []byte) (*WorkflowFile, error) {
+	f := &WorkflowFile{
 		Path:    path,
 		Content: content,
 	}
@@ -452,8 +207,8 @@ func Parse(path string, content []byte) (*File, error) {
 }
 
 // ExtractActionRefs finds all uses: references to repository actions in the workflow.
-func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
-	var refs []ActionRef
+func (f *WorkflowFile) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) {
+	var refs []parserlock.ActionRef
 	var warnings []string
 	var localPaths []string
 	seen := make(map[string]bool)
@@ -469,7 +224,7 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 			return
 		}
 		if strings.HasPrefix(value, "./") {
-			if isLocalReusableWorkflow(value) {
+			if parserlock.IsLocalReusableWorkflow(value) {
 				return
 			}
 			if !seenLocal[value] {
@@ -478,7 +233,7 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 			}
 			return
 		}
-		actionRef := ParseActionRef(value)
+		actionRef := parserlock.ParseActionRef(value)
 		if actionRef != nil {
 			dedupKey := actionRef.FullName() + "@" + actionRef.Ref
 			if !seen[dedupKey] {
@@ -493,7 +248,7 @@ func (f *File) ExtractActionRefs() ([]ActionRef, []string, []string) {
 
 // RewriteActionRefs rewrites targeted uses: refs in the original workflow
 // content while preserving the surrounding formatting and comments.
-func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, error) {
+func (f *WorkflowFile) RewriteActionRefs(replacements map[string]string) ([]byte, int, error) {
 	if len(replacements) == 0 {
 		return append([]byte(nil), f.Content...), 0, nil
 	}
@@ -595,21 +350,11 @@ func walkYAMLNodesDepth(node *yaml.Node, fn func(keyNode, valueNode *yaml.Node),
 	}
 }
 
-func docNode(root *yaml.Node) *yaml.Node {
-	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
-		return root.Content[0]
-	}
-	if root.Kind == yaml.MappingNode {
-		return root
-	}
-	return nil
-}
-
 // ExtractLocalCompositeRefs reads action.yml files from local paths relative
 // to the workflow file's directory and returns any repository action refs
 // found in their steps.
-func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]ActionRef, []string) {
-	var refs []ActionRef
+func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]parserlock.ActionRef, []string) {
+	var refs []parserlock.ActionRef
 	var warnings []string
 	seen := make(map[string]bool)
 
@@ -650,7 +395,7 @@ func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]Acti
 		}
 
 		for _, use := range uses {
-			actionRef := ParseActionRef(use)
+			actionRef := parserlock.ParseActionRef(use)
 			if actionRef != nil {
 				dedupKey := actionRef.FullName() + "@" + actionRef.Ref
 				if !seen[dedupKey] {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // Semver holds parsed version components.
@@ -24,7 +26,7 @@ var semverRE = regexp.MustCompile(`^(v?)(\d+)(?:\.(\d+))?(?:\.(\d+))?(.*)$`)
 // tag doesn't look like a version (or is a full SHA that happens to start with
 // a digit).
 func ParseSemver(tag string) (Semver, bool) {
-	if IsFullSHA(tag) {
+	if parserlock.IsFullSha(tag) {
 		return Semver{}, false
 	}
 	m := semverRE.FindStringSubmatch(tag)

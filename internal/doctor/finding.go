@@ -1,6 +1,9 @@
 package doctor
 
-import "github.com/github/gh-actions-pin/internal/lockfile"
+import (
+	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
+)
 
 // Category classifies the state of a workflow or individual action dependency.
 type Category string
@@ -48,7 +51,7 @@ type Finding struct {
 	// Severity of the finding.
 	Severity Severity
 	// ActionRef is the action reference this finding relates to (nil for workflow-level findings).
-	ActionRef *lockfile.ActionRef
+	ActionRef *parserlock.ActionRef
 	// Dependency is the existing pinned dep if any.
 	Dependency *lockfile.Dependency
 	// ParentNWO is the dep key of the direct action that pulls in this transitive dep (empty if direct).
@@ -92,7 +95,7 @@ type WorkflowReport struct {
 	Path     string
 	Findings []Finding
 	// ActionRefs are all action references found in the workflow.
-	ActionRefs []lockfile.ActionRef
+	ActionRefs []parserlock.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []lockfile.Dependency
 	// Inventory lists all dependencies with direct/transitive classification.

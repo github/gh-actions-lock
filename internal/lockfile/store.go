@@ -194,7 +194,7 @@ type DirectTracker struct {
 
 // NewDirectTracker records which entries of deps match one of the workflow's
 // direct refs, by NWO@Ref, at the deps' current (pre-mutation) refs.
-func NewDirectTracker(refs []ActionRef, deps []Dependency) DirectTracker {
+func NewDirectTracker(refs []parserlock.ActionRef, deps []Dependency) DirectTracker {
 	want := make(map[string]bool, len(refs))
 	for _, ref := range refs {
 		want[ref.NWO()+"@"+ref.Ref] = true

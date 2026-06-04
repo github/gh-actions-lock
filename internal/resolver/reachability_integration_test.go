@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -183,7 +184,7 @@ func TestIntegration_AnnotatedTagPeeling(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{
 		{Owner: fixtureOwner, Repo: fixtureRepo, Ref: "annotated-v1"},
 	})
 	require.NoError(t, err, "annotated tag must resolve through the peel")

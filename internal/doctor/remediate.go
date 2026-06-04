@@ -12,6 +12,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
 )
@@ -904,7 +905,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 	// Review each action one at a time. Auto-apply prior choices and internal
 	// actions silently; prompt for each external action.
-	var approved []lockfile.ActionRef
+	var approved []parserlock.ActionRef
 	for _, ref := range wr.ActionRefs {
 		key := ref.FullName() + "@" + ref.Ref // display key (preserves sub-action path)
 		depKey := ref.NWO() + "@" + ref.Ref   // dep.Key() form (NWO@Ref, runner-flat)
@@ -955,7 +956,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 		// Already a full SHA — immutable and pinned by construction. Record it
 		// without prompting; surface the matching release tag if we can find one.
-		if lockfile.IsFullSHA(ref.Ref) {
+		if parserlock.IsFullSha(ref.Ref) {
 			commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", ref.Owner, ref.Repo, sha)
 			shaLabel := rem.output.Hyperlink(sha[:12], commitURL)
 			if tag, err := rem.tagLister.BestPatchTagForSHA(ref.Owner, ref.Repo, sha); err == nil && tag != "" {
@@ -1046,7 +1047,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 // (tags, branches, versions) are preserved as-is.
 // Returns a (possibly modified) copy of the WorkflowReport with updated refs.
 func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
-	updated := make([]lockfile.ActionRef, 0, len(wr.ActionRefs))
+	updated := make([]parserlock.ActionRef, 0, len(wr.ActionRefs))
 	for _, ref := range wr.ActionRefs {
 		if !rem.isSameOwner(ref.Owner) {
 			updated = append(updated, ref)
@@ -1066,7 +1067,7 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 		}
 
 		// Bare SHA → swap to default branch. Named refs stay as-is.
-		if lockfile.IsFullSHA(ref.Ref) {
+		if parserlock.IsFullSha(ref.Ref) {
 			rem.output.Detail("  %s: using %s (default branch) instead of %s",
 				ref.FullName(), info.DefaultBranch, ref.Ref)
 			ref.Ref = info.DefaultBranch
@@ -1419,7 +1420,7 @@ func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) erro
 	// missing ref. Divert into the full tag picker so the user can choose
 	// a real tag, open the releases page, or skip.
 	owner, repo := dep.OwnerRepo()
-	if rem.prompter.IsInteractive() && owner != "" && newRef != "" && !lockfile.IsFullSHA(newRef) {
+	if rem.prompter.IsInteractive() && owner != "" && newRef != "" && !parserlock.IsFullSha(newRef) {
 		if rem.tagLister.LookupTag(owner, repo, newRef) == nil {
 			rem.output.Detail("  ref %q no longer exists upstream — pick a valid tag instead", newRef)
 			return rem.handleSHATagPicker(wr, finding, owner, repo)

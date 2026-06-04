@@ -9,6 +9,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 func TestSelectLatestTagPrefersHighestMajorTag(t *testing.T) {
@@ -33,7 +34,7 @@ func TestSelectLatestTagFallbacksWhenNoStableSemver(t *testing.T) {
 }
 
 func TestBuildResolveWithFileQuery(t *testing.T) {
-	refs := []lockfile.ActionRef{
+	refs := []parserlock.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "actions", Repo: "cache", Path: "save", Ref: "v4"},
 	}
@@ -67,7 +68,7 @@ func TestBuildResolveWithFileQuery(t *testing.T) {
 }
 
 func TestParseResolveWithFileResponse(t *testing.T) {
-	refs := []lockfile.ActionRef{
+	refs := []parserlock.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "actions", Repo: "cache", Path: "save", Ref: "v4"},
 	}
@@ -111,7 +112,7 @@ func TestParseResolveWithFileResponse(t *testing.T) {
 // reporting `ref "v1" does not exist`. Live fixture:
 // nodeselector/actions-test-fixtures has annotated tag `annotated-v1`.
 func TestBuildResolveWithFileQueryPeelsAnnotatedTags(t *testing.T) {
-	refs := []lockfile.ActionRef{
+	refs := []parserlock.ActionRef{
 		{Owner: "nodeselector", Repo: "actions-test-fixtures", Ref: "annotated-v1"},
 		{Owner: "actions", Repo: "checkout", Ref: "main"},
 		{Owner: "actions", Repo: "cache", Ref: "abc123abc123abc123abc123abc123abc1234567"},
@@ -143,7 +144,7 @@ func TestBuildResolveWithFileQueryPeelsAnnotatedTags(t *testing.T) {
 // `... on Commit { oid }` fragment matches normally and the resolver records
 // the original ref name alongside the peeled commit SHA.
 func TestParseResolveWithFileResponse_AnnotatedTagPeeled(t *testing.T) {
-	refs := []lockfile.ActionRef{
+	refs := []parserlock.ActionRef{
 		{Owner: "nodeselector", Repo: "actions-test-fixtures", Ref: "annotated-v1"},
 	}
 	aliases := map[string]int{"a0": 0}
@@ -168,7 +169,7 @@ func TestParseResolveWithFileResponse_AnnotatedTagPeeled(t *testing.T) {
 }
 
 func TestParseResolveWithFileResponseErrors(t *testing.T) {
-	refs := []lockfile.ActionRef{
+	refs := []parserlock.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "actions", Repo: "setup-go", Ref: "v6"},
 		{Owner: "actions", Repo: "cache", Ref: "v4"},
@@ -200,7 +201,7 @@ func TestParseResolveWithFileResponseErrors(t *testing.T) {
 // message instead of being collapsed into the generic "repository not found
 // or not accessible".
 func TestParseResolveWithFileResponse_SAMLSSO(t *testing.T) {
-	refs := []lockfile.ActionRef{
+	refs := []parserlock.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "unknownorg", Repo: "missing", Ref: "v1"},
 	}
@@ -269,7 +270,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 		actionYML: "name: Setup Go\nruns:\n  using: node20\n",
 	}
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "owner", Repo: "composite", Ref: "v1"},
 	})
@@ -310,7 +311,7 @@ func TestResolveAllRecursiveMultipleParents(t *testing.T) {
 		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{
 		{Owner: "owner", Repo: "compositeA", Ref: "v1"},
 		{Owner: "owner", Repo: "compositeB", Ref: "v1"},
 	})
@@ -362,7 +363,7 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	_, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
+	_, _, err := r.ResolveAllRecursive([]parserlock.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err == nil || !strings.Contains(err.Error(), "exceeded max depth 1") {
 		t.Fatalf("expected recursion depth error, got %v", err)
 	}
@@ -392,7 +393,7 @@ func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
 		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -430,7 +431,7 @@ func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
 		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -475,7 +476,7 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{
 		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "main"},
 	})
 	if err != nil {
@@ -530,7 +531,7 @@ func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
 		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]parserlock.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -645,7 +646,7 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 		t.Fatalf("NewWithTransport returned error: %v", err)
 	}
 
-	deps, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
+	deps, _, err := r.ResolveAllRecursive([]parserlock.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}

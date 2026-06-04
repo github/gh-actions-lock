@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
@@ -47,7 +48,7 @@ func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWor
 // as findings without re-loading the file.
 type ParsedWorkflow struct {
 	Path          string
-	Refs          []lockfile.ActionRef
+	Refs          []parserlock.ActionRef
 	ExistingDeps  []lockfile.Dependency
 	ParseWarnings []string
 	LoadErr       error
@@ -108,9 +109,9 @@ func ParseAll(paths []string, store *lockfile.Store, onScan func(done, total int
 // CollectResolvable returns the deduplicated union of refs and existing deps
 // across all parsed workflows. Use the returned slices to pre-warm the
 // resolver caches once before per-workflow diagnostics.
-func CollectResolvable(parsed []ParsedWorkflow) ([]lockfile.ActionRef, []lockfile.Dependency) {
+func CollectResolvable(parsed []ParsedWorkflow) ([]parserlock.ActionRef, []lockfile.Dependency) {
 	seenRef := make(map[string]bool)
-	var refs []lockfile.ActionRef
+	var refs []parserlock.ActionRef
 	for _, pw := range parsed {
 		for _, ref := range pw.Refs {
 			key := ref.FullName() + "@" + ref.Ref
@@ -278,7 +279,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	return wr
 }
 
-func buildEngineWorkflowInput(wfKey string, refs []lockfile.ActionRef) diagnostics.WorkflowInput {
+func buildEngineWorkflowInput(wfKey string, refs []parserlock.ActionRef) diagnostics.WorkflowInput {
 	uses := make([]diagnostics.UsesRef, 0, len(refs))
 	for _, ref := range refs {
 		uses = append(uses, diagnostics.UsesRef{
@@ -291,8 +292,8 @@ func buildEngineWorkflowInput(wfKey string, refs []lockfile.ActionRef) diagnosti
 	return diagnostics.WorkflowInput{Path: wfKey, Uses: uses}
 }
 
-func indexRefs(refs []lockfile.ActionRef) map[string]lockfile.ActionRef {
-	out := make(map[string]lockfile.ActionRef, len(refs))
+func indexRefs(refs []parserlock.ActionRef) map[string]parserlock.ActionRef {
+	out := make(map[string]parserlock.ActionRef, len(refs))
 	for _, ref := range refs {
 		out[ref.FullName()+"@"+ref.Ref] = ref
 	}
@@ -313,7 +314,7 @@ func indexDeps(deps []lockfile.Dependency) map[string]lockfile.Dependency {
 func translateFinding(
 	path string,
 	ef diagnostics.Finding,
-	refByKey map[string]lockfile.ActionRef,
+	refByKey map[string]parserlock.ActionRef,
 	depByKey map[string]lockfile.Dependency,
 	directNWOs map[string]bool,
 	parentMap map[string][]string,

@@ -1,6 +1,9 @@
 package doctor
 
-import "github.com/github/gh-actions-pin/internal/lockfile"
+import (
+	"github.com/github/gh-actions-pin/internal/lockfile"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
+)
 
 // sessionState tracks user decisions across multiple workflows during
 // an interactive remediation session. It allows auto-applying a prior
@@ -41,19 +44,19 @@ func (s *sessionState) recallChoice(dep *lockfile.Dependency) (string, bool) {
 }
 
 // refKey returns a session memory key for an unpinned action ref: "owner/repo@ref".
-func refKey(ref lockfile.ActionRef) string {
+func refKey(ref parserlock.ActionRef) string {
 	return ref.FullName() + "@" + ref.Ref
 }
 
 // markRefsApproved records all action refs as approved for auto-pinning.
-func (s *sessionState) markRefsApproved(refs []lockfile.ActionRef) {
+func (s *sessionState) markRefsApproved(refs []parserlock.ActionRef) {
 	for _, ref := range refs {
 		s.approvedRefs[refKey(ref)] = true
 	}
 }
 
 // allRefsApproved returns true if every ref was already approved in a prior workflow.
-func (s *sessionState) allRefsApproved(refs []lockfile.ActionRef) bool {
+func (s *sessionState) allRefsApproved(refs []parserlock.ActionRef) bool {
 	if len(refs) == 0 {
 		return false
 	}
