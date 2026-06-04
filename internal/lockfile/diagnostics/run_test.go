@@ -15,6 +15,7 @@ type stubResolver struct {
 	refs         map[string]RefResult          // key: "owner/repo@ref"
 	ancestry     map[string]AncestryStatus     // key: "owner/repo:candidate:head"
 	reachability map[string]ReachabilityStatus // key: "owner/repo:sha:ref"
+	tagObjects   map[string]string             // key: "owner/repo@sha" -> peeled commit
 }
 
 func (s *stubResolver) ResolveRef(_ context.Context, owner, repo, ref string) RefResult {
@@ -36,6 +37,14 @@ func (s *stubResolver) CheckReachability(_ context.Context, owner, repo, sha, re
 		return ReachabilityUnknown
 	}
 	return s.reachability[owner+"/"+repo+":"+sha+":"+ref]
+}
+
+func (s *stubResolver) PeelTagObject(_ context.Context, owner, repo, sha string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	commit, ok := s.tagObjects[owner+"/"+repo+"@"+sha]
+	return commit, ok
 }
 
 const (
@@ -291,10 +300,12 @@ func TestRun_MisleadingSha_TagObjectSHA(t *testing.T) {
 	r := &stubResolver{
 		refs: map[string]RefResult{
 			"actions/github-script@" + tagObjectSHA: {
-				Status:    RefStatusResolved,
-				Sha:       peeledCommit,
-				Immutable: true,
+				Status: RefStatusResolved,
+				Sha:    peeledCommit,
 			},
+		},
+		tagObjects: map[string]string{
+			"actions/github-script@" + tagObjectSHA: peeledCommit,
 		},
 	}
 	got := Run(context.Background(), lf, []WorkflowInput{wf}, Options{Resolver: r})

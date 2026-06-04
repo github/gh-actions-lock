@@ -17,20 +17,9 @@ const (
 
 // RefResult is the resolver's answer for ResolveRef.
 type RefResult struct {
-	Status RefStatus
-	Sha    string // populated when Status == RefStatusResolved — the resolved commit OID
-	// Immutable reports whether the input ref is content-addressed and
-	// therefore safe regardless of any divergence from Sha. True when:
-	//   - the input ref is itself a commit OID that matches Sha, or
-	//   - the input ref is an annotated tag object SHA (including chains
-	//     of tag-of-tag objects) that peels to Sha.
-	// False when the input ref is a SHA-shaped string that resolves to a
-	// commit via a mutable ref (a branch or branch-shaped name) — the
-	// only shape MISLEADING_SHA / CheckSHARefMismatches should flag.
-	// Non-hex refs (tag/branch names) are not subject to those checks at
-	// all; this field is only meaningful for hex inputs.
-	Immutable bool
-	RefType   string // optional: "tag" | "branch" | "commit"
+	Status  RefStatus
+	Sha     string // populated when Status == RefStatusResolved — the resolved commit OID
+	RefType string // optional: "tag" | "branch" | "commit"
 }
 
 // AncestryStatus is the outcome of CheckAncestry(candidate, head).
@@ -57,14 +46,20 @@ const (
 	ReachabilityUnreachable
 )
 
-// Resolver answers the three questions the engine needs to do
-// resolver-bound checks. All methods take a context so hosts can apply
-// timeouts. Implementations should return *Unknown for any failure rather
-// than an error; the engine has no error path here.
+// Resolver answers the questions the engine needs to do resolver-bound
+// checks. All methods take a context so hosts can apply timeouts.
+// Implementations should return *Unknown / (",", false) for any failure
+// rather than an error; the engine has no error path here.
 type Resolver interface {
 	ResolveRef(ctx context.Context, owner, repo, ref string) RefResult
 	CheckAncestry(ctx context.Context, owner, repo, candidateSha, headSha string) AncestryStatus
 	CheckReachability(ctx context.Context, owner, repo, sha, ref string) ReachabilityStatus
+	// PeelTagObject reports whether a hex SHA names an annotated tag
+	// object (including chains of tag-of-tag), and if so returns the
+	// commit OID it ultimately points at. Used by checkMisleadingSha to
+	// distinguish a branch named after a SHA (the forgery shape) from a
+	// content-addressed tag-object pin (legitimate).
+	PeelTagObject(ctx context.Context, owner, repo, sha string) (commit string, ok bool)
 }
 
 // ActionFileProvider fetches action.yml (or action.yaml) contents for a
