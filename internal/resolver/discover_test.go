@@ -127,6 +127,12 @@ func TestDiscoverContaining_BranchOnly(t *testing.T) {
 
 func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 	reg := &httpmock.Registry{}
+	// Phase 1: listProtectedBranches (query contains "protected=true") returns empty.
+	reg.Register(
+		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
+		httpmock.JSONResponse(branchListResponse()),
+	)
+	// Phase 2: listBranches (full listing) also returns empty → impostor error.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
 		httpmock.JSONResponse(branchListResponse()),
@@ -180,24 +186,22 @@ func TestDiscoverContainingDefault_PrefersDefaultBranch(t *testing.T) {
 }
 
 func TestDiscoverContaining_AutoDiscoversDefaultAndPrefersProtected(t *testing.T) {
-	// No hintRef, no exact-match branch. Lex order would try aaa first,
-	// but we expect: main (default, fetched from repo metadata) →
-	// releases/v4 (protected) → aaa (unprotected). main and releases/v4
-	// don't contain "abc"; releases/v4 does. So compare order matters:
-	// main first (404 ancestry), then releases/v4 (match).
+	// No hintRef, no exact-match branch. Protected branches are checked in
+	// phase 1: main (default) is tried first, then releases/v4. Unprotected
+	// branches (aaa, zzz) are not in the protected-branch API response and
+	// so are never compared. main doesn't contain abc; releases/v4 does.
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponseProtected(
-			"aaa", "aaa000", false,
-			"main", "m000", true,
-			"releases/v4", "rv4000", true,
-			"zzz", "z000", false,
-		)),
-	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout$`),
 		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+	)
+	// Phase 1: listProtectedBranches returns only the truly-protected branches.
+	reg.Register(
+		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
+		httpmock.JSONResponse(branchListResponseProtected(
+			"main", "m000", true,
+			"releases/v4", "rv4000", true,
+		)),
 	)
 	// First compare hit: abc...m000 (default branch) — not an ancestor.
 	reg.Register(
@@ -262,19 +266,28 @@ func TestDiscoverContaining_UnprotectedOnlyFallsBack(t *testing.T) {
 
 func TestDiscoverContaining_CommitOnlyOnUnprotectedBranchFallsBack(t *testing.T) {
 	// main is protected but does NOT contain abc. dev is unprotected and
-	// contains abc. Protected-first fails → fallback finds dev.
+	// contains abc. Phase 1 scans protected branches only (main); compare
+	// shows abc is not on main. Phase 2 full scan finds dev via exact match.
 	reg := &httpmock.Registry{}
+	// Phase 1: listProtectedBranches returns only main.
+	reg.Register(
+		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
+		httpmock.JSONResponse(branchListResponseProtected(
+			"main", "m000", true,
+		)),
+	)
+	// Phase 1 compare: abc not an ancestor of main.
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/compare/abc\.\.\.m000`),
+		httpmock.JSONResponse(compareAncestorResponse("0000")),
+	)
+	// Phase 2: full branch listing includes unprotected dev.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
 		httpmock.JSONResponse(branchListResponseProtected(
 			"main", "m000", true,
 			"dev", "abc", false,
 		)),
-	)
-	// First pass scans main (protected) via Compare — not an ancestor.
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/compare/abc\.\.\.m000`),
-		httpmock.JSONResponse(compareAncestorResponse("0000")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
@@ -370,38 +383,6 @@ func TestNormalizeContaining_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 	}
 	if deps[0].Tag != "v4" || deps[0].Branch != "main" {
 		t.Errorf("expected Tag=v4 Branch=main, got Tag=%q Branch=%q", deps[0].Tag, deps[0].Branch)
-	}
-	reg.Verify(t)
-}
-
-func TestNormalizeContaining_DisableReachabilityDoesNotAffectBranchDiscovery(t *testing.T) {
-	// DisableReachability only gates CheckReachability, not NormalizeContaining.
-	// Branch discovery for lockfile metadata always runs.
-	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "abc")),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse("v4", "abc")),
-	)
-
-	r, err := NewWithTransport("github.com", reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.DisableReachability = true
-
-	deps := []lockfile.Dependency{
-		{NWO: "actions/checkout", Ref: "v4", SHA: "abc"},
-	}
-	_, err = r.NormalizeContaining(deps)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if deps[0].Branch != "main" {
-		t.Errorf("expected Branch=main even when DisableReachability=true, got %q", deps[0].Branch)
 	}
 	reg.Verify(t)
 }

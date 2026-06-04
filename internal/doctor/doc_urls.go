@@ -13,6 +13,13 @@ package doctor
 
 const securityHardeningBase = "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions"
 
+// PublisherTagReleasesDocURL points to GitHub's guidance for action publishers
+// on tagging releases from a branch. It's surfaced alongside imposter-commit
+// findings to help users escalate to the action's maintainer when the pinned
+// SHA is orphaned (off any branch) — a publisher behavior the consumer can't
+// fix locally beyond re-pinning to a sane release.
+const PublisherTagReleasesDocURL = "https://docs.github.com/en/actions/how-tos/create-and-publish-actions/manage-custom-actions#using-tags-for-release-management"
+
 // docURLs maps every Category that can appear on a Finding to its
 // documentation URL. Categories representing "no issue" (Valid, RunOnly)
 // have no URL — they aren't rendered as findings.

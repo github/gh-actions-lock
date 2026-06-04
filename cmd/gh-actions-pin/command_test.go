@@ -178,7 +178,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -382,7 +382,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
@@ -431,7 +431,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
@@ -481,7 +481,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
@@ -531,7 +531,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -597,7 +597,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
@@ -659,7 +659,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref_moved is a warning, should not error")
 
@@ -715,7 +715,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings", workflowPath,
+		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref_moved is a warning, should not error")
 
@@ -785,7 +785,7 @@ jobs:
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=workflows", workflowPath,
+		"check", "--rescan", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -860,7 +860,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=workflows", workflowPath,
+		"check", "--rescan", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -911,7 +911,7 @@ jobs:
 
 	// --json with no value should use the default fields (valid,findings,workflows)
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json", workflowPath,
+		"check", "--rescan", "--json", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -932,15 +932,9 @@ func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	// Single mock — the resolver caches, so both workflows resolve via one query.
-	reg.Register(
-		httpmock.GraphQLForRepo("actions", "checkout"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-			},
-		}),
-	)
+	// No HTTP stub: both workflows are fully recorded in the lockfile, so
+	// the fast path skips every network round-trip. The dedup logic under
+	// test operates purely on the inventory built from disk.
 
 	wf1 := writeTempWorkflow(t, `
 name: ci

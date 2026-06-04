@@ -2,6 +2,7 @@ package diagnostics
 
 import (
 	"fmt"
+	"strings"
 
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
@@ -149,14 +150,31 @@ func checkStale(wf WorkflowInput, depPins []parserlock.Pin) []Finding {
 		return nil
 	}
 	used := make(map[string]bool, len(wf.Uses))
+	// Secondary index: workflow steps that are already SHA-pinned use the
+	// full commit hash as their ref. Record "lowercase-nwo@lowercase-sha"
+	// so we don't flag the lockfile pin (which stores the semver tag as
+	// its Ref) as stale when the uses: line has been rewritten to a SHA.
+	usedBySHA := make(map[string]bool, len(wf.Uses))
 	for _, u := range wf.Uses {
 		used[u.IndexKey()] = true
+		nwoLower := strings.ToLower(u.Owner + "/" + u.Repo)
+		usedBySHA[nwoLower+"@"+strings.ToLower(u.Ref)] = true
 	}
 
 	var out []Finding
 	for _, p := range depPins {
 		if used[p.IndexKey()] {
 			continue
+		}
+		// If the workflow already pins this action by its commit SHA (i.e.
+		// the uses: line was rewritten to the full hash), the lockfile entry
+		// is still valid — the SHA just appears in the uses: ref instead of
+		// the semver tag. Skip so we don't report a false stale on every run.
+		if p.Hex != "" {
+			nwoLower := strings.ToLower(p.NWO)
+			if usedBySHA[nwoLower+"@"+strings.ToLower(p.Hex)] {
+				continue
+			}
 		}
 		f := findingFromPin(wf.Path, p)
 		f.Code = CodeStale

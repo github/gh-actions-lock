@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
+	"golang.org/x/sync/singleflight"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,11 +35,17 @@ type MetadataResolver interface {
 // dependencies: entries — entries still referenced by an out-of-scope workflow are
 // preserved, so partial invocations (e.g. `upgrade workflows/foo.yml`) stay
 // noop on unrelated workflows.
+//
+// Store is safe for concurrent use: Set/Save/Get/File/AllDeps/lookupIDs all
+// take the same mutex, allowing parallel pin and upgrade workers to share
+// a single store instance without external synchronization.
 type Store struct {
+	mu       sync.Mutex
 	repoRoot string
 	file     parserlock.File
 	meta     MetadataResolver
 	idCache  map[string][2]int64
+	idSF     singleflight.Group
 }
 
 // OpenStore reads the lockfile at repoRoot, returning an empty in-memory file
@@ -51,7 +59,8 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 	case err == nil:
 		file, err = parserlock.Parse(contents)
 		if err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", Path, err)
+			// Corrupt or unrecognized lockfile — treat as empty and overwrite.
+			file = parserlock.File{Version: parserlock.Version}
 		}
 	case errors.Is(err, os.ErrNotExist):
 		file = parserlock.File{Version: parserlock.Version}
@@ -87,7 +96,9 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 		canon := pin.String()
 		normalizedActions[canon] = action
 		if action.OwnerID != 0 && action.RepoID != 0 {
-			s.idCache[pin.Owner+"/"+pin.Repo] = [2]int64{action.OwnerID, action.RepoID}
+			// idCache is keyed by lowercase owner/repo to match lookupIDs and the
+			// canonical pin reader; mixed-case keys here would silently miss.
+			s.idCache[strings.ToLower(pin.Owner+"/"+pin.Repo)] = [2]int64{action.OwnerID, action.RepoID}
 		}
 	}
 	s.file.Actions = normalizedActions
@@ -116,12 +127,16 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 // consumers that drive the workflow-parser diagnostics engine directly and
 // need the whole file (workflow keys + actions metadata) in one shot.
 func (s *Store) File() parserlock.File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.file
 }
 
 // Get returns the dependencies recorded for workflowKey (e.g.
 // ".github/workflows/ci.yml"). Returns nil when the workflow has no entry.
 func (s *Store) Get(workflowKey string) ([]Dependency, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	deps, ok := s.file.Workflows[workflowKey]
 	if !ok {
 		return nil, nil
@@ -142,6 +157,8 @@ func (s *Store) Get(workflowKey string) ([]Dependency, error) {
 // undefined. Intended for callers that need the union of recorded pins
 // across all workflows (e.g. seeding resolver caches on startup).
 func (s *Store) AllDeps() []Dependency {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]Dependency, 0, len(s.file.Actions))
 	for raw, action := range s.file.Actions {
 		pin, ok := parserlock.ParsePin(raw)
@@ -225,6 +242,28 @@ func (t DirectTracker) Keys(deps []Dependency) map[string]bool {
 // Resolution of owner/repo numeric IDs happens lazily per NWO and is cached
 // for the lifetime of the store.
 func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string][]string, directKeys map[string]bool) error {
+	// Resolve repo IDs for every unique owner/repo BEFORE taking s.mu so
+	// concurrent pin workers don't serialize on the network round-trip.
+	// lookupIDs is safe to call without s.mu and dedups in-flight fetches
+	// for the same key via singleflight.
+	seenRepos := make(map[string]struct{}, len(deps))
+	for _, d := range deps {
+		pin, err := dependencyToPin(d)
+		if err != nil {
+			return err
+		}
+		k := pin.Owner + "/" + pin.Repo
+		if _, ok := seenRepos[k]; ok {
+			continue
+		}
+		seenRepos[k] = struct{}{}
+		if _, err := s.lookupIDs(pin.Owner, pin.Repo); err != nil {
+			return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	directPins := make([]string, 0)
 	seenDirect := map[string]bool{}
 	// keyToPin: Dependency.Key() (NWO@Ref) → canonical pin (NWO@Ref:algo-hex).
@@ -285,9 +324,11 @@ func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string]
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
-		ids, err := s.lookupIDs(pin.Owner, pin.Repo)
-		if err != nil {
-			return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
+		// IDs were pre-resolved above (outside the mutex); read from cache
+		// directly so we don't recursively re-acquire s.mu.
+		ids, ok := s.idCache[strings.ToLower(pin.Owner+"/"+pin.Repo)]
+		if !ok {
+			return fmt.Errorf("resolving repo IDs for %s/%s: not in cache after pre-resolve", pin.Owner, pin.Repo)
 		}
 		var uses []string
 		if children, ok := parentToChildren[pinKey]; ok && len(children) > 0 {
@@ -315,6 +356,8 @@ func (s *Store) Set(workflowKey string, deps []Dependency, parentMap map[string]
 // entries (pins referenced by no workflow). When the in-memory file is empty
 // after GC, the on-disk file is removed.
 func (s *Store) Save() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Mark transitive closure reachable from any workflow as used. Walk the
 	// per-action `uses:` graph so deduplicated transitive entries don't get
 	// GC'd as orphans.
@@ -366,24 +409,51 @@ func (s *Store) Save() error {
 	return os.Rename(tmp, full)
 }
 
+// lookupIDs resolves the (owner, repo) numeric IDs, caching the result.
+// Safe to call without s.mu held: cache hits are read under a brief lock,
+// and concurrent misses for the same key are coalesced via singleflight
+// so we issue at most one network request per repo.
 func (s *Store) lookupIDs(owner, repo string) ([2]int64, error) {
-	key := owner + "/" + repo
+	// Cache key is always lowercase: callers mix canonical (lowercased) and
+	// raw NWOs, and we MUST agree across all idCache reads/writes or pins
+	// silently miss the cache after pre-resolve.
+	key := strings.ToLower(owner + "/" + repo)
+	s.mu.Lock()
 	if ids, ok := s.idCache[key]; ok {
+		s.mu.Unlock()
 		return ids, nil
 	}
+	s.mu.Unlock()
+
 	if s.meta == nil {
 		return [2]int64{}, fmt.Errorf("metadata resolver not configured")
 	}
-	ownerID, repoID, err := s.meta.RepoIDs(owner, repo)
+
+	res, err, _ := s.idSF.Do(key, func() (any, error) {
+		s.mu.Lock()
+		if ids, ok := s.idCache[key]; ok {
+			s.mu.Unlock()
+			return ids, nil
+		}
+		s.mu.Unlock()
+
+		ownerID, repoID, err := s.meta.RepoIDs(owner, repo)
+		if err != nil {
+			return [2]int64{}, err
+		}
+		if ownerID == 0 || repoID == 0 {
+			return [2]int64{}, fmt.Errorf("metadata resolver returned zero IDs for %s", key)
+		}
+		ids := [2]int64{ownerID, repoID}
+		s.mu.Lock()
+		s.idCache[key] = ids
+		s.mu.Unlock()
+		return ids, nil
+	})
 	if err != nil {
 		return [2]int64{}, err
 	}
-	if ownerID == 0 || repoID == 0 {
-		return [2]int64{}, fmt.Errorf("metadata resolver returned zero IDs for %s", key)
-	}
-	ids := [2]int64{ownerID, repoID}
-	s.idCache[key] = ids
-	return ids, nil
+	return res.([2]int64), nil
 }
 
 // WorkflowKeyFromPath converts a workflow path discovered on disk (relative

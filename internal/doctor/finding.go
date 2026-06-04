@@ -63,6 +63,18 @@ type Finding struct {
 	// engine adapter so it's parity-aligned with the editor's
 	// codeDescription link; "" when no URL is mapped.
 	DocURL string
+	// SaneSuggestionTag is the most recent stable tag whose commit is
+	// reachable from a branch, populated for unreachable-SHA findings
+	// (CategoryImposterCommit) when one can be found. Empty otherwise.
+	SaneSuggestionTag string
+	// SaneSuggestionSHA is the commit SHA the suggested tag points to.
+	SaneSuggestionSHA string
+	// SaneSuggestionSearched is true when the sane-release walk ran for
+	// this finding (regardless of outcome). Lets renderers distinguish
+	// "we didn't look" from "we looked and found nothing" — the latter
+	// signals the publisher's whole release flow detaches commits and
+	// warrants escalation rather than a re-pin.
+	SaneSuggestionSearched bool
 }
 
 // InventoryEntry describes a single dependency with context.

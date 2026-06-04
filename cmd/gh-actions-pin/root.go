@@ -103,6 +103,7 @@ $ gh actions-pin upgrade --action actions/checkout
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
+	cmd.Flags().BoolVar(&opts.Rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	cmd.AddCommand(newCheckCmd(f))
 	cmd.AddCommand(newUpgradeCmd(f))
 
@@ -114,6 +115,11 @@ func Execute() int {
 	f := NewDefaultFactory()
 	if err := NewRootCmd(f).Execute(); err != nil {
 		if !errors.Is(err, errSilent) {
+			// Detach any narration log sink first: it may have been pointed at
+			// io.Discard during the run (the JSON-less "the terminal owns the
+			// spinners" mode), in which case routing the error through
+			// f.UI.Error would silently swallow it. We want the error visible.
+			f.UI.SetLog(nil)
 			f.UI.Error("%s", err)
 		}
 		return 1

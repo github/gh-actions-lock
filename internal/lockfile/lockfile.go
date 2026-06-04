@@ -3,6 +3,10 @@
 // dependencies: section, and parses action.yml metadata for composite actions.
 package lockfile
 
+// TODO seems like we're duplicating stuff that lives in the pkg/lockfile
+// TODO split out per type maybe this file is big and complicated & we shoudl consider exporting these in pkg/lockfile
+// TODO for the workflow type we should be clear that it is only internal, that should not be somethign someoen can use because it's partial.
+
 import (
 	"fmt"
 	"os"

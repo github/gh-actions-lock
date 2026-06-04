@@ -6,15 +6,21 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
+
+// upgradeWorkers bounds concurrent per-file upgrade workers. Matches the pin
+// worker pool size in internal/doctor so concurrency stays predictable across
+// commands.
+const upgradeWorkers = 8
 
 type upgradeOptions struct {
 	WorkflowPaths []string
@@ -123,7 +129,6 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	if err != nil {
 		return err
 	}
-	r.DisableReachability = !doctor.ReachabilityEnabled()
 
 	store, err := lockfile.OpenStore(".", r)
 	if err != nil {
@@ -140,7 +145,8 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	// Attach a run log so detailed narration goes to a file, leaving the
 	// terminal to the spinner and a final summary. Skipped in --json mode.
 	var logger *runlog.Logger
-	if opts.JSONFields == "" {
+	parallel := opts.JSONFields == ""
+	if parallel {
 		if lg, lerr := runlog.Open(); lerr == nil {
 			logger = lg
 			f.UI.SetLog(logger)
@@ -148,20 +154,69 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 		}
 		label := fmt.Sprintf("Upgrading across %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
 		f.UI.StartProgress(label)
-		r.ProgressFn = func(detail string) { f.UI.UpdateProgress(detail) }
+		// Workers own the detail area via SetWorkerStatus per slot; the
+		// resolver's per-step progress would race with that, so silence it.
+		r.ProgressFn = nil
+		f.UI.ClearWorkerStatuses()
+		defer f.UI.ClearWorkerStatuses()
 	}
-	for i, workflowPath := range opts.WorkflowPaths {
-		if opts.JSONFields == "" {
-			f.UI.UpdateLabel(fmt.Sprintf("[%d/%d] %s", i+1, total, workflowPath))
-			f.UI.UpdateProgress("")
-		}
-		changes, err := upgradeOneFile(f, opts, workflowPath, r, store, targets)
-		if err != nil {
-			f.UI.Error("%s: %s", workflowPath, err)
-			hadError = true
-		}
-		allChanges = append(allChanges, changes...)
+
+	workers := upgradeWorkers
+	if workers > total {
+		workers = total
 	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	type job struct {
+		slot int
+		path string
+	}
+	jobs := make(chan job, total)
+	for _, p := range opts.WorkflowPaths {
+		jobs <- job{path: p}
+	}
+	close(jobs)
+
+	var (
+		mu   sync.Mutex
+		done atomic.Int64
+		wg   sync.WaitGroup
+	)
+	updateLabel := func() {
+		if !parallel {
+			return
+		}
+		f.UI.UpdateLabel(fmt.Sprintf("[%d/%d] Upgrading workflows", done.Load(), total))
+	}
+	updateLabel()
+
+	for slot := 0; slot < workers; slot++ {
+		wg.Add(1)
+		go func(slot int) {
+			defer wg.Done()
+			for j := range jobs {
+				if parallel {
+					f.UI.SetWorkerStatus(slot, "→ "+j.path)
+				}
+				changes, err := upgradeOneFile(f, opts, j.path, r, store, targets)
+				mu.Lock()
+				if err != nil {
+					f.UI.Error("%s: %s", j.path, err)
+					hadError = true
+				}
+				allChanges = append(allChanges, changes...)
+				mu.Unlock()
+				done.Add(1)
+				updateLabel()
+				if parallel {
+					f.UI.SetWorkerStatus(slot, "")
+				}
+			}
+		}(slot)
+	}
+	wg.Wait()
 
 	if opts.Write {
 		if err := store.Save(); err != nil {
@@ -299,7 +354,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		f.UI.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
-	deps, err := r.ResolveAllRecursive(upgradedRefs)
+	deps, parentMap, err := r.ResolveAllRecursive(upgradedRefs)
 	if err != nil {
 		return nil, fmt.Errorf("resolving actions: %w", err)
 	}
@@ -329,7 +384,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 			parentRewrites[preKeys[i]] = newKey
 		}
 	}
-	r.RekeyParentMap(parentRewrites)
+	parentMap = resolver.RekeyParentMap(parentMap, parentRewrites)
 
 	// Discover containing tag/branch for every resolved commit and merge
 	// any further rewrites (typically @sha → @tag) into updatedContent.
@@ -355,7 +410,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 			normParentRewrites[preNormKeys[i]] = newKey
 		}
 	}
-	r.RekeyParentMap(normParentRewrites)
+	parentMap = resolver.RekeyParentMap(parentMap, normParentRewrites)
 
 	diff := lockfile.DiffDeps(existingDeps, deps)
 	var changes []jsonUpgradeChange
@@ -385,7 +440,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return nil, fmt.Errorf("writing file: %w", err)
 	}
 
-	if err := store.Set(wfKey, deps, r.ParentMap(), directTracker.Keys(deps)); err != nil {
+	if err := store.Set(wfKey, deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return nil, fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 

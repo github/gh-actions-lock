@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/lockfile/diagnostics"
@@ -13,43 +14,167 @@ import (
 // It performs no output — purely analytical. The optional onWorkflow callback
 // is invoked before each workflow is diagnosed, carrying 1-based progress so
 // callers can render an [i/N] indicator.
+//
+// Diagnose is a backward-compatible wrapper that runs ParseAll, pre-resolves
+// the union of refs/deps via the resolver (cached), and then DiagnoseParsed.
+// Most callers should drive the three phases directly to control the UI:
+//
+//	parsed := doctor.ParseAll(paths, store, onScan)
+//	refs, deps := doctor.CollectResolvable(parsed)
+//	_, _ = r.ResolveAllRecursive(refs)
+//	_ = r.CheckReachabilityAll(deps)
+//	report := doctor.DiagnoseParsed(parsed, r, store)
 func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
-	report := &Report{}
+	var onScan func(done, total int, path string)
+	if len(onWorkflow) > 0 {
+		onScan = onWorkflow[0]
+	}
+	parsed := ParseAll(paths, store, onScan)
+	if r != nil {
+		refs, deps := CollectResolvable(parsed)
+		if len(refs) > 0 {
+			_, _, _ = r.ResolveAllRecursive(refs)
+		}
+		if len(deps) > 0 {
+			_ = r.CheckReachabilityAll(deps)
+		}
+	}
+	return DiagnoseParsed(parsed, r, store)
+}
+
+// ParsedWorkflow holds the per-workflow parse result that both phases need.
+// LoadErr / DepsErr capture early failures so DiagnoseParsed can surface them
+// as findings without re-loading the file.
+type ParsedWorkflow struct {
+	Path          string
+	Refs          []lockfile.ActionRef
+	ExistingDeps  []lockfile.Dependency
+	ParseWarnings []string
+	LoadErr       error
+	DepsErr       error
+	// TrustLockfile, when true, instructs DiagnoseParsed to run this
+	// workflow's diagnostics with a nil resolver. Network-bound checks
+	// (REF_MOVED, IMPOSTER_COMMIT) are skipped and the engine relies on
+	// purely structural validation against the on-disk lockfile. Caller
+	// is asserting "this is already pinned and I trust the prior
+	// verification" — typically set on the fast path when every direct
+	// ref in the workflow is already recorded in the lockfile.
+	TrustLockfile bool
+	// SkipReachWhenUnchanged, when true, instructs DiagnoseParsed to skip
+	// the per-dep reachability network call for any ExistingDep whose
+	// (NWO, Ref, SHA) matches an entry in the freshly-resolved live deps
+	// for this workflow. A Reachable result is synthesized in place. This
+	// is the per-workflow analogue of the cmd-level fast path: when at
+	// least one direct ref is new/changed (so the workflow couldn't be
+	// fully trusted), the remaining unchanged pins still don't need a
+	// fresh network reachability sweep on every run. Callers should leave
+	// this false when --rescan or an equivalent "verify everything" flag
+	// is in effect.
+	SkipReachWhenUnchanged bool
+}
+
+// ParseAll loads and parses every workflow path, returning a slice in input
+// order. onScan, if non-nil, fires with 1-based progress before each workflow
+// is parsed so the UI can render [i/N] without leaking resolver detail.
+func ParseAll(paths []string, store *lockfile.Store, onScan func(done, total int, path string)) []ParsedWorkflow {
 	total := len(paths)
+	out := make([]ParsedWorkflow, 0, total)
 	for i, path := range paths {
-		for _, fn := range onWorkflow {
-			if fn != nil {
-				fn(i+1, total, path)
+		if onScan != nil {
+			onScan(i+1, total, path)
+		}
+		pw := ParsedWorkflow{Path: path}
+		wf, err := lockfile.Load(path)
+		if err != nil {
+			pw.LoadErr = err
+			out = append(out, pw)
+			continue
+		}
+		pw.Refs, _, pw.ParseWarnings = wf.ExtractActionRefs()
+		if len(pw.Refs) > 0 {
+			wfKey := lockfile.WorkflowKeyFromPath(path)
+			deps, depsErr := store.Get(wfKey)
+			if depsErr != nil {
+				pw.DepsErr = depsErr
+			} else {
+				pw.ExistingDeps = deps
 			}
 		}
-		wr := diagnoseOneWorkflow(path, r, store)
-		report.Workflows = append(report.Workflows, wr)
+		out = append(out, pw)
+	}
+	return out
+}
+
+// CollectResolvable returns the deduplicated union of refs and existing deps
+// across all parsed workflows. Use the returned slices to pre-warm the
+// resolver caches once before per-workflow diagnostics.
+func CollectResolvable(parsed []ParsedWorkflow) ([]lockfile.ActionRef, []lockfile.Dependency) {
+	seenRef := make(map[string]bool)
+	var refs []lockfile.ActionRef
+	for _, pw := range parsed {
+		for _, ref := range pw.Refs {
+			key := ref.FullName() + "@" + ref.Ref
+			if seenRef[key] {
+				continue
+			}
+			seenRef[key] = true
+			refs = append(refs, ref)
+		}
+	}
+	seenDep := make(map[string]bool)
+	var deps []lockfile.Dependency
+	for _, pw := range parsed {
+		for _, dep := range pw.ExistingDeps {
+			key := dep.Key()
+			if seenDep[key] {
+				continue
+			}
+			seenDep[key] = true
+			deps = append(deps, dep)
+		}
+	}
+	return refs, deps
+}
+
+// DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.
+// Assumes the resolver caches have already been warmed (calls into the
+// resolver will hit cache and stay silent). Returns a Report aggregating per-
+// workflow findings in input order.
+func DiagnoseParsed(parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) *Report {
+	report := &Report{}
+	for _, pw := range parsed {
+		effR := r
+		if pw.TrustLockfile {
+			// Disk-only validation: caller has asserted the lockfile is
+			// trusted for this workflow, so no network round-trips. Engine
+			// falls back to structural-only checks for this entry.
+			effR = nil
+		}
+		report.Workflows = append(report.Workflows, diagnoseOneParsed(pw, effR, store))
 	}
 	return report
 }
 
-func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
-	wr := WorkflowReport{Path: path}
+func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
+	wr := WorkflowReport{Path: pw.Path}
 
-	wf, err := lockfile.Load(path)
-	if err != nil {
+	if pw.LoadErr != nil {
 		wr.Findings = append(wr.Findings, Finding{
-			WorkflowPath: path,
+			WorkflowPath: pw.Path,
 			Category:     CategoryNotPinned,
 			Severity:     SeverityError,
-			Detail:       fmt.Sprintf("failed to load workflow: %s", err),
+			Detail:       fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
 			DocURL:       DocURLFor(CategoryNotPinned),
 		})
 		return wr
 	}
 
-	refs, _, parseWarnings := wf.ExtractActionRefs()
-	wr.ActionRefs = refs
-	wr.ParseWarnings = parseWarnings
+	wr.ActionRefs = pw.Refs
+	wr.ParseWarnings = pw.ParseWarnings
 
-	if len(refs) == 0 {
+	if len(pw.Refs) == 0 {
 		wr.Findings = append(wr.Findings, Finding{
-			WorkflowPath: path,
+			WorkflowPath: pw.Path,
 			Category:     CategoryRunOnly,
 			Severity:     SeverityOK,
 			Detail:       "no action references found",
@@ -57,36 +182,35 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 		return wr
 	}
 
-	wfKey := lockfile.WorkflowKeyFromPath(path)
-	existingDeps, depsErr := store.Get(wfKey)
-	if depsErr != nil {
+	if pw.DepsErr != nil {
 		wr.Findings = append(wr.Findings, Finding{
-			WorkflowPath: path,
+			WorkflowPath: pw.Path,
 			Category:     CategoryNotPinned,
 			Severity:     SeverityError,
-			Detail:       fmt.Sprintf("failed to read dependencies: %s", depsErr),
+			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
 			Remediation:  "fix or regenerate the dependencies: section with `gh actions-pin`",
 			DocURL:       DocURLFor(CategoryNotPinned),
 		})
 		return wr
 	}
-	wr.Deps = existingDeps
+	wr.Deps = pw.ExistingDeps
 
-	directNWOs := make(map[string]bool, len(refs))
-	for _, ref := range refs {
+	directNWOs := make(map[string]bool, len(pw.Refs))
+	for _, ref := range pw.Refs {
 		directNWOs[ref.NWO()] = true
 	}
 
-	// Resolve live state: used to populate the inventory parent map and to
-	// prime the engine adapter. Failure degrades to structural-only checks
-	// for any refs that couldn't be resolved — partial results are kept.
+	// Resolve live state: hits cache when ParseAll's caller pre-warmed the
+	// resolver. Failure degrades to structural-only checks for any refs that
+	// couldn't be resolved — partial results are kept.
 	var liveDeps []lockfile.Dependency
+	var resolvedParents resolver.ParentMap
 	if r != nil {
 		var resolveErr error
-		liveDeps, resolveErr = r.ResolveAllRecursive(refs)
+		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(pw.Refs)
 		if resolveErr != nil {
 			wr.Findings = append(wr.Findings, Finding{
-				WorkflowPath: path,
+				WorkflowPath: pw.Path,
 				Category:     CategoryValid,
 				Severity:     SeverityWarning,
 				Detail:       fmt.Sprintf("could not re-resolve actions: %s", resolveErr),
@@ -94,25 +218,29 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 		}
 	}
 
-	for _, dep := range existingDeps {
+	for _, dep := range pw.ExistingDeps {
 		owner, repo := dep.OwnerRepo()
 		wr.Inventory = append(wr.Inventory, InventoryEntry{
 			Dep:    dep,
-			File:   path,
+			File:   pw.Path,
 			Direct: directNWOs[owner+"/"+repo],
 		})
 	}
 	parentMap := map[string][]string{}
 	if r != nil {
-		parentMap = r.ParentMap()
+		parentMap = resolvedParents
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 
-	// Run the portable diagnostics engine.
-	wfInput := buildEngineWorkflowInput(wfKey, refs)
+	wfKey := lockfile.WorkflowKeyFromPath(pw.Path)
+	wfInput := buildEngineWorkflowInput(wfKey, pw.Refs)
 	var reach []resolver.ReachabilityResult
-	if r != nil && !r.DisableReachability && len(existingDeps) > 0 {
-		reach = r.CheckReachabilityAll(existingDeps)
+	if r != nil && len(pw.ExistingDeps) > 0 {
+		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
+		reach = trusted
+		if len(toCheck) > 0 {
+			reach = append(reach, r.CheckReachabilityAll(toCheck)...)
+		}
 	}
 	var engineRes diagnostics.Resolver
 	if r != nil && liveDeps != nil {
@@ -125,26 +253,22 @@ func diagnoseOneWorkflow(path string, r *resolver.Resolver, store *lockfile.Stor
 		diagnostics.Options{Resolver: engineRes},
 	)
 
-	refByKey := indexRefs(refs)
-	depByKey := indexDeps(existingDeps)
+	refByKey := indexRefs(pw.Refs)
+	depByKey := indexDeps(pw.ExistingDeps)
 	for _, ef := range engineFindings {
-		// Engine's stale check doesn't know about composite-expanded
-		// transitive deps — suppress those false positives here.
 		if ef.Code == diagnostics.CodeStale && isTransitivePin(ef, depByKey, parentMap) {
 			continue
 		}
-		wr.Findings = append(wr.Findings, translateFinding(path, ef, refByKey, depByKey, directNWOs, parentMap))
+		wr.Findings = append(wr.Findings, translateFinding(pw.Path, ef, refByKey, depByKey, directNWOs, parentMap))
 	}
 
-	// Reachability complement: engine emits imposter for direct uses only,
-	// and stays silent on Unknown. Cover transitive deps + Unknown for all.
 	if len(reach) > 0 {
-		wr.Findings = append(wr.Findings, reachabilityComplementFindings(path, reach, existingDeps, directNWOs, parentMap, wr.Findings)...)
+		wr.Findings = append(wr.Findings, reachabilityComplementFindings(pw.Path, reach, pw.ExistingDeps, directNWOs, parentMap, wr.Findings)...)
 	}
 
 	if !hasIssues(wr.Findings) {
 		wr.Findings = append(wr.Findings, Finding{
-			WorkflowPath: path,
+			WorkflowPath: pw.Path,
 			Category:     CategoryValid,
 			Severity:     SeverityOK,
 			Detail:       "all dependencies pinned and verified",
@@ -209,19 +333,24 @@ func translateFinding(
 		fullName += "/" + ef.Path
 	}
 	key := fullName + "@" + ef.Ref
+	// depByKey is indexed by dep.Key() = dep.NWO+"@"+dep.Ref, which never
+	// includes the sub-path. Look up by owner/repo@ref so sub-path actions
+	// (e.g. owner/repo/sub-action@ref) match their lockfile entry.
+	baseDepKey := ef.Owner + "/" + ef.Repo + "@" + ef.Ref
 
 	if ref, ok := refByKey[key]; ok {
 		refCopy := ref
 		df.ActionRef = &refCopy
 	}
-	if dep, ok := depByKey[key]; ok {
+	if dep, ok := depByKey[baseDepKey]; ok {
 		depCopy := dep
 		df.Dependency = &depCopy
 	} else if ef.LockedSha != "" {
 		df.Dependency = &lockfile.Dependency{
-			NWO: fullName,
-			Ref: ef.Ref,
-			SHA: ef.LockedSha,
+			NWO:  ef.Owner + "/" + ef.Repo,
+			Path: ef.Path,
+			Ref:  ef.Ref,
+			SHA:  ef.LockedSha,
 		}
 	}
 
@@ -256,6 +385,96 @@ func isTransitivePin(ef diagnostics.Finding, depByKey map[string]lockfile.Depend
 		return false
 	}
 	return len(parentMap[dep.Key()]) > 0
+}
+
+// CollectReachDeps returns the deduplicated union of existing deps across the
+// given parsed workflows that will need a fresh reachability network check
+// once diagnostics runs. It mirrors the per-workflow partition diagnose
+// performs internally (see partitionReachByLive) but operates over the union,
+// so callers can pre-warm CheckReachabilityAll once across every networked
+// workflow instead of paying the per-workflow repo-warmup + per-dep
+// concurrency cost serially. Pass live as the result of a single
+// ResolveAllRecursive over the union of refs (the resolver cache makes the
+// per-workflow re-lookups inside diagnose free).
+func CollectReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependency) []lockfile.Dependency {
+	if len(parsed) == 0 {
+		return nil
+	}
+	liveSHA := make(map[string]string, len(live))
+	for _, d := range live {
+		liveSHA[d.Key()] = d.SHA
+	}
+	seen := make(map[string]bool)
+	var out []lockfile.Dependency
+	for _, pw := range parsed {
+		if !pw.SkipReachWhenUnchanged {
+			// When unchanged-skip isn't active (e.g. --rescan), the per-
+			// workflow path will check every existing dep. Mirror that so
+			// pre-warm sees the full set.
+			for _, d := range pw.ExistingDeps {
+				if seen[d.Key()] {
+					continue
+				}
+				seen[d.Key()] = true
+				out = append(out, d)
+			}
+			continue
+		}
+		for _, d := range pw.ExistingDeps {
+			sha, ok := liveSHA[d.Key()]
+			if ok && strings.EqualFold(sha, d.SHA) {
+				continue
+			}
+			if seen[d.Key()] {
+				continue
+			}
+			seen[d.Key()] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// partitionReachByLive splits existing deps into the set that needs a fresh
+// reachability network check and the set that can be synthesized as
+// Reachable because the freshly-resolved live deps confirm the recorded
+// (NWO, Ref, SHA) is still what the ref resolves to right now.
+//
+// When skipUnchanged is false, no synthesis happens — every existing dep
+// goes to toCheck. This is the path --rescan takes: explicit re-verify
+// every recorded pin against current upstream branches.
+//
+// The synthesis is safe because the live resolve is itself a strong
+// integrity signal: the ref still maps to the same SHA upstream, and that
+// SHA's prior reachability verdict was recorded at lockfile-write time.
+// The remaining attack surface (branch deleted out from under a still-
+// pinned tag) is exactly what --rescan exists to catch.
+func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bool) (toCheck []lockfile.Dependency, trusted []resolver.ReachabilityResult) {
+	if !skipUnchanged || len(live) == 0 {
+		return existing, nil
+	}
+	liveSHA := make(map[string]string, len(live))
+	for _, d := range live {
+		liveSHA[d.Key()] = d.SHA
+	}
+	for _, d := range existing {
+		sha, ok := liveSHA[d.Key()]
+		if !ok || !strings.EqualFold(sha, d.SHA) {
+			toCheck = append(toCheck, d)
+			continue
+		}
+		owner, repo := d.OwnerRepo()
+		trusted = append(trusted, resolver.ReachabilityResult{
+			Owner:  owner,
+			Repo:   repo,
+			Ref:    d.Ref,
+			SHA:    d.SHA,
+			DepKey: d.Key(),
+			Status: resolver.Reachable,
+			Detail: "lockfile entry unchanged and live resolve confirms SHA — prior reachability verification retained",
+		})
+	}
+	return toCheck, trusted
 }
 
 // reachabilityComplementFindings covers the cases the engine doesn't:

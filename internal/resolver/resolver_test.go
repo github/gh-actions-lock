@@ -253,7 +253,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
 	r.cache["owner/composite@v1"] = resolvedEntry{
@@ -269,7 +269,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 		actionYML: "name: Setup Go\nruns:\n  using: node20\n",
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "owner", Repo: "composite", Ref: "v1"},
 	})
@@ -282,7 +282,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 	}
 
 	// Verify parentMap tracks the child dep key → parent dep key.
-	pm := r.ParentMap()
+	pm := parentMapForTest
 	parents, ok := pm["actions/setup-go@v6"]
 	if !ok || len(parents) != 1 || parents[0] != "owner/composite@v1" {
 		t.Fatalf("expected parentMap to map actions/setup-go@v6 → [owner/composite@v1], got %v", pm)
@@ -307,10 +307,10 @@ func TestResolveAllRecursiveMultipleParents(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: "owner", Repo: "compositeA", Ref: "v1"},
 		{Owner: "owner", Repo: "compositeB", Ref: "v1"},
 	})
@@ -322,7 +322,7 @@ func TestResolveAllRecursiveMultipleParents(t *testing.T) {
 		t.Fatalf("expected 3 unique deps, got %d: %+v", len(deps), deps)
 	}
 
-	pm := r.ParentMap()
+	pm := parentMapForTest
 	parents, ok := pm["shared/dep@v1"]
 	if !ok {
 		t.Fatal("expected parentMap to contain shared/dep@v1")
@@ -359,10 +359,10 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	_, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
+	_, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err == nil || !strings.Contains(err.Error(), "exceeded max depth 1") {
 		t.Fatalf("expected recursion depth error, got %v", err)
 	}
@@ -389,10 +389,10 @@ func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
 		t.Fatalf("expected 3 deps, got %d: %+v", len(deps), deps)
 	}
 
-	pm := r.ParentMap()
+	pm := parentMapForTest
 	if got := pm["owner/b@v1"]; len(got) != 1 || got[0] != "owner/a@v1" {
 		t.Errorf("expected owner/b@v1 parent = [owner/a@v1], got %v", got)
 	}
@@ -427,17 +427,17 @@ func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
 	if len(deps) != 1 {
 		t.Fatalf("expected single dep (no self-loop expansion), got %d: %+v", len(deps), deps)
 	}
-	pm := r.ParentMap()
+	pm := parentMapForTest
 	if parents, ok := pm["owner/repo@main"]; ok {
 		t.Errorf("expected no self-parent for owner/repo@main, got %v", parents)
 	}
@@ -472,10 +472,10 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "main"},
 	})
 	if err != nil {
@@ -497,7 +497,7 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 		t.Fatalf("expected 2-levels-deep transitive org/fixtures-b@main to be discovered, got %+v", deps)
 	}
 
-	pm := r.ParentMap()
+	pm := parentMapForTest
 	// The same-tarball edge must NOT create a self-parent on the tarball.
 	for _, p := range pm["org/fixtures@main"] {
 		if p == "org/fixtures@main" {
@@ -527,10 +527,10 @@ func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
 			},
 		},
 		latestRefCache: map[string]string{},
-		reachCache:     map[string]ReachabilityStatus{},
+		reachCache:     map[string]reachCacheEntry{},
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
 		t.Fatalf("expected 2 deps (cycle terminates without duplication), got %d: %+v", len(deps), deps)
 	}
 
-	pm := r.ParentMap()
+	pm := parentMapForTest
 	// A is parent of B (A uses B).
 	if got := pm["owner/b@v1"]; len(got) != 1 || got[0] != "owner/a@v1" {
 		t.Errorf("expected owner/b@v1 parent = [owner/a@v1], got %v", got)
@@ -645,7 +645,7 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 		t.Fatalf("NewWithTransport returned error: %v", err)
 	}
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
+	deps, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 
 func TestCheckReachability_Reachable(t *testing.T) {
 	r := &Resolver{
-		reachCache: map[string]ReachabilityStatus{},
+		reachCache: map[string]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return Reachable, "ancestor of " + ref
 		},
@@ -672,7 +672,7 @@ func TestCheckReachability_Reachable(t *testing.T) {
 
 func TestCheckReachability_Unreachable(t *testing.T) {
 	r := &Resolver{
-		reachCache: map[string]ReachabilityStatus{},
+		reachCache: map[string]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return Unreachable, "commit is not an ancestor of " + ref
 		},
@@ -685,7 +685,7 @@ func TestCheckReachability_Unreachable(t *testing.T) {
 
 func TestCheckReachability_Unknown(t *testing.T) {
 	r := &Resolver{
-		reachCache: map[string]ReachabilityStatus{},
+		reachCache: map[string]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return ReachabilityUnknown, "clone failed"
 		},
@@ -699,7 +699,7 @@ func TestCheckReachability_Unknown(t *testing.T) {
 func TestCheckReachability_CachesResults(t *testing.T) {
 	calls := 0
 	r := &Resolver{
-		reachCache: map[string]ReachabilityStatus{},
+		reachCache: map[string]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			calls++
 			return Reachable, "ancestor of " + ref
@@ -712,8 +712,8 @@ func TestCheckReachability_CachesResults(t *testing.T) {
 	if r1.Status != Reachable || r2.Status != Reachable {
 		t.Fatalf("expected both calls to return Reachable, got %s and %s", r1.Status, r2.Status)
 	}
-	if r2.Detail != "cached" {
-		t.Fatalf("expected second call to be cached, got detail %q", r2.Detail)
+	if r2.Detail != "ancestor of v6" {
+		t.Fatalf("expected second call to return the original detail, got %q", r2.Detail)
 	}
 	if calls != 1 {
 		t.Fatalf("expected checkReachFn called once, got %d", calls)
@@ -723,7 +723,7 @@ func TestCheckReachability_CachesResults(t *testing.T) {
 func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
 	calls := 0
 	r := &Resolver{
-		reachCache: map[string]ReachabilityStatus{},
+		reachCache: map[string]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			calls++
 			return Reachable, "ancestor of " + ref
@@ -771,6 +771,7 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 
 	t.Run("not on any branch", func(t *testing.T) {
 		reg := &httpmock.Registry{}
+		probeBranchesEmpty(reg)
 		reg.Register(
 			httpmock.REST("GET", `repos/actions/checkout/branches`),
 			httpmock.JSONResponse(branchListResponse()),
@@ -818,6 +819,7 @@ func TestCheckReachability_ForkInjection_Unreachable(t *testing.T) {
 
 	reg := &httpmock.Registry{}
 	// Empty branch list: fork commits have no branches in the upstream repo.
+	probeBranchesEmpty(reg)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
 		httpmock.JSONResponse(branchListResponse()),
@@ -834,6 +836,176 @@ func TestCheckReachability_ForkInjection_Unreachable(t *testing.T) {
 	}
 	if !strings.Contains(result.Detail, "fork-network") {
 		t.Fatalf("expected detail to mention fork-network, got %q", result.Detail)
+	}
+	reg.Verify(t)
+}
+
+// TestCheckReachability_FoundViaFullScan_SetsFullScanUsed verifies that when a
+// commit is not on a canonical branch and is confirmed only after the full
+// branch scan, the result flags FullScanUsed so the caller can surface it.
+func TestCheckReachability_FoundViaFullScan_SetsFullScanUsed(t *testing.T) {
+	sha := "abc123abc123abc123abc123abc123abc123abc1"
+
+	reg := &httpmock.Registry{}
+	// Phase 1 protected-branch probe returns empty → canonical set misses.
+	probeBranchesEmpty(reg)
+	// Phase 2 full listing: a branch whose HEAD differs from sha, forcing the
+	// ancestry (Compare) slow path rather than an exact-HEAD match.
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/branches`),
+		httpmock.JSONResponse(branchListResponse("feature/x", "fx000")),
+	)
+	// Compare confirms sha is an ancestor of the branch HEAD → reachable.
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(compareAncestorResponse(sha)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("actions", "checkout", sha, "v1")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable via full scan, got %s (%s)", result.Status, result.Detail)
+	}
+	if !result.FullScanUsed {
+		t.Fatalf("expected FullScanUsed=true when commit found only via full branch scan")
+	}
+	reg.Verify(t)
+}
+
+// TestCheckReachability_FoundInCanonicalSet_NoFullScan verifies that a commit
+// confirmed in the canonical set (here, the default branch fetched directly)
+// does NOT flag FullScanUsed.
+func TestCheckReachability_FoundInCanonicalSet_NoFullScan(t *testing.T) {
+	sha := "aafc3630d7b9aafc3630d7b9aafc3630d7b9aafc"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/vercel/next.js$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "canary"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/vercel/next.js/git/ref/heads/canary`),
+		httpmock.JSONResponse(gitRefHeadResponse("canary", sha)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("vercel", "next.js", sha, "canary")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
+	}
+	if result.FullScanUsed {
+		t.Fatalf("expected FullScanUsed=false when commit is on a canonical branch")
+	}
+	reg.Verify(t)
+}
+
+// gitRefHeadResponse returns a git/ref response for an exact branch match.
+func gitRefHeadResponse(name, sha string) any {
+	return map[string]any{
+		"ref":    "refs/heads/" + name,
+		"object": map[string]any{"sha": sha, "type": "commit"},
+	}
+}
+
+// probeBranchesEmpty registers HTTP stubs for the phase-1 canonical branch
+// probes (getDefaultBranch, listProtectedBranches, listReleaseBranches) for
+// actions/checkout, all returning empty results. This forces CheckReachability
+// to fall through to the phase-2 full branch scan. Any ref-specific
+// getBranchHead lookup that isn't stubbed fails silently (getBranchHead returns
+// false on any error), which is correct for the "no canonical branches" case.
+func probeBranchesEmpty(reg *httpmock.Registry) {
+	// getDefaultBranch: returns empty default so addNamed("") is skipped.
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": ""}),
+	)
+	// listProtectedBranches: empty. RESTWithQuery ensures this stub is only
+	// consumed by the ?protected=true call, not by the full listBranches scan.
+	reg.Register(
+		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
+		httpmock.JSONResponse([]any{}),
+	)
+	// listReleaseBranches: matchingHeadRefs("v") and ("release") both empty.
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/git/matching-refs/heads/v`),
+		httpmock.JSONResponse([]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/git/matching-refs/heads/release`),
+		httpmock.JSONResponse([]any{}),
+	)
+}
+
+// TestCheckReachability_BranchBeyondPageCap_ValidatedViaDirectFetch covers the
+// mega-repo case (e.g. vercel/next.js, whose default branch `canary` sorts
+// beyond the paginated branch-listing cap). The commit is the HEAD of a branch
+// that the full listing would never surface, but the canonical-set phase
+// fetches that branch directly via git/ref and confirms reachability — so no
+// false impostor verdict. listBranches is intentionally NOT stubbed: a phase-1
+// hit must short-circuit before the full scan.
+func TestCheckReachability_BranchBeyondPageCap_ValidatedViaDirectFetch(t *testing.T) {
+	sha := "aafc3630d7b9aafc3630d7b9aafc3630d7b9aafc"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/vercel/next.js$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "canary"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/vercel/next.js/git/ref/heads/canary`),
+		httpmock.JSONResponse(gitRefHeadResponse("canary", sha)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := r.CheckReachability("vercel", "next.js", sha, "canary")
+	if result.Status != Reachable {
+		t.Fatalf("expected Reachable via direct fetch, got %s (%s)", result.Status, result.Detail)
+	}
+	if !strings.Contains(result.Detail, "canary") {
+		t.Fatalf("expected detail to name branch canary, got %q", result.Detail)
+	}
+	reg.Verify(t)
+}
+
+// TestDiscoverContaining_BranchBeyondPageCap_NotImpostor is the discovery-path
+// counterpart: a commit on a branch that sorts past the listing cap must be
+// placed on that branch (fetched directly) rather than flagged as an impostor.
+func TestDiscoverContaining_BranchBeyondPageCap_NotImpostor(t *testing.T) {
+	sha := "aafc3630d7b9aafc3630d7b9aafc3630d7b9aafc"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/vercel/next.js/git/ref/heads/canary`),
+		httpmock.JSONResponse(gitRefHeadResponse("canary", sha)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/vercel/next.js/tags`),
+		httpmock.JSONResponse(tagListResponse()),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, branch, err := r.DiscoverContainingDefault("vercel", "next.js", sha, "canary", "canary")
+	if err != nil {
+		t.Fatalf("unexpected error (false impostor?): %v", err)
+	}
+	if branch != "canary" {
+		t.Fatalf("expected branch=canary via direct fetch, got %q", branch)
 	}
 	reg.Verify(t)
 }
@@ -857,21 +1029,6 @@ func TestCheckReachability_BranchListError_ReturnsUnknown(t *testing.T) {
 		t.Fatalf("expected Unknown when branches API fails, got %s (%s)", result.Status, result.Detail)
 	}
 	reg.Verify(t)
-}
-
-// TestCheckReachability_Disabled_ReturnsUnknown verifies that
-// DisableReachability=true bypasses the security check and returns Unknown.
-func TestCheckReachability_Disabled_ReturnsUnknown(t *testing.T) {
-	r, err := NewWithTransport("github.com", &httpmock.Registry{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.DisableReachability = true
-
-	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
-	if result.Status != ReachabilityUnknown {
-		t.Fatalf("expected Unknown when disabled, got %s (%s)", result.Status, result.Detail)
-	}
 }
 
 func TestCheckAncestry_Confirmed(t *testing.T) {

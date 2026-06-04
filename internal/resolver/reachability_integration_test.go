@@ -183,7 +183,7 @@ func TestIntegration_AnnotatedTagPeeling(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	deps, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: fixtureOwner, Repo: fixtureRepo, Ref: "annotated-v1"},
 	})
 	require.NoError(t, err, "annotated tag must resolve through the peel")

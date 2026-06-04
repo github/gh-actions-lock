@@ -1,5 +1,7 @@
 package lockfile
 
+// TODO -- why not stdlib?
+
 import (
 	"fmt"
 	"regexp"

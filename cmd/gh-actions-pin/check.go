@@ -24,6 +24,10 @@ type checkOptions struct {
 	JSONFields    string
 	Hostname      string
 	NoInteractive bool
+	// Rescan forces a full reachability re-verification of every recorded
+	// pin, bypassing the fast path that trusts the lockfile. Useful for
+	// audits or when a CI policy requires re-attestation on every run.
+	Rescan bool
 }
 
 // JSON output types — thin wrappers around doctor.Report.
@@ -115,6 +119,7 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
+	cmd.Flags().BoolVar(&opts.Rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	return cmd
 }
 
@@ -125,25 +130,27 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	}
 	opts.WorkflowPaths = paths
 
-	// Attach a run log: detailed narration is written to a file under the user
-	// cache dir, keeping the terminal to spinners, prompts, and a final summary.
-	// Skipped in --json mode, where stderr carries only progress.
-	var logger *runlog.Logger
+	// --no-interactive is an explicit headless signal: skip the spinner,
+	// icons, and per-tick churn even on a real TTY. This complements the
+	// auto-detection in ui.New (which fires for non-TTY writers and CI=true)
+	// so users running headlessly on a workstation without CI set still get
+	// log-oriented output.
+	if opts.NoInteractive {
+		f.UI.MarkHeadless()
+	}
+
+	// Detailed narration is suppressed from the terminal during the run so the
+	// output stays limited to phase labels, prompts, and the final summary.
+	// A structured, action-centric provenance record (what was resolved and
+	// how) is written at the end instead. JSON mode keeps the narration log
+	// attached so machine-readable events can flow on stderr.
 	if opts.JSONFields == "" {
-		if lg, lerr := runlog.Open(); lerr == nil {
-			logger = lg
-			f.UI.SetLog(logger)
-			defer logger.Close()
-		}
+		f.UI.SetLog(io.Discard)
 	}
 
 	r, err := f.NewResolver(resolveHostname(opts.Hostname))
 	if err != nil {
 		return err
-	}
-	// Respect test overrides — only apply config when no test func is injected.
-	if !r.HasReachabilityFunc() {
-		r.DisableReachability = !doctor.ReachabilityEnabled()
 	}
 	store, err := lockfile.OpenStore(".", r)
 	if err != nil {
@@ -152,33 +159,190 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// Seed branch hints from the existing lockfile so repeat scans short-circuit
 	// the per-branch Compare walk when the recorded branch still contains the SHA.
 	r.SeedBranchHints(store.AllDeps())
-	// Single pass: doctor.Diagnose handles all validation.
+	// Two-phase scan/resolve.
+	//
+	// Phase 1 (Scan): parse every workflow with a clean `Scanning [i/n] path`
+	// label. No resolver progress or worker rows leak under the bar because
+	// nothing in this phase calls the resolver.
+	//
+	// Phase 2 (Resolve): pre-warm the resolver caches once for the union of
+	// refs and deps. The resolver's per-action worker UX takes over.
+	//
+	// Phase 3 (Diagnose): per-workflow engine diagnostics that hit the warmed
+	// caches and stay silent.
 	total := len(opts.WorkflowPaths)
-	var onWorkflow func(done, total int, path string)
-	if opts.JSONFields == "" {
-		label := fmt.Sprintf("Checking %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
+	// showSpinner gates the interactive spinner + per-action worker rows +
+	// resolver progress callbacks. We restrict it to non-JSON TTY runs:
+	//
+	//   * JSON mode keeps stderr quiet so consumers can pipe `2>/dev/null`.
+	//   * Headless mode (CI, non-TTY) gets its phase markers directly from
+	//     showHeadlessProgress below, which doesn't install
+	//     r.WorkerProgressFn. That matters because a non-nil
+	//     WorkerProgressFn flips the resolver from a single batched GraphQL
+	//     call to per-ref parallel calls — a UX choice that should not leak
+	//     into headless output (and that would, e.g., quadruple the request
+	//     count for test stubs registered against the batched query shape).
+	showSpinner := opts.JSONFields == "" && !f.UI.Headless()
+	showHeadlessProgress := f.UI.Headless()
+
+	var onScan func(done, total int, path string)
+	if showSpinner {
+		label := fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
 		f.UI.StartProgress(label)
-		r.ProgressFn = func(detail string) { f.UI.UpdateProgress(detail) }
-		onWorkflow = func(done, total int, path string) {
-			f.UI.UpdateLabel(fmt.Sprintf("[%d/%d] %s", done, total, path))
+		onScan = func(done, total int, path string) {
+			f.UI.UpdateLabel(fmt.Sprintf("Scanning [%d/%d] %s", done, total, path))
 			f.UI.UpdateProgress("")
+		}
+	} else if showHeadlessProgress {
+		// Headless: emit one line per phase directly, no callbacks. The UI
+		// layer dedupes label stems so subsequent UpdateLabel calls with the
+		// same phase name are no-ops.
+		f.UI.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
+	}
+
+	parsed := doctor.ParseAll(opts.WorkflowPaths, store, onScan)
+
+	// Fast path: unless the user asked for a full --rescan, validate
+	// fully-recorded workflows purely from disk. Their refs all match
+	// lockfile entries, so we trust the prior verification and skip every
+	// network round-trip (no live resolve, no reachability check). Network
+	// work is restricted to workflows that are actually changing or adding
+	// pins — true for both default and explicit-scope runs. Pass `--rescan`
+	// to re-verify everything end-to-end.
+	//
+	// For workflows that don't qualify for the full fast path (at least one
+	// direct ref is new or changed), we still avoid per-dep reachability
+	// network calls for the unchanged pins in that workflow:
+	// SkipReachWhenUnchanged tells diagnose to synthesize Reachable for any
+	// ExistingDep whose live-resolved SHA still matches the recorded SHA.
+	// Without this, a single new dep in a workflow with 20 transitive pins
+	// triggers ~20 list-branches + ~N compare calls per pin — most of which
+	// re-prove what the lockfile already records.
+	skippedRescan := 0
+	if !opts.Rescan {
+		for i := range parsed {
+			if isFullyRecorded(parsed[i]) {
+				parsed[i].TrustLockfile = true
+				skippedRescan++
+			} else {
+				parsed[i].SkipReachWhenUnchanged = true
+			}
 		}
 	}
 
-	report := doctor.Diagnose(opts.WorkflowPaths, r, store, onWorkflow)
+	// Network-bound resolve+reach only sees the non-trusted workflows. When
+	// every workflow is trusted (the steady-state happy path), refs/deps
+	// are both empty and we make zero network calls.
+	var networked []doctor.ParsedWorkflow
+	for _, pw := range parsed {
+		if !pw.TrustLockfile {
+			networked = append(networked, pw)
+		}
+	}
+	refs, deps := doctor.CollectResolvable(networked)
+	if showSpinner {
+		f.UI.UpdateProgress("")
+		f.UI.ClearWorkerStatuses()
+		// Wire structured counter callbacks so the top label expresses one
+		// rolling total per phase. The resolver no longer rewrites the label
+		// itself; we own the phrasing so the bar never jumps between
+		// "resolving" and "transitive resolving" — transitive is just deeper
+		// edges in the same Resolve phase.
+		r.OnResolveProgress = func(done, total int) {
+			f.UI.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
+		}
+		r.OnVerifyProgress = func(done, total int) {
+			f.UI.UpdateLabel(fmt.Sprintf("Verifying reachability [%d/%d]", done, total))
+		}
+		r.WorkerProgressFn = func(slot int, status string) { f.UI.SetWorkerStatus(slot, status) }
+	} else if showHeadlessProgress && (len(refs) > 0 || (opts.Rescan && len(deps) > 0)) {
+		// Headless: announce the phase once, without per-ref worker callbacks.
+		// We deliberately leave r.WorkerProgressFn unset so the resolver
+		// stays in batched-GraphQL mode.
+		f.UI.UpdateLabel("Resolving actions")
+	}
+	if len(refs) > 0 {
+		_, _, _ = r.ResolveAllRecursive(refs)
+	}
+	// Pre-warm reachability across all networked workflows in one shot. The
+	// per-workflow diagnose pass also calls CheckReachabilityAll, but doing
+	// it once here lets the resolver pool per-repo branch/default-branch
+	// warmup and per-dep Compare concurrency across every workflow that
+	// needs verification — instead of running each workflow's small batch
+	// serially. The resolver's reach cache makes the per-workflow calls
+	// downstream effectively free hits.
+	//
+	// On --rescan the pre-warm intentionally includes every recorded pin
+	// (verifies everything end-to-end). On the default path it's the
+	// deduplicated union of "needs fresh check" deps per CollectReachDeps
+	// (new pins + pins whose live SHA differs from the lockfile). On a
+	// fully steady-state lockfile this set is empty and we make zero reach
+	// network calls here.
+	var reachDeps []lockfile.Dependency
+	if opts.Rescan {
+		reachDeps = deps
+	} else {
+		// Re-resolve to populate liveDeps for the union. The cache makes
+		// this O(1) per ref; we use the result purely to drive the
+		// partition.
+		live, _, _ := r.ResolveAllRecursive(refs)
+		reachDeps = doctor.CollectReachDeps(networked, live)
+	}
+	if len(reachDeps) > 0 {
+		if showHeadlessProgress {
+			f.UI.UpdateLabel("Verifying reachability")
+		}
+		_ = r.CheckReachabilityAll(reachDeps)
+	}
 
-	f.UI.StopProgress()
+	if showSpinner {
+		// Quiet the resolver before per-workflow diagnostics — they hit cache
+		// and shouldn't repaint label/workers.
+		r.OnResolveProgress = nil
+		r.OnVerifyProgress = nil
+		r.WorkerProgressFn = nil
+		f.UI.ClearWorkerStatuses()
+		f.UI.UpdateLabel("Analyzing")
+		f.UI.UpdateProgress("")
+	} else if showHeadlessProgress {
+		f.UI.UpdateLabel("Analyzing")
+	}
+
+	report := doctor.DiagnoseParsed(parsed, r, store)
 
 	// Compute validity from findings.
 	valid := report.IsValid()
 
+	// Enrich imposter-commit findings with a suggested re-pin target — the
+	// most recent stable release whose commit is still reachable from a
+	// branch in the action repo. Bounded network walk per affected action;
+	// skipped entirely when no imposter findings exist.
+	if hasImposterFindings(report) {
+		hostname := resolveHostname(opts.Hostname)
+		if restClient, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
+			tl := doctor.NewTagLister(restClient)
+			doctor.EnrichImposterFindings(report, tl, r)
+		}
+	}
+
 	// JSON output — always before any human-readable output.
 	if opts.JSONFields != "" {
+		f.UI.StopProgress()
 		return writeCheckJSON(f.Out, report, valid, opts.JSONFields, store.File().Version)
 	}
 
 	// Determine if interactive remediation will follow.
 	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && f.IsTerminal()
+
+	// In interactive mode the summary and prompts render on the terminal, so
+	// stop the checking spinner now. In non-interactive mode keep it running
+	// across the phase transition into remediation: all narration goes to the
+	// log, so the terminal stays a single continuous spinner with no gap before
+	// pinning begins. The remediator adopts the running spinner; check.go stops
+	// it after remediation, just before the terminal summary.
+	if interactive {
+		f.UI.StopProgress()
+	}
 
 	// Always remediate — non-interactive mode auto-fixes what it can.
 	willRemediate := true
@@ -190,6 +354,19 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	actionable := report.WorkflowsNeedingAttention()
 	var fixedCount, skippedCount, alertedCount, unresolvedCount int
 	var skippedDeps, alertedDeps, unresolvedDeps []string
+	var alertedWorkflows map[string][]string
+	var alertedReasons map[string]string
+	var alertedSuggestions map[string]string
+	var alertedSearched map[string]bool
+	var fullScanDeps []string
+	var autoFixedImposters []doctor.AutoFixedImposter
+	printed := false
+
+	var repoOwner, repoName string
+	if currentRepo, err := repository.Current(); err == nil {
+		repoOwner = currentRepo.Owner
+		repoName = currentRepo.Name
+	}
 
 	if willRemediate && len(actionable) > 0 {
 		hostname := resolveHostname(opts.Hostname)
@@ -202,13 +379,11 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if !interactive {
 			prompter = &doctor.NoopPrompter{}
 		} else {
-			prompter = doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
-		}
-
-		var repoOwner, repoName string
-		if currentRepo, err := repository.Current(); err == nil {
-			repoOwner = currentRepo.Owner
-			repoName = currentRepo.Name
+			hp := doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
+			// Let prompts pause the continuous pinning spinner while they own
+			// the terminal, then resume it — no blank gaps between workflows.
+			hp.SetProgress(f.UI)
+			prompter = hp
 		}
 
 		rem := doctor.NewRemediator(prompter, r, restClient, store, f.UI, doctor.RemediateOptions{
@@ -218,6 +393,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		})
 
 		if err := rem.Remediate(report); err != nil {
+			f.UI.StopProgress()
 			if errors.Is(err, doctor.ErrAborted) {
 				f.UI.TermWarn("Interrupted — no further changes applied")
 				return nil
@@ -225,20 +401,29 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			return err
 		}
 
+		// Pass C: convert any alerted impostors that already carry a
+		// sane-release suggestion into actual rewrites + re-pins. Runs
+		// after Remediate so applyPin/applySHAToTag have had a chance to
+		// surface the impostor signal first; the rewrites consume the
+		// alerted-suggestions map populated by alertImposter.
+		rem.AutoFixAlertedImposters()
+
 		if err := store.Save(); err != nil {
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
 
-		f.UI.TermBlank()
+		uniqueSkipped := len(rem.SkippedDeps)
 		if rem.Fixed > 0 {
 			f.UI.TermSuccess("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
+			printed = true
 		}
-		uniqueSkipped := len(rem.SkippedDeps)
 		if uniqueSkipped > 0 {
 			f.UI.TermWarn("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
+			printed = true
 		}
 		if rem.Unresolved > 0 {
 			f.UI.TermWarn("%d %s could not be resolved", rem.Unresolved, ui.Pluralize(rem.Unresolved, "action", "actions"))
+			printed = true
 		}
 		fixedCount = rem.Fixed
 		skippedCount = uniqueSkipped
@@ -246,16 +431,77 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		unresolvedCount = rem.Unresolved
 		skippedDeps = rem.SkippedDeps
 		alertedDeps = rem.AlertedDeps
+		alertedWorkflows = rem.AlertedWorkflows
+		alertedReasons = rem.AlertedReasons
+		alertedSuggestions = rem.AlertedSuggestions
+		alertedSearched = rem.AlertedSearched
+		fullScanDeps = rem.FullScanDeps
 		unresolvedDeps = rem.UnresolvedDeps
+		autoFixedImposters = rem.AutoFixedImposters
 	}
 
 	// Terminal end-state: spinners and narration are done; print the summary.
-	if logger != nil {
-		defer func() { f.UI.TermDetail("Full log: %s", logger.Path()) }()
+	// Stop any spinner still running (non-interactive path keeps it alive
+	// through remediation, or no workflows were actionable) before Term* output
+	// writes directly to the terminal.
+	f.UI.StopProgress()
+
+	// Write a structured, action-centric provenance record — what was resolved
+	// and how, deduplicated to one entry per action — and point the user at it.
+	// Skipped in --json mode, which already emitted machine-readable output.
+	if opts.JSONFields == "" {
+		repoInfo := &runlog.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.Hostname)}
+		outcomes := newProvenanceOutcomes(alertedDeps, skippedDeps, unresolvedDeps, fullScanDeps, alertedReasons)
+		prov := buildProvenanceReport(report, store, valid, repoInfo, outcomes)
+		if path, werr := runlog.WriteReport(prov); werr == nil {
+			defer func() { f.UI.TermDetail("Resolution record: %s", path) }()
+		}
+	}
+
+	// Surface any commits that were pinned only after a full-branch-scan
+	// fallback: they are valid but not on a canonical branch, which is worth
+	// a red heads-up even when the run otherwise succeeds.
+	if len(fullScanDeps) > 0 {
+		if printed {
+			f.UI.TermBlank()
+		}
+		printed = true
+		f.UI.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan:",
+			len(fullScanDeps), ui.Pluralize(len(fullScanDeps), "action", "actions"))
+		for _, dep := range fullScanDeps {
+			f.UI.TermDetail("  %s", f.UI.TermYellow(dep))
+		}
+	}
+
+	// Surface auto-fixed impostors: refs whose pinned commit was unreachable
+	// from any branch but where a recent stable release tag was reachable, so
+	// pin rewrote uses: to that tag instead of alerting. The substitution may
+	// cross a major-version boundary (e.g. v1.25.0 → v3.0.3) so the user
+	// must eyeball each one — flag it loudly with the publisher-docs link.
+	if len(autoFixedImposters) > 0 {
+		if printed {
+			f.UI.TermBlank()
+		}
+		printed = true
+		f.UI.TermWarn("%d %s auto-pinned to a safer release — review for sanity:",
+			len(autoFixedImposters), ui.Pluralize(len(autoFixedImposters), "action", "actions"))
+		for _, fix := range autoFixedImposters {
+			short := fix.NewSHA
+			if len(short) > 7 {
+				short = short[:7]
+			}
+			f.UI.TermDetail("  %s: %s → %s (%s)", fix.NWO, fix.OldRef, fix.NewTag, short)
+			f.UI.TermDetail("    in %s", fix.Workflow)
+		}
+		f.UI.TermDetail("  Publishers: %s", doctor.PublisherTagReleasesDocURL)
 	}
 
 	if valid && fixedCount == 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
 		f.UI.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
+		if skippedRescan > 0 {
+			f.UI.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
+				skippedRescan, ui.Pluralize(skippedRescan, "workflow", "workflows"))
+		}
 		return nil
 	}
 
@@ -265,30 +511,86 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			return nil
 		}
 		if alertedCount > 0 {
-			f.UI.TermBlank()
+			if printed {
+				f.UI.TermBlank()
+			}
+			printed = true
 			f.UI.TermError("%d %s %s investigation — do not auto-fix:",
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
+
+			// Group deps by reason, preserving first-seen order.
+			var reasonOrder []string
+			byReason := map[string][]string{}
 			for _, dep := range alertedDeps {
-				f.UI.TermDetail("  %s", dep)
-				for _, path := range workflowsForDep(report, dep) {
-					f.UI.TermDetail("    └─ %s", path)
+				reason := alertedReasons[dep]
+				if _, seen := byReason[reason]; !seen {
+					reasonOrder = append(reasonOrder, reason)
+				}
+				byReason[reason] = append(byReason[reason], dep)
+			}
+			for _, reason := range reasonOrder {
+				if reason != "" {
+					f.UI.TermDetail("  %s", f.UI.TermBold(reason))
+				}
+				indent := "  "
+				if reason != "" {
+					indent = "    "
+				}
+				for _, dep := range byReason[reason] {
+					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep)))
+					paths := alertedWorkflows[dep]
+					if len(paths) == 0 {
+						paths = workflowsForDep(report, dep)
+					}
+					for _, path := range paths {
+						f.UI.TermDetail("%s  └─ %s", indent, f.UI.TermDim(path))
+					}
+					if sug := alertedSuggestions[dep]; sug != "" {
+						nwo := dep
+						if i := strings.IndexByte(dep, '@'); i >= 0 {
+							nwo = dep[:i]
+						}
+						// sug is "tag short-sha"; split for clean display.
+						tag, sha := sug, ""
+						if sp := strings.IndexByte(sug, ' '); sp >= 0 {
+							tag = sug[:sp]
+							sha = sug[sp+1:]
+						}
+						display := nwo + "@" + tag
+						if sha != "" {
+							display += " (" + sha + ")"
+						}
+						f.UI.TermDetail("%s  %s suggested: re-pin to %s — latest release reachable from a branch",
+							indent, f.UI.TermBold("→"), f.UI.TermYellow(display))
+					} else if alertedSearched[dep] {
+						f.UI.TermDetail("%s  %s no recent release was reachable from a branch — escalate to the action publisher",
+							indent, f.UI.TermBold("→"))
+					}
+					if alertedSearched[dep] {
+						f.UI.TermDetail("%s     publishers: %s", indent, f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
+					}
 				}
 			}
 		}
 		if skippedCount > 0 {
-			f.UI.TermBlank()
+			if printed {
+				f.UI.TermBlank()
+			}
+			printed = true
 			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally:",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
-				f.UI.TermDetail("  %s", dep)
+				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep)))
 			}
 		}
 		if unresolvedCount > 0 {
-			f.UI.TermBlank()
+			if printed {
+				f.UI.TermBlank()
+			}
 			f.UI.TermError("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, dep := range unresolvedDeps {
-				f.UI.TermDetail("  %s", dep)
+				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep)))
 			}
 		}
 		return errSilent
@@ -315,6 +617,30 @@ func findingToJSON(f doctor.Finding) checkFinding {
 		jf.RequiredBy = f.ParentNWO
 	}
 	return jf
+}
+
+// isFullyRecorded reports whether every direct action ref in the workflow is
+// already present in the lockfile-recorded deps for that workflow. It's the
+// gate for the fast path: when true, we trust the prior verification and
+// skip the network round-trip to re-verify reachability. Parse/load errors
+// or refs missing from the lockfile force a full re-verification.
+func isFullyRecorded(pw doctor.ParsedWorkflow) bool {
+	if pw.LoadErr != nil || pw.DepsErr != nil {
+		return false
+	}
+	if len(pw.Refs) == 0 {
+		return true
+	}
+	haveDep := make(map[string]bool, len(pw.ExistingDeps))
+	for _, d := range pw.ExistingDeps {
+		haveDep[d.NWO+"@"+d.Ref] = true
+	}
+	for _, r := range pw.Refs {
+		if !haveDep[r.Owner+"/"+r.Repo+"@"+r.Ref] {
+			return false
+		}
+	}
+	return true
 }
 
 // writeCheckJSON writes the unified JSON output.
@@ -540,6 +866,24 @@ func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willReme
 				if isAlertedCategory(f.Category) && f.Remediation != "" {
 					out.Detail("  %s %s", out.Bold("⚠"), f.Remediation)
 				}
+				if f.SaneSuggestionTag != "" {
+					nwo := ""
+					if f.Dependency != nil {
+						nwo = f.Dependency.NWO
+					}
+					sha := f.SaneSuggestionSHA
+					if len(sha) > 7 {
+						sha = sha[:7]
+					}
+					out.Detail("  %s suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
+						out.Bold("→"), nwo, f.SaneSuggestionTag, sha)
+				} else if f.SaneSuggestionSearched {
+					out.Detail("  %s no recent release was reachable from a branch — escalate to the action publisher",
+						out.Bold("→"))
+				}
+				if f.SaneSuggestionSearched {
+					out.Detail("  publishers: %s", out.DocLink(doctor.PublisherTagReleasesDocURL))
+				}
 				if f.DocURL != "" {
 					out.Detail("  see: %s", out.DocLink(f.DocURL))
 				}
@@ -692,6 +1036,47 @@ func isAlertedCategory(c doctor.Category) bool {
 		return true
 	}
 	return false
+}
+
+// hasImposterFindings reports whether any workflow in the report carries a
+// CategoryImposterCommit finding. Used to gate the bounded tag-walk that
+// enriches those findings with a sane-release suggestion.
+func hasImposterFindings(r *doctor.Report) bool {
+	if r == nil {
+		return false
+	}
+	for _, wr := range r.Workflows {
+		for _, f := range wr.Findings {
+			if f.Category == doctor.CategoryImposterCommit {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// depReleaseURL derives a GitHub URL from a dep key of the form
+// "owner/repo[/path]@ref". Links to the specific release tag when the ref
+// looks like a tag (not a SHA), otherwise the releases list.
+func depReleaseURL(dep string) string {
+	nwo := dep
+	ref := ""
+	if i := strings.IndexByte(dep, '@'); i >= 0 {
+		nwo = dep[:i]
+		ref = dep[i+1:]
+	}
+	parts := strings.SplitN(nwo, "/", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	base := "https://github.com/" + parts[0] + "/" + parts[1]
+	if ref != "" && isHexSHA(ref) {
+		return base + "/commit/" + ref
+	}
+	if ref != "" {
+		return base + "/releases/tag/" + ref
+	}
+	return base + "/releases"
 }
 
 // workflowsForDep returns workflow paths whose findings reference the given

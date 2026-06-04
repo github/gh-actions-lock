@@ -13,6 +13,13 @@ import (
 // ErrAborted is returned when the user presses Ctrl+C to abort.
 var ErrAborted = errors.New("aborted by user")
 
+// ProgressController lets a prompter pause an active progress spinner while a
+// prompt owns the terminal, then resume it afterwards. The UI satisfies this.
+type ProgressController interface {
+	PauseProgress()
+	ResumeProgress()
+}
+
 // Prompter abstracts interactive user prompts for testing and non-TTY fallback.
 type Prompter interface {
 	// Confirm asks a yes/no question.
@@ -29,6 +36,7 @@ type Prompter interface {
 type HuhPrompter struct {
 	out        io.Writer
 	isTerminal func() bool
+	progress   ProgressController
 }
 
 // NewHuhPrompter creates an interactive prompter that writes to stderr.
@@ -49,7 +57,25 @@ func (p *HuhPrompter) IsInteractive() bool {
 	return p.isTerminal()
 }
 
+// SetProgress attaches a progress controller that is paused while a prompt is
+// on screen and resumed once it closes, so a continuous spinner and prompts
+// don't fight over the terminal.
+func (p *HuhPrompter) SetProgress(pc ProgressController) {
+	p.progress = pc
+}
+
+// pauseProgress pauses the attached spinner (if any) and returns a function
+// that resumes it. Always defer the returned function.
+func (p *HuhPrompter) pauseProgress() func() {
+	if p.progress == nil {
+		return func() {}
+	}
+	p.progress.PauseProgress()
+	return p.progress.ResumeProgress
+}
+
 func (p *HuhPrompter) Confirm(message string, defaultVal bool) (bool, error) {
+	defer p.pauseProgress()()
 	result := defaultVal
 	err := huh.NewForm(
 		huh.NewGroup(
@@ -73,6 +99,7 @@ func (p *HuhPrompter) Select(message string, options []string) (int, error) {
 	if len(options) == 0 {
 		return -1, fmt.Errorf("no options provided")
 	}
+	defer p.pauseProgress()()
 	var selected int
 	huhOptions := make([]huh.Option[int], len(options))
 	for i, opt := range options {
@@ -100,6 +127,7 @@ func (p *HuhPrompter) MultiSelect(message string, options []string) ([]int, erro
 	if len(options) == 0 {
 		return nil, fmt.Errorf("no options provided")
 	}
+	defer p.pauseProgress()()
 	var selected []int
 	huhOptions := make([]huh.Option[int], len(options))
 	for i, opt := range options {

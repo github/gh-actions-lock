@@ -1,12 +1,40 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
+
+// splitNWO splits "owner/repo" into its components. Returns ("", "") for
+// inputs without a slash. Used to feed alertImposter coords carved out of
+// ImpostorError.NWO, which packs owner+repo as a single field.
+func splitNWO(nwo string) (string, string) {
+	i := strings.IndexByte(nwo, '/')
+	if i < 0 {
+		return "", ""
+	}
+	return nwo[:i], nwo[i+1:]
+}
+
+// directUsesFor returns the original `uses:` text (ActionRef.Raw) for the
+// direct dep matching (owner, repo, ref), or "" if no direct ActionRef in
+// this workflow matches. The auto-fix path needs Raw to feed
+// File.RewriteActionRefs, which keys rewrites on the verbatim uses string;
+// transitive impostors (matched only via parent composite actions) return
+// "" so callers can fall back to alerting.
+func directUsesFor(refs []lockfile.ActionRef, owner, repo, ref string) string {
+	for _, ar := range refs {
+		if ar.Owner == owner && ar.Repo == repo && ar.Ref == ref {
+			return ar.Raw
+		}
+	}
+	return ""
+}
 
 // startWork shows a spinner (TTY only) for the network-heavy portion of a
 // remediation and wires the resolver's progress callback to its detail line.
@@ -15,6 +43,12 @@ import (
 // interactive prompt in its handler.
 func (rem *Remediator) startWork(label string) {
 	if !rem.output.IsTTY() {
+		return
+	}
+	// The parallel pin pool owns the spinner detail (per-worker rows) and
+	// must not be perturbed by individual applyPin calls toggling the global
+	// resolver progress callback.
+	if rem.parallel {
 		return
 	}
 	// A session-wide spinner already owns the screen; leave it running so we
@@ -29,6 +63,9 @@ func (rem *Remediator) startWork(label string) {
 
 func (rem *Remediator) stopWork() {
 	if !rem.output.IsTTY() {
+		return
+	}
+	if rem.parallel {
 		return
 	}
 	if rem.sessionProgress {
@@ -48,10 +85,10 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		return err
 	}
 
-	rem.startWork(fmt.Sprintf("Pinning %s", wr.Path))
+	rem.startWork(rem.workLabel(fmt.Sprintf("Pinning %s", wr.Path)))
 	defer rem.stopWork()
 
-	deps, err := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
+	deps, parentMap, err := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
@@ -59,24 +96,32 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 
 	// Check for impostor commits at pin time — don't let fork-network
 	// commits get pinned in the first place. Fail closed: if we can't
-	// verify reachability (e.g. branch_commits returns 429), refuse to
-	// pin rather than silently accepting a potentially poisoned commit.
+	// verify reachability (e.g. list-branches returns an error), refuse
+	// to pin rather than silently accepting a potentially poisoned commit.
 	//
-	// When reachability is disabled via config, skip this gate entirely —
-	// the branch_commits endpoint would return "disabled" for every dep,
-	// which would block all pinning.
-	if !rem.resolver.DisableReachability {
-		reachResults := rem.resolver.CheckReachabilityAll(deps)
-		for _, rr := range reachResults {
-			switch rr.Status {
-			case resolver.Unreachable:
-				rem.output.Error("%s/%s@%s: %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
-				rem.Alerted++
-				return fmt.Errorf("refusing to pin: impostor commit detected for %s/%s@%s", rr.Owner, rr.Repo, rr.Ref)
-			case resolver.ReachabilityUnknown:
-				rem.output.Error("%s/%s@%s: could not verify commit reachability — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail)
-				rem.Alerted++
-				return fmt.Errorf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later)", rr.Owner, rr.Repo, rr.Ref)
+	// Auto-fix runs upstream in remediateWorkflow before applyPin is
+	// called: by the time we get here, the workflow file has already been
+	// rewritten if a sane-release substitution was available. Anything
+	// still reaching this loop with Status == Unreachable is unfixable
+	// (no suggestion, transitive impostor, etc.) and must alert.
+	reachResults := rem.resolver.CheckReachabilityAll(deps)
+	for _, rr := range reachResults {
+		switch rr.Status {
+		case resolver.Unreachable:
+			rem.alertImposter(wr.Path, rr.Owner, rr.Repo, rr.Ref,
+				fmt.Sprintf("refusing to pin: impostor commit detected for %s/%s@%s — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
+			return errWorkflowAlerted
+		case resolver.ReachabilityUnknown:
+			rem.alertWorkflow(wr.Path, rr.Owner+"/"+rr.Repo+"@"+rr.Ref,
+				"couldn't verify the SHA is reachable (API or network issue) — retry before pinning",
+				fmt.Sprintf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later) — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
+			return errWorkflowAlerted
+		case resolver.Reachable:
+			// Reachable, but only after falling back to a full branch
+			// scan: the commit is not on a canonical branch. Pin it, but
+			// flag it so the summary can surface it in red.
+			if rr.FullScanUsed {
+				rem.recordFullScanDep(rr.Owner + "/" + rr.Repo + "@" + rr.Ref)
 			}
 		}
 	}
@@ -128,8 +173,13 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	}
 	normRewrites, err := rem.resolver.NormalizeContaining(deps)
 	if err != nil {
-		rem.Alerted++
-		return fmt.Errorf("normalizing containing refs: %w", err)
+		var imp *resolver.ImpostorError
+		if errors.As(err, &imp) {
+			owner, repo := splitNWO(imp.NWO)
+			rem.alertImposter(wr.Path, owner, repo, imp.Ref, imp.Error())
+			return errWorkflowAlerted
+		}
+		return fmt.Errorf("%s: normalizing containing refs: %w", wr.Path, err)
 	}
 	for k, v := range normRewrites {
 		rewrites[k] = v
@@ -141,7 +191,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	}
 
 	// Update parent map keys to reflect narrowed refs.
-	rem.resolver.RekeyParentMap(parentRewrites)
+	parentMap = resolver.RekeyParentMap(parentMap, parentRewrites)
 
 	// If we have rewrites, update the uses: lines in the workflow first.
 	if len(rewrites) > 0 {
@@ -154,12 +204,12 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		}
 	}
 
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap(), directTracker.Keys(deps)); err != nil {
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Pinned %d dependencies in %s", len(deps), wr.Path)
-	rem.Fixed++
+	rem.incFixed()
 	return nil
 }
 
@@ -180,7 +230,7 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	}
 	if changed == 0 {
 		rem.output.Warning("could not find %s in workflow to rewrite", oldUses)
-		rem.Skipped++
+		rem.incSkipped()
 		return nil
 	}
 
@@ -197,20 +247,21 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 	rem.startWork(fmt.Sprintf("Re-pinning %s", dep.NWO))
 	defer rem.stopWork()
 	refs, _, _ := wf2.ExtractActionRefs()
-	deps, err := rem.resolver.ResolveAllRecursive(refs)
+	deps, parentMap, err := rem.resolver.ResolveAllRecursive(refs)
 	if err != nil {
 		return fmt.Errorf("re-resolving after ref change: %w", err)
 	}
 	directTracker := lockfile.NewDirectTracker(refs, deps)
-	if err := rem.normalizeAndRewrite(wr.Path, deps); err != nil {
+	parentMap, err = rem.normalizeAndRewrite(wr.Path, deps, parentMap)
+	if err != nil {
 		return err
 	}
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap(), directTracker.Keys(deps)); err != nil {
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Converted %s from SHA to %s and re-pinned", dep.NWO, tag)
-	rem.Fixed++
+	rem.incFixed()
 	return nil
 }
 
@@ -224,50 +275,69 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 	refs, _, _ := wf.ExtractActionRefs()
 	rem.startWork(fmt.Sprintf("Re-resolving %s", dep.NWO))
 	defer rem.stopWork()
-	deps, err := rem.resolver.ResolveAllRecursive(refs)
+	deps, parentMap, err := rem.resolver.ResolveAllRecursive(refs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
 	directTracker := lockfile.NewDirectTracker(refs, deps)
 
-	if err := rem.normalizeAndRewrite(wr.Path, deps); err != nil {
+	parentMap, err = rem.normalizeAndRewrite(wr.Path, deps, parentMap)
+	if err != nil {
 		return err
 	}
 
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, rem.resolver.ParentMap(), directTracker.Keys(deps)); err != nil {
+	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
 	rem.output.Success("Updated %s to latest resolution", dep.Key())
-	rem.Fixed++
+	rem.incFixed()
 	return nil
 }
 
 // normalizeAndRewrite runs containing-ref discovery against deps, mutates
-// dep.Tag/Branch/Ref in place, and rewrites the workflow file's uses: lines
-// to the canonical refs. Returns an error if any commit has no containing
-// branch (impostor signal).
-func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency) error {
+// dep.Tag/Branch/Ref in place, rewrites the workflow file's uses: lines to
+// the canonical refs, and rekeys parentMap to reflect any ref changes. Both
+// `deps` and `parentMap` may be mutated; callers should treat them as live
+// after the call and pass the (rekeyed) parentMap on to store.Set.
+// Returns an error if any commit has no containing branch (impostor signal).
+func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency, parentMap resolver.ParentMap) (resolver.ParentMap, error) {
+	preNormKeys := make([]string, len(deps))
+	for i, d := range deps {
+		preNormKeys[i] = d.Key()
+	}
 	normRewrites, err := rem.resolver.NormalizeContaining(deps)
 	if err != nil {
-		rem.Alerted++
-		return fmt.Errorf("normalizing containing refs: %w", err)
+		var imp *resolver.ImpostorError
+		if errors.As(err, &imp) {
+			owner, repo := splitNWO(imp.NWO)
+			rem.alertImposter(workflowPath, owner, repo, imp.Ref, imp.Error())
+			return parentMap, errWorkflowAlerted
+		}
+		return parentMap, fmt.Errorf("%s: normalizing containing refs: %w", workflowPath, err)
 	}
+	parentRewrites := make(map[string]string, len(deps))
+	for i := range deps {
+		if newKey := deps[i].Key(); newKey != preNormKeys[i] {
+			parentRewrites[preNormKeys[i]] = newKey
+		}
+	}
+	parentMap = resolver.RekeyParentMap(parentMap, parentRewrites)
 	if len(normRewrites) == 0 {
-		return nil
+		return parentMap, nil
 	}
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
-		return err
+		return parentMap, err
 	}
 	content, _, err := wf.RewriteActionRefs(normRewrites)
 	if err != nil {
-		return fmt.Errorf("rewriting refs to canonical tag/branch: %w", err)
+		return parentMap, fmt.Errorf("rewriting refs to canonical tag/branch: %w", err)
 	}
 	if err := writeWorkflowFile(workflowPath, content); err != nil {
-		return fmt.Errorf("writing file: %w", err)
+		return parentMap, fmt.Errorf("writing file: %w", err)
 	}
-	return nil
+	return parentMap, nil
 }
 
 // writeWorkflowFile overwrites an existing workflow file, preserving its
@@ -280,4 +350,124 @@ func writeWorkflowFile(path string, content []byte) error {
 		mode = info.Mode().Perm()
 	}
 	return os.WriteFile(path, content, mode)
+}
+
+// AutoFixAlertedImposters walks the alerted-impostor state populated during
+// Remediate and rewrites uses: lines for any dep that already has a
+// sane-release suggestion attached. Each matched workflow is rewritten to
+// the suggested tag and re-pinned via applyPin. Successful fixes are moved
+// from the alerted summary into AutoFixedImposters so the end-of-run output
+// can announce them as "auto-pinned — review for sanity" instead of
+// continuing to flag them as unfixable. Workflows whose re-pin fails (e.g.
+// the suggested tag is also unreachable) are left in the alerted set with
+// the rewritten file on disk so the user can inspect manually.
+func (rem *Remediator) AutoFixAlertedImposters() {
+	if len(rem.AlertedSuggestions) == 0 {
+		return
+	}
+
+	type pending struct {
+		owner, repo, oldRef string
+		newTag, newSHA      string
+		depKey              string
+	}
+
+	rem.mu.Lock()
+	byWorkflow := map[string][]pending{}
+	for depKey, sug := range rem.AlertedSuggestions {
+		slash := strings.IndexByte(depKey, '/')
+		at := strings.LastIndexByte(depKey, '@')
+		if slash <= 0 || at <= slash {
+			continue
+		}
+		owner := depKey[:slash]
+		repo := depKey[slash+1 : at]
+		oldRef := depKey[at+1:]
+		newTag, newSHA := sug, ""
+		if sp := strings.IndexByte(sug, ' '); sp >= 0 {
+			newTag = sug[:sp]
+			newSHA = sug[sp+1:]
+		}
+		if newTag == "" {
+			continue
+		}
+		for _, wp := range rem.AlertedWorkflows[depKey] {
+			byWorkflow[wp] = append(byWorkflow[wp], pending{owner, repo, oldRef, newTag, newSHA, depKey})
+		}
+	}
+	rem.mu.Unlock()
+
+	if len(byWorkflow) == 0 {
+		return
+	}
+
+	fixedKeys := map[string]bool{}
+	for wp, fixes := range byWorkflow {
+		wf, err := lockfile.Load(wp)
+		if err != nil {
+			continue
+		}
+		refs, _, _ := wf.ExtractActionRefs()
+		rewrites := map[string]string{}
+		for _, fx := range fixes {
+			for _, ar := range refs {
+				if ar.Owner == fx.owner && ar.Repo == fx.repo {
+					rewrites[ar.Raw] = fx.owner + "/" + fx.repo + "@" + fx.newTag
+				}
+			}
+		}
+		if len(rewrites) == 0 {
+			continue
+		}
+		content, changed, err := wf.RewriteActionRefs(rewrites)
+		if err != nil || changed == 0 {
+			continue
+		}
+		if err := writeWorkflowFile(wp, content); err != nil {
+			continue
+		}
+		wf2, err := lockfile.Load(wp)
+		if err != nil {
+			continue
+		}
+		newRefs, _, _ := wf2.ExtractActionRefs()
+		if err := rem.applyPin(WorkflowReport{Path: wp, ActionRefs: newRefs}); err != nil {
+			// Re-pin failed (e.g. suggested tag is also unreachable).
+			// Leave the rewritten file in place; the alert remains so the
+			// user notices.
+			continue
+		}
+		for _, fx := range fixes {
+			rem.recordAutoFixedImposter(wp, fx.owner+"/"+fx.repo, fx.oldRef, fx.newTag, fx.newSHA)
+			fixedKeys[fx.depKey] = true
+		}
+	}
+
+	if len(fixedKeys) == 0 {
+		return
+	}
+
+	rem.mu.Lock()
+	defer rem.mu.Unlock()
+	for k := range fixedKeys {
+		delete(rem.AlertedSuggestions, k)
+		delete(rem.AlertedReasons, k)
+		delete(rem.AlertedWorkflows, k)
+		delete(rem.AlertedSearched, k)
+	}
+	if len(rem.AlertedDeps) > 0 {
+		kept := rem.AlertedDeps[:0]
+		for _, d := range rem.AlertedDeps {
+			if !fixedKeys[d] {
+				kept = append(kept, d)
+			}
+		}
+		rem.AlertedDeps = kept
+	}
+	delta := len(fixedKeys)
+	if delta > rem.Alerted {
+		delta = rem.Alerted
+	}
+	rem.Alerted -= delta
+	rem.Fixed += delta
 }

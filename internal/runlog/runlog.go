@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -29,8 +30,10 @@ const (
 	retentionCount = 50
 )
 
-// Logger is an io.Writer-backed transcript file for a single run.
+// Logger is an io.Writer-backed transcript file for a single run. Safe for
+// concurrent use by multiple goroutines; Write serializes via mu.
 type Logger struct {
+	mu   sync.Mutex
 	f    *os.File
 	path string
 }
@@ -65,6 +68,8 @@ func (l *Logger) Write(p []byte) (int, error) {
 	if l == nil || l.f == nil {
 		return len(p), nil
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	return l.f.Write(p)
 }
 

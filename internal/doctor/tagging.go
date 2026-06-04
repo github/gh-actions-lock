@@ -3,9 +3,10 @@ package doctor
 import (
 	"fmt"
 
-	"github.com/github/gh-actions-pin/internal/lockfile"
 	"strings"
 	"time"
+
+	"github.com/github/gh-actions-pin/internal/lockfile"
 )
 
 // TagSuggestion is a tag paired with why it's being suggested.
@@ -105,7 +106,7 @@ func (tl *TagLister) TagsForSHA(owner, repo, sha string) ([]TagInfo, error) {
 	}
 	var matched []TagInfo
 	for _, t := range all {
-		if strings.EqualFold(t.SHA, sha) {
+		if t.MatchesSHA(sha) {
 			matched = append(matched, t)
 		}
 	}

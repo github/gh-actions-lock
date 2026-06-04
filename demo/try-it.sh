@@ -20,18 +20,6 @@ banner() { echo -e "\n${BOLD}${CYAN}── $1 ──${RESET_COLOR}\n"; }
 comment() { echo -e "${DIM}# $1${RESET_COLOR}"; }
 run() { echo -e "${GREEN}\$ $*${RESET_COLOR}"; "$@"; echo; }
 
-# Enable the reachability check (branch_commits) for scenarios that need it.
-# This undocumented endpoint 429s aggressively so it's off by default.
-# Uses GH_ACTIONS_PIN_CONFIG to avoid mutating real user config.
-enable_reachability() {
-  _DEMO_CONFIG=$(mktemp /tmp/gh-actions-pin-demo-XXXXXX.yml)
-  echo "reachability_check: true" > "$_DEMO_CONFIG"
-  export GH_ACTIONS_PIN_CONFIG="$_DEMO_CONFIG"
-}
-disable_reachability() {
-  unset GH_ACTIONS_PIN_CONFIG
-  rm -f "${_DEMO_CONFIG:-}"
-}
 show_workflow_summary() {
   awk '/uses:/ { print }' "$1"
   local lock
@@ -363,8 +351,6 @@ scenario_ref_moved() {
 scenario_imposter_commit() {
   banner "Imposter commit — fork injection"
   bash "$RESET"
-  enable_reachability
-  trap disable_reachability EXIT
   local scratch wf
   scratch="$(stage_workflow demo/workflows-pwned/1-pinned-before-hijack.yml)"
   wf=".github/workflows/1-pinned-before-hijack.yml"
@@ -372,8 +358,6 @@ scenario_imposter_commit() {
   run show_workflow_summary "$scratch/$wf"
   comment "Check detects the tag moved to a fork-network commit"
   ( cd "$scratch" && run gh actions-pin check "$wf" )
-  disable_reachability
-  trap - EXIT
 }
 
 scenario_lockfile_forgery() {

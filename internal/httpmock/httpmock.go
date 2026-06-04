@@ -228,6 +228,21 @@ func REST(method, pathPattern string) Matcher {
 	}
 }
 
+// RESTWithQuery is like REST but also requires querySubstring to appear in the
+// request's raw query string. Use this to distinguish calls that share a URL
+// path but differ by query parameter (e.g. branches?protected=true vs
+// branches?per_page=100).
+func RESTWithQuery(method, pathPattern, querySubstring string) Matcher {
+	re := regexp.MustCompile(pathPattern)
+
+	return func(req *http.Request) bool {
+		if !strings.EqualFold(req.Method, method) {
+			return false
+		}
+		return re.MatchString(req.URL.Path) && strings.Contains(req.URL.RawQuery, querySubstring)
+	}
+}
+
 // StatusResponse returns a response with the given status code and empty body.
 func StatusResponse(code int) Responder {
 	return func(req *http.Request) (*http.Response, error) {
