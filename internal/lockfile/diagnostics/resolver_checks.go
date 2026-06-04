@@ -21,14 +21,15 @@ func checkMisleadingSha(ctx context.Context, wf WorkflowInput, r Resolver) []Fin
 		if res.Status != RefStatusResolved || res.Sha == "" {
 			continue
 		}
-		if strings.EqualFold(res.Sha, u.Ref) {
+		// MISLEADING_SHA cares about exactly one shape: a SHA-shaped ref
+		// that resolves to a commit via a *mutable* path (a branch named
+		// after a SHA). Commit-OID pins and annotated-tag-object pins
+		// (including chains) are content-addressed and safe even when
+		// res.Sha differs from the input — the host marks those Immutable.
+		if res.Immutable {
 			continue
 		}
-		// Pinning to an annotated-tag object SHA is a legitimate immutable
-		// pin: the workflow's `uses:` ref equals the tag object's own SHA,
-		// which the host peels via `^{commit}` to a different underlying
-		// commit. Accept it when the host surfaces it.
-		if res.TagObjectSHA != "" && strings.EqualFold(res.TagObjectSHA, u.Ref) {
+		if strings.EqualFold(res.Sha, u.Ref) {
 			continue
 		}
 		f := findingFromUse(wf, u)

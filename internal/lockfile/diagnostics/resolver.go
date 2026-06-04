@@ -18,16 +18,19 @@ const (
 // RefResult is the resolver's answer for ResolveRef.
 type RefResult struct {
 	Status RefStatus
-	Sha    string // populated when Status == RefStatusResolved
-	// TagObjectSHA, when non-empty, is the SHA of the annotated tag object
-	// associated with the resolved ref (distinct from the peeled commit
-	// SHA). Pinning a workflow's `uses:` to this SHA is a legitimate
-	// immutable-pin pattern for annotated tags / immutable releases:
-	// callers comparing a SHA-shaped ref against the resolved commit must
-	// also accept TagObjectSHA as a match. Empty for lightweight tags or
-	// when the host can't supply it.
-	TagObjectSHA string
-	RefType      string // optional: "tag" | "branch" | "commit"
+	Sha    string // populated when Status == RefStatusResolved — the resolved commit OID
+	// Immutable reports whether the input ref is content-addressed and
+	// therefore safe regardless of any divergence from Sha. True when:
+	//   - the input ref is itself a commit OID that matches Sha, or
+	//   - the input ref is an annotated tag object SHA (including chains
+	//     of tag-of-tag objects) that peels to Sha.
+	// False when the input ref is a SHA-shaped string that resolves to a
+	// commit via a mutable ref (a branch or branch-shaped name) — the
+	// only shape MISLEADING_SHA / CheckSHARefMismatches should flag.
+	// Non-hex refs (tag/branch names) are not subject to those checks at
+	// all; this field is only meaningful for hex inputs.
+	Immutable bool
+	RefType   string // optional: "tag" | "branch" | "commit"
 }
 
 // AncestryStatus is the outcome of CheckAncestry(candidate, head).

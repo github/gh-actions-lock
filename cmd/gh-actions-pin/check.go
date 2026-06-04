@@ -308,10 +308,12 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		f.UI.UpdateLabel("Analyzing")
 	}
 
-	// Build a TagLister up-front so the engine adapter can recognize
-	// annotated-tag-object SHA pins (e.g. `actions/github-script@<tag-obj>`
-	// for an immutable release). The same TagLister is reused later by
-	// EnrichImposterFindings and the Remediator so we don't refetch tags.
+	// Build a shared REST client + TagLister up-front. The diagnostics
+	// engine now uses the resolver's PeelTagObject directly to recognize
+	// annotated-tag-object SHA pins, so no tagger is needed for that path.
+	// The TagLister is still reused by EnrichImposterFindings and the
+	// Remediator (best-patch-for-SHA lookups, release tag hints) so we
+	// don't refetch tags downstream.
 	hostname := resolveHostname(opts.Hostname)
 	var tagger *doctor.TagLister
 	var sharedRestClient *api.RESTClient
@@ -320,7 +322,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		tagger = doctor.NewTagLister(rc)
 	}
 
-	report := doctor.DiagnoseParsedWithTagger(parsed, r, store, tagger)
+	report := doctor.DiagnoseParsed(parsed, r, store)
 
 	// Compute validity from findings.
 	valid := report.IsValid()

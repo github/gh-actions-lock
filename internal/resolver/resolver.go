@@ -309,9 +309,19 @@ type tagPeel struct {
 // release tags are stored as tag *objects* whose own SHA differs from the
 // commit they point at, so a `uses:` pin to that tag-object SHA is a
 // legitimate immutable pin even though it does not equal the commit SHA the
-// ref resolves to. Returns ok=false for lightweight tags, plain commits, or
-// any lookup failure (fail open).
+// ref resolves to. Follows tag-of-tag chains up to a small depth cap.
+// Returns ok=false for lightweight tags, plain commits, cycles, or any
+// lookup failure (fail open).
 func (r *Resolver) PeelTagObject(owner, repo, sha string) (commit string, ok bool) {
+	return r.peelTagObject(owner, repo, sha, 0)
+}
+
+const maxTagPeelDepth = 5
+
+func (r *Resolver) peelTagObject(owner, repo, sha string, depth int) (string, bool) {
+	if depth >= maxTagPeelDepth {
+		return "", false
+	}
 	key := hintKey(owner, repo, sha)
 	r.cacheMu.Lock()
 	cached, hit := r.tagObjectCache[key]
@@ -333,14 +343,27 @@ func (r *Resolver) PeelTagObject(owner, repo, sha string) (commit string, ok boo
 		// failures so a later retry can succeed.
 		return "", false
 	}
-	r.cacheMu.Lock()
-	defer r.cacheMu.Unlock()
-	if resp.Object.Type != "commit" || resp.Object.SHA == "" {
+	switch {
+	case resp.Object.Type == "commit" && resp.Object.SHA != "":
+		r.cacheMu.Lock()
+		r.tagObjectCache[key] = tagPeel{commit: resp.Object.SHA, isTag: true}
+		r.cacheMu.Unlock()
+		return resp.Object.SHA, true
+	case resp.Object.Type == "tag" && resp.Object.SHA != "":
+		// Tag-of-tag chain — recurse to find the underlying commit.
+		commit, ok := r.peelTagObject(owner, repo, resp.Object.SHA, depth+1)
+		if ok {
+			r.cacheMu.Lock()
+			r.tagObjectCache[key] = tagPeel{commit: commit, isTag: true}
+			r.cacheMu.Unlock()
+		}
+		return commit, ok
+	default:
+		r.cacheMu.Lock()
 		r.tagObjectCache[key] = tagPeel{}
+		r.cacheMu.Unlock()
 		return "", false
 	}
-	r.tagObjectCache[key] = tagPeel{commit: resp.Object.SHA, isTag: true}
-	return resp.Object.SHA, true
 }
 
 // RepoIDs returns the numeric owner ID and repo ID for a NWO, querying

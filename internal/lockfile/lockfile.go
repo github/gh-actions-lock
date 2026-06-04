@@ -230,23 +230,43 @@ func isHexString(s string) bool {
 }
 
 // SHARefMismatch describes a dependency whose uses: ref looks like a full SHA
-// but resolved to a different commit OID.
+// but resolved to a different commit OID via a mutable path (e.g. a branch
+// named after a SHA — the only forgery shape worth flagging).
 type SHARefMismatch struct {
 	Dep        Dependency
 	ResolvedAs string
 }
 
-// CheckSHARefMismatches inspects resolved dependencies for refs that look like
-// full SHAs but resolved to different OIDs.
-func CheckSHARefMismatches(deps []Dependency) []SHARefMismatch {
+// TagObjectPeeler can dereference a 40-hex SHA into the commit it points at
+// when the SHA is itself an annotated tag object. *resolver.Resolver
+// satisfies this; tests pass a stub. A nil peeler disables tag-object
+// recognition and reverts to the strict EqualFold(ref, sha) check.
+type TagObjectPeeler interface {
+	PeelTagObject(owner, repo, sha string) (commit string, ok bool)
+}
+
+// CheckSHARefMismatches inspects resolved dependencies for refs that look
+// like full SHAs but resolved to different commit OIDs. Commit-OID pins and
+// annotated-tag-object pins are content-addressed and immutable — those are
+// honored as legitimate even when ref != sha. A nil peeler reverts to the
+// strict comparison; pass a non-nil peeler in network-connected paths so
+// tag-object pins (the immutable-release pattern) don't false-positive.
+func CheckSHARefMismatches(deps []Dependency, peeler TagObjectPeeler) []SHARefMismatch {
 	var mismatches []SHARefMismatch
 	for _, dep := range deps {
-		if IsFullSHA(dep.Ref) && !strings.EqualFold(dep.Ref, dep.SHA) {
-			mismatches = append(mismatches, SHARefMismatch{
-				Dep:        dep,
-				ResolvedAs: dep.SHA,
-			})
+		if !IsFullSHA(dep.Ref) || strings.EqualFold(dep.Ref, dep.SHA) {
+			continue
 		}
+		if peeler != nil {
+			owner, repo := dep.OwnerRepo()
+			if commit, ok := peeler.PeelTagObject(owner, repo, dep.Ref); ok && strings.EqualFold(commit, dep.SHA) {
+				continue
+			}
+		}
+		mismatches = append(mismatches, SHARefMismatch{
+			Dep:        dep,
+			ResolvedAs: dep.SHA,
+		})
 	}
 	return mismatches
 }

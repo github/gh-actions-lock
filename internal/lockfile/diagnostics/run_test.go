@@ -291,9 +291,9 @@ func TestRun_MisleadingSha_TagObjectSHA(t *testing.T) {
 	r := &stubResolver{
 		refs: map[string]RefResult{
 			"actions/github-script@" + tagObjectSHA: {
-				Status:       RefStatusResolved,
-				Sha:          peeledCommit,
-				TagObjectSHA: tagObjectSHA,
+				Status:    RefStatusResolved,
+				Sha:       peeledCommit,
+				Immutable: true,
 			},
 		},
 	}

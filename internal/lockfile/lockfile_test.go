@@ -406,11 +406,45 @@ func TestCheckSHARefMismatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mismatches := CheckSHARefMismatches(tt.deps)
+			mismatches := CheckSHARefMismatches(tt.deps, nil)
 			assert.Len(t, mismatches, tt.wantCount)
 			if tt.wantMismatch != "" && len(mismatches) > 0 {
 				assert.Equal(t, tt.wantMismatch, mismatches[0].Dep.NWO)
 			}
 		})
 	}
+}
+
+// stubPeeler simulates a TagObjectPeeler: the configured map records, per
+// (owner/repo|sha), the commit that sha peels to. Absent keys peel to ("", false).
+type stubPeeler map[string]string
+
+func (s stubPeeler) PeelTagObject(owner, repo, sha string) (string, bool) {
+	commit, ok := s[owner+"/"+repo+"|"+sha]
+	return commit, ok
+}
+
+func TestCheckSHARefMismatches_HonorsTagObjectPeeler(t *testing.T) {
+	const tagObjSHA = "d746ffe35508b1917358783b479e04febd2b8f71"
+	const peeledCommit = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
+	const branchHead = "ddddccccbbbbaaaa0000111122223333eeeeffff"
+
+	deps := []Dependency{
+		// Legitimate annotated-tag-object pin (immutable release pattern).
+		{NWO: "actions/github-script", Ref: tagObjSHA, SHA: peeledCommit},
+		// Branch named after a SHA — the real forgery shape.
+		{NWO: "evil/repo", Ref: "aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000", SHA: branchHead},
+	}
+	peeler := stubPeeler{
+		"actions/github-script|" + tagObjSHA: peeledCommit,
+	}
+
+	mismatches := CheckSHARefMismatches(deps, peeler)
+	if assert.Len(t, mismatches, 1) {
+		assert.Equal(t, "evil/repo", mismatches[0].Dep.NWO)
+	}
+
+	// Without the peeler the legitimate tag-object pin false-positives.
+	mismatches = CheckSHARefMismatches(deps, nil)
+	assert.Len(t, mismatches, 2)
 }

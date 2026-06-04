@@ -360,7 +360,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	}
 	directTracker := lockfile.NewDirectTracker(upgradedRefs, deps)
 
-	if mismatches := lockfile.CheckSHARefMismatches(deps); len(mismatches) > 0 {
+	if mismatches := lockfile.CheckSHARefMismatches(deps, r); len(mismatches) > 0 {
 		f.UI.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
 			f.UI.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
