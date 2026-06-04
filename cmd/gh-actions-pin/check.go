@@ -555,7 +555,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 					indent = "    "
 				}
 				for _, dep := range byReason[reason] {
-					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep)))
+					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep, r)))
 					paths := alertedWorkflows[dep]
 					if len(paths) == 0 {
 						paths = workflowsForDep(report, dep)
@@ -598,7 +598,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally:",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
-				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep)))
+				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep, r)))
 			}
 		}
 		if unresolvedCount > 0 {
@@ -608,7 +608,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.TermError("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, dep := range unresolvedDeps {
-				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep)))
+				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep, r)))
 			}
 		}
 		return errSilent
@@ -1074,9 +1074,13 @@ func hasImposterFindings(r *doctor.Report) bool {
 }
 
 // depReleaseURL derives a GitHub URL from a dep key of the form
-// "owner/repo[/path]@ref". Links to the specific release tag when the ref
-// looks like a tag (not a SHA), otherwise the releases list.
-func depReleaseURL(dep string) string {
+// "owner/repo[/path]@ref". Commit-SHA pins link to /commit/<sha> (the
+// diff view). Annotated-tag-object SHAs link to /tree/<sha> instead —
+// /commit/<tagobject-sha> returns 404 because the tag object is not a
+// commit. Non-SHA refs link to /releases/tag/<ref>. A nil checker
+// (or one that has not peeled this SHA) falls back to the plain
+// /commit/<sha> path.
+func depReleaseURL(dep string, checker tagObjectChecker) string {
 	nwo := dep
 	ref := ""
 	if i := strings.IndexByte(dep, '@'); i >= 0 {
@@ -1089,12 +1093,23 @@ func depReleaseURL(dep string) string {
 	}
 	base := "https://github.com/" + parts[0] + "/" + parts[1]
 	if ref != "" && isHexSHA(ref) {
+		if checker != nil && checker.IsKnownTagObject(parts[0], parts[1], ref) {
+			return base + "/tree/" + ref
+		}
 		return base + "/commit/" + ref
 	}
 	if ref != "" {
 		return base + "/releases/tag/" + ref
 	}
 	return base + "/releases"
+}
+
+// tagObjectChecker is the cache-only "is this SHA an annotated tag object?"
+// query used by depReleaseURL. *resolver.Resolver satisfies this; tests
+// pass a stub. Kept as a small local interface so the URL builder stays
+// I/O-free and trivially mockable.
+type tagObjectChecker interface {
+	IsKnownTagObject(owner, repo, sha string) bool
 }
 
 // workflowsForDep returns workflow paths whose findings reference the given

@@ -1,6 +1,11 @@
 package lockfile
 
-// TODO -- why not stdlib?
+// Semver is gh-actions-pin's bespoke version parser. The Go stdlib has no
+// semver package; golang.org/x/mod/semver exists but enforces strict
+// semver 2.0 (rejects bare "v4" or "v4.2"), drops the v prefix, and
+// doesn't expose MajorTag/MinorTag re-pinning helpers. Action tags
+// routinely use bare-major refs and we need the "v" preserved so
+// rewritten refs match the publisher's tag scheme — so we roll our own.
 
 import (
 	"fmt"

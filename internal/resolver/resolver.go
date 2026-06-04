@@ -317,6 +317,19 @@ func (r *Resolver) PeelTagObject(owner, repo, sha string) (commit string, ok boo
 	return r.peelTagObject(owner, repo, sha, 0)
 }
 
+// IsKnownTagObject reports whether (owner, repo, sha) is already cached as
+// an annotated tag object. Cache-only — never issues a network call. Use
+// from display paths (e.g. URL builders) that must not block on I/O. A
+// false return means either "definitely not a tag object" or "we have not
+// peeled this SHA yet" — callers must treat the negative as ambiguous.
+func (r *Resolver) IsKnownTagObject(owner, repo, sha string) bool {
+	key := hintKey(owner, repo, sha)
+	r.cacheMu.Lock()
+	cached, hit := r.tagObjectCache[key]
+	r.cacheMu.Unlock()
+	return hit && cached.isTag
+}
+
 const maxTagPeelDepth = 5
 
 func (r *Resolver) peelTagObject(owner, repo, sha string, depth int) (string, bool) {
