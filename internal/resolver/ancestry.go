@@ -175,10 +175,7 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 		return true, nil
 	}
 	key := cachekey.ForCompare(owner, repo, sha, branchHeadSHA)
-	r.cacheMu.Lock()
-	v, ok := r.compareCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if v, ok := r.compareCache.get(key); ok {
 		return v, nil
 	}
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
@@ -189,13 +186,13 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) &&
 			(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {
-			r.setCompareCache(key, false)
+			r.compareCache.put(key, false)
 			return false, nil // unrelated histories or missing commit
 		}
 		return false, err
 	}
 	// sha is an ancestor of branchHeadSHA iff the merge base IS sha.
 	contains := strings.EqualFold(resp.MergeBaseCommit.SHA, sha)
-	r.setCompareCache(key, contains)
+	r.compareCache.put(key, contains)
 	return contains, nil
 }

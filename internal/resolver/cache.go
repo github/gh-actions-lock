@@ -3,6 +3,7 @@ package resolver
 import (
 	"fmt"
 	"net/url"
+	"sync"
 
 	"github.com/github/gh-actions-pin/internal/cachekey"
 )
@@ -36,32 +37,30 @@ type reachCacheEntry struct {
 	detail string
 }
 
-// setReachCache stores a reachability verdict under cacheMu.
-func (r *Resolver) setReachCache(key cachekey.Reach, status ReachabilityStatus, detail string) {
-	r.cacheMu.Lock()
-	r.reachCache[key] = reachCacheEntry{status: status, detail: detail}
-	r.cacheMu.Unlock()
+// syncMap is a lock-paired map keyed by K. Each cache on Resolver owns one
+// instance so the lock and the data it protects sit together at the
+// declaration site — every callsite reads a single mutex that guards a
+// single map. The zero value is usable; the underlying map is allocated on
+// first put so partial composite literals (common in tests) don't panic.
+type syncMap[K comparable, V any] struct {
+	mu sync.Mutex
+	m  map[K]V
 }
 
-// setCompareCache stores a Compare verdict under cacheMu.
-func (r *Resolver) setCompareCache(key cachekey.Compare, contains bool) {
-	r.cacheMu.Lock()
-	r.compareCache[key] = contains
-	r.cacheMu.Unlock()
+func (c *syncMap[K, V]) get(k K) (V, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.m[k]
+	return v, ok
 }
 
-// setDefaultBranchCache stores a default-branch lookup under cacheMu.
-func (r *Resolver) setDefaultBranchCache(key cachekey.Repo, name string) {
-	r.cacheMu.Lock()
-	r.defaultBranchCache[key] = name
-	r.cacheMu.Unlock()
-}
-
-// setNamedBranch stores a single-branch lookup under cacheMu.
-func (r *Resolver) setNamedBranch(key cachekey.NWOName, bh branchHead) {
-	r.cacheMu.Lock()
-	r.namedBranchCache[key] = bh
-	r.cacheMu.Unlock()
+func (c *syncMap[K, V]) put(k K, v V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = make(map[K]V)
+	}
+	c.m[k] = v
 }
 
 // RepoIDs returns the numeric owner ID and repo ID for a NWO, querying
@@ -69,10 +68,7 @@ func (r *Resolver) setNamedBranch(key cachekey.NWOName, bh branchHead) {
 // the resolver.
 func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	ids, ok := r.repoIDsCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if ids, ok := r.repoIDsCache.get(key); ok {
 		return ids[0], ids[1], nil
 	}
 	var resp struct {
@@ -88,8 +84,6 @@ func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
 	if resp.ID == 0 || resp.Owner.ID == 0 {
 		return 0, 0, fmt.Errorf("%s returned zero IDs (owner=%d repo=%d)", path, resp.Owner.ID, resp.ID)
 	}
-	r.cacheMu.Lock()
-	r.repoIDsCache[key] = [2]int64{resp.Owner.ID, resp.ID}
-	r.cacheMu.Unlock()
+	r.repoIDsCache.put(key, [2]int64{resp.Owner.ID, resp.ID})
 	return resp.Owner.ID, resp.ID, nil
 }

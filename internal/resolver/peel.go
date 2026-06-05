@@ -48,18 +48,13 @@ func (r *Resolver) PeelTagObject(owner, repo, sha string) (commit string, ok boo
 // peeled this SHA yet" — callers must treat the negative as ambiguous.
 func (r *Resolver) IsKnownTagObject(owner, repo, sha string) bool {
 	key := cachekey.ForNWOSha(owner, repo, sha)
-	r.cacheMu.Lock()
-	cached, hit := r.tagObjectCache[key]
-	r.cacheMu.Unlock()
+	cached, hit := r.tagObjectCache.get(key)
 	return hit && cached.isTag
 }
 
 func (r *Resolver) peelTagObject(owner, repo, sha string) (string, bool) {
 	key := cachekey.ForNWOSha(owner, repo, sha)
-	r.cacheMu.Lock()
-	cached, hit := r.tagObjectCache[key]
-	r.cacheMu.Unlock()
-	if hit {
+	if cached, hit := r.tagObjectCache.get(key); hit {
 		return cached.commit, cached.isTag
 	}
 	var resp struct {
@@ -93,9 +88,7 @@ func (r *Resolver) peelTagObject(owner, repo, sha string) (string, bool) {
 	if resp.Repository.Head.Typename != "Tag" {
 		// Definitively not an annotated tag object — cache the negative so
 		// the common "pin is a plain commit SHA" case never re-queries.
-		r.cacheMu.Lock()
-		r.tagObjectCache[key] = tagPeel{}
-		r.cacheMu.Unlock()
+		r.tagObjectCache.put(key, tagPeel{})
 		return "", false
 	}
 	if resp.Repository.Peeled == nil || resp.Repository.Peeled.OID == "" {
@@ -104,9 +97,7 @@ func (r *Resolver) peelTagObject(owner, repo, sha string) (string, bool) {
 		// ambiguous rather than authoritatively negative.
 		return "", false
 	}
-	r.cacheMu.Lock()
-	r.tagObjectCache[key] = tagPeel{commit: resp.Repository.Peeled.OID, isTag: true}
-	r.cacheMu.Unlock()
+	r.tagObjectCache.put(key, tagPeel{commit: resp.Repository.Peeled.OID, isTag: true})
 	return resp.Repository.Peeled.OID, true
 }
 
@@ -126,10 +117,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	}
 
 	cacheKey := cachekey.ForReach(owner, repo, sha, ref)
-	r.cacheMu.Lock()
-	entry, ok := r.reachCache[cacheKey]
-	r.cacheMu.Unlock()
-	if ok {
+	if entry, ok := r.reachCache.get(cacheKey); ok {
 		result.Status = entry.status
 		result.Detail = entry.detail
 		return result
@@ -138,7 +126,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 	// Allow tests to inject a fake implementation.
 	if r.checkReachFn != nil {
 		result.Status, result.Detail = r.checkReachFn(owner, repo, sha, ref)
-		r.setReachCache(cacheKey, result.Status, result.Detail)
+		r.reachCache.put(cacheKey, reachCacheEntry{status: result.Status, detail: result.Detail})
 		return result
 	}
 
@@ -165,7 +153,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		if err != nil {
 			result.Status = ReachabilityUnknown
 			result.Detail = fmt.Sprintf("could not list branches for %s/%s: %s", owner, repo, err)
-			r.setReachCache(cacheKey, result.Status, result.Detail)
+			r.reachCache.put(cacheKey, reachCacheEntry{status: result.Status, detail: result.Detail})
 			return result
 		}
 		protectedBranches := make([]branchHead, 0, len(branches))
@@ -209,7 +197,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		}
 	}
 
-	r.setReachCache(cacheKey, result.Status, result.Detail)
+	r.reachCache.put(cacheKey, reachCacheEntry{status: result.Status, detail: result.Detail})
 	return result
 }
 
@@ -241,9 +229,7 @@ func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []b
 	}
 	// Slow path: ancestry via Compare API in tier order. The walk runs
 	// concurrently — see function comment.
-	r.cacheMu.Lock()
-	hintBranch := r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, sha)]
-	r.cacheMu.Unlock()
+	hintBranch, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
 	ordered := orderedBranches(candidates, hintBranch, ref, defaultBranch)
 	if len(ordered) == 0 {
 		return "", false
@@ -382,10 +368,10 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 	}
 
 	// Fan out the per-dependency checks with a bounded worker pool. Each dep is
-	// independent; the cache maps they touch are guarded by cacheMu and progress
-	// reporting is serialized, so results[i] is the only unsynchronized write
-	// and each goroutine owns a distinct index. Each goroutine also owns a
-	// stable slot index (0..limit-1) for the per-worker UI display.
+	// independent; per-cache locks serialize map access and progress reporting
+	// is serialized via progressMu, so results[i] is the only unsynchronized
+	// write and each goroutine owns a distinct index. Each goroutine also owns
+	// a stable slot index (0..limit-1) for the per-worker UI display.
 	results := make([]ReachabilityResult, total)
 	limit := reachabilityConcurrency
 	if limit > total {
@@ -432,10 +418,7 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 // the number of API calls.
 func (r *Resolver) listBranches(owner, repo string) ([]branchHead, error) {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	cached, ok := r.branchListCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if cached, ok := r.branchListCache.get(key); ok {
 		return cached, nil
 	}
 	var all []branchHead
@@ -459,9 +442,7 @@ func (r *Resolver) listBranches(owner, repo string) ([]branchHead, error) {
 			break // last page
 		}
 	}
-	r.cacheMu.Lock()
-	r.branchListCache[key] = all
-	r.cacheMu.Unlock()
+	r.branchListCache.put(key, all)
 	return all, nil
 }
 
@@ -470,10 +451,7 @@ func (r *Resolver) listBranches(owner, repo string) ([]branchHead, error) {
 // cached per owner/repo.
 func (r *Resolver) listTagsForRepo(owner, repo string) ([]tagEntry, error) {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	cached, ok := r.tagListCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if cached, ok := r.tagListCache.get(key); ok {
 		return cached, nil
 	}
 	path := fmt.Sprintf("repos/%s/%s/tags?per_page=100",
@@ -491,9 +469,7 @@ func (r *Resolver) listTagsForRepo(owner, repo string) ([]tagEntry, error) {
 	for _, t := range resp {
 		tags = append(tags, tagEntry{Name: t.Name, SHA: t.Commit.SHA})
 	}
-	r.cacheMu.Lock()
-	r.tagListCache[key] = tags
-	r.cacheMu.Unlock()
+	r.tagListCache.put(key, tags)
 	return tags, nil
 }
 
@@ -547,10 +523,7 @@ func orderedBranches(branches []branchHead, hintBranch, hintRef, defaultBranch s
 // callers don't retry.
 func (r *Resolver) getDefaultBranch(owner, repo string) string {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	name, ok := r.defaultBranchCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if name, ok := r.defaultBranchCache.get(key); ok {
 		return name
 	}
 	var resp struct {
@@ -558,10 +531,10 @@ func (r *Resolver) getDefaultBranch(owner, repo string) string {
 	}
 	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
 	if err := r.restClient.Get(path, &resp); err != nil {
-		r.setDefaultBranchCache(key, "")
+		r.defaultBranchCache.put(key, "")
 		return ""
 	}
-	r.setDefaultBranchCache(key, resp.DefaultBranch)
+	r.defaultBranchCache.put(key, resp.DefaultBranch)
 	return resp.DefaultBranch
 }
 
@@ -586,10 +559,7 @@ func (r *Resolver) getBranchHead(owner, repo, name string) (branchHead, bool) {
 		return branchHead{}, false
 	}
 	key := cachekey.ForNWOName(owner, repo, name)
-	r.cacheMu.Lock()
-	bh, ok := r.namedBranchCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if bh, ok := r.namedBranchCache.get(key); ok {
 		return bh, bh.Name != ""
 	}
 	path := fmt.Sprintf("repos/%s/%s/git/ref/heads/%s",
@@ -604,7 +574,7 @@ func (r *Resolver) getBranchHead(owner, repo, name string) (branchHead, bool) {
 	if err := r.restClient.Get(path, &resp); err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
-			r.setNamedBranch(key, branchHead{}) // negative cache
+			r.namedBranchCache.put(key, branchHead{}) // negative cache
 		}
 		return branchHead{}, false
 	}
@@ -613,8 +583,8 @@ func (r *Resolver) getBranchHead(owner, repo, name string) (branchHead, bool) {
 	if resp.Object.SHA == "" {
 		return branchHead{}, false
 	}
-	bh = branchHead{Name: name, SHA: resp.Object.SHA}
-	r.setNamedBranch(key, bh)
+	bh := branchHead{Name: name, SHA: resp.Object.SHA}
+	r.namedBranchCache.put(key, bh)
 	return bh, true
 }
 
@@ -623,10 +593,7 @@ func (r *Resolver) getBranchHead(owner, repo, name string) (branchHead, bool) {
 // yields whatever was collected so far (possibly empty). Cached per owner/repo.
 func (r *Resolver) listProtectedBranches(owner, repo string) []branchHead {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	cached, ok := r.protectedBranchCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if cached, ok := r.protectedBranchCache.get(key); ok {
 		return cached
 	}
 	var all []branchHead
@@ -649,9 +616,7 @@ func (r *Resolver) listProtectedBranches(owner, repo string) []branchHead {
 			break
 		}
 	}
-	r.cacheMu.Lock()
-	r.protectedBranchCache[key] = all
-	r.cacheMu.Unlock()
+	r.protectedBranchCache.put(key, all)
 	return all
 }
 
@@ -687,10 +652,7 @@ func (r *Resolver) matchingHeadRefs(owner, repo, prefix string) []branchHead {
 // cached per owner/repo.
 func (r *Resolver) listReleaseBranches(owner, repo string) []branchHead {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	cached, ok := r.releaseBranchCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if cached, ok := r.releaseBranchCache.get(key); ok {
 		return cached
 	}
 	seen := make(map[string]bool)
@@ -704,9 +666,7 @@ func (r *Resolver) listReleaseBranches(owner, repo string) []branchHead {
 			all = append(all, bh)
 		}
 	}
-	r.cacheMu.Lock()
-	r.releaseBranchCache[key] = all
-	r.cacheMu.Unlock()
+	r.releaseBranchCache.put(key, all)
 	return all
 }
 
@@ -732,9 +692,7 @@ func (r *Resolver) likelyBranches(owner, repo, sha, ref, defaultBranch string) [
 	if ref != "" && !lockfile.IsFullSha(ref) {
 		addNamed(ref)
 	}
-	r.cacheMu.Lock()
-	hint := r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, sha)]
-	r.cacheMu.Unlock()
+	hint, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
 	addNamed(hint)
 	addNamed(defaultBranch)
 	for _, bh := range r.listProtectedBranches(owner, repo) {
@@ -855,9 +813,7 @@ func (r *Resolver) findContainingBranch(owner, repo, sha, hintRef, defaultBranch
 		return pickPreferred(exact, hintRef, defaultBranch), nil
 	}
 	// Slow path: ancestry via Compare API in tier order.
-	r.cacheMu.Lock()
-	hintBranch := r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, sha)]
-	r.cacheMu.Unlock()
+	hintBranch, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
 	for _, b := range orderedBranches(candidates, hintBranch, hintRef, defaultBranch) {
 		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
 		ok, err := r.branchContainsCommit(owner, repo, sha, b.SHA)
