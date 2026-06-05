@@ -144,11 +144,10 @@ graph entries with `uses:` links to direct dependencies).
 - The lockfile schema is versioned independently. The current schema version
   is `v0.0.1`, embedded in the package and emitted as the `version` field of
   every lockfile.
-- Pre-1.0, the package reserves the right to remove incidentally-exported
-  helpers (notably `BuildPinIndex`, `UsesIndexKey`, and `IsValidPin` are
-  candidates). The 15 symbols documented in the
-  [Usage](#usage) and [What this package does](#what-this-package-does)
-  sections are the intended stable surface.
+- Pre-1.0, the package reserves the right to remove any incidentally-exported
+  helper not covered by the [Usage](#usage) and
+  [What this package does](#what-this-package-does) sections. Those sections
+  define the intended stable surface.
 - Schema changes follow the rules in `RELEASING.md`: backward-compatible
   additions can ship in a minor schema version; breaking changes require a
   new schema `$id` and bumped `version` const.

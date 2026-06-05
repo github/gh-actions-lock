@@ -2,13 +2,13 @@ package lockfile
 
 import "strings"
 
-// UsesIndexKey parses a workflow step `uses:` value into the canonical
+// usesIndexKey parses a workflow step `uses:` value into the canonical
 // lockfile IndexKey ("owner/repo@ref"). Sub-action paths
 // ("owner/repo/path@ref") collapse to "owner/repo@ref" because the
 // lockfile keys on the repository — matching the runner's tarball download
 // identity. Local actions ("./...", ".\\...") and "docker://" references
 // are not lockable; ok=false. Malformed inputs also return ok=false.
-func UsesIndexKey(uses string) (string, bool) {
+func usesIndexKey(uses string) (string, bool) {
 	if strings.HasPrefix(uses, "./") || strings.HasPrefix(uses, ".\\") || strings.HasPrefix(uses, "docker://") {
 		return "", false
 	}
