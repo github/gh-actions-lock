@@ -70,6 +70,10 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			  misleading-sha   - ref looks like a SHA but resolves to a different commit
 			  impostor-commit  - locked SHA is not reachable from any branch in the upstream repo
 			  lockfile-forgery - pinned SHA is not an ancestor of the upstream ref it claims
+
+			Exit status: 0 if valid; 1 if blocking findings remain OR the tool
+			itself failed. With --json, parse stdout regardless of exit code and
+			branch on .valid — see INTEGRATION.md for details.
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows

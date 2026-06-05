@@ -28,6 +28,67 @@ honored; G9 is the new one this audit surfaces.
 
 ---
 
+## Exit codes
+
+**Verified current behavior** (run against the binary at this release):
+
+| Code | Meaning                                                                                                                                                            |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0    | `valid:true`. No blocking findings; lockfile is in good shape. Nothing to do.                                                                                       |
+| 1    | **Overloaded.** Either (a) `valid:false` — blocking findings present, stdout JSON is complete and well-formed — **or** (b) actual tool failure (bad flag, IO error, network failure, etc.) — stdout may be empty or partial. |
+
+There is **no** distinct exit code for "tool failure vs. blocking findings."
+Both collapse to 1 (see `cmd/gh-actions-pin/root.go:117–131`: `Execute` returns
+1 for *any* non-nil error, including the sentinel `errSilent` that
+`runCheck` returns when `valid` is false).
+
+### What this means for consumers
+
+**Do not** use shell-style "raise on any non-zero exit" patterns. The CLI exits
+1 on a perfectly successful run that simply found things to fix — that is a
+*result*, not a failure. Treating it as a failure (the dependabot-core
+footgun) makes every unpinned-but-otherwise-fine repo look broken.
+
+Instead: **capture stdout regardless of exit code**, then drive control flow
+off the JSON payload's `valid` and `findings[]` fields. Use the *shape* of
+stdout to distinguish blocking findings (well-formed JSON, `valid:false`)
+from a tool failure (empty or non-JSON stdout):
+
+```bash
+output=$(gh actions-pin --no-interactive --json=valid,findings,workflows,dependencies 2>/dev/null)
+rc=$?
+
+if [ -z "$output" ] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1; then
+  # Empty/non-JSON stdout → tool failure (regardless of $rc).
+  echo "gh actions-pin failed (exit $rc) with no parseable output" >&2
+  exit 2
+fi
+
+# stdout is well-formed JSON: rc is informational only. Branch on .valid.
+valid=$(printf '%s' "$output" | jq -r '.valid')
+case "$valid" in
+  true)  echo "lock is clean" ;;
+  false) printf '%s' "$output" | jq '.findings' ;;  # act on findings
+esac
+```
+
+Verified empirically at this release:
+
+```
+$ gh actions-pin --help                      ; echo $?    # 0
+$ gh actions-pin --bogus-flag                ; echo $?    # 1  (no JSON on stdout)
+$ gh actions-pin --json=valid                ; echo $?    # 0  on a clean repo
+$ gh actions-pin --no-interactive --json=valid,findings  # in a repo with an unpinned action
+… {"valid":false, "findings":[…], …}
+                                             ; echo $?    # 1  (complete JSON on stdout)
+```
+
+If we ever split tool failures out to a distinct exit code (e.g. 2), this
+section will be updated and the JSON-shape sniff above will still be a
+correct fallback for older binaries.
+
+---
+
 ## G1 — `--json` flag form (`--json=dependencies`, not `--json dependencies`)
 
 **Status:** 🔧 fixed in this release (docs).
