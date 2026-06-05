@@ -22,6 +22,14 @@ import (
 type checkOptions struct {
 	WorkflowPaths []string
 	JSONFields    string
+	// Format selects a structured output format. Currently only "sarif"
+	// is supported; "" leaves the existing terminal/--json behavior
+	// untouched. SARIF output is written to OutputPath (or stdout when
+	// OutputPath is "-").
+	Format string
+	// OutputPath is where structured output (currently SARIF) is
+	// written. "-" means stdout.
+	OutputPath    string
 	Hostname      string
 	NoInteractive bool
 	// Rescan forces a full reachability re-verification of every recorded
@@ -88,6 +96,8 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
+	cmd.Flags().StringVar(&opts.Format, "format", "", "Structured output `format` (currently only `sarif`)")
+	cmd.Flags().StringVar(&opts.OutputPath, "output", "", "Write structured output to `path` (use `-` for stdout). Required with --format=sarif.")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	cmd.Flags().BoolVar(&opts.Rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
@@ -95,6 +105,27 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 }
 
 func runCheck(f *pinFactory, opts *checkOptions) error {
+	// Validate structured-output flags before any work runs. --format is
+	// orthogonal to --json: emitting both at once would produce two
+	// stdout streams competing for the same writer, so we reject the
+	// combination up front instead of letting the second one clobber
+	// the first.
+	switch opts.Format {
+	case "", "sarif":
+	default:
+		return fmt.Errorf("unknown --format %q (supported: sarif)", opts.Format)
+	}
+	if opts.Format == "sarif" {
+		if opts.OutputPath == "" {
+			return fmt.Errorf("--output is required when --format=sarif (use `-` for stdout)")
+		}
+		if opts.JSONFields != "" {
+			return fmt.Errorf("--format=sarif cannot be combined with --json")
+		}
+	} else if opts.OutputPath != "" {
+		return fmt.Errorf("--output requires --format")
+	}
+
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
 		return err
@@ -115,7 +146,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// A structured, action-centric provenance record (what was resolved and
 	// how) is written at the end instead. JSON mode keeps the narration log
 	// attached so machine-readable events can flow on stderr.
-	if opts.JSONFields == "" {
+	if opts.JSONFields == "" && opts.Format == "" {
 		f.UI.SetLog(io.Discard)
 	}
 
@@ -153,7 +184,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	//     call to per-ref parallel calls — a UX choice that should not leak
 	//     into headless output (and that would, e.g., quadruple the request
 	//     count for test stubs registered against the batched query shape).
-	showSpinner := opts.JSONFields == "" && !f.UI.Headless()
+	showSpinner := opts.JSONFields == "" && opts.Format == "" && !f.UI.Headless()
 	showHeadlessProgress := f.UI.Headless()
 
 	var onScan func(done, total int, path string)
@@ -316,6 +347,39 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		f.UI.StopProgress()
 		if err := format.WriteJSON(f.Out, report, valid, opts.JSONFields, cliVersion(), store.File().Version); err != nil {
 			return err
+		}
+		if !valid {
+			return errSilent
+		}
+		return nil
+	}
+
+	// SARIF output — write to file (or stdout when `-`). Like JSON mode,
+	// nothing else prints; SARIF consumers want exactly one document on
+	// the configured sink. Exit code mirrors JSON mode so CI gates on
+	// the same signal regardless of format.
+	if opts.Format == "sarif" {
+		f.UI.StopProgress()
+		out := f.Out
+		var closeFn func() error
+		if opts.OutputPath != "-" {
+			fh, err := os.Create(opts.OutputPath)
+			if err != nil {
+				return fmt.Errorf("opening --output: %w", err)
+			}
+			out = fh
+			closeFn = fh.Close
+		}
+		if err := format.WriteSARIF(out, report, cliVersion()); err != nil {
+			if closeFn != nil {
+				_ = closeFn()
+			}
+			return err
+		}
+		if closeFn != nil {
+			if err := closeFn(); err != nil {
+				return fmt.Errorf("closing --output: %w", err)
+			}
 		}
 		if !valid {
 			return errSilent
