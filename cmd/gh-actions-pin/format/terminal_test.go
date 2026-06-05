@@ -133,6 +133,135 @@ func TestPresentResults_WarningsReachTerminal(t *testing.T) {
 	}
 }
 
+// TestPresentResults_RemediateHints locks the willRemediate-aware "↳"
+// follow-up lines that PresentResults emits under each warning headline.
+// Categories the remediator auto-fixes (NotPinned, SHAAsRef) flip between
+// "resolving below" and a manual "run X" hint; categories it skips
+// (RefMoved, inconclusive) always show the manual hint.
+func TestPresentResults_RemediateHints(t *testing.T) {
+	tests := []struct {
+		name          string
+		willRemediate bool
+		findings      []doctor.Finding
+		wantOutput    []string
+		notWanted     []string
+	}{
+		{
+			name:          "not-pinned shows resolving-below when remediating",
+			willRemediate: true,
+			findings: []doctor.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     doctor.CategoryNotPinned,
+				Severity:     doctor.SeverityWarning,
+				Confidence:   doctor.ConfidenceHigh,
+			}},
+			wantOutput: []string{"not yet pinned", "↳ resolving below"},
+			notWanted:  []string{"run `gh actions-pin`"},
+		},
+		{
+			name:          "not-pinned shows manual hint when not remediating",
+			willRemediate: false,
+			findings: []doctor.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     doctor.CategoryNotPinned,
+				Severity:     doctor.SeverityWarning,
+				Confidence:   doctor.ConfidenceHigh,
+			}},
+			wantOutput: []string{"not yet pinned", "↳ run `gh actions-pin` to pin them"},
+			notWanted:  []string{"resolving below"},
+		},
+		{
+			name:          "sha-as-ref shows resolving-below when remediating",
+			willRemediate: true,
+			findings: []doctor.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     doctor.CategorySHAAsRef,
+				Severity:     doctor.SeverityWarning,
+				Confidence:   doctor.ConfidenceHigh,
+				ActionRef:    &lockfile.ActionRef{Owner: "octo", Repo: "action", Ref: "abc123"},
+				Dependency: &lockfile.Dependency{
+					NWO: "octo/action",
+					Ref: "abc123",
+					SHA: "abc1230000000000000000000000000000000000",
+				},
+			}},
+			wantOutput: []string{"bare SHA", "↳ resolving below"},
+			notWanted:  []string{"run `gh actions-pin upgrade`"},
+		},
+		{
+			name:          "ref-moved always shows upgrade hint as ↳ follow-up",
+			willRemediate: true,
+			findings: []doctor.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     doctor.CategoryRefMoved,
+				Severity:     doctor.SeverityWarning,
+				Confidence:   doctor.ConfidenceHigh,
+				Dependency: &lockfile.Dependency{
+					NWO: "octo/action",
+					Ref: "v1",
+					SHA: "1111111111111111111111111111111111111111",
+				},
+				ObservedSHA: "2222222222222222222222222222222222222222",
+				Detail:      "ref v1 now resolves to 222222222222",
+			}},
+			wantOutput: []string{
+				"moved upstream",
+				"↳ run `gh actions-pin upgrade` to update",
+			},
+		},
+		{
+			name:          "inconclusive warning surfaces ↳ remediation when set",
+			willRemediate: false,
+			findings: []doctor.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     doctor.CategoryReachabilityUnknown,
+				Severity:     doctor.SeverityWarning,
+				Confidence:   doctor.ConfidenceLow,
+				Dependency: &lockfile.Dependency{
+					NWO: "octo/action",
+					Ref: "v1",
+					SHA: "1111111111111111111111111111111111111111",
+				},
+				Detail:      "branch list rate limited",
+				Remediation: "retry later",
+			}},
+			wantOutput: []string{
+				"branch list rate limited",
+				"↳ retry later",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, buf := newTestUI()
+			report := &doctor.Report{
+				Workflows: []doctor.WorkflowReport{{
+					Path:     ".github/workflows/a.yml",
+					Findings: tt.findings,
+				}},
+			}
+			PresentResults(u, report, true, tt.willRemediate)
+
+			got := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(got, want) {
+					t.Errorf("PresentResults output missing %q\nfull output:\n%s", want, got)
+				}
+			}
+			for _, unwanted := range tt.notWanted {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("PresentResults output unexpectedly contains %q\nfull output:\n%s", unwanted, got)
+				}
+			}
+		})
+	}
+}
+
+// long-standing decision (see TODO in terminal.go) that transitive deps
+// pinned to bare SHAs are not surfaced — the consumer can't act on
+// upstream composite actions' pinning choices and per-transitive
+// warnings drown out the actionable ones.
 // TestPresentResults_TransitiveSHAAsRefStillSuppressed locks in the
 // long-standing decision (see TODO in terminal.go) that transitive deps
 // pinned to bare SHAs are not surfaced — the consumer can't act on
