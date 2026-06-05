@@ -75,6 +75,9 @@ type WorkflowReport struct {
 // NeedsAttention returns true if this workflow has any non-OK findings.
 func (r *WorkflowReport) NeedsAttention() bool {
 	for _, f := range r.Findings {
+		if f.Category.IsInconclusive() {
+			continue
+		}
 		switch f.Category {
 		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA, CategoryRefMoved:
 			continue
@@ -101,6 +104,9 @@ func (f *Finding) IsValid() bool {
 	if f.Severity == SeverityError {
 		return false
 	}
+	if f.Category.IsInconclusive() {
+		return true
+	}
 	switch f.Category {
 	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
 		return true
@@ -118,7 +124,7 @@ func (f *Finding) IsWarning() bool {
 		return true
 	case f.Category == CategoryRefMoved:
 		return true
-	case f.Category == CategoryValid && f.Severity == SeverityWarning:
+	case f.Category.IsInconclusive():
 		return true
 	case f.Category == CategoryNotPinned && f.ActionRef == nil:
 		return true

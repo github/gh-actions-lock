@@ -322,14 +322,14 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: nil,
 		},
 		{
-			// Pins the rate-limit-fallback contract from the
-			// confidence-axis card: when the Compare API can't give an
-			// authoritative ancestry answer (AncestryUnknown — rate
-			// limit, transient API error, see resolver.CheckAncestry),
-			// the resulting ref-moved finding downgrades from High to
-			// Medium so consumers know we inferred from the SHA mismatch
-			// alone.
-			name: "ref-moved confidence: AncestryUnknown is medium",
+			// Compare API rate-limit fallback: when ancestry is unknown
+			// we can't classify the SHA mismatch as benign-but-known
+			// (ref-moved) or tampered (lockfile-forgery). Emit
+			// CategoryAncestryUnknown so consumers (Dependabot
+			// FindingMapper) don't conflate "scan inconclusive" with
+			// "scan clean" — the latter was the pre-card behavior
+			// when this path emitted CategoryValid+warning.
+			name: "ancestry unknown emits ancestry-unknown, not ref-moved",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
@@ -343,10 +343,16 @@ func TestRunChecks(t *testing.T) {
 					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
 				},
 			},
-			wantCategories: []Category{CategoryRefMoved},
+			wantCategories: []Category{CategoryAncestryUnknown},
 			extra: func(t *testing.T, got []Finding) {
+				if got[0].Category == CategoryValid {
+					t.Fatalf("Category: ancestry-unknown must not regress to valid (Dependabot FindingMapper treats valid as clean)")
+				}
 				if got[0].Confidence != ConfidenceMedium {
 					t.Errorf("Confidence: got %q, want %q (AncestryUnknown is the rate-limit fallback path)", got[0].Confidence, ConfidenceMedium)
+				}
+				if got[0].Severity != SeverityWarning {
+					t.Errorf("Severity: got %q, want %q (inconclusive findings stay warnings)", got[0].Severity, SeverityWarning)
 				}
 			},
 		},

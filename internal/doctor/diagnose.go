@@ -163,9 +163,9 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			Category:     CategoryNotPinned,
 			Severity:     SeverityError,
 			// High: the YAML failed to load — concrete, file-level fact.
-			Confidence:  ConfidenceHigh,
-			Detail:      fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
-			DocURL:      DocURLFor(CategoryNotPinned),
+			Confidence: ConfidenceHigh,
+			Detail:     fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
+			DocURL:     DocURLFor(CategoryNotPinned),
 		})
 		return wr
 	}
@@ -216,7 +216,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			// verdict about any specific dependency.
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: pw.Path,
-				Category:     CategoryValid,
+				Category:     CategoryReachabilityUnknown,
 				Severity:     SeverityWarning,
 				Confidence:   ConfidenceLow,
 				Detail:       fmt.Sprintf("could not re-resolve actions: %s", resolveErr),
@@ -489,7 +489,7 @@ func reachabilityComplementFindings(
 			// Low: we couldn't get a reachability answer at all.
 			out = append(out, Finding{
 				WorkflowPath: path,
-				Category:     CategoryValid,
+				Category:     CategoryReachabilityUnknown,
 				Severity:     SeverityWarning,
 				Confidence:   ConfidenceLow,
 				Dependency:   &depCopy,
@@ -506,6 +506,9 @@ func hasIssues(findings []Finding) bool {
 	for _, f := range findings {
 		if f.Severity == SeverityError {
 			return true
+		}
+		if f.Category.IsInconclusive() {
+			continue
 		}
 		if f.Category != CategoryValid && f.Category != CategoryRunOnly && f.Severity == SeverityWarning {
 			return true

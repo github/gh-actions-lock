@@ -343,6 +343,19 @@ strings emitted by the binary (`internal/doctor/finding.go:11–35`) are
 | n/a                  | `sha-as-ref`             | Bare SHA pin with no human-readable ref alongside.             |
 | n/a                  | `stale`                  | Lock entry exists for a `uses:` that's no longer in the workflow. |
 
+**Non-blocking diagnostic categories** (added when the scan can't reach a verdict):
+
+| `category` string       | When it fires                                                                                              |
+|-------------------------|------------------------------------------------------------------------------------------------------------|
+| `ancestry-unknown`      | The Compare API didn't return an authoritative ancestor decision (rate-limit, transient error). We know the SHAs differ but can't classify the move as benign-but-known (`ref-moved`) vs. tampered (`lockfile-forgery`). Severity `warning`, confidence `medium`. Treat as "rescan needed", not a lockfile defect. |
+| `reachability-unknown`  | `branch_commits` didn't return an authoritative reachability answer (resolver failure, GraphQL rate limit, network error). Severity `warning`, confidence `low`. Treat as "rescan needed". |
+
+These are intentionally separate from `valid` so the `FindingMapper`
+contract — `category=valid` ⇒ clean state, nothing to do — holds.
+Mapping `ancestry-unknown` / `reachability-unknown` onto a Dependabot
+finding is optional; if surfaced, classify them as transient/diagnostic
+rather than blocking.
+
 For the Dependabot `FindingMapper`, the canonical blocking set is:
 
 ```

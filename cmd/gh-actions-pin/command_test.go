@@ -362,7 +362,10 @@ jobs:
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["ref-moved"], "should detect SHA changed: %+v", payload.Findings)
+	// SHA changed but Compare API is not mocked → ancestry returns
+	// Unknown, so the SHA mismatch surfaces as ancestry-unknown
+	// rather than ref-moved or lockfile-forgery.
+	assert.True(t, categories["ancestry-unknown"], "should detect SHA changed (ancestry inconclusive): %+v", payload.Findings)
 	assert.True(t, categories["impostor-commit"], "should detect unreachable commit: %+v", payload.Findings)
 }
 
@@ -457,14 +460,24 @@ jobs:
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid, "valid should be true when reachability is unknown")
 
-	// Reachability unknown produces a CategoryValid finding with SeverityWarning.
+	// Reachability unknown surfaces as CategoryReachabilityUnknown +
+	// SeverityWarning so consumers (Dependabot FindingMapper) don't
+	// see CategoryValid for a scan that didn't actually verify.
 	hasWarning := false
+	sawValid := false
 	for _, f := range payload.Findings {
 		if f.Severity == "warning" && strings.Contains(f.Detail, "clone failed") {
 			hasWarning = true
+			if f.Category != "reachability-unknown" {
+				t.Errorf("category = %q, want %q (must not regress to valid+warning)", f.Category, "reachability-unknown")
+			}
+		}
+		if f.Category == "valid" {
+			sawValid = true
 		}
 	}
 	assert.True(t, hasWarning, "should have a reachability warning: %+v", payload.Findings)
+	assert.False(t, sawValid, "CategoryValid must not appear for an unverified scan: %+v", payload.Findings)
 }
 
 // TestCheck_Reachable verifies the happy path: pinned SHA matches live
@@ -643,8 +656,12 @@ jobs:
 	assert.False(t, categories["lockfile-forgery"], "should NOT have lockfile-forgery: %+v", payload.Findings)
 }
 
-// TestCheck_LockfileForgery_RateLimited verifies that when the ancestry check
-// is rate-limited, the finding stays as ref-moved (fail open).
+// TestCheck_LockfileForgery_RateLimited verifies that when the ancestry
+// check is rate-limited, the finding surfaces as ancestry-unknown — not
+// ref-moved (which would imply a benign-but-known move) and not
+// lockfile-forgery (which requires an authoritative not-ancestor
+// answer). The pre-card behavior silently emitted CategoryValid+warning,
+// which broke consumers that expected `valid` to mean clean.
 func TestCheck_LockfileForgery_RateLimited(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -689,18 +706,20 @@ jobs:
 		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.True(t, payload.Valid, "ref-moved is a warning, workflow is still valid")
+	assert.True(t, payload.Valid, "ancestry-unknown is a warning, workflow is still valid")
 
 	categories := map[string]bool{}
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["ref-moved"], "should keep as ref-moved when rate limited: %+v", payload.Findings)
+	assert.True(t, categories["ancestry-unknown"], "should classify as ancestry-unknown when rate limited: %+v", payload.Findings)
 	assert.False(t, categories["lockfile-forgery"], "should NOT have lockfile-forgery when rate limited: %+v", payload.Findings)
+	assert.False(t, categories["ref-moved"], "should NOT downgrade to ref-moved when rate limited: %+v", payload.Findings)
+	assert.False(t, categories["valid"], "rate-limited ancestry must not regress to CategoryValid: %+v", payload.Findings)
 
 	// Verify the detail mentions the inconclusive ancestry check.
 	for _, f := range payload.Findings {
-		if f.Category == "ref-moved" {
+		if f.Category == "ancestry-unknown" {
 			assert.Contains(t, f.Detail, "ancestry check inconclusive")
 		}
 	}

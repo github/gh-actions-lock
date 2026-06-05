@@ -43,7 +43,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 
 	first := true
 	for _, finding := range wr.Findings {
-		if finding.Category == CategoryValid || finding.Category == CategoryRunOnly || finding.Category == CategoryRefMoved {
+		if finding.Category == CategoryValid || finding.Category == CategoryRunOnly || finding.Category == CategoryRefMoved || finding.Category.IsInconclusive() {
 			continue
 		}
 
