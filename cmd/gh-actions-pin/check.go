@@ -71,9 +71,11 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			  impostor-commit  - locked SHA is not reachable from any branch in the upstream repo
 			  lockfile-forgery - pinned SHA is not an ancestor of the upstream ref it claims
 
-			Exit status: 0 if valid; 1 if blocking findings remain OR the tool
-			itself failed. With --json, parse stdout regardless of exit code and
-			branch on .valid — see INTEGRATION.md for details.
+			Exit status: 0 if valid; 1 if blocking findings remain (stdout JSON
+			is well-formed when --json is set); 2 if the tool itself failed
+			(bad flag, IO error, network failure, malformed lockfile, etc.).
+			With --json, parse stdout regardless of exit code and branch on
+			.valid — see INTEGRATION.md for details.
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows

@@ -36,12 +36,12 @@ honored, and G9 — the gap this audit surfaced — is now closed by the
 | Code | Meaning                                                                                                                                                            |
 |------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 0    | `valid:true`. No blocking findings; lockfile is in good shape. Nothing to do.                                                                                       |
-| 1    | **Overloaded.** Either (a) `valid:false` — blocking findings present, stdout JSON is complete and well-formed — **or** (b) actual tool failure (bad flag, IO error, network failure, etc.) — stdout may be empty or partial. |
+| 1    | `valid:false`. Blocking findings present. When `--json` is set, stdout JSON is complete and well-formed.                                                            |
+| 2    | **Tool failure.** Bad flag, IO error, network failure, malformed lockfile, future-version refusal (`pkg/lockfile.ErrFutureVersion`), panic, etc. stdout MAY be empty or malformed; rely on stderr for diagnosis. |
 
-There is **no** distinct exit code for "tool failure vs. blocking findings."
-Both collapse to 1 (see `cmd/gh-actions-pin/root.go:117–131`: `Execute` returns
-1 for *any* non-nil error, including the sentinel `errSilent` that
-`runCheck` returns when `valid` is false).
+The classification rule lives in `cmd/gh-actions-pin/root.go` (`exitCodeFor`):
+only the `errSilent` sentinel (returned by `runCheck` when blocking findings
+are present) maps to 1; every other non-nil error maps to 2.
 
 ### What this means for consumers
 
@@ -50,17 +50,19 @@ Both collapse to 1 (see `cmd/gh-actions-pin/root.go:117–131`: `Execute` return
 *result*, not a failure. Treating it as a failure (the dependabot-core
 footgun) makes every unpinned-but-otherwise-fine repo look broken.
 
-Instead: **capture stdout regardless of exit code**, then drive control flow
-off the JSON payload's `valid` and `findings[]` fields. Use the *shape* of
-stdout to distinguish blocking findings (well-formed JSON, `valid:false`)
-from a tool failure (empty or non-JSON stdout):
+The recommended pattern — **capture stdout regardless of exit code**, then
+drive control flow off the JSON payload's `valid` and `findings[]` fields —
+still applies. It is also the forward-compatible path: older binaries collapsed
+tool failures and `valid:false` into exit 1, and the JSON-shape sniff
+distinguishes them without relying on the exit code.
 
 ```bash
 output=$(gh actions-pin --no-interactive --json=valid,findings,workflows,dependencies 2>/dev/null)
 rc=$?
 
 if [ -z "$output" ] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1; then
-  # Empty/non-JSON stdout → tool failure (regardless of $rc).
+  # Empty/non-JSON stdout → tool failure. On current binaries $rc is 2;
+  # on older binaries it was 1. The shape sniff works either way.
   echo "gh actions-pin failed (exit $rc) with no parseable output" >&2
   exit 2
 fi
@@ -77,16 +79,21 @@ Verified empirically at this release:
 
 ```
 $ gh actions-pin --help                      ; echo $?    # 0
-$ gh actions-pin --bogus-flag                ; echo $?    # 1  (no JSON on stdout)
+$ gh actions-pin --bogus-flag                ; echo $?    # 2  (was 1; no JSON on stdout)
 $ gh actions-pin --json=valid                ; echo $?    # 0  on a clean repo
 $ gh actions-pin --no-interactive --json=valid,findings  # in a repo with an unpinned action
 … {"valid":false, "findings":[…], …}
                                              ; echo $?    # 1  (complete JSON on stdout)
+$ gh actions-pin                             ; echo $?    # 2  on repo with a future-version lockfile
 ```
 
-If we ever split tool failures out to a distinct exit code (e.g. 2), this
-section will be updated and the JSON-shape sniff above will still be a
-correct fallback for older binaries.
+### Compatibility note for older binaries
+
+Prior to this release, exit 1 was overloaded: it meant either "blocking
+findings present" (stdout JSON well-formed) **or** "tool failure" (stdout
+empty or malformed). The JSON-shape sniff in the snippet above distinguished
+them then and continues to distinguish them now, so consumer code written
+against the older contract keeps working.
 
 ---
 
