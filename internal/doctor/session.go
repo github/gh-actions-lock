@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
@@ -8,28 +9,44 @@ import (
 // sessionState tracks user decisions across multiple workflows during
 // an interactive remediation session. It allows auto-applying a prior
 // choice when the same dependency appears in another workflow file.
+//
+// The choices map is intentionally string-keyed because it stores entries
+// under two different key shapes:
+//   - "owner/repo@SHA" for tag selections (via choiceKey), where the value
+//     is a chosen tag name; and
+//   - "owner/repo@Ref"  for skip markers (via Dependency.Key), where the
+//     value is "skipped".
+//
+// A typed key would force two separate maps; the prefix-scan in
+// shaConvertedForNWO also relies on the shared "owner/repo@…" prefix.
+// Both string keys are produced by typed helpers (cachekey.NWOSha.String,
+// lockfile.Dependency.Key) so we still get normalized owner/repo casing
+// and a single source of truth for the wire shape.
 type sessionState struct {
-	// "owner/repo@SHA" → chosen tag name.
 	choices map[string]string
 
-	// "owner/repo" → chosen ref (e.g. "main" or "v2") for same-owner repos.
-	internalRefChoices map[string]string
+	// owner/repo → chosen ref (e.g. "main" or "v2") for same-owner repos.
+	internalRefChoices map[cachekey.Repo]string
 
-	// "owner/repo@ref" → true for refs the user already approved for pinning.
-	approvedRefs map[string]bool
+	// (owner/repo[/path], ref) → true for refs the user already approved
+	// for pinning.
+	approvedRefs map[cachekey.ActionRef]bool
 }
 
 func newSessionState() sessionState {
 	return sessionState{
 		choices:            make(map[string]string),
-		internalRefChoices: make(map[string]string),
-		approvedRefs:       make(map[string]bool),
+		internalRefChoices: make(map[cachekey.Repo]string),
+		approvedRefs:       make(map[cachekey.ActionRef]bool),
 	}
 }
 
-// choiceKey returns a stable key for session memory: "owner/repo@SHA".
+// choiceKey returns a stable session-memory key for the dep's (NWO, SHA)
+// pair. The owner/repo segment is normalized via cachekey.ForNWOSha so
+// case-only NWO drift can't split the cache.
 func choiceKey(dep *lockfile.Dependency) string {
-	return dep.NWO + "@" + dep.SHA
+	owner, repo := dep.OwnerRepo()
+	return cachekey.ForNWOSha(owner, repo, dep.SHA).String()
 }
 
 // recordChoice saves a tag choice for a dep so it can be auto-applied later.
@@ -43,9 +60,9 @@ func (s *sessionState) recallChoice(dep *lockfile.Dependency) (string, bool) {
 	return tag, ok
 }
 
-// refKey returns a session memory key for an unpinned action ref: "owner/repo@ref".
-func refKey(ref parserlock.ActionRef) string {
-	return ref.FullName() + "@" + ref.Ref
+// refKey returns a session memory key for an unpinned action ref.
+func refKey(ref parserlock.ActionRef) cachekey.ActionRef {
+	return cachekey.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 }
 
 // markRefsApproved records all action refs as approved for auto-pinning.

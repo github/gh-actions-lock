@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
@@ -71,48 +72,48 @@ type ReachabilityResult struct {
 
 // Resolver resolves action refs to commit SHAs.
 type Resolver struct {
-	client             *api.GraphQLClient
-	restClient         *api.RESTClient
-	hostname           string
-	MaxRecursionDepth  int
-	cache              map[string]resolvedEntry
-	latestRefCache     map[string]string
-	reachCache         map[string]reachCacheEntry
-	branchListCache    map[string][]branchHead // "owner/repo" → cached branch list
-	tagListCache       map[string][]tagEntry   // "owner/repo" → cached tag list
-	repoIDsCache       map[string][2]int64     // owner/repo → [ownerID, repoID]
-	defaultBranchCache map[string]string       // "owner/repo" → cached default branch name ("" = lookup failed / unknown)
-	// compareCache memoizes branchContainsCommit results, keyed by
-	// "owner/repo|sha|branchHeadSHA". Compare API responses are deterministic
-	// for an immutable (commit, branch-head) pair, so within a single CLI
-	// invocation we never need to repeat the call.
-	compareCache map[string]bool
-	// branchHintBySHA records the branch we believe contains a given commit,
-	// keyed by "owner/repo|sha" (sha lowercased). Populated by SeedBranchHints
-	// from the existing lockfile so reruns can short-circuit the full branch
-	// scan when the recorded branch still contains the commit.
-	branchHintBySHA map[string]string
-	// namedBranchCache memoizes single-branch HEAD lookups (getBranchHead),
-	// keyed "owner/repo|name". A zero-value branchHead (empty Name) records a
-	// known-missing branch so 404s are not re-fetched. These lookups use the
-	// git/ref endpoint and so bypass the paginated branch-listing page cap.
-	namedBranchCache map[string]branchHead
-	// protectedBranchCache memoizes the protected-branch list per "owner/repo"
+	client            *api.GraphQLClient
+	restClient        *api.RESTClient
+	hostname          string
+	MaxRecursionDepth int
+	// cache memoizes ResolveAllRecursive entries by path-aware action ref
+	// so repeated traversals of the same composite graph never re-query.
+	cache              map[cachekey.ActionRef]resolvedEntry
+	latestRefCache     map[cachekey.Repo]string
+	reachCache         map[cachekey.Reach]reachCacheEntry
+	branchListCache    map[cachekey.Repo][]branchHead
+	tagListCache       map[cachekey.Repo][]tagEntry
+	repoIDsCache       map[cachekey.Repo][2]int64
+	defaultBranchCache map[cachekey.Repo]string // "" caches a failed lookup
+	// compareCache memoizes branchContainsCommit verdicts. Compare API
+	// responses are deterministic for an immutable (commit, branch-head)
+	// pair, so within a single CLI invocation we never repeat the call.
+	compareCache map[cachekey.Compare]bool
+	// branchHintBySHA records the branch we believe contains a given
+	// commit. Populated by SeedBranchHints from the existing lockfile so
+	// reruns can short-circuit the full branch scan when the recorded
+	// branch still contains the commit.
+	branchHintBySHA map[cachekey.NWOSha]string
+	// namedBranchCache memoizes single-branch HEAD lookups (getBranchHead).
+	// A zero-value branchHead (empty Name) records a known-missing branch
+	// so 404s are not re-fetched. These lookups use the git/ref endpoint
+	// and so bypass the paginated branch-listing page cap.
+	namedBranchCache map[cachekey.NWOName]branchHead
+	// protectedBranchCache memoizes the protected-branch list per repo
 	// (GET /branches?protected=true) — part of the canonical "likely" set
 	// validated before any full branch scan.
-	protectedBranchCache map[string][]branchHead
-	// releaseBranchCache memoizes release/v* branches per "owner/repo"
-	// (git matching-refs for heads/v and heads/release), the canonical
+	protectedBranchCache map[cachekey.Repo][]branchHead
+	// releaseBranchCache memoizes release/v* branches per repo (git
+	// matching-refs for heads/v and heads/release), the canonical
 	// publication branches for actions.
-	releaseBranchCache map[string][]branchHead
+	releaseBranchCache map[cachekey.Repo][]branchHead
 	// checkReachFn overrides the default branch-discovery check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
-	// tagObjectCache memoizes PeelTagObject results, keyed by
-	// "owner/repo|sha" (sha lowercased). An annotated/immutable-release tag
-	// is stored in Git as a tag *object* whose own SHA differs from the
-	// commit it points at; this cache records whether a given SHA is such a
-	// tag object and, if so, the commit it peels to.
-	tagObjectCache map[string]tagPeel
+	// tagObjectCache memoizes PeelTagObject results. An annotated /
+	// immutable-release tag is stored in Git as a tag *object* whose own
+	// SHA differs from the commit it points at; this cache records whether
+	// a given SHA is such a tag object and, if so, the commit it peels to.
+	tagObjectCache map[cachekey.NWOSha]tagPeel
 
 	// cacheMu guards the cache maps that may be read and written concurrently
 	// during the parallel reachability phase (CheckReachabilityAll): reachCache,
@@ -200,13 +201,9 @@ func (r *Resolver) SeedBranchHints(deps []lockfile.Dependency) {
 			continue
 		}
 		r.cacheMu.Lock()
-		r.branchHintBySHA[hintKey(owner, repo, d.SHA)] = d.Branch
+		r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, d.SHA)] = d.Branch
 		r.cacheMu.Unlock()
 	}
-}
-
-func hintKey(owner, repo, sha string) string {
-	return owner + "/" + repo + "|" + strings.ToLower(sha)
 }
 
 // ParentMap is a child dep key → parent dep keys mapping returned alongside
@@ -282,19 +279,19 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		restClient:           restClient,
 		hostname:             hostname,
 		MaxRecursionDepth:    DefaultMaxRecursionDepth,
-		cache:                make(map[string]resolvedEntry),
-		latestRefCache:       make(map[string]string),
-		reachCache:           make(map[string]reachCacheEntry),
-		branchListCache:      make(map[string][]branchHead),
-		tagListCache:         make(map[string][]tagEntry),
-		repoIDsCache:         make(map[string][2]int64),
-		defaultBranchCache:   make(map[string]string),
-		compareCache:         make(map[string]bool),
-		branchHintBySHA:      make(map[string]string),
-		namedBranchCache:     make(map[string]branchHead),
-		protectedBranchCache: make(map[string][]branchHead),
-		releaseBranchCache:   make(map[string][]branchHead),
-		tagObjectCache:       make(map[string]tagPeel),
+		cache:                make(map[cachekey.ActionRef]resolvedEntry),
+		latestRefCache:       make(map[cachekey.Repo]string),
+		reachCache:           make(map[cachekey.Reach]reachCacheEntry),
+		branchListCache:      make(map[cachekey.Repo][]branchHead),
+		tagListCache:         make(map[cachekey.Repo][]tagEntry),
+		repoIDsCache:         make(map[cachekey.Repo][2]int64),
+		defaultBranchCache:   make(map[cachekey.Repo]string),
+		compareCache:         make(map[cachekey.Compare]bool),
+		branchHintBySHA:      make(map[cachekey.NWOSha]string),
+		namedBranchCache:     make(map[cachekey.NWOName]branchHead),
+		protectedBranchCache: make(map[cachekey.Repo][]branchHead),
+		releaseBranchCache:   make(map[cachekey.Repo][]branchHead),
+		tagObjectCache:       make(map[cachekey.NWOSha]tagPeel),
 	}, nil
 }
 
@@ -324,7 +321,7 @@ func (r *Resolver) PeelTagObject(owner, repo, sha string) (commit string, ok boo
 // false return means either "definitely not a tag object" or "we have not
 // peeled this SHA yet" — callers must treat the negative as ambiguous.
 func (r *Resolver) IsKnownTagObject(owner, repo, sha string) bool {
-	key := hintKey(owner, repo, sha)
+	key := cachekey.ForNWOSha(owner, repo, sha)
 	r.cacheMu.Lock()
 	cached, hit := r.tagObjectCache[key]
 	r.cacheMu.Unlock()
@@ -345,7 +342,7 @@ const tagObjectPeelQuery = `query($owner: String!, $name: String!, $oid: GitObje
 }`
 
 func (r *Resolver) peelTagObject(owner, repo, sha string) (string, bool) {
-	key := hintKey(owner, repo, sha)
+	key := cachekey.ForNWOSha(owner, repo, sha)
 	r.cacheMu.Lock()
 	cached, hit := r.tagObjectCache[key]
 	r.cacheMu.Unlock()
@@ -404,7 +401,7 @@ func (r *Resolver) peelTagObject(owner, repo, sha string) (string, bool) {
 // the GitHub REST API on cache miss. Results are cached for the lifetime of
 // the resolver.
 func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	ids, ok := r.repoIDsCache[key]
 	r.cacheMu.Unlock()
@@ -472,7 +469,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 		SHA:   sha,
 	}
 
-	cacheKey := owner + "/" + repo + "/" + sha + "/" + ref
+	cacheKey := cachekey.ForReach(owner, repo, sha, ref)
 	r.cacheMu.Lock()
 	entry, ok := r.reachCache[cacheKey]
 	r.cacheMu.Unlock()
@@ -561,7 +558,7 @@ func (r *Resolver) CheckReachability(owner, repo, sha, ref string) ReachabilityR
 }
 
 // setReachCache stores a reachability verdict under cacheMu.
-func (r *Resolver) setReachCache(key string, status ReachabilityStatus, detail string) {
+func (r *Resolver) setReachCache(key cachekey.Reach, status ReachabilityStatus, detail string) {
 	r.cacheMu.Lock()
 	r.reachCache[key] = reachCacheEntry{status: status, detail: detail}
 	r.cacheMu.Unlock()
@@ -604,7 +601,7 @@ func (r *Resolver) reachabilityScan(owner, repo, sha, ref string, candidates []b
 	// Slow path: ancestry via Compare API in tier order. The walk runs
 	// concurrently — see function comment.
 	r.cacheMu.Lock()
-	hintBranch := r.branchHintBySHA[hintKey(owner, repo, sha)]
+	hintBranch := r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, sha)]
 	r.cacheMu.Unlock()
 	ordered := orderedBranches(candidates, hintBranch, ref, defaultBranch)
 	if len(ordered) == 0 {
@@ -669,7 +666,7 @@ type tagEntry struct {
 // cached per owner/repo. Paginates up to 3 pages (300 branches) to bound
 // the number of API calls.
 func (r *Resolver) listBranches(owner, repo string) ([]branchHead, error) {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	cached, ok := r.branchListCache[key]
 	r.cacheMu.Unlock()
@@ -707,7 +704,7 @@ func (r *Resolver) listBranches(owner, repo string) ([]branchHead, error) {
 // the documented REST API (GET /repos/{owner}/{repo}/tags). Results are
 // cached per owner/repo.
 func (r *Resolver) listTagsForRepo(owner, repo string) ([]tagEntry, error) {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	cached, ok := r.tagListCache[key]
 	r.cacheMu.Unlock()
@@ -743,7 +740,7 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 	if strings.EqualFold(sha, branchHeadSHA) {
 		return true, nil
 	}
-	key := owner + "/" + repo + "|" + strings.ToLower(sha) + "|" + strings.ToLower(branchHeadSHA)
+	key := cachekey.ForCompare(owner, repo, sha, branchHeadSHA)
 	r.cacheMu.Lock()
 	v, ok := r.compareCache[key]
 	r.cacheMu.Unlock()
@@ -770,7 +767,7 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 }
 
 // setCompareCache stores a Compare verdict under cacheMu.
-func (r *Resolver) setCompareCache(key string, contains bool) {
+func (r *Resolver) setCompareCache(key cachekey.Compare, contains bool) {
 	r.cacheMu.Lock()
 	r.compareCache[key] = contains
 	r.cacheMu.Unlock()
@@ -825,7 +822,7 @@ func orderedBranches(branches []branchHead, hintBranch, hintRef, defaultBranch s
 // the resolver. On lookup failure an empty string is cached so subsequent
 // callers don't retry.
 func (r *Resolver) getDefaultBranch(owner, repo string) string {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	name, ok := r.defaultBranchCache[key]
 	r.cacheMu.Unlock()
@@ -845,7 +842,7 @@ func (r *Resolver) getDefaultBranch(owner, repo string) string {
 }
 
 // setDefaultBranchCache stores a default-branch lookup under cacheMu.
-func (r *Resolver) setDefaultBranchCache(key, name string) {
+func (r *Resolver) setDefaultBranchCache(key cachekey.Repo, name string) {
 	r.cacheMu.Lock()
 	r.defaultBranchCache[key] = name
 	r.cacheMu.Unlock()
@@ -871,7 +868,7 @@ func (r *Resolver) getBranchHead(owner, repo, name string) (branchHead, bool) {
 	if name == "" {
 		return branchHead{}, false
 	}
-	key := owner + "/" + repo + "|" + name
+	key := cachekey.ForNWOName(owner, repo, name)
 	r.cacheMu.Lock()
 	bh, ok := r.namedBranchCache[key]
 	r.cacheMu.Unlock()
@@ -905,7 +902,7 @@ func (r *Resolver) getBranchHead(owner, repo, name string) (branchHead, bool) {
 }
 
 // setNamedBranch stores a single-branch lookup under cacheMu.
-func (r *Resolver) setNamedBranch(key string, bh branchHead) {
+func (r *Resolver) setNamedBranch(key cachekey.NWOName, bh branchHead) {
 	r.cacheMu.Lock()
 	r.namedBranchCache[key] = bh
 	r.cacheMu.Unlock()
@@ -915,7 +912,7 @@ func (r *Resolver) setNamedBranch(key string, bh branchHead) {
 // GET /repos/{owner}/{repo}/branches?protected=true. Best-effort: any error
 // yields whatever was collected so far (possibly empty). Cached per owner/repo.
 func (r *Resolver) listProtectedBranches(owner, repo string) []branchHead {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	cached, ok := r.protectedBranchCache[key]
 	r.cacheMu.Unlock()
@@ -979,7 +976,7 @@ func (r *Resolver) matchingHeadRefs(owner, repo, prefix string) []branchHead {
 // publication branches) by matching heads/v and heads/release. Best-effort;
 // cached per owner/repo.
 func (r *Resolver) listReleaseBranches(owner, repo string) []branchHead {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	cached, ok := r.releaseBranchCache[key]
 	r.cacheMu.Unlock()
@@ -1026,7 +1023,7 @@ func (r *Resolver) likelyBranches(owner, repo, sha, ref, defaultBranch string) [
 		addNamed(ref)
 	}
 	r.cacheMu.Lock()
-	hint := r.branchHintBySHA[hintKey(owner, repo, sha)]
+	hint := r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, sha)]
 	r.cacheMu.Unlock()
 	addNamed(hint)
 	addNamed(defaultBranch)
@@ -1149,7 +1146,7 @@ func (r *Resolver) findContainingBranch(owner, repo, sha, hintRef, defaultBranch
 	}
 	// Slow path: ancestry via Compare API in tier order.
 	r.cacheMu.Lock()
-	hintBranch := r.branchHintBySHA[hintKey(owner, repo, sha)]
+	hintBranch := r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, sha)]
 	r.cacheMu.Unlock()
 	for _, b := range orderedBranches(candidates, hintBranch, hintRef, defaultBranch) {
 		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
@@ -1378,22 +1375,24 @@ func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (Ancest
 // CheckReachabilityAll runs reachability checks on a batch of dependencies,
 // deduplicating by owner/repo/sha/ref.
 func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []ReachabilityResult {
-	var results []ReachabilityResult
-	seen := make(map[string]bool)
+	// Reachability dedup keys: lowercased SHAs are fine because the API
+	// returns canonical lowercase, and ref preserves case so the same SHA at
+	// "v6" vs "V6" stays distinct.
+	seenReach := make(map[cachekey.Reach]bool)
 
 	// Pre-filter to the unique deps we'll actually check so progress can be
 	// reported as [i/N] against a stable total.
 	unique := make([]lockfile.Dependency, 0, len(deps))
 	for _, dep := range deps {
-		owner, _ := dep.OwnerRepo()
+		owner, repo := dep.OwnerRepo()
 		if owner == "" {
 			continue
 		}
-		key := dep.NWO + "/" + dep.SHA + "/" + dep.Ref
-		if seen[key] {
+		key := cachekey.ForReach(owner, repo, dep.SHA, dep.Ref)
+		if seenReach[key] {
 			continue
 		}
-		seen[key] = true
+		seenReach[key] = true
 		unique = append(unique, dep)
 	}
 
@@ -1420,14 +1419,20 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 	// per repo avoids the thundering-herd of identical list-branches calls
 	// when N parallel workers race on the same repo. Parallelized across the
 	// same slot pool used by the verify fan-out so the user sees movement.
-	uniqueRepos := make([]string, 0)
-	seenRepo := make(map[string]bool)
+	// uniqueRepos tracks distinct owner/repo pairs we still need to warm. We
+	// keep the original strings alongside the typed key so the warmup loop
+	// can issue API calls without re-parsing.
+	type repoEntry struct {
+		owner, repo string
+	}
+	uniqueRepos := make([]repoEntry, 0)
+	seenRepo := make(map[cachekey.Repo]bool)
 	for _, dep := range unique {
 		owner, repo := dep.OwnerRepo()
-		rk := owner + "/" + repo
-		if !seenRepo[rk] {
-			seenRepo[rk] = true
-			uniqueRepos = append(uniqueRepos, rk)
+		k := cachekey.ForRepo(owner, repo)
+		if !seenRepo[k] {
+			seenRepo[k] = true
+			uniqueRepos = append(uniqueRepos, repoEntry{owner: owner, repo: repo})
 		}
 	}
 	if r.checkReachFn == nil && len(uniqueRepos) > 0 {
@@ -1440,26 +1445,22 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 			warmupSlots <- i
 		}
 		var warmupWG sync.WaitGroup
-		for _, rk := range uniqueRepos {
+		for _, re := range uniqueRepos {
 			warmupWG.Add(1)
 			slot := <-warmupSlots
-			go func(rk string, slot int) {
+			go func(re repoEntry, slot int) {
 				defer warmupWG.Done()
 				defer func() { warmupSlots <- slot }()
-				parts := strings.SplitN(rk, "/", 2)
-				if len(parts) != 2 {
-					return
-				}
-				owner, repo := parts[0], parts[1]
+				rk := re.owner + "/" + re.repo
 				if r.WorkerProgressFn != nil {
 					r.WorkerProgressFn(slot, "→ loading "+rk)
 				}
-				_, _ = r.listBranches(owner, repo)
-				_ = r.getDefaultBranch(owner, repo)
+				_, _ = r.listBranches(re.owner, re.repo)
+				_ = r.getDefaultBranch(re.owner, re.repo)
 				if r.WorkerProgressFn != nil {
 					r.WorkerProgressFn(slot, "")
 				}
-			}(rk, slot)
+			}(re, slot)
 		}
 		warmupWG.Wait()
 	}
@@ -1469,7 +1470,7 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 	// reporting is serialized, so results[i] is the only unsynchronized write
 	// and each goroutine owns a distinct index. Each goroutine also owns a
 	// stable slot index (0..limit-1) for the per-worker UI display.
-	results = make([]ReachabilityResult, total)
+	results := make([]ReachabilityResult, total)
 	limit := reachabilityConcurrency
 	if limit > total {
 		limit = total
@@ -1511,7 +1512,7 @@ func (r *Resolver) CheckReachabilityAll(deps []lockfile.Dependency) []Reachabili
 
 // LatestRef returns the highest stable tag for an action repository.
 func (r *Resolver) LatestRef(owner, repo string) (string, error) {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo)
 	r.cacheMu.Lock()
 	ref, ok := r.latestRefCache[key]
 	r.cacheMu.Unlock()
@@ -1561,8 +1562,8 @@ func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 	return best, nil
 }
 
-func cacheKey(ref parserlock.ActionRef) string {
-	return ref.FullName() + "@" + ref.Ref
+func cacheKey(ref parserlock.ActionRef) cachekey.ActionRef {
+	return cachekey.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 }
 
 // ResolveAllRecursive resolves action refs and recursively discovers transitive
@@ -1570,7 +1571,7 @@ func cacheKey(ref parserlock.ActionRef) string {
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
 // caller and safe to mutate or hold across concurrent resolver calls.
 func (r *Resolver) ResolveAllRecursive(refs []parserlock.ActionRef) ([]lockfile.Dependency, ParentMap, error) {
-	seen := make(map[string]bool)
+	seen := make(map[cachekey.ActionRef]bool)
 	var allDeps []lockfile.Dependency
 	parentMap := make(ParentMap)
 
@@ -1606,7 +1607,7 @@ func (r *Resolver) ResolveAllRecursive(refs []parserlock.ActionRef) ([]lockfile.
 
 		var toResolve []parserlock.ActionRef
 		for _, ref := range pending {
-			key := ref.FullName() + "@" + ref.Ref
+			key := cacheKey(ref)
 			if !seen[key] {
 				seen[key] = true
 				toResolve = append(toResolve, ref)
@@ -1831,7 +1832,7 @@ func (r *Resolver) resolveWithActionYML(refs []parserlock.ActionRef) ([]lockfile
 
 	var freshDeps []lockfile.Dependency
 	var freshYMLs []string
-	var freshKeys []string
+	var freshKeys []cachekey.ActionRef
 	var batchErr error
 	for i := 0; i < len(uncached); i += MaxBatchSize {
 		end := i + MaxBatchSize
@@ -1862,7 +1863,7 @@ func (r *Resolver) resolveWithActionYML(refs []parserlock.ActionRef) ([]lockfile
 	// Build allDeps from cached refs + freshly-resolved ones. Refs that failed
 	// to resolve are simply absent — callers see them missing rather than
 	// receiving an empty slice for the whole workflow.
-	resolvedFresh := make(map[string]int, len(freshDeps))
+	resolvedFresh := make(map[cachekey.ActionRef]int, len(freshDeps))
 	for i := range freshDeps {
 		resolvedFresh[freshKeys[i]] = i
 	}
@@ -1902,7 +1903,7 @@ type repoResponse struct {
 	} `json:"object"`
 }
 
-func (r *Resolver) resolveWithActionYMLBatch(refs []parserlock.ActionRef) ([]lockfile.Dependency, []string, []string, error) {
+func (r *Resolver) resolveWithActionYMLBatch(refs []parserlock.ActionRef) ([]lockfile.Dependency, []string, []cachekey.ActionRef, error) {
 	query, vars, aliasMap := buildResolveWithFileQuery(refs)
 
 	var data map[string]json.RawMessage
@@ -1981,10 +1982,10 @@ func buildResolveWithFileQuery(refs []parserlock.ActionRef) (string, map[string]
 	return decl.String() + body.String(), vars, aliasMap
 }
 
-func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []parserlock.ActionRef, aliasMap map[string]int, gqlErr *api.GraphQLError, hostname string) ([]lockfile.Dependency, []string, []string, error) {
+func parseResolveWithFileResponse(data map[string]json.RawMessage, refs []parserlock.ActionRef, aliasMap map[string]int, gqlErr *api.GraphQLError, hostname string) ([]lockfile.Dependency, []string, []cachekey.ActionRef, error) {
 	var deps []lockfile.Dependency
 	var ymls []string
-	var keys []string
+	var keys []cachekey.ActionRef
 	var errs []string
 
 	samlOwners := samlBlockedOwners(gqlErr, refs, aliasMap)

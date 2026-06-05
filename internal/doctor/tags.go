@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"golang.org/x/sync/singleflight"
 	"gopkg.in/yaml.v3"
@@ -89,7 +90,7 @@ type CooldownConfig struct {
 
 // CooldownDays returns the cooldown period for a given repo.
 func (c CooldownConfig) CooldownDays(owner, repo string) int {
-	if days, ok := c.RepoOverrides[owner+"/"+repo]; ok {
+	if days, ok := c.RepoOverrides[owner+"/"+repo]; ok { // user YAML wire format, not a cache key
 		return days
 	}
 	return c.DefaultDays
@@ -112,7 +113,7 @@ func NewTagLister(client *api.RESTClient) *TagLister {
 // singleflight, so multiple pin workers fetching different repos proceed
 // in parallel.
 func (tl *TagLister) ListTags(owner, repo string) ([]TagInfo, error) {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo).String()
 	tl.mu.Lock()
 	if cached, ok := tl.cache[key]; ok {
 		tl.mu.Unlock()
@@ -308,7 +309,7 @@ func (tl *TagLister) fetchReleaseTags(owner, repo string) (map[string]releaseInf
 
 	// Cache release dates. fetchReleaseTags runs without tl.mu held now that
 	// ListTags uses singleflight, so guard the map write explicitly.
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo).String()
 	tl.mu.Lock()
 	if _, ok := tl.releaseDates[key]; !ok {
 		tl.releaseDates[key] = make(map[string]string)
@@ -326,7 +327,7 @@ func (tl *TagLister) fetchReleaseTags(owner, repo string) (map[string]releaseInf
 func (tl *TagLister) ReleaseDate(owner, repo, tag string) string {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo).String()
 	if dates, ok := tl.releaseDates[key]; ok {
 		return dates[tag]
 	}
@@ -392,7 +393,7 @@ func (tl *TagLister) isTagTooNew(owner, repo, tag string) bool {
 // owner/repo. Concurrent calls for different repos run in parallel; calls
 // for the same repo are coalesced via singleflight.
 func (tl *TagLister) GetRepoInfo(owner, repo string) (*RepoInfo, error) {
-	key := owner + "/" + repo
+	key := cachekey.ForRepo(owner, repo).String()
 	tl.mu.Lock()
 	if cached, ok := tl.repoCache[key]; ok {
 		tl.mu.Unlock()
