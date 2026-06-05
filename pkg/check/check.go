@@ -1,31 +1,12 @@
-// Package check is the staged-for-extraction rule-evaluation surface for
-// gh-actions-pin. It defines the deterministic Input fact bundle a Check
-// operates over and the Check interface every rule must satisfy. Rule
-// implementations live elsewhere (today: internal/doctor); this package
-// exposes only the shapes so future consumers — CLI, scanners,
-// Dependabot, an editor LSP — agree on the contract without depending
-// on the CLI's resolver/HTTP/orchestration code.
+// Package check defines the deterministic Input fact bundle and Check
+// interface that rule implementations operate over. Rule impls live in
+// internal/doctor; this package stays import-light (stdlib + pkg/findings
+// + pkg/lockfile) so future consumers can depend on the shapes without
+// pulling in the CLI's resolver, HTTP, or orchestration code.
 //
-// A Check given the same Input must produce the same findings on every
-// platform. The package imports only the standard library, pkg/findings,
-// and pkg/lockfile; no HTTP, filesystem, go-gh, or internal/*.
-//
-// Stability:
-//   - Reachability status string values ("reachable", "unreachable",
-//     "unknown") are part of the public schema; TestReachabilityStringsAreFrozen
-//     guards against accidental renames.
-//   - Public struct field names and types are additive-only post-cut.
-//     Renaming or removing an exported field is a breaking change.
-//     TestInputShapeIsFrozen / TestFactShapesAreFrozen pin existing
-//     fields without asserting count, so new facts can land additively
-//     as their checks move over from internal/doctor.
-//   - The Check interface method set is frozen; TestCheckInterfaceIsFrozen
-//     pins Name() and Evaluate(Input) []findings.Finding.
-//
-// This first cut is interface-only. A future cut will land per-rule
-// Check implementations and an aggregate Run(Input) findings.Report
-// driver once the doctor engine can be driven from a fact bundle and
-// prove parity with existing tests (see pkg-library-boundary.md).
+// Public reachability string values and exported field/method shapes are
+// frozen by tests in this package — see TestReachabilityStringsAreFrozen,
+// TestInputShapeIsFrozen, TestFactShapesAreFrozen, TestCheckInterfaceIsFrozen.
 package check
 
 import (

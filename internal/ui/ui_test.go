@@ -90,4 +90,3 @@ func TestPrintLine_MergesDeferredWritesOverSnapshot(t *testing.T) {
 		}
 	}
 }
-
