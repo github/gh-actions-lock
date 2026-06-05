@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/repository"
+	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/runlog"
@@ -28,35 +28,6 @@ type checkOptions struct {
 	// pin, bypassing the fast path that trusts the lockfile. Useful for
 	// audits or when a CI policy requires re-attestation on every run.
 	Rescan bool
-}
-
-// JSON output types — thin wrappers around doctor.Report.
-
-type checkFinding struct {
-	Workflow    string `json:"workflow"`
-	Category    string `json:"category"`
-	Severity    string `json:"severity"`
-	Dependency  string `json:"dependency,omitempty"`
-	RequiredBy  string `json:"required_by,omitempty"`
-	Detail      string `json:"detail"`
-	Remediation string `json:"remediation,omitempty"`
-	DocURL      string `json:"doc_url,omitempty"`
-}
-
-type checkDependency struct {
-	NWO        string   `json:"nwo"`
-	Ref        string   `json:"ref"`
-	SHA        string   `json:"sha"`
-	HashAlgo   string   `json:"hash_algo,omitempty"`
-	Direct     bool     `json:"direct"`
-	RequiredBy []string `json:"required_by,omitempty"`
-}
-
-type checkWorkflow struct {
-	Path         string            `json:"path"`
-	Valid        bool              `json:"valid"`
-	Findings     []checkFinding    `json:"findings"`
-	Dependencies []checkDependency `json:"dependencies,omitempty"`
 }
 
 func newCheckCmd(f *pinFactory) *cobra.Command {
@@ -343,7 +314,13 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// JSON output — always before any human-readable output.
 	if opts.JSONFields != "" {
 		f.UI.StopProgress()
-		return writeCheckJSON(f.Out, report, valid, opts.JSONFields, store.File().Version)
+		if err := format.WriteJSON(f.Out, report, valid, opts.JSONFields, cliVersion(), store.File().Version); err != nil {
+			return err
+		}
+		if !valid {
+			return errSilent
+		}
+		return nil
 	}
 
 	// Determine if interactive remediation will follow.
@@ -363,7 +340,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	willRemediate := true
 
 	// Human-readable output.
-	presentCheckResults(f.UI, report, valid, willRemediate)
+	format.PresentResults(f.UI, report, valid, willRemediate)
 
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
@@ -555,10 +532,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 					indent = "    "
 				}
 				for _, dep := range byReason[reason] {
-					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep, r)))
+					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 					paths := alertedWorkflows[dep]
 					if len(paths) == 0 {
-						paths = workflowsForDep(report, dep)
+						paths = format.WorkflowsForDep(report, dep)
 					}
 					for _, path := range paths {
 						f.UI.TermDetail("%s  └─ %s", indent, f.UI.TermDim(path))
@@ -598,7 +575,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally:",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
-				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep, r)))
+				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 			}
 		}
 		if unresolvedCount > 0 {
@@ -608,33 +585,12 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.TermError("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, dep := range unresolvedDeps {
-				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), depReleaseURL(dep, r)))
+				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 			}
 		}
 		return errSilent
 	}
 	return nil
-}
-
-// findingToJSON converts a doctor.Finding to a JSON-safe struct.
-func findingToJSON(f doctor.Finding) checkFinding {
-	jf := checkFinding{
-		Workflow:    f.WorkflowPath,
-		Category:    string(f.Category),
-		Severity:    string(f.Severity),
-		Detail:      f.Detail,
-		Remediation: f.Remediation,
-		DocURL:      f.DocURL,
-	}
-	if f.Dependency != nil {
-		jf.Dependency = f.Dependency.Key()
-	} else if f.ActionRef != nil {
-		jf.Dependency = f.ActionRef.FullName() + "@" + f.ActionRef.Ref
-	}
-	if f.ParentNWO != "" {
-		jf.RequiredBy = f.ParentNWO
-	}
-	return jf
 }
 
 // isFullyRecorded reports whether every direct action ref in the workflow is
@@ -661,401 +617,6 @@ func isFullyRecorded(pw doctor.ParsedWorkflow) bool {
 	return true
 }
 
-// writeCheckJSON writes the unified JSON output.
-func writeCheckJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV, lockfileVersion string) error {
-	fields := strings.Split(fieldsCSV, ",")
-
-	// Build all data lazily.
-	var allFindings []checkFinding
-	var allDeps []checkDependency
-	var allWorkflows []checkWorkflow
-
-	buildFindings := func() []checkFinding {
-		if allFindings != nil {
-			return allFindings
-		}
-		allFindings = []checkFinding{}
-		for _, f := range report.RepoFindings {
-			allFindings = append(allFindings, findingToJSON(f))
-		}
-		for _, wr := range report.Workflows {
-			for _, f := range wr.Findings {
-				if f.Category == doctor.CategoryRunOnly || (f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityOK) {
-					continue
-				}
-				allFindings = append(allFindings, findingToJSON(f))
-			}
-		}
-		return allFindings
-	}
-
-	buildDeps := func() []checkDependency {
-		if allDeps != nil {
-			return allDeps
-		}
-		allDeps = []checkDependency{}
-		// Deduplicate across workflows, merging required_by lists.
-		seen := make(map[string]*checkDependency)
-		var order []string
-		for _, wr := range report.Workflows {
-			for _, inv := range wr.Inventory {
-				key := inv.Dep.Key()
-				if existing, ok := seen[key]; ok {
-					// Merge required_by lists.
-					for _, p := range inv.Parents {
-						found := false
-						for _, ep := range existing.RequiredBy {
-							if ep == p {
-								found = true
-								break
-							}
-						}
-						if !found {
-							existing.RequiredBy = append(existing.RequiredBy, p)
-						}
-					}
-					// If direct in any workflow, mark as direct.
-					if inv.Direct {
-						existing.Direct = true
-					}
-					continue
-				}
-				d := checkDependency{
-					NWO:        inv.Dep.NWO,
-					Ref:        inv.Dep.Ref,
-					SHA:        inv.Dep.SHA,
-					HashAlgo:   inv.Dep.HashAlgo,
-					Direct:     inv.Direct,
-					RequiredBy: inv.Parents,
-				}
-				seen[key] = &d
-				order = append(order, key)
-			}
-		}
-		for _, key := range order {
-			allDeps = append(allDeps, *seen[key])
-		}
-		return allDeps
-	}
-
-	buildWorkflows := func() []checkWorkflow {
-		if allWorkflows != nil {
-			return allWorkflows
-		}
-		allWorkflows = []checkWorkflow{}
-		for _, wr := range report.Workflows {
-			wf := checkWorkflow{
-				Path:     wr.Path,
-				Valid:    wr.IsValid(),
-				Findings: []checkFinding{},
-			}
-			for _, f := range wr.Findings {
-				if f.Category == doctor.CategoryRunOnly || (f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityOK) {
-					continue
-				}
-				wf.Findings = append(wf.Findings, findingToJSON(f))
-			}
-			for _, inv := range wr.Inventory {
-				wf.Dependencies = append(wf.Dependencies, checkDependency{
-					NWO:        inv.Dep.NWO,
-					Ref:        inv.Dep.Ref,
-					SHA:        inv.Dep.SHA,
-					HashAlgo:   inv.Dep.HashAlgo,
-					Direct:     inv.Direct,
-					RequiredBy: inv.Parents,
-				})
-			}
-			allWorkflows = append(allWorkflows, wf)
-		}
-		return allWorkflows
-	}
-
-	payload := map[string]interface{}{
-		"cli_version":      cliVersion(),
-		"lockfile_version": lockfileVersion,
-	}
-	for _, field := range fields {
-		field = strings.TrimSpace(field)
-		switch field {
-		case "valid":
-			payload[field] = valid
-		case "findings":
-			payload[field] = buildFindings()
-		case "dependencies":
-			payload[field] = buildDeps()
-		case "workflows":
-			payload[field] = buildWorkflows()
-		default:
-			return fmt.Errorf("unknown JSON field %q (expected valid, findings, workflows, dependencies)", field)
-		}
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(payload); err != nil {
-		return err
-	}
-	if !valid {
-		return errSilent
-	}
-	return nil
-}
-
-// presentCheckResults renders human-readable output from a doctor report.
-func presentCheckResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate bool) {
-	for _, f := range report.RepoFindings {
-		out.Warning("%s", f.Detail)
-		if f.DocURL != "" {
-			out.Detail("  see: %s", out.DocLink(f.DocURL))
-		}
-	}
-
-	var validCount, failedCount int
-	for _, wr := range report.Workflows {
-		if wr.IsValid() {
-			validCount++
-		} else {
-			failedCount++
-		}
-	}
-	checked := validCount + failedCount
-
-	if valid && checked > 0 {
-		out.Success("All %d %s valid", checked, ui.Pluralize(checked, "workflow", "workflows"))
-	} else if checked > 0 {
-		// Collect error findings grouped by dependency.
-		type depGroup struct {
-			dep      string
-			findings []doctor.Finding
-		}
-		var depOrder []string
-		depMap := map[string]*depGroup{}
-
-		for _, wr := range report.Workflows {
-			for _, f := range wr.Findings {
-				if f.IsValid() {
-					continue
-				}
-				depKey := f.DepKey()
-				if dg, ok := depMap[depKey]; ok {
-					dg.findings = append(dg.findings, f)
-				} else {
-					depOrder = append(depOrder, depKey)
-					depMap[depKey] = &depGroup{dep: depKey, findings: []doctor.Finding{f}}
-				}
-			}
-		}
-
-		// Count categories; render per-dep detail only for non-NOT_PINNED.
-		catCounts := map[doctor.Category]int{}
-		for _, dep := range depOrder {
-			dg := depMap[dep]
-
-			// Tally and check if this dep is NOT_PINNED only.
-			allNotPinned := true
-			for _, f := range dg.findings {
-				catCounts[f.Category]++
-				if f.Category != doctor.CategoryNotPinned {
-					allNotPinned = false
-				}
-			}
-			if allNotPinned {
-				continue // pure aggregation — no per-dep output
-			}
-
-			// Render per-dep detail for actionable categories.
-			for _, f := range dg.findings {
-				if f.Category == doctor.CategoryNotPinned {
-					continue // skip NOT_PINNED lines in mixed groups too
-				}
-				label := strings.ToUpper(string(f.Category))
-				icon := "!"
-				if isAlertedCategory(f.Category) {
-					icon = "✗"
-				}
-				out.Detail("%s %s %s", icon, out.Dim(label), dep)
-				out.Detail("  %s", f.Detail)
-				if f.Category == doctor.CategoryLockfileForgery && f.Dependency != nil {
-					owner, repo := f.Dependency.OwnerRepo()
-					if owner != "" {
-						out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
-					}
-				}
-				if isAlertedCategory(f.Category) && f.Remediation != "" {
-					out.Detail("  %s %s", out.Bold("⚠"), f.Remediation)
-				}
-				if f.SaneSuggestionTag != "" {
-					nwo := ""
-					if f.Dependency != nil {
-						nwo = f.Dependency.NWO
-					}
-					sha := f.SaneSuggestionSHA
-					if len(sha) > 7 {
-						sha = sha[:7]
-					}
-					out.Detail("  %s suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
-						out.Bold("→"), nwo, f.SaneSuggestionTag, sha)
-				} else if f.SaneSuggestionSearched {
-					out.Detail("  %s no recent release was reachable from a branch — escalate to the action publisher",
-						out.Bold("→"))
-				}
-				if f.SaneSuggestionSearched {
-					out.Detail("  publishers: %s", out.DocLink(doctor.PublisherTagReleasesDocURL))
-				}
-				if f.DocURL != "" {
-					out.Detail("  see: %s", out.DocLink(f.DocURL))
-				}
-			}
-		}
-
-		parts := []string{}
-		for _, cat := range []doctor.Category{
-			doctor.CategoryLockfileForgery,
-			doctor.CategoryRefChanged, doctor.CategoryNotPinned,
-			doctor.CategoryStale, doctor.CategoryMisleadingSHA, doctor.CategoryImposterCommit,
-		} {
-			if n, ok := catCounts[cat]; ok {
-				parts = append(parts, fmt.Sprintf("%d %s", n, string(cat)))
-			}
-		}
-		out.Error("%d of %d %s failed: %s",
-			failedCount, checked,
-			ui.Pluralize(checked, "workflow", "workflows"),
-			strings.Join(parts, ", "))
-		out.Blank()
-	}
-
-	// Warnings — deduplicate by dep key.
-	type warningGroup struct {
-		finding   doctor.Finding
-		count     int
-		workflows []string
-	}
-	var warnOrder []string
-	warnMap := map[string]*warningGroup{}
-	for _, wr := range report.Workflows {
-		for _, f := range wr.Findings {
-			if f.IsWarning() {
-				key := f.DepKey()
-				if key == "" {
-					key = f.WorkflowPath // workflow-level warnings
-				}
-				if wg, ok := warnMap[key]; ok {
-					wg.count++
-					wg.workflows = append(wg.workflows, f.WorkflowPath)
-				} else {
-					warnOrder = append(warnOrder, key)
-					warnMap[key] = &warningGroup{finding: f, count: 1, workflows: []string{f.WorkflowPath}}
-				}
-			}
-		}
-		for _, pw := range wr.ParseWarnings {
-			out.Warning("%s: %s", wr.Path, pw)
-		}
-	}
-
-	// Collect workflow-level NOT_PINNED warnings separately for collapsing.
-	var unpinnedWorkflows []string
-	var otherWarnings []string
-	for _, key := range warnOrder {
-		wg := warnMap[key]
-		f := wg.finding
-		if f.Category == doctor.CategoryNotPinned && f.ActionRef == nil {
-			unpinnedWorkflows = append(unpinnedWorkflows, f.WorkflowPath)
-		} else {
-			otherWarnings = append(otherWarnings, key)
-		}
-	}
-	if len(unpinnedWorkflows) > 0 {
-		if willRemediate {
-			out.Warning("%d %s not yet pinned — resolving below",
-				len(unpinnedWorkflows),
-				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
-		} else {
-			out.Warning("%d %s not yet pinned (run `gh actions-pin` to fix)",
-				len(unpinnedWorkflows),
-				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
-		}
-	}
-	// Separate SHA_AS_REF warnings into direct (aggregate) and transitive (suppressed).
-	// TODO: Transitive deps pinned to bare SHAs are silently swallowed for now.
-	// We need to figure out how to coexist better with composite actions that
-	// don't use dependency pinning — warning on every transitive dep is noisy
-	// and not actionable by the consumer. Revisit when we have a story for
-	// composite action authors to adopt pinning.
-	// Collect REF_MOVED warnings for compact display.
-	var bareSHADeps []string
-	var refMovedWarnings []string
-	var otherDetailWarnings []string
-	for _, key := range otherWarnings {
-		wg := warnMap[key]
-		f := wg.finding
-		if f.Category == doctor.CategorySHAAsRef {
-			isTransitive := f.Dependency != nil && f.ActionRef == nil
-			if !isTransitive {
-				bareSHADeps = append(bareSHADeps, key)
-			}
-			// transitive SHA_AS_REF: silently swallowed (see TODO above)
-		} else if f.Category == doctor.CategoryRefMoved {
-			refMovedWarnings = append(refMovedWarnings, key)
-		} else if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning &&
-			strings.Contains(f.Remediation, "transitive dependency") {
-			// transitive reachability unknown: silently swallowed (see TODO above)
-		} else {
-			otherDetailWarnings = append(otherDetailWarnings, key)
-		}
-	}
-	if len(bareSHADeps) > 0 {
-		out.Warning("%d %s pinned to a bare SHA without a tag ref",
-			len(bareSHADeps),
-			ui.Pluralize(len(bareSHADeps), "action is", "actions are"))
-		if willRemediate {
-			out.Detail("  ↳ resolving below")
-		} else {
-			out.Detail("  ↳ run `gh actions-pin upgrade` to pin to tagged releases")
-		}
-	}
-	if len(refMovedWarnings) > 0 {
-		out.Warning("%d %s moved upstream — run `gh actions-pin upgrade` to update",
-			len(refMovedWarnings),
-			ui.Pluralize(len(refMovedWarnings), "ref has", "refs have"))
-		for _, key := range refMovedWarnings {
-			wg := warnMap[key]
-			f := wg.finding
-			out.Detail("  ↳ %s: %s", key, f.Detail)
-			if f.Dependency != nil && f.LiveSHA != "" {
-				owner, repo := f.Dependency.OwnerRepo()
-				if owner != "" {
-					out.Detail("    %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA[:12], f.LiveSHA[:12])))
-				}
-			}
-		}
-	}
-	for _, key := range otherDetailWarnings {
-		wg := warnMap[key]
-		f := wg.finding
-		depKey := f.DepKey()
-		if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning {
-			label := depKey
-			if label == "" {
-				label = f.WorkflowPath
-			}
-			out.Warning("%s: %s", label, f.Detail)
-		}
-	}
-}
-
-// isAlertedCategory reports whether a finding category has no auto-fix and
-// requires human investigation (already surfaced in presentCheckResults — the
-// remediator should not re-print it in non-interactive mode).
-func isAlertedCategory(c doctor.Category) bool {
-	switch c {
-	case doctor.CategoryImposterCommit, doctor.CategoryLockfileForgery, doctor.CategoryMisleadingSHA:
-		return true
-	}
-	return false
-}
-
 // hasImposterFindings reports whether any workflow in the report carries a
 // CategoryImposterCommit finding. Used to gate the bounded tag-walk that
 // enriches those findings with a sane-release suggestion.
@@ -1071,61 +632,6 @@ func hasImposterFindings(r *doctor.Report) bool {
 		}
 	}
 	return false
-}
-
-// depReleaseURL derives a GitHub URL from a dep key of the form
-// "owner/repo[/path]@ref". Commit-SHA pins link to /commit/<sha> (the
-// diff view). Annotated-tag-object SHAs link to /tree/<sha> instead —
-// /commit/<tagobject-sha> returns 404 because the tag object is not a
-// commit. Non-SHA refs link to /releases/tag/<ref>. A nil checker
-// (or one that has not peeled this SHA) falls back to the plain
-// /commit/<sha> path.
-func depReleaseURL(dep string, checker tagObjectChecker) string {
-	nwo := dep
-	ref := ""
-	if i := strings.IndexByte(dep, '@'); i >= 0 {
-		nwo = dep[:i]
-		ref = dep[i+1:]
-	}
-	parts := strings.SplitN(nwo, "/", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	base := "https://github.com/" + parts[0] + "/" + parts[1]
-	if ref != "" && isHexSHA(ref) {
-		if checker != nil && checker.IsKnownTagObject(parts[0], parts[1], ref) {
-			return base + "/tree/" + ref
-		}
-		return base + "/commit/" + ref
-	}
-	if ref != "" {
-		return base + "/releases/tag/" + ref
-	}
-	return base + "/releases"
-}
-
-// tagObjectChecker is the cache-only "is this SHA an annotated tag object?"
-// query used by depReleaseURL. *resolver.Resolver satisfies this; tests
-// pass a stub. Kept as a small local interface so the URL builder stays
-// I/O-free and trivially mockable.
-type tagObjectChecker interface {
-	IsKnownTagObject(owner, repo, sha string) bool
-}
-
-// workflowsForDep returns workflow paths whose findings reference the given
-// dependency key (ordered as they appear in the report, deduplicated).
-func workflowsForDep(report *doctor.Report, depKey string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, wr := range report.Workflows {
-		for _, f := range wr.Findings {
-			if f.DepKey() == depKey && !seen[wr.Path] {
-				seen[wr.Path] = true
-				out = append(out, wr.Path)
-			}
-		}
-	}
-	return out
 }
 
 // cliVersion returns the gh-actions-pin extension version embedded by the Go
