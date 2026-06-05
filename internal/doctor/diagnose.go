@@ -246,9 +246,22 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			reach = append(reach, r.CheckReachabilityAll(toCheck)...)
 		}
 	}
+	// Independent sweep for LIVE SHAs whose tag has moved: the
+	// tag-hijacked-to-fork-network shape is invisible to the locked-SHA
+	// sweep above (the lockfile entry is still legitimate; the live
+	// SHA is the impostor). Kept separate so the result map's
+	// (NWO, Ref, SHA) keys don't shadow the lockfile sweep — they
+	// share NWO@Ref dep keys, which would confuse
+	// reachabilityComplementFindings if mixed into `reach`.
+	var liveMovedReach []resolver.ReachabilityResult
+	if r != nil && len(liveDeps) > 0 && len(pw.ExistingDeps) > 0 {
+		if moved := liveMovedDeps(pw.ExistingDeps, liveDeps); len(moved) > 0 {
+			liveMovedReach = r.CheckReachabilityAll(moved)
+		}
+	}
 	var checkR checkResolver
 	if r != nil && liveDeps != nil {
-		checkR = newPrewarmedResolver(r, liveDeps, reach)
+		checkR = newPrewarmedResolver(r, liveDeps, reach, liveMovedReach)
 	}
 	rawFindings := runChecks(pw, store.File(), checkR)
 
@@ -371,6 +384,94 @@ func CollectReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependency) []loc
 			seen[d.Key()] = true
 			out = append(out, d)
 		}
+	}
+	return out
+}
+
+// CollectLiveMovedReachDeps returns the deduplicated set of synthetic
+// dependencies (NWO, Ref + LIVE SHA) for which a reachability check
+// should be pre-warmed. Each entry pairs an existing lockfile dep with
+// the LIVE SHA it currently resolves to, when they differ — the input
+// that lets the engine emit CategoryImpostorCommit for the
+// tag-hijacked-to-fork-network shape (where the lockfile SHA is still
+// legit but the live tag now points at a fork commit).
+//
+// Keyed on NWO@Ref+LiveSHA so the locked-SHA reach sweep
+// (CollectReachDeps) and this sweep never request the same Compare
+// path twice. Pass live as the result of a single ResolveAllRecursive
+// over the union of refs.
+func CollectLiveMovedReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependency) []lockfile.Dependency {
+	if len(parsed) == 0 || len(live) == 0 {
+		return nil
+	}
+	liveSHA := make(map[string]string, len(live))
+	liveDep := make(map[string]lockfile.Dependency, len(live))
+	for _, d := range live {
+		liveSHA[d.Key()] = d.SHA
+		liveDep[d.Key()] = d
+	}
+	seen := make(map[cachekey.Reach]bool)
+	var out []lockfile.Dependency
+	for _, pw := range parsed {
+		for _, d := range pw.ExistingDeps {
+			ls, ok := liveSHA[d.Key()]
+			if !ok || strings.EqualFold(ls, d.SHA) {
+				continue
+			}
+			synthetic := d
+			synthetic.SHA = ls
+			// Prefer the live dep's NWO casing if the live resolve has
+			// one — it's the canonical one returned by the API.
+			if ld, ok := liveDep[d.Key()]; ok && ld.NWO != "" {
+				synthetic.NWO = ld.NWO
+			}
+			owner, repo := synthetic.OwnerRepo()
+			k := cachekey.ForReach(owner, repo, synthetic.SHA, synthetic.Ref)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, synthetic)
+		}
+	}
+	return out
+}
+
+// liveMovedDeps is the per-workflow analogue of CollectLiveMovedReachDeps.
+// Returns synthetic (NWO, Ref, LIVE SHA) deps for any existing dep whose
+// live resolve differs from the recorded SHA. Used inside diagnoseOneParsed
+// to drive a second CheckReachabilityAll over the moved set so the
+// prewarmedResolver's reach cache has the (owner, repo, liveSHA, ref) entry
+// the engine needs to emit a live-SHA impostor finding.
+func liveMovedDeps(existing, live []lockfile.Dependency) []lockfile.Dependency {
+	if len(existing) == 0 || len(live) == 0 {
+		return nil
+	}
+	liveSHA := make(map[string]string, len(live))
+	liveDep := make(map[string]lockfile.Dependency, len(live))
+	for _, d := range live {
+		liveSHA[d.Key()] = d.SHA
+		liveDep[d.Key()] = d
+	}
+	seen := make(map[cachekey.Reach]bool)
+	var out []lockfile.Dependency
+	for _, d := range existing {
+		ls, ok := liveSHA[d.Key()]
+		if !ok || strings.EqualFold(ls, d.SHA) {
+			continue
+		}
+		synthetic := d
+		synthetic.SHA = ls
+		if ld, ok := liveDep[d.Key()]; ok && ld.NWO != "" {
+			synthetic.NWO = ld.NWO
+		}
+		owner, repo := synthetic.OwnerRepo()
+		k := cachekey.ForReach(owner, repo, synthetic.SHA, synthetic.Ref)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, synthetic)
 	}
 	return out
 }
