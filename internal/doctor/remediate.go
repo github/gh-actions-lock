@@ -215,23 +215,11 @@ func (rem *Remediator) tryAutoFixImpostors(wr *WorkflowReport) bool {
 	if len(rewrites) == 0 {
 		return false
 	}
-	wf, err := lockfile.Load(wr.Path)
-	if err != nil {
+	refs, applied, err := rem.applyImpostorRewrites(wr.Path, rewrites)
+	if err != nil || !applied {
 		return false
 	}
-	content, _, err := wf.RewriteActionRefs(rewrites)
-	if err != nil {
-		return false
-	}
-	if err := writeWorkflowFile(wr.Path, content); err != nil {
-		return false
-	}
-	wf2, err := lockfile.Load(wr.Path)
-	if err != nil {
-		return false
-	}
-	refs2, _, _ := wf2.ExtractActionRefs()
-	wr.ActionRefs = refs2
+	wr.ActionRefs = refs
 	wr.Findings = keep
 	for _, fix := range pending {
 		rem.recordAutoFixedImpostor(wr.Path, fix.nwo, fix.oldRef, fix.newTag, fix.newSHA)
