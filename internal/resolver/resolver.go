@@ -310,11 +310,12 @@ type tagPeel struct {
 // release tags are stored as tag *objects* whose own SHA differs from the
 // commit they point at, so a `uses:` pin to that tag-object SHA is a
 // legitimate immutable pin even though it does not equal the commit SHA the
-// ref resolves to. Follows tag-of-tag chains up to a small depth cap.
-// Returns ok=false for lightweight tags, plain commits, cycles, or any
+// ref resolves to. Tag-of-tag chains are peeled server-side via the
+// `^{commit}` revision suffix, so chain depth costs us nothing. Returns
+// ok=false for lightweight tags, plain commits, unknown SHAs, or any
 // lookup failure (fail open).
 func (r *Resolver) PeelTagObject(owner, repo, sha string) (commit string, ok bool) {
-	return r.peelTagObject(owner, repo, sha, 0)
+	return r.peelTagObject(owner, repo, sha)
 }
 
 // IsKnownTagObject reports whether (owner, repo, sha) is already cached as
@@ -330,12 +331,20 @@ func (r *Resolver) IsKnownTagObject(owner, repo, sha string) bool {
 	return hit && cached.isTag
 }
 
-const maxTagPeelDepth = 5
+// tagObjectPeelQuery resolves both the type of the object at $oid and the
+// commit it peels to in a single round trip. `object(expression:)` with the
+// `^{commit}` suffix follows tag-of-tag chains server-side, so depth costs
+// us nothing. The two aliases are evaluated independently — `head` tells us
+// whether the input SHA is itself an annotated tag object (vs a commit,
+// blob, tree, or unknown OID), and `peeled.oid` is the underlying commit.
+const tagObjectPeelQuery = `query($owner: String!, $name: String!, $oid: GitObjectID!, $expr: String!) {
+  repository(owner: $owner, name: $name) {
+    head: object(oid: $oid) { __typename }
+    peeled: object(expression: $expr) { ... on Commit { oid } }
+  }
+}`
 
-func (r *Resolver) peelTagObject(owner, repo, sha string, depth int) (string, bool) {
-	if depth >= maxTagPeelDepth {
-		return "", false
-	}
+func (r *Resolver) peelTagObject(owner, repo, sha string) (string, bool) {
 	key := hintKey(owner, repo, sha)
 	r.cacheMu.Lock()
 	cached, hit := r.tagObjectCache[key]
@@ -344,40 +353,51 @@ func (r *Resolver) peelTagObject(owner, repo, sha string, depth int) (string, bo
 		return cached.commit, cached.isTag
 	}
 	var resp struct {
-		Object struct {
-			Type string `json:"type"`
-			SHA  string `json:"sha"`
-		} `json:"object"`
+		Repository *struct {
+			Head *struct {
+				Typename string `json:"__typename"`
+			} `json:"head"`
+			Peeled *struct {
+				OID string `json:"oid"`
+			} `json:"peeled"`
+		} `json:"repository"`
 	}
-	path := fmt.Sprintf("repos/%s/%s/git/tags/%s",
-		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
-	if err := r.restClient.Get(path, &resp); err != nil {
-		// 404 means "not a tag object"; any other error is transient. Either
-		// way we fail open (treat as not-a-tag) and do not cache transient
-		// failures so a later retry can succeed.
+	vars := map[string]any{
+		"owner": owner,
+		"name":  repo,
+		"oid":   sha,
+		"expr":  sha + "^{commit}",
+	}
+	if err := r.client.Do(tagObjectPeelQuery, vars, &resp); err != nil {
+		// Transient transport or partial GraphQL error — fail open and do
+		// not cache, matching the prior REST behavior so a later retry
+		// can still succeed.
 		return "", false
 	}
-	switch {
-	case resp.Object.Type == "commit" && resp.Object.SHA != "":
-		r.cacheMu.Lock()
-		r.tagObjectCache[key] = tagPeel{commit: resp.Object.SHA, isTag: true}
-		r.cacheMu.Unlock()
-		return resp.Object.SHA, true
-	case resp.Object.Type == "tag" && resp.Object.SHA != "":
-		// Tag-of-tag chain — recurse to find the underlying commit.
-		commit, ok := r.peelTagObject(owner, repo, resp.Object.SHA, depth+1)
-		if ok {
-			r.cacheMu.Lock()
-			r.tagObjectCache[key] = tagPeel{commit: commit, isTag: true}
-			r.cacheMu.Unlock()
-		}
-		return commit, ok
-	default:
+	if resp.Repository == nil || resp.Repository.Head == nil {
+		// OID not present in the repo (or repo not accessible). Treat as
+		// "not a tag object" but do not cache — the SHA may show up after
+		// a fetch / permission grant.
+		return "", false
+	}
+	if resp.Repository.Head.Typename != "Tag" {
+		// Definitively not an annotated tag object — cache the negative so
+		// the common "pin is a plain commit SHA" case never re-queries.
 		r.cacheMu.Lock()
 		r.tagObjectCache[key] = tagPeel{}
 		r.cacheMu.Unlock()
 		return "", false
 	}
+	if resp.Repository.Peeled == nil || resp.Repository.Peeled.OID == "" {
+		// Annotated tag whose chain bottoms out at a non-commit (tree/blob)
+		// or for whom GraphQL refused to peel. Don't cache — the result is
+		// ambiguous rather than authoritatively negative.
+		return "", false
+	}
+	r.cacheMu.Lock()
+	r.tagObjectCache[key] = tagPeel{commit: resp.Repository.Peeled.OID, isTag: true}
+	r.cacheMu.Unlock()
+	return resp.Repository.Peeled.OID, true
 }
 
 // RepoIDs returns the numeric owner ID and repo ID for a NWO, querying

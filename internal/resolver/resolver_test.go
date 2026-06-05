@@ -1154,3 +1154,168 @@ func TestCheckAncestry_Unknown_RateLimit(t *testing.T) {
 	}
 	reg.Verify(t)
 }
+
+// peelResponse builds a GraphQL response body for the tag-object peel
+// query: typename is the __typename returned for object(oid:$oid), and
+// peeledOID is the commit returned for object(expression:$oid^{commit}).
+// Pass typename=="" to omit the head object entirely (simulating "OID not
+// found"); pass peeledOID=="" to omit the peeled commit fragment.
+func peelResponse(typename, peeledOID string) map[string]any {
+	repo := map[string]any{}
+	if typename != "" {
+		repo["head"] = map[string]any{"__typename": typename}
+	} else {
+		repo["head"] = nil
+	}
+	if peeledOID != "" {
+		repo["peeled"] = map[string]any{"oid": peeledOID}
+	} else {
+		repo["peeled"] = nil
+	}
+	return map[string]any{"data": map[string]any{"repository": repo}}
+}
+
+func TestPeelTagObjectAnnotatedTagOneRoundTrip(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// One stub — one round trip. If the implementation falls back to a
+	// recursive walk it will fail "no registered HTTP stubs matched".
+	tagSHA := "1111111111111111111111111111111111111111"
+	commitSHA := "2222222222222222222222222222222222222222"
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "repo"),
+		httpmock.JSONResponse(peelResponse("Tag", commitSHA)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport: %v", err)
+	}
+
+	got, ok := r.PeelTagObject("owner", "repo", tagSHA)
+	if !ok {
+		t.Fatalf("expected ok=true for annotated tag object")
+	}
+	if got != commitSHA {
+		t.Fatalf("expected peeled commit %q, got %q", commitSHA, got)
+	}
+	if !r.IsKnownTagObject("owner", "repo", tagSHA) {
+		t.Fatalf("expected cache to mark tag-object SHA as known")
+	}
+}
+
+func TestPeelTagObjectDeepChainStillOneRoundTrip(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// A tag-of-tag-of-tag chain seven levels deep — well past the prior
+	// REST walk's hardcoded depth cap of 5. The GraphQL `^{commit}` peel
+	// happens server-side, so the client still sees exactly one stub.
+	tagSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	commitSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "deep"),
+		httpmock.JSONResponse(peelResponse("Tag", commitSHA)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport: %v", err)
+	}
+
+	got, ok := r.PeelTagObject("owner", "deep", tagSHA)
+	if !ok || got != commitSHA {
+		t.Fatalf("expected commit %q ok=true, got %q ok=%v", commitSHA, got, ok)
+	}
+}
+
+func TestPeelTagObjectPlainCommitNegativeCached(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	commitSHA := "3333333333333333333333333333333333333333"
+	// Plain-commit SHA: __typename is "Commit", not "Tag". One stub only —
+	// the second call must hit the negative cache instead of re-querying.
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "plain"),
+		httpmock.JSONResponse(peelResponse("Commit", commitSHA)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport: %v", err)
+	}
+
+	if _, ok := r.PeelTagObject("owner", "plain", commitSHA); ok {
+		t.Fatalf("expected ok=false for plain commit SHA")
+	}
+	if r.IsKnownTagObject("owner", "plain", commitSHA) {
+		t.Fatalf("plain commit must not be marked as tag object")
+	}
+	// Second call: no new stub — proves the negative result is cached.
+	if _, ok := r.PeelTagObject("owner", "plain", commitSHA); ok {
+		t.Fatalf("cached negative result flipped to ok=true")
+	}
+}
+
+func TestPeelTagObjectUnknownSHANotCached(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	unknownSHA := "4444444444444444444444444444444444444444"
+	// OID not present in the repo: GraphQL returns repository.head == null.
+	// We must NOT cache — the SHA may appear after a fetch or permission
+	// grant, so a follow-up call has to re-query.
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "unknown"),
+		httpmock.JSONResponse(peelResponse("", "")),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "unknown"),
+		httpmock.JSONResponse(peelResponse("Tag", "5555555555555555555555555555555555555555")),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport: %v", err)
+	}
+
+	if _, ok := r.PeelTagObject("owner", "unknown", unknownSHA); ok {
+		t.Fatalf("expected ok=false when OID is unknown")
+	}
+	got, ok := r.PeelTagObject("owner", "unknown", unknownSHA)
+	if !ok || got != "5555555555555555555555555555555555555555" {
+		t.Fatalf("expected retry to succeed with peeled commit, got %q ok=%v", got, ok)
+	}
+}
+
+func TestPeelTagObjectTransientErrorNotCached(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	sha := "6666666666666666666666666666666666666666"
+	commitSHA := "7777777777777777777777777777777777777777"
+	// First call: 500. Must not cache — second call retries and succeeds.
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "flaky"),
+		httpmock.StatusResponse(500),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "flaky"),
+		httpmock.JSONResponse(peelResponse("Tag", commitSHA)),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatalf("NewWithTransport: %v", err)
+	}
+
+	if _, ok := r.PeelTagObject("owner", "flaky", sha); ok {
+		t.Fatalf("expected ok=false on transient error")
+	}
+	got, ok := r.PeelTagObject("owner", "flaky", sha)
+	if !ok || got != commitSHA {
+		t.Fatalf("expected retry to succeed, got %q ok=%v", got, ok)
+	}
+}
