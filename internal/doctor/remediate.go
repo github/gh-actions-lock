@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
 )
