@@ -31,7 +31,7 @@ func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[st
 		if knownAction[nwoLower(ref.Owner, ref.Repo)] {
 			continue
 		}
-		f := newRefFinding(pw, ref, CategoryNotPinned, SeverityError)
+		f := newRefFinding(pw, ref, CategoryNotPinned, SeverityError, ConfidenceHigh)
 		f.Detail = fmt.Sprintf("used in workflow but not pinned in lockfile (%s@%s)", formatUseName(ref.Owner, ref.Repo, ref.Path), ref.Ref)
 		f.Remediation = "pin with `gh actions-pin`"
 		out = append(out, f)
@@ -49,7 +49,7 @@ func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]parserlock.Pin) []Find
 		if !parserlock.IsFullSha(ref.Ref) {
 			continue
 		}
-		f := newRefFinding(pw, ref, CategorySHAAsRef, SeverityWarning)
+		f := newRefFinding(pw, ref, CategorySHAAsRef, SeverityWarning, ConfidenceHigh)
 		f.Detail = "pinned to a bare SHA without a symbolic ref — weakens supply-chain traceability"
 		f.Remediation = fmt.Sprintf("pin to a tag instead: https://github.com/%s/releases", nwoLower(ref.Owner, ref.Repo))
 		lockedSha := ref.Ref
@@ -96,7 +96,9 @@ func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 			continue
 		}
 		p := candidates[0]
-		f := newRefFinding(pw, ref, CategoryRefChanged, SeverityError)
+		// High confidence: this is the lockfile-vs-workflow string mismatch
+		// — exact comparison of two strings we control, no inference.
+		f := newRefFinding(pw, ref, CategoryRefChanged, SeverityError, ConfidenceHigh)
 		f.Detail = fmt.Sprintf("workflow uses ref %q but lockfile pins %q", ref.Ref, p.Ref)
 		f.Remediation = "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line"
 		f.Dependency = synthDep(ref, p.Hex)
@@ -135,6 +137,7 @@ func checkStale(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 			WorkflowPath: pw.Path,
 			Category:     CategoryStale,
 			Severity:     SeverityWarning,
+			Confidence:   ConfidenceHigh,
 			Detail:       fmt.Sprintf("lockfile pins %s@%s but no uses: in this workflow references it", nwoLower(p.Owner, p.Repo), p.Ref),
 			Remediation:  "remove the entry or re-run `gh actions-pin`",
 			Dependency: &lockfile.Dependency{

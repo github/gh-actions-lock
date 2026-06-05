@@ -26,6 +26,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA(t *testing.T) {
 		WorkflowPath: ".github/workflows/ci.yml",
 		Category:     doctor.Category("misleading_sha"),
 		Severity:     doctor.SeverityWarning,
+		Confidence:   doctor.ConfidenceHigh,
 		Dependency:   dep,
 		ObservedSHA:  observedSHA,
 	}
@@ -64,6 +65,7 @@ func TestBuildProvenanceReport_OmitsObservedSHAWhenEqual(t *testing.T) {
 		WorkflowPath: ".github/workflows/ci.yml",
 		Category:     doctor.Category("stale"),
 		Severity:     doctor.SeverityInfo,
+		Confidence:   doctor.ConfidenceHigh,
 		Dependency:   dep,
 		ObservedSHA:  sha, // matches pinned SHA — nothing to flag
 	}
@@ -148,6 +150,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *tes
 				WorkflowPath: ".github/workflows/ci.yml",
 				Category:     tc.category,
 				Severity:     doctor.SeverityError,
+				Confidence:   doctor.ConfidenceHigh,
 				Dependency:   dep,
 				ObservedSHA:  tc.observedSHA,
 			}
