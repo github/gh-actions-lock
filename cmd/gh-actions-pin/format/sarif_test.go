@@ -323,7 +323,7 @@ func TestWriteSARIF_EmptyFindings(t *testing.T) {
 	for _, r := range doc.Runs[0].Tool.Driver.Rules {
 		seen[r.ID] = true
 	}
-	for _, id := range []string{"unpinned-uses", "impostor-commit"} {
+	for _, id := range []string{"unpinned-uses", "impostor-commit", "onboarding-required"} {
 		if !seen[id] {
 			t.Errorf("catalog missing %q", id)
 		}
