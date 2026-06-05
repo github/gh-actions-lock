@@ -4,19 +4,11 @@ import (
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
-// This file owns the boundary between internal/lockfile (CLI-internal
-// orchestration) and pkg/lockfile (the staged-for-extraction schema/grammar
-// package). External callers — cmd/, internal/doctor, internal/resolver,
-// internal/runlog — must consume these aliases instead of importing
-// pkg/lockfile directly. When pkg/lockfile is extracted to its own module,
-// only this file changes; downstream import paths stay stable.
+// This file owns the boundary between internal/lockfile orchestration and the
+// parser-level schema package.
 //
-// Type aliases are used (rather than wrapper structs) because the
-// underlying types are schema-shape-stable: ActionRef, Pin, File, and
-// Action are intentionally part of pkg/lockfile's contract. Adding a
-// genuine wrapper layer would force conversion at every call site without
-// any change-isolation benefit, since shape drift is already prohibited
-// by the package's compatibility policy.
+// Type aliases avoid conversion churn while keeping call sites on the internal
+// package path.
 
 // ActionRef is the parsed form of a workflow `uses:` string.
 type ActionRef = parserlock.ActionRef

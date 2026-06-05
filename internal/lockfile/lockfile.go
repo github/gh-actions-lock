@@ -1,12 +1,6 @@
-// Package lockfile owns gh-actions-pin's internal workflow-file
-// representation and the resolver-time Dependency intermediate. The
-// schema-stable pieces of the lockfile/uses/action.yml grammars live in
-// the sibling public module github.com/github/gh-actions-pin/pkg/lockfile;
-// this package wraps and orchestrates them for the CLI's own use.
-//
-// Anything in this package is internal and unstable. Consumers that want
-// to parse a `uses:` ref or an action.yml should depend on pkg/lockfile
-// instead.
+// Package lockfile owns gh-actions-pin's internal workflow-file representation
+// and resolver-time Dependency intermediate. Schema-level parsing lives in the
+// sibling pkg/lockfile package.
 package lockfile
 
 import (
@@ -169,11 +163,6 @@ func CheckSHARefMismatches(deps []Dependency, peeler TagObjectPeeler) []SHARefMi
 // WorkflowFile is the parsed workflow YAML the CLI rewrites in-place.
 // It carries the original byte content alongside the parsed node tree so
 // RewriteActionRefs can do anchored, comment-preserving substitution.
-//
-// This type is intentionally internal: it owns how this CLI loads and
-// rewrites workflow YAML, which is not stable schema. The schema-level
-// `uses:` and action.yml shapes live in pkg/lockfile (ActionRef,
-// ActionMeta) for downstream consumers.
 type WorkflowFile struct {
 	Path    string
 	Content []byte
