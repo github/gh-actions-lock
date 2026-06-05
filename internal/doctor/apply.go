@@ -80,8 +80,6 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
-	directTracker := lockfile.NewDirectTracker(wr.ActionRefs, deps)
-
 	// Check for impostor commits at pin time — don't let fork-network
 	// commits get pinned in the first place. Fail closed: if we can't
 	// verify reachability (e.g. list-branches returns an error), refuse
@@ -92,18 +90,24 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// rewritten if a sane-release substitution was available. Anything
 	// still reaching this loop with Status == Unreachable is unfixable
 	// (no suggestion, transitive impostor, etc.) and must alert.
+	//
+	// Containment is per-dependency, not per-workflow: a workflow that
+	// mixes one impostor with healthy actions drops only the impostor and
+	// still pins the benign siblings. Skipping the whole workflow on the
+	// first bad dep left those siblings out of the lockfile, so a second
+	// run kept "finding" and re-pinning them — the non-convergence bug.
 	reachResults := rem.resolver.CheckReachabilityAll(rem.ctx, deps)
+	badKeys := make(map[string]bool)
 	for _, rr := range reachResults {
+		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
 		switch rr.Status {
 		case resolver.Unreachable:
 			// Defense-in-depth invariant: diagnose's live-direct sweep
 			// (liveReachImpostorFindings) is the primary detector for
 			// this shape and would have produced a CategoryImpostorCommit
 			// finding before remediation. Hitting this branch means a
-			// resolver cache disagreement let one slip through; alert
-			// so the run reports it, but per-workflow containment via
-			// errWorkflowAlerted lets siblings keep going.
-			depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
+			// resolver cache disagreement let one slip through; alert so
+			// the run reports it, then drop it from the closure.
 			rem.alertWorkflow(wr.Path, depKey, reasonForCategory(CategoryImpostorCommit),
 				fmt.Sprintf("refusing to pin: impostor commit detected for %s/%s@%s — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
 			// Diagnose-time impostor findings carry enrichment from
@@ -113,21 +117,32 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 			// to preserve the renderer's "→ no recent release was
 			// reachable — escalate" / "→ suggested: re-pin" line.
 			rem.mergeEnrichmentForAlert(wr.Findings, rr.Owner+"/"+rr.Repo, rr.Ref)
-			return errWorkflowAlerted
+			badKeys[depKey] = true
 		case resolver.ReachabilityUnknown:
-			rem.alertWorkflow(wr.Path, rr.Owner+"/"+rr.Repo+"@"+rr.Ref,
+			rem.alertWorkflow(wr.Path, depKey,
 				"couldn't verify the SHA is reachable (API or network issue) — retry before pinning",
 				fmt.Sprintf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later) — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
-			return errWorkflowAlerted
+			badKeys[depKey] = true
 		case resolver.Reachable:
 			// Reachable, but only after falling back to a full branch
 			// scan: the commit is not on a canonical branch. Pin it, but
 			// flag it so the summary can surface it in red.
 			if rr.FullScanUsed {
-				rem.recordFullScanDep(rr.Owner + "/" + rr.Repo + "@" + rr.Ref)
+				rem.recordFullScanDep(depKey)
 			}
 		}
 	}
+
+	if len(badKeys) > 0 {
+		deps, parentMap = dropDeps(deps, parentMap, badKeys)
+		// Every resolved dep failed the gate — nothing benign is left to
+		// pin, so skip the lockfile write. The alerts above already fired.
+		if len(deps) == 0 {
+			return errWorkflowAlerted
+		}
+	}
+
+	directTracker := lockfile.NewDirectTracker(wr.ActionRefs, deps)
 
 	// Narrow mutable version tags (v4, v4.2) to specific patch tags (v4.2.1)
 	// so that ref-moved signals are meaningful — patch tags should never move.
@@ -215,6 +230,39 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	rem.output.Success("Pinned %d dependencies in %s", len(deps), wr.Path)
 	rem.incFixed()
 	return nil
+}
+
+// dropDeps removes every dependency whose NWO@Ref key is in drop from the
+// closure and prunes the parent map (both as a child entry and from every
+// parent's child list). It keys on Dependency.Key(), the same NWO@Ref form
+// the parent map uses, so a reachability-failed dep can be contained without
+// discarding the workflow's benign siblings. Neither input is mutated.
+func dropDeps(deps []lockfile.Dependency, parentMap resolver.ParentMap, drop map[string]bool) ([]lockfile.Dependency, resolver.ParentMap) {
+	kept := make([]lockfile.Dependency, 0, len(deps))
+	for _, d := range deps {
+		if drop[d.Key()] {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if len(parentMap) == 0 {
+		return kept, parentMap
+	}
+	pruned := make(resolver.ParentMap, len(parentMap))
+	for child, parents := range parentMap {
+		if drop[child] {
+			continue
+		}
+		np := make([]string, 0, len(parents))
+		for _, p := range parents {
+			if drop[p] {
+				continue
+			}
+			np = append(np, p)
+		}
+		pruned[child] = np
+	}
+	return kept, pruned
 }
 
 // applySHAToTag rewrites a uses: line from @SHA to @tag and hands the
