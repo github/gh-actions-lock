@@ -129,8 +129,8 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 		// Record the resolver's live SHA whenever a finding surfaces one
 		// that doesn't match the recorded SHA — makes MISLEADING_SHA and
 		// REF_MOVED entries falsifiable rather than echoing the input ref.
-		if f.LiveSHA != "" && g.action.LiveSHA == "" && !equalFoldHex(f.LiveSHA, g.action.SHA) {
-			g.action.LiveSHA = f.LiveSHA
+		if f.ObservedSHA != "" && g.action.ObservedSHA == "" && !equalFoldHex(f.ObservedSHA, g.action.SHA) {
+			g.action.ObservedSHA = f.ObservedSHA
 		}
 	}
 	for _, f := range report.RepoFindings {
@@ -239,8 +239,8 @@ func findingIdentity(f doctor.Finding) (nwo, ref, sha string) {
 			sha = f.ActionRef.Ref
 		}
 	}
-	if sha == "" && f.LiveSHA != "" {
-		sha = f.LiveSHA
+	if sha == "" && f.ObservedSHA != "" {
+		sha = f.ObservedSHA
 	}
 	return nwo, ref, sha
 }

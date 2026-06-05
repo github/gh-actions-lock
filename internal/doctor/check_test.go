@@ -184,7 +184,7 @@ func TestRunChecks_RefMoved(t *testing.T) {
 	if len(got) != 1 || got[0].Category != CategoryRefMoved {
 		t.Fatalf("expected single ref_moved finding, got %#v", got)
 	}
-	if got[0].LiveSHA != shaCheckoutV4 || got[0].Dependency == nil || got[0].Dependency.SHA != shaCheckoutV3 {
+	if got[0].ObservedSHA != shaCheckoutV4 || got[0].Dependency == nil || got[0].Dependency.SHA != shaCheckoutV3 {
 		t.Fatalf("unexpected sha pair on finding: %#v", got[0])
 	}
 }
@@ -212,6 +212,12 @@ func TestRunChecks_LockfileForgery(t *testing.T) {
 			hasForgery = true
 			if f.Severity != SeverityError {
 				t.Fatalf("expected error severity, got %s", f.Severity)
+			}
+			if f.ObservedSHA != shaCheckoutV4 {
+				t.Fatalf("ObservedSHA: got %q, want %q (resolver output, makes claim falsifiable)", f.ObservedSHA, shaCheckoutV4)
+			}
+			if f.Dependency == nil || f.Dependency.SHA != shaImposter {
+				t.Fatalf("Dependency.SHA: want pinned %s, got %#v", shaImposter, f.Dependency)
 			}
 		}
 	}
@@ -251,6 +257,12 @@ func TestRunChecks_MisleadingSha(t *testing.T) {
 	for _, f := range got {
 		if f.Category == CategoryMisleadingSHA {
 			hasMisleading = true
+			if f.ObservedSHA != shaSetupGoV5 {
+				t.Fatalf("ObservedSHA: got %q, want %q (resolver output, makes claim falsifiable)", f.ObservedSHA, shaSetupGoV5)
+			}
+			if f.Dependency == nil || f.Dependency.SHA != shaCheckoutV4 {
+				t.Fatalf("Dependency.SHA: want pinned %s (the SHA-shaped ref), got %#v", shaCheckoutV4, f.Dependency)
+			}
 		}
 	}
 	if !hasMisleading {

@@ -14,11 +14,11 @@ const SchemaVersion = "gh-actions-pin/provenance/v1"
 
 // Resolution classifies what was done to an action during a run.
 const (
-	ResolutionPinned        = "pinned"             // newly locked (or re-locked) to a commit SHA
-	ResolutionAlreadyPinned = "already-pinned"     // already locked and still valid; no change
+	ResolutionPinned        = "pinned"              // newly locked (or re-locked) to a commit SHA
+	ResolutionAlreadyPinned = "already-pinned"      // already locked and still valid; no change
 	ResolutionInvestigate   = "needs-investigation" // security gate tripped; left for a human
-	ResolutionSkipped       = "skipped"            // user (or non-interactive mode) declined to fix
-	ResolutionUnresolved    = "unresolved"         // ref could not be resolved to a SHA
+	ResolutionSkipped       = "skipped"             // user (or non-interactive mode) declined to fix
+	ResolutionUnresolved    = "unresolved"          // ref could not be resolved to a SHA
 )
 
 // Report is the structured, action-centric provenance document written at the
@@ -63,18 +63,19 @@ type Summary struct {
 // Action is a single deduplicated action dependency and the provenance of how
 // it was resolved during the run.
 type Action struct {
-	NWO        string `json:"nwo"`
-	Ref        string `json:"ref"`
-	SHA        string `json:"sha,omitempty"`
-	HashAlgo   string `json:"hash_algo,omitempty"`
-	// LiveSHA is the resolver's currently-resolved SHA for Ref, recorded
-	// when it differs from SHA (e.g. MISLEADING_SHA, REF_MOVED). It makes
-	// a finding falsifiable: a reader can compare the pinned SHA against
-	// what upstream actually resolves to right now, without re-running the
+	NWO      string `json:"nwo"`
+	Ref      string `json:"ref"`
+	SHA      string `json:"sha,omitempty"`
+	HashAlgo string `json:"hash_algo,omitempty"`
+	// ObservedSHA is the SHA the resolver got when it looked up Ref during
+	// this run. Recorded when it differs from SHA (the pinned value) — e.g.
+	// MISLEADING_SHA, REF_MOVED, LOCKFILE_FORGERY. Makes a finding
+	// falsifiable: a reader can compare what was pinned against what
+	// upstream actually resolved to at scan time, without re-running the
 	// resolver. Empty when the run did not surface a divergence.
-	LiveSHA    string `json:"live_sha,omitempty"`
-	Direct     bool   `json:"direct"`
-	Resolution string `json:"resolution"`
+	ObservedSHA string `json:"observed_sha,omitempty"`
+	Direct      bool   `json:"direct"`
+	Resolution  string `json:"resolution"`
 	// How is concise, human-readable provenance ("locked ref v4 to <sha>",
 	// "verified via full branch scan", a security reason, etc.).
 	How string `json:"how,omitempty"`

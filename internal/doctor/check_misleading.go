@@ -31,7 +31,7 @@ func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 			continue
 		}
 		f := newRefFinding(pw, ref, CategoryMisleadingSHA, SeverityError)
-		f.LiveSHA = sha
+		f.ObservedSHA = sha
 		f.Dependency = synthDep(ref, ref.Ref)
 		f.Detail = fmt.Sprintf("ref %s resolves to %s — the ref string looks like a SHA but isn't this commit", shortSha(ref.Ref), shortSha(sha))
 		f.Remediation = "investigate — the ref may be a tag named after a SHA, not the SHA itself"
@@ -63,7 +63,7 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]parserlock.P
 		}
 		ancestry := r.CheckAncestry(ref.Owner, ref.Repo, pin.Hex, sha)
 		f := newRefFinding(pw, ref, "", "")
-		f.LiveSHA = sha
+		f.ObservedSHA = sha
 		f.Dependency = synthDep(ref, pin.Hex)
 		switch ancestry {
 		case resolver.AncestryNotAncestor:

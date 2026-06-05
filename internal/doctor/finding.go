@@ -60,8 +60,10 @@ type Finding struct {
 	Detail string
 	// Remediation describes what doctor can do about it.
 	Remediation string
-	// LiveSHA is the current upstream SHA when it differs from the pinned SHA (e.g. REF_MOVED).
-	LiveSHA string
+	// ObservedSHA is the SHA the resolver got at scan time, recorded when
+	// it differs from the pinned SHA (e.g. REF_MOVED, MISLEADING_SHA,
+	// LOCKFILE_FORGERY).
+	ObservedSHA string
 	// DocURL points to docs explaining the finding. Populated by the
 	// engine adapter so it's parity-aligned with the editor's
 	// codeDescription link; "" when no URL is mapped.

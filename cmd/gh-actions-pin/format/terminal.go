@@ -230,10 +230,10 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			wg := warnMap[key]
 			f := wg.finding
 			out.Detail("  ↳ %s: %s", key, f.Detail)
-			if f.Dependency != nil && f.LiveSHA != "" {
+			if f.Dependency != nil && f.ObservedSHA != "" {
 				owner, repo := f.Dependency.OwnerRepo()
 				if owner != "" {
-					out.Detail("    %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA[:12], f.LiveSHA[:12])))
+					out.Detail("    %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA[:12], f.ObservedSHA[:12])))
 				}
 			}
 		}

@@ -178,7 +178,7 @@ type Finding struct {
     ParentNWO    string      // dep key of the direct action pulling in a transitive dep
     Detail       string
     Remediation  string
-    LiveSHA      string      // current upstream SHA when it differs from the pin (e.g. ref_moved)
+    ObservedSHA  string      // SHA the resolver got at scan time, when it differs from the pin (e.g. ref_moved)
     DocURL       string      // docs link for the finding, parity-aligned with the editor
 }
 ```
