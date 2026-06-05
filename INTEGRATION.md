@@ -20,8 +20,46 @@ on-disk lockfile YAML.
 
 | Code | Meaning |
 |------|---------|
-| 0    | All checks passed (or upgrade preview shown) |
-| 1    | Validation failures found (tampered, stale, unreachable) |
+| 0    | `valid:true`. No blocking findings; nothing to do. |
+| 1    | **Overloaded.** Either (a) `valid:false` — blocking findings present (tampered, stale, unreachable, not-pinned, …), stdout JSON is complete and well-formed — **or** (b) actual tool failure (bad flag, IO error, network failure, etc.), stdout may be empty or partial. |
+
+> **Footgun.** Exit 1 does **not** mean "the tool failed." It is the normal
+> exit code for a successful run that found things to fix. Shell-style "raise
+> on any non-zero exit" wrappers will misreport every unpinned-but-otherwise-fine
+> repo as broken.
+
+**Recommended consumer pattern:** capture stdout regardless of exit code,
+then drive control flow off the JSON payload's `valid` and `findings[]`
+fields. Use the *shape* of stdout to distinguish blocking findings
+(well-formed JSON, `valid:false`) from a tool failure (empty or non-JSON
+stdout):
+
+```bash
+output=$(gh actions-pin check --no-interactive --json=valid,findings,workflows,dependencies 2>/dev/null)
+rc=$?
+
+if [ -z "$output" ] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1; then
+  # Empty / non-JSON stdout → tool failure (regardless of $rc).
+  echo "gh actions-pin failed (exit $rc) with no parseable output" >&2
+  exit 2
+fi
+
+# stdout is well-formed JSON: branch on .valid, not on $rc.
+case "$(printf '%s' "$output" | jq -r '.valid')" in
+  true)  : ;;                                          # clean, nothing to do
+  false) printf '%s' "$output" | jq '.findings' ;;     # act on findings
+esac
+```
+
+The same pattern in pseudocode for non-shell consumers:
+
+```
+result, exit_code := run("gh actions-pin", "--no-interactive", "--json=valid,findings")
+parsed, ok        := try_parse_json(result.stdout)
+if !ok                  → tool failure (treat as engine error; exit_code is informational)
+else if parsed.valid    → success, nothing to do
+else                    → act on parsed.findings (this is a normal result, not a failure)
+```
 
 ## Non-Interactive Flags
 
