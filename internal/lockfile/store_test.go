@@ -1,10 +1,13 @@
 package lockfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 type fakeMetadataResolver struct{}
@@ -291,72 +294,107 @@ func TestStore_SaveGCHandlesCyclicUses(t *testing.T) {
 // nondeterminism. Sort all map iterations, do not embed timestamps, and
 // keep list ordering stable.
 func TestStore_SaveIsByteDeterministic(t *testing.T) {
-// Build a non-trivial store: two workflows, multiple actions, a diamond
-// transitive dep so we exercise the parent-map / uses-list sort paths.
-deps := []Dependency{
-{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
-{NWO: "owner/b", Ref: "v2", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1", Branch: "main"},
-{NWO: "shared/dep", Ref: "v3", SHA: "cccccccccccccccccccccccccccccccccccccccc", HashAlgo: "sha1", Branch: "main"},
-{NWO: "owner/extra", Ref: "v4", SHA: "dddddddddddddddddddddddddddddddddddddddd", HashAlgo: "sha1", Branch: "main"},
-}
-parentMap := map[string][]string{
-"shared/dep@v3": {"owner/a@v1", "owner/b@v2"},
-}
-directKeys := map[string]bool{
-"owner/a@v1":     true,
-"owner/b@v2":     true,
-"owner/extra@v4": true,
-}
+	// Build a non-trivial store: two workflows, multiple actions, a diamond
+	// transitive dep so we exercise the parent-map / uses-list sort paths.
+	deps := []Dependency{
+		{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
+		{NWO: "owner/b", Ref: "v2", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1", Branch: "main"},
+		{NWO: "shared/dep", Ref: "v3", SHA: "cccccccccccccccccccccccccccccccccccccccc", HashAlgo: "sha1", Branch: "main"},
+		{NWO: "owner/extra", Ref: "v4", SHA: "dddddddddddddddddddddddddddddddddddddddd", HashAlgo: "sha1", Branch: "main"},
+	}
+	parentMap := map[string][]string{
+		"shared/dep@v3": {"owner/a@v1", "owner/b@v2"},
+	}
+	directKeys := map[string]bool{
+		"owner/a@v1":     true,
+		"owner/b@v2":     true,
+		"owner/extra@v4": true,
+	}
 
-build := func() []byte {
-dir := t.TempDir()
-if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
-t.Fatal(err)
-}
-store, err := OpenStore(dir, fakeMetadataResolver{})
-if err != nil {
-t.Fatalf("opening store: %v", err)
-}
-if err := store.Set(".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
-t.Fatalf("Set ci.yml: %v", err)
-}
-if err := store.Set(".github/workflows/release.yml", deps, parentMap, directKeys); err != nil {
-t.Fatalf("Set release.yml: %v", err)
-}
-if err := store.Save(); err != nil {
-t.Fatalf("Save: %v", err)
-}
-raw, err := os.ReadFile(filepath.Join(dir, Path))
-if err != nil {
-t.Fatalf("read lockfile: %v", err)
-}
-return raw
-}
+	build := func() []byte {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenStore(dir, fakeMetadataResolver{})
+		if err != nil {
+			t.Fatalf("opening store: %v", err)
+		}
+		if err := store.Set(".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
+			t.Fatalf("Set ci.yml: %v", err)
+		}
+		if err := store.Set(".github/workflows/release.yml", deps, parentMap, directKeys); err != nil {
+			t.Fatalf("Set release.yml: %v", err)
+		}
+		if err := store.Save(); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, Path))
+		if err != nil {
+			t.Fatalf("read lockfile: %v", err)
+		}
+		return raw
+	}
 
-first := build()
-second := build()
+	first := build()
+	second := build()
 
-if !bytesEqual(first, second) {
-t.Fatalf("Save is non-deterministic: byte-for-byte mismatch between runs\n--- first run (%d bytes) ---\n%s\n--- second run (%d bytes) ---\n%s",
-len(first), string(first), len(second), string(second))
-}
+	if !bytesEqual(first, second) {
+		t.Fatalf("Save is non-deterministic: byte-for-byte mismatch between runs\n--- first run (%d bytes) ---\n%s\n--- second run (%d bytes) ---\n%s",
+			len(first), string(first), len(second), string(second))
+	}
 
-// Sanity guard: ensure we actually wrote a non-trivial lockfile (so a
-// future refactor that accidentally short-circuits Save can't make this
-// test pass vacuously).
-if !strings.Contains(string(first), "shared/dep@v3") {
-t.Fatalf("expected lockfile to contain shared/dep@v3, got:\n%s", string(first))
-}
+	// Sanity guard: ensure we actually wrote a non-trivial lockfile (so a
+	// future refactor that accidentally short-circuits Save can't make this
+	// test pass vacuously).
+	if !strings.Contains(string(first), "shared/dep@v3") {
+		t.Fatalf("expected lockfile to contain shared/dep@v3, got:\n%s", string(first))
+	}
 }
 
 func bytesEqual(a, b []byte) bool {
-if len(a) != len(b) {
-return false
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
-for i := range a {
-if a[i] != b[i] {
-return false
-}
-}
-return true
+
+func TestStore_RefusesFutureVersionLockfile(t *testing.T) {
+	// An old binary encountering a lockfile written by a newer binary must
+	// surface the version error to the user, not silently treat the lockfile
+	// as corrupt and overwrite it — that would destroy pins this binary
+	// cannot interpret.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dir, Path)
+	if err := os.WriteFile(lockPath, []byte("version: v9.0.0\ndependencies: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := OpenStore(dir, fakeMetadataResolver{})
+	if err == nil {
+		t.Fatal("expected error opening future-version lockfile, got nil")
+	}
+	if !errors.Is(err, parserlock.ErrFutureVersion) {
+		t.Errorf("error does not match ErrFutureVersion sentinel: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gh extension upgrade gh-actions-pin") {
+		t.Errorf("error should include upgrade-path hint, got: %v", err)
+	}
+
+	// Lockfile must remain untouched on disk so the user can recover.
+	got, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading lockfile after refused open: %v", err)
+	}
+	if !strings.Contains(string(got), "v9.0.0") {
+		t.Errorf("lockfile was overwritten: %s", got)
+	}
 }
