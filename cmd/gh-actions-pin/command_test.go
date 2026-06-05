@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
@@ -183,8 +184,8 @@ jobs:
 	require.NoError(t, err)
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
@@ -387,8 +388,8 @@ jobs:
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
@@ -436,8 +437,8 @@ jobs:
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
@@ -486,8 +487,8 @@ jobs:
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid, "valid should be true when reachability is unknown")
@@ -536,8 +537,8 @@ jobs:
 	require.NoError(t, err)
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
@@ -602,8 +603,8 @@ jobs:
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
@@ -664,8 +665,8 @@ jobs:
 	require.NoError(t, err, "ref_moved is a warning, should not error")
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
@@ -720,8 +721,8 @@ jobs:
 	require.NoError(t, err, "ref_moved is a warning, should not error")
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
@@ -791,9 +792,9 @@ jobs:
 
 	var payload struct {
 		Workflows []struct {
-			Path         string            `json:"path"`
-			Valid        bool              `json:"valid"`
-			Dependencies []checkDependency `json:"dependencies"`
+			Path         string              `json:"path"`
+			Valid        bool                `json:"valid"`
+			Dependencies []format.Dependency `json:"dependencies"`
 		} `json:"workflows"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
@@ -804,7 +805,7 @@ jobs:
 	require.Len(t, wf.Dependencies, 3)
 
 	// Find the transitive dep
-	var transitiveDep *checkDependency
+	var transitiveDep *format.Dependency
 	for i := range wf.Dependencies {
 		if wf.Dependencies[i].NWO == "actions/cache" {
 			transitiveDep = &wf.Dependencies[i]
@@ -866,13 +867,13 @@ jobs:
 
 	var payload struct {
 		Workflows []struct {
-			Dependencies []checkDependency `json:"dependencies"`
+			Dependencies []format.Dependency `json:"dependencies"`
 		} `json:"workflows"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	require.Len(t, payload.Workflows, 1)
 
-	var transitiveDep *checkDependency
+	var transitiveDep *format.Dependency
 	for i := range payload.Workflows[0].Dependencies {
 		if payload.Workflows[0].Dependencies[i].NWO == "actions/cache" {
 			transitiveDep = &payload.Workflows[0].Dependencies[i]
@@ -980,7 +981,7 @@ jobs:
 	require.NoError(t, err)
 
 	var payload struct {
-		Dependencies []checkDependency `json:"dependencies"`
+		Dependencies []format.Dependency `json:"dependencies"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 
@@ -1036,8 +1037,8 @@ func TestCheckCommand_JSONLoadErrorIsInvalid(t *testing.T) {
 	require.ErrorIs(t, err, errSilent)
 
 	var payload struct {
-		Valid    bool           `json:"valid"`
-		Findings []checkFinding `json:"findings"`
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.False(t, payload.Valid)
