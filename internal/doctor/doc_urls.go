@@ -24,15 +24,17 @@ const PublisherTagReleasesDocURL = "https://docs.github.com/en/actions/how-tos/c
 // documentation URL. Categories representing "no issue" (Valid, RunOnly)
 // have no URL — they aren't rendered as findings.
 var docURLs = map[Category]string{
-	CategoryNotPinned:          securityHardeningBase + "#using-third-party-actions",
-	CategorySHAAsRef:           securityHardeningBase + "#using-third-party-actions",
-	CategoryRefChanged:         securityHardeningBase + "#using-third-party-actions",
-	CategoryStale:              securityHardeningBase + "#using-third-party-actions",
-	CategoryMisleadingSHA:      securityHardeningBase + "#using-third-party-actions",
-	CategoryRefMoved:           securityHardeningBase + "#using-third-party-actions",
-	CategoryLockfileForgery:    securityHardeningBase + "#using-third-party-actions",
-	CategoryImpostorCommit:     securityHardeningBase + "#using-third-party-actions",
-	CategoryOnboardingRequired: securityHardeningBase + "#using-third-party-actions",
+	CategoryNotPinned:           securityHardeningBase + "#using-third-party-actions",
+	CategorySHAAsRef:            securityHardeningBase + "#using-third-party-actions",
+	CategoryRefChanged:          securityHardeningBase + "#using-third-party-actions",
+	CategoryStale:               securityHardeningBase + "#using-third-party-actions",
+	CategoryMisleadingSHA:       securityHardeningBase + "#using-third-party-actions",
+	CategoryRefMoved:            securityHardeningBase + "#using-third-party-actions",
+	CategoryLockfileForgery:     securityHardeningBase + "#using-third-party-actions",
+	CategoryImpostorCommit:      securityHardeningBase + "#using-third-party-actions",
+	CategoryOnboardingRequired:  securityHardeningBase + "#using-third-party-actions",
+	CategoryAncestryUnknown:     securityHardeningBase + "#using-third-party-actions",
+	CategoryReachabilityUnknown: securityHardeningBase + "#using-third-party-actions",
 }
 
 // DocURLFor returns the documentation URL for a finding category, or ""

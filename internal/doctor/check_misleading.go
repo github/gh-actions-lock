@@ -78,21 +78,24 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — lockfile may have been tampered with", shortSha(pin.Hex), shortSha(sha))
 			f.Remediation = "investigate immediately — verify the lockfile entry against upstream history"
 		default:
-			f.Category = CategoryRefMoved
-			f.Severity = SeverityWarning
-			// Medium confidence when ancestry is unknown: we inferred
-			// from the SHA mismatch alone because the Compare API was
-			// rate-limited or errored (see resolver.go CheckAncestry
-			// fallback ~line 1361). Otherwise we got AncestryConfirmed
-			// and the move is benign-but-known.
 			if ancestry == resolver.AncestryUnknown {
+				// Compare API didn't return an authoritative
+				// answer — rate-limited or transient error (see
+				// resolver.go CheckAncestry fallback). Surface as
+				// its own category so consumers don't conflate
+				// "we couldn't check" with "moved but benign".
+				f.Category = CategoryAncestryUnknown
+				f.Severity = SeverityWarning
 				f.Confidence = ConfidenceMedium
 				f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive)", ref.Ref, shortSha(sha), shortSha(pin.Hex))
+				f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"
 			} else {
+				f.Category = CategoryRefMoved
+				f.Severity = SeverityWarning
 				f.Confidence = ConfidenceHigh
 				f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, shortSha(sha), shortSha(pin.Hex))
+				f.Remediation = "re-run `gh actions-pin` to refresh the lock entry"
 			}
-			f.Remediation = "re-run `gh actions-pin` to refresh the lock entry"
 		}
 		out = append(out, f)
 	}

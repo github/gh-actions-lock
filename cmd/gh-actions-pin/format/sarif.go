@@ -216,6 +216,25 @@ var ruleCatalog = []sarifRule{
 		HelpURI:    docURLOr(doctor.CategoryOnboardingRequired),
 		Properties: map[string]interface{}{"category": string(doctor.CategoryOnboardingRequired)},
 	},
+	{
+		ID:               "ancestry-unknown",
+		Name:             "AncestryUnknown",
+		ShortDescription: sarifMessage{Text: "Compare API could not classify the pinned SHA against the upstream ref"},
+		FullDescription: sarifMessage{Text: "The pinned SHA differs from the live ref but the Compare API was rate-limited or returned an error, " +
+			"so the move could not be classified as benign (ref-moved) or tampered (lockfile-forgery). " +
+			"Diagnostic only — retry when the API is available to resolve the ambiguity."},
+		HelpURI:    docURLOr(doctor.CategoryAncestryUnknown),
+		Properties: map[string]interface{}{"category": string(doctor.CategoryAncestryUnknown)},
+	},
+	{
+		ID:               "reachability-unknown",
+		Name:             "ReachabilityUnknown",
+		ShortDescription: sarifMessage{Text: "Could not verify the pinned SHA is reachable upstream"},
+		FullDescription: sarifMessage{Text: "branch_commits did not return an authoritative reachability answer (resolver failure, GraphQL rate limit, network error). " +
+			"Diagnostic only — the dependency was neither confirmed verified nor flagged as an impostor."},
+		HelpURI:    docURLOr(doctor.CategoryReachabilityUnknown),
+		Properties: map[string]interface{}{"category": string(doctor.CategoryReachabilityUnknown)},
+	},
 }
 
 func docURLOr(c doctor.Category) string {

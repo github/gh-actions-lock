@@ -42,6 +42,18 @@ const (
 	// RunOnly means the workflow has no action refs (only run:
 	// steps), so pinning is not applicable.
 	RunOnly Category = "run-only"
+	// AncestryUnknown means the Compare API couldn't decide whether
+	// the pinned SHA is in the ref's history (typically rate-limited
+	// or transient error). Non-blocking diagnostic: we know the SHAs
+	// differ but can't classify the move as benign-but-known
+	// (ref-moved) vs. tampered (lockfile-forgery).
+	AncestryUnknown Category = "ancestry-unknown"
+	// ReachabilityUnknown means branch_commits couldn't decide
+	// whether the pinned SHA is still reachable from any branch in
+	// the upstream repo (resolver failure, GraphQL rate limit, etc).
+	// Non-blocking diagnostic: surfaced so consumers can retry rather
+	// than treating the dep as verified.
+	ReachabilityUnknown Category = "reachability-unknown"
 	// OnboardingRequired means an `upgrade --no-onboard` run targeted
 	// a workflow that has no existing entry in `lockfile.workflows{}`.
 	// The CLI refuses to silently add it during a dependency-update
@@ -49,6 +61,19 @@ const (
 	// re-running upgrade.
 	OnboardingRequired Category = "onboarding-required"
 )
+
+// IsInconclusive reports whether c represents a diagnostic that
+// couldn't reach a verdict (network/rate-limit fallback). These are
+// surfaced as warnings but are not blocking: consumers (e.g.
+// Dependabot FindingMapper) treat them as "scan inconclusive, retry"
+// rather than "lockfile is bad".
+func (c Category) IsInconclusive() bool {
+	switch c {
+	case AncestryUnknown, ReachabilityUnknown:
+		return true
+	}
+	return false
+}
 
 // Severity indicates how serious a finding is if it represents a real
 // problem. Pair with Confidence to express how strongly the tool stands

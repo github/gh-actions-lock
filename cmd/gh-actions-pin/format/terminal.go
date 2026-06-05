@@ -205,7 +205,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			// transitive sha-as-ref: silently swallowed (see TODO above)
 		} else if f.Category == doctor.CategoryRefMoved {
 			refMovedWarnings = append(refMovedWarnings, key)
-		} else if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning &&
+		} else if f.Category.IsInconclusive() &&
 			strings.Contains(f.Remediation, "transitive dependency") {
 			// transitive reachability unknown: silently swallowed (see TODO above)
 		} else {
@@ -242,7 +242,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		wg := warnMap[key]
 		f := wg.finding
 		depKey := f.DepKey()
-		if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning {
+		if f.Category.IsInconclusive() && f.Severity == doctor.SeverityWarning {
 			label := depKey
 			if label == "" {
 				label = f.WorkflowPath

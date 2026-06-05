@@ -45,6 +45,14 @@ const (
 	CategoryRefMoved        = findings.RefMoved
 	CategoryValid           = findings.Valid
 	CategoryRunOnly         = findings.RunOnly
+	// CategoryAncestryUnknown — Compare API couldn't classify the
+	// pinned SHA's relationship to the ref's history (typically a
+	// rate-limit fallback). Diagnostic; non-blocking.
+	CategoryAncestryUnknown = findings.AncestryUnknown
+	// CategoryReachabilityUnknown — branch_commits couldn't decide
+	// whether the pinned SHA is still reachable upstream (resolver
+	// failure, rate limit). Diagnostic; non-blocking.
+	CategoryReachabilityUnknown = findings.ReachabilityUnknown
 	// CategoryOnboardingRequired — set by `upgrade --no-onboard` when
 	// the targeted workflow has no existing entry in lockfile.workflows{}.
 	CategoryOnboardingRequired = findings.OnboardingRequired
