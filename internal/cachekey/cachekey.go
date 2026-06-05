@@ -1,53 +1,13 @@
-// Package cachekey defines comparable struct types used as map keys for the
-// resolver- and doctor-side in-memory caches (branch lists, tag lists,
-// compare results, reachability, action resolution, etc.).
+// Package cachekey defines comparable struct types for resolver and doctor
+// in-memory cache keys.
 //
-// # Why not strings?
+// Constructors centralize normalization: owner, repo, and hex SHAs are
+// lowercased; refs preserve case because git refs are case-sensitive.
+// Struct fields stay unexported so callers cannot build unnormalized keys.
 //
-// Cache keys built from string concatenation (`owner + "/" + repo + "|" +
-// strings.ToLower(sha)`) drift across callsites: each cache picks its own
-// delimiter, each callsite remembers (or forgets) its own normalization,
-// and a delimiter that happens to appear in user-supplied input can collide
-// distinct tuples into one slot. Two callers writing the "same" key by
-// different concatenations also miss each other's entries. Typed keys move
-// every one of those decisions into one constructor per shape: callers hand
-// over the components and get back a value that compares equal iff the
-// tuple is the same.
-//
-// # Normalization
-//
-// All constructors apply consistent normalization:
-//
-//   - Owner and repo are lowercased. GitHub NWOs are case-insensitive, so
-//     "Actions/Checkout" and "actions/checkout" name the same repository
-//     and must share a cache slot.
-//   - Hex commit SHAs are lowercased. The git wire protocol treats hex as
-//     case-insensitive and our caches must too.
-//   - Refs (tags, branches) preserve case. Git refs ARE case-sensitive.
-//
-// All struct fields are unexported so the constructors are the only way to
-// build a key. This rules out callers building a value with un-normalized
-// fields and silently reintroducing the collision class the package exists
-// to prevent.
-//
-// # String forms
-//
-// Each key type has a String() method intended for diagnostics and for the
-// few APIs that require a string key (e.g. golang.org/x/sync/singleflight).
-// The string forms are stable across calls within a process but are NOT a
-// parseable wire format: they pick delimiters that are convenient for
-// humans and unambiguous within a single key shape, not invertible.
-// Callers must not parse a String() result back into components and must
-// not use it as a durable identifier outside the process.
-//
-// # When NOT to use this package
-//
-// Some "owner/repo@ref"-shaped strings in this codebase are part of a wire
-// format (the lockfile's NWO@Ref dep key, the workflow YAML `uses:` line,
-// resolver.ParentMap's child/parent keys). Those are contract strings, not
-// cache keys, and must continue to use the canonical wire form
-// (lockfile.Pin.IndexKey / lockfile.Dependency.Key). cachekey types are
-// strictly for in-memory cache and dedup-set identity.
+// String methods are diagnostics-only. Do not parse them or use them as
+// durable identifiers; lockfile.Dependency.Key and lockfile.Pin.IndexKey own
+// wire-format keys.
 package cachekey
 
 import "strings"
@@ -65,7 +25,7 @@ func ForRepo(owner, repo string) Repo {
 	return Repo{owner: strings.ToLower(owner), repo: strings.ToLower(repo)}
 }
 
-// String returns "owner/repo" (lowercased).
+// String is diagnostics-only.
 func (r Repo) String() string {
 	return r.owner + "/" + r.repo
 }
@@ -82,7 +42,7 @@ func ForNWORef(owner, repo, ref string) NWORef {
 	return NWORef{repo: ForRepo(owner, repo), ref: ref}
 }
 
-// String returns "owner/repo@ref". Diagnostics-only; do not parse.
+// String is diagnostics-only; do not parse.
 func (k NWORef) String() string {
 	return k.repo.String() + "@" + k.ref
 }
@@ -98,7 +58,7 @@ func ForNWOSha(owner, repo, sha string) NWOSha {
 	return NWOSha{repo: ForRepo(owner, repo), sha: strings.ToLower(sha)}
 }
 
-// String returns "owner/repo|sha". Diagnostics-only; do not parse.
+// String is diagnostics-only; do not parse.
 func (k NWOSha) String() string {
 	return k.repo.String() + "|" + k.sha
 }
@@ -116,7 +76,7 @@ func ForNWOName(owner, repo, name string) NWOName {
 	return NWOName{repo: ForRepo(owner, repo), name: name}
 }
 
-// String returns "owner/repo|name". Diagnostics-only; do not parse.
+// String is diagnostics-only; do not parse.
 func (k NWOName) String() string {
 	return k.repo.String() + "|" + k.name
 }
@@ -138,7 +98,7 @@ func ForCompare(owner, repo, base, head string) Compare {
 	}
 }
 
-// String returns "owner/repo|base|head". Diagnostics-only; do not parse.
+// String is diagnostics-only; do not parse.
 func (k Compare) String() string {
 	return k.repo.String() + "|" + k.base + "|" + k.head
 }
@@ -161,7 +121,7 @@ func ForReach(owner, repo, sha, ref string) Reach {
 	}
 }
 
-// String returns "owner/repo|sha|ref". Diagnostics-only; do not parse.
+// String is diagnostics-only; do not parse.
 func (k Reach) String() string {
 	return k.repo.String() + "|" + k.sha + "|" + k.ref
 }
@@ -183,8 +143,7 @@ func ForActionRef(owner, repo, path, ref string) ActionRef {
 	return ActionRef{repo: ForRepo(owner, repo), path: path, ref: ref}
 }
 
-// String returns "owner/repo@ref" or "owner/repo/path@ref" when a sub-action
-// path is set. Diagnostics-only; do not parse.
+// String is diagnostics-only; do not parse.
 func (k ActionRef) String() string {
 	if k.path == "" {
 		return k.repo.String() + "@" + k.ref
