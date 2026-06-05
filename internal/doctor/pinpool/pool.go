@@ -1,14 +1,7 @@
 // Package pinpool runs the parallel pin pass for `gh actions pin doctor`.
 //
-// The doctor often has dozens of workflow files to pin in one run, and
-// each pin involves several network round-trips. Doing them one at a
-// time is slow, so pinpool spreads the work across a handful of
-// goroutines (8 by default) that pull from a shared queue.
-//
-// Run takes the list of workflows, hands each one to the first free
-// goroutine, and waits for them all to finish before returning. If a
-// pin fails, the remaining workflows still get a chance to pin — Run
-// only returns the first failure once every workflow has been tried.
+// A pin can involve several network round-trips, so Run spreads workflow jobs
+// across worker goroutines and returns the first error after all jobs finish.
 package pinpool
 
 import (
@@ -31,33 +24,18 @@ type Reporter interface {
 	UpdateLabel(label string)
 }
 
-// Run dispatches jobs across up to `workers` goroutines. For each job,
-// the assigned worker:
+// Run dispatches jobs across up to `workers` goroutines.
 //
-//   - calls r.SetWorkerStatus(slot, "→ "+display(j)) before invoking run
-//   - calls run(slot, j)
-//   - increments a shared done counter and calls
-//     r.UpdateLabel(fmt.Sprintf("[%d/%d] %s", done, total, label))
+// Worker slots are not cleared between jobs; the next job overwrites the
+// previous status so the spinner never flickers down to a bare header. Slots
+// are cleared only when their worker exits.
 //
-// The slot is NOT cleared between jobs — the next iteration's "→ next"
-// status overwrites the previous one. This keeps a current target
-// visible at all times during steady-state operation, so the spinner
-// never flickers down to a bare header during the millisecond gap
-// between completing one job and pulling the next. Slots are cleared
-// once, with r.SetWorkerStatus(slot, ""), only when the worker exits
-// because the job channel has drained.
+// The first non-nil job error is returned after every worker has finished.
+// Callers with non-fatal sentinels should normalize them to nil inside run.
 //
-// run reports an error per job. The first non-nil error is returned
-// after every worker has finished, so a single failure does not strand
-// siblings. Callers that have a "non-fatal" sentinel (e.g. a
-// security-gate skip) should normalize it to nil inside run.
-//
-// If workers <= 0, DefaultWorkers is used. workers is clamped to
-// len(jobs). Returns nil when len(jobs) == 0 without touching r.
-//
-// r, display, and run must be non-nil when len(jobs) > 0.
-//
-// This is a simplified approach that requires all jobs before execution.
+// If workers <= 0, DefaultWorkers is used. workers is clamped to len(jobs).
+// Returns nil when len(jobs) == 0 without touching r. r, display, and run must
+// be non-nil when len(jobs) > 0.
 func Run[T any](
 	workers int,
 	r Reporter,
