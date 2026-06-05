@@ -1,17 +1,8 @@
 // Package runlog manages the on-disk transcript of a gh-actions-pin run.
 //
-// Detailed narration (every action resolved, every pin written, every warning)
-// is written to a plain-text log file rather than the terminal, keeping the
-// interactive output limited to spinners, prompts, and a final summary.
-//
-// Logs live under the user's cache directory (os.UserCacheDir), which resolves
-// to the idiomatic location on each platform:
-//
-//	macOS   ~/Library/Caches/gh-actions-pin/logs
-//	Linux   $XDG_CACHE_HOME/gh-actions-pin/logs (or ~/.cache/...)
-//	Windows %LocalAppData%\gh-actions-pin\logs
-//
-// Old logs are garbage-collected on open so the directory stays bounded.
+// Detailed narration goes to a plain-text log under os.UserCacheDir, keeping
+// interactive output limited to spinners, prompts, and the final summary. Old
+// logs are garbage-collected on open so the directory stays bounded.
 package runlog
 
 import (
