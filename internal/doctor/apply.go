@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
@@ -97,7 +96,15 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	for _, rr := range reachResults {
 		switch rr.Status {
 		case resolver.Unreachable:
-			rem.alertImpostor(wr.Path, rr.Owner, rr.Repo, rr.Ref,
+			// Defense-in-depth invariant: diagnose's live-direct sweep
+			// (liveReachImpostorFindings) is the primary detector for
+			// this shape and would have produced a CategoryImpostorCommit
+			// finding before remediation. Hitting this branch means a
+			// resolver cache disagreement let one slip through; alert
+			// so the run reports it, but per-workflow containment via
+			// errWorkflowAlerted lets siblings keep going.
+			depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
+			rem.alertWorkflow(wr.Path, depKey, reasonForCategory(CategoryImpostorCommit),
 				fmt.Sprintf("refusing to pin: impostor commit detected for %s/%s@%s — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
 			return errWorkflowAlerted
 		case resolver.ReachabilityUnknown:
@@ -164,8 +171,8 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	if err != nil {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
-			owner, repo, _ := lockfile.SplitNWO(imp.NWO)
-			rem.alertImpostor(wr.Path, owner, repo, imp.Ref, imp.Error())
+			depKey := imp.NWO + "@" + imp.Ref
+			rem.alertWorkflow(wr.Path, depKey, reasonForCategory(CategoryImpostorCommit), imp.Error())
 			return errWorkflowAlerted
 		}
 		return fmt.Errorf("%s: normalizing containing refs: %w", wr.Path, err)
@@ -303,8 +310,8 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	if err != nil {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
-			owner, repo, _ := lockfile.SplitNWO(imp.NWO)
-			rem.alertImpostor(workflowPath, owner, repo, imp.Ref, imp.Error())
+			depKey := imp.NWO + "@" + imp.Ref
+			rem.alertWorkflow(workflowPath, depKey, reasonForCategory(CategoryImpostorCommit), imp.Error())
 			return parentMap, errWorkflowAlerted
 		}
 		return parentMap, fmt.Errorf("%s: normalizing containing refs: %w", workflowPath, err)
@@ -333,22 +340,17 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	return parentMap, nil
 }
 
-// applyImpostorRewrites is the shared file I/O step used by both impostor
-// auto-fix paths: pre-pin (tryAutoFixImpostors, driven by check-phase
-// findings with SaneSuggestionTag) and post-pin (AutoFixAlertedImpostors,
-// driven by alerts surfaced during pinning). Each path builds its own
-// rewrites map — the matching semantics differ — and calls this helper to
-// load the file, apply the rewrites, write it back, and reload the action
-// refs so the caller can re-pin against the new content.
+// applyImpostorRewrites loads a workflow, applies the rewrites map, writes
+// it back, and reloads the action refs so the caller can re-pin against
+// the new content. Used by the pre-pin impostor auto-fix path
+// (tryAutoFixImpostors, driven by check-phase findings with
+// SaneSuggestionTag).
 //
 // Returns the refreshed ActionRefs together with applied=true when the
 // rewrite actually changed the file. An empty rewrites map or a
 // zero-change rewrite is a no-op and returns (nil, false, nil); on any I/O
 // error the file is left in whatever state the failure produced and the
-// error is returned. Callers own applyPin and recordAutoFixedImpostor so
-// each path can keep its distinct semantics around when to count a fix
-// (pre-pin records on rewrite; post-pin records only after applyPin
-// confirms the suggested tag is pinnable).
+// error is returned.
 func (rem *Remediator) applyImpostorRewrites(workflowPath string, rewrites map[string]string) ([]lockfile.ActionRef, bool, error) {
 	if len(rewrites) == 0 {
 		return nil, false, nil
@@ -385,120 +387,4 @@ func writeWorkflowFile(path string, content []byte) error {
 		mode = info.Mode().Perm()
 	}
 	return os.WriteFile(path, content, mode)
-}
-
-// AutoFixAlertedImpostors walks the alerted-impostor state populated during
-// Remediate and rewrites uses: lines for any dep that already has a
-// sane-release suggestion attached. Each matched workflow is rewritten to
-// the suggested tag and re-pinned via applyPin. Successful fixes are moved
-// from the alerted summary into AutoFixedImpostors so the end-of-run output
-// can announce them as "auto-pinned — review for sanity" instead of
-// continuing to flag them as unfixable. Workflows whose re-pin fails (e.g.
-// the suggested tag is also unreachable) are left in the alerted set with
-// the rewritten file on disk so the user can inspect manually.
-func (rem *Remediator) AutoFixAlertedImpostors() {
-	if len(rem.AlertedSuggestions) == 0 {
-		return
-	}
-
-	type pending struct {
-		owner, repo, oldRef string
-		newTag, newSHA      string
-		depKey              string
-	}
-
-	rem.mu.Lock()
-	byWorkflow := map[string][]pending{}
-	for depKey, sug := range rem.AlertedSuggestions {
-		ar := lockfile.ParseActionRef(depKey)
-		if ar == nil {
-			continue
-		}
-		owner := ar.Owner
-		repo := ar.Repo
-		oldRef := ar.Ref
-		newTag, newSHA := sug, ""
-		if sp := strings.IndexByte(sug, ' '); sp >= 0 {
-			newTag = sug[:sp]
-			newSHA = sug[sp+1:]
-		}
-		if newTag == "" {
-			continue
-		}
-		for _, wp := range rem.AlertedWorkflows[depKey] {
-			byWorkflow[wp] = append(byWorkflow[wp], pending{owner, repo, oldRef, newTag, newSHA, depKey})
-		}
-	}
-	rem.mu.Unlock()
-
-	if len(byWorkflow) == 0 {
-		return
-	}
-
-	fixedKeys := map[string]bool{}
-	for wp, fixes := range byWorkflow {
-		wf, err := lockfile.Load(wp)
-		if err != nil {
-			continue
-		}
-		refs, _, _ := wf.ExtractActionRefs()
-		rewrites := map[string]string{}
-		for _, fx := range fixes {
-			for _, ar := range refs {
-				if ar.Owner == fx.owner && ar.Repo == fx.repo {
-					rewrites[ar.Raw] = fx.owner + "/" + fx.repo + "@" + fx.newTag
-				}
-			}
-		}
-		newRefs, applied, err := rem.applyImpostorRewrites(wp, rewrites)
-		if err != nil || !applied {
-			continue
-		}
-		if err := rem.applyPin(WorkflowReport{Path: wp, ActionRefs: newRefs}); err != nil {
-			// Re-pin failed (e.g. suggested tag is also unreachable).
-			// Leave the rewritten file in place; the alert remains so the
-			// user notices.
-			continue
-		}
-		for _, fx := range fixes {
-			// Best-effort OldSHA: when the impostor ref was SHA-pinned the
-			// ref string IS the resolved SHA. For tag-pinned cases this
-			// path doesn't carry the resolved SHA, so leave it empty —
-			// the display omits the commit link gracefully.
-			oldSHA := ""
-			if lockfile.IsFullSha(fx.oldRef) {
-				oldSHA = fx.oldRef
-			}
-			rem.recordAutoFixedImpostor(wp, fx.owner+"/"+fx.repo, fx.oldRef, oldSHA, fx.newTag, fx.newSHA)
-			fixedKeys[fx.depKey] = true
-		}
-	}
-
-	if len(fixedKeys) == 0 {
-		return
-	}
-
-	rem.mu.Lock()
-	defer rem.mu.Unlock()
-	for k := range fixedKeys {
-		delete(rem.AlertedSuggestions, k)
-		delete(rem.AlertedReasons, k)
-		delete(rem.AlertedWorkflows, k)
-		delete(rem.AlertedSearched, k)
-	}
-	if len(rem.AlertedDeps) > 0 {
-		kept := rem.AlertedDeps[:0]
-		for _, d := range rem.AlertedDeps {
-			if !fixedKeys[d] {
-				kept = append(kept, d)
-			}
-		}
-		rem.AlertedDeps = kept
-	}
-	delta := len(fixedKeys)
-	if delta > rem.Alerted {
-		delta = rem.Alerted
-	}
-	rem.Alerted -= delta
-	rem.Fixed += delta
 }

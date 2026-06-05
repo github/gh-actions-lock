@@ -41,8 +41,11 @@ func newProvenanceOutcomes(alerted, skipped, unresolved, fullScan []string, reas
 // buildProvenanceReport assembles the action-centric provenance document from
 // the diagnosis report, the final lockfile state, and the remediator outcomes.
 // Actions are deduplicated across workflows: each unique action@ref appears
-// once with the list of workflows that reference it.
-func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid bool, repo *runlog.RepoInfo, out provenanceOutcomes) *runlog.Report {
+// once with the list of workflows that reference it. autoFixed records any
+// auto-fix rewrites (one entry per workflow+action) so downstream consumers
+// (Dependabot, audit tooling) can see what was changed without diffing the
+// workflow file.
+func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid bool, repo *runlog.RepoInfo, out provenanceOutcomes, autoFixed []doctor.AutoFixedImpostor) *runlog.Report {
 	finalSHA := make(map[string]lockfile.Dependency)
 	for _, d := range store.AllDeps() {
 		finalSHA[d.Key()] = d
@@ -180,11 +183,25 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 	sum.Actions = len(actions)
 	sum.Valid = valid
 
+	var autoFixedOut []runlog.AutoFix
+	for _, fx := range autoFixed {
+		autoFixedOut = append(autoFixedOut, runlog.AutoFix{
+			Workflow: fx.Workflow,
+			NWO:      fx.NWO,
+			FromRef:  fx.OldRef,
+			FromSHA:  fx.OldSHA,
+			ToRef:    fx.NewTag,
+			ToSHA:    fx.NewSHA,
+			Reason:   "impostor pin rewritten to reachable release",
+		})
+	}
+
 	return &runlog.Report{
-		Tool:    runlog.ToolInfo{Name: "gh-actions-pin", Version: cliVersion()},
-		Repo:    repo,
-		Summary: sum,
-		Actions: actions,
+		Tool:      runlog.ToolInfo{Name: "gh-actions-pin", Version: cliVersion()},
+		Repo:      repo,
+		Summary:   sum,
+		Actions:   actions,
+		AutoFixed: autoFixedOut,
 	}
 }
 

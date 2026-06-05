@@ -271,38 +271,6 @@ func (rem *Remediator) alertWorkflow(workflowPath, depKey, reason, detail string
 	rem.AlertedWorkflows[depKey] = append(rem.AlertedWorkflows[depKey], workflowPath)
 }
 
-// alertImpostor wraps alertWorkflow with a sane-release lookup against the
-// action repo so the end-of-run summary can suggest a re-pin target (or
-// signal that no recent release is reachable). Call sites that already
-// produce a Finding go through addAlertedDep + recordAlertSuggestion; this
-// path covers the pin-time refusal in apply.go where only the dep coords
-// are in hand.
-func (rem *Remediator) alertImpostor(workflowPath, owner, repo, ref, detail string) {
-	depKey := owner + "/" + repo + "@" + ref
-	rem.alertWorkflow(workflowPath, depKey, reasonForCategory(CategoryImpostorCommit), detail)
-	tag, sha := FindSaneRelease(rem.tagLister, rem.resolver, owner, repo)
-	rem.mu.Lock()
-	defer rem.mu.Unlock()
-	if rem.AlertedSearched == nil {
-		rem.AlertedSearched = map[string]bool{}
-	}
-	rem.AlertedSearched[depKey] = true
-	if tag == "" {
-		return
-	}
-	if rem.AlertedSuggestions == nil {
-		rem.AlertedSuggestions = map[string]string{}
-	}
-	if _, ok := rem.AlertedSuggestions[depKey]; ok {
-		return
-	}
-	short := sha
-	if len(short) > 7 {
-		short = short[:7]
-	}
-	rem.AlertedSuggestions[depKey] = tag + " " + short
-}
-
 func (rem *Remediator) markUnresolved(key string) {
 	rem.mu.Lock()
 	defer rem.mu.Unlock()
