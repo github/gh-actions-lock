@@ -5,33 +5,23 @@ package format
 // Wire-format contract (spec-locked, do not re-litigate):
 //   - SARIF schema: 2.1.0
 //     (https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
-//   - Rule IDs match zizmor where the audit definition overlaps:
-//     `impostor-commit`, `unpinned-uses`. Citing those names asserts the
-//     zizmor-published definition. Our non-overlapping rules use our
-//     existing kebab-case category IDs (`sha-as-ref`, `ref-changed`,
-//     `ref-moved`, `misleading-sha`, `lockfile-forgery`, `stale`).
+//   - Rule IDs match zizmor where the audit definition overlaps
+//     (`impostor-commit`, `unpinned-uses`) so consumers can correlate.
+//     Non-overlapping rules use our kebab-case category IDs.
 //   - Severity → SARIF level: error→error, warning→warning, info→note,
 //     ok→note. An unrecognized severity is a hard error here, not a
-//     silent downgrade — finding constructors are required to populate
-//     Severity, and a future SeverityError-equivalent must be mapped
-//     explicitly before it surfaces in SARIF.
-//   - Confidence rides in `properties.confidence` (high/medium/low). We
-//     deliberately do NOT overload SARIF `level` for confidence — level
-//     maps from Severity only.
-//   - partialFingerprints uses the `primaryLocationLineHash` strategy:
-//     SHA-256 (hex) of the trimmed text of the `uses:` line. Stable
-//     across runs so code-scanning can dedupe alerts when the workflow
-//     file is re-uploaded.
-//   - Positions are 1-based per the SARIF spec. Our parser exposes
-//     ActionRef.Raw but no line/column, so we re-scan the workflow file
-//     once and locate the first matching `uses:` line. Translation to
-//     1-based happens at this boundary, not throughout.
-//   - The lockfile is state, not findings — SARIF carries the diff
-//     against the lockfile only. The lockfile itself is never embedded.
+//     silent downgrade.
+//   - Confidence rides in `properties.confidence`. SARIF `level` maps
+//     from Severity only.
+//   - partialFingerprints uses `primaryLocationLineHash`: SHA-256 of
+//     the trimmed `uses:` line text. Stable across runs so
+//     code-scanning can dedupe.
+//   - Positions are 1-based per the SARIF spec.
+//   - SARIF carries the diff against the lockfile; the lockfile
+//     itself is never embedded.
 //
 // Caveats worth knowing when consuming the emitted file:
 //   - GitHub code-scanning caps uploads at 25 MB / 5000 results per run.
-//     We're nowhere near that in practice.
 //   - Private repos without GitHub Advanced Security will 403 on
 //     `gh code-scanning upload-sarif`, but we still emit the file.
 
@@ -132,16 +122,13 @@ type sarifRegion struct {
 }
 
 // categoryRuleID maps an internal doctor.Category to the SARIF ruleId we
-// emit. Overlaps with zizmor's audit IDs use zizmor's name; everything
-// else uses our kebab-case category ID verbatim. CategoryValid and
-// CategoryRunOnly never produce SARIF results (they are not findings).
+// emit. Overlaps with zizmor's audit IDs use zizmor's name so consumers
+// can correlate; everything else uses our kebab-case category ID
+// verbatim. CategoryValid and CategoryRunOnly never produce SARIF
+// results.
 func categoryRuleID(c doctor.Category) string {
 	switch c {
 	case findings.NotPinned:
-		// Semantic sibling of zizmor's `unpinned-uses`. We flag the
-		// lockfile mismatch rather than the workflow-level unpinned
-		// ref, but the user-visible remediation (pin to SHA) is the
-		// same, so we share the rule ID.
 		return "unpinned-uses"
 	case findings.ImpostorCommit:
 		return "impostor-commit"
@@ -158,11 +145,10 @@ var ruleCatalog = []sarifRule{
 	{
 		ID:               "unpinned-uses",
 		Name:             "UnpinnedUses",
-		ShortDescription: sarifMessage{Text: "Action dependency is not pinned to a commit SHA in the lockfile"},
-		FullDescription: sarifMessage{Text: "The workflow references an action but no matching dependency is recorded in actions-pin.lock. " +
-			"Pin every action to a 40-character commit SHA so a tag move cannot silently swap the code that runs in CI."},
-		HelpURI:    docURLOr(findings.NotPinned),
-		Properties: map[string]interface{}{"category": string(findings.NotPinned)},
+		ShortDescription: sarifMessage{Text: "Action dependency is not pinned in actions.lock"},
+		FullDescription:  sarifMessage{Text: "The workflow references an action but no matching dependency is recorded in .github/workflows/actions.lock. Run `gh actions-pin` to add the entry."},
+		HelpURI:          docURLOr(findings.NotPinned),
+		Properties:       map[string]interface{}{"category": string(findings.NotPinned)},
 	},
 	{
 		ID:               "sha-as-ref",
@@ -192,10 +178,9 @@ var ruleCatalog = []sarifRule{
 		ID:               "impostor-commit",
 		Name:             "ImpostorCommit",
 		ShortDescription: sarifMessage{Text: "Pinned SHA is not reachable from any branch in the action repository"},
-		FullDescription: sarifMessage{Text: "The locked commit cannot be reached from any branch or release tag in the upstream repository. " +
-			"This is the zizmor `impostor-commit` audit signal — most commonly a fork-network commit injected via PR. Re-pin to a sane release."},
-		HelpURI:    docURLOr(findings.ImpostorCommit),
-		Properties: map[string]interface{}{"category": string(findings.ImpostorCommit)},
+		FullDescription:  sarifMessage{Text: "The locked commit cannot be reached from any branch or release tag in the upstream repository — most commonly a fork-network commit injected via PR. Re-pin to a sane release."},
+		HelpURI:          docURLOr(findings.ImpostorCommit),
+		Properties:       map[string]interface{}{"category": string(findings.ImpostorCommit)},
 	},
 	{
 		ID:               "misleading-sha",
