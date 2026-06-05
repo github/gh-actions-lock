@@ -25,7 +25,7 @@ name: "4: Never pinned — fork injection caught even without prior baseline"
 #
 # RESULT:  CAUGHT ✗
 #          ✓ NOT TAMPERED    — pinned SHA matches live resolution (both 7b403c9)
-#          ✗ IMPOSTOR_COMMIT — 7b403c9 is not on any branch in
+#          ✗ impostor-commit — 7b403c9 is not on any branch in
 #                              nodeselector/actions-test-fixtures
 #                              (fork-network commit detected)
 #

@@ -127,8 +127,8 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 			g.action.SHA = sha
 		}
 		// Record the resolver's live SHA whenever a finding surfaces one
-		// that doesn't match the recorded SHA — makes MISLEADING_SHA and
-		// REF_MOVED entries falsifiable rather than echoing the input ref.
+		// that doesn't match the recorded SHA — makes misleading-sha and
+		// ref-moved entries falsifiable rather than echoing the input ref.
 		if f.ObservedSHA != "" && g.action.ObservedSHA == "" && !equalFoldHex(f.ObservedSHA, g.action.SHA) {
 			g.action.ObservedSHA = f.ObservedSHA
 		}

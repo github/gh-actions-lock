@@ -18,7 +18,7 @@ Type "grep -E 'uses:|  -' demo/workflows-pwned/1-pinned-before-hijack.yml"
 Enter
 Sleep 2s
 
-Type "echo '# branch_commits detects the fork injection — IMPOSTOR_COMMIT fires'"
+Type "echo '# branch_commits detects the fork injection — impostor-commit fires'"
 Enter
 Sleep 1s
 

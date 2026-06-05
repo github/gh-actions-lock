@@ -55,12 +55,12 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			  gh actions-pin check --json 2>/dev/null | jq .valid
 
 			Issue types:
-			  REF_MOVED      - locked SHA no longer matches upstream (expected for mutable tags like v4)
+			  ref-moved      - locked SHA no longer matches upstream (expected for mutable tags like v4)
 			  MISSING       - action in workflow has no lock entry
 			  STALE         - lock entry references an action no longer in the workflow
-			  REF_CHANGED   - workflow ref was edited; lock needs updating
-			  MISLEADING_SHA - ref looks like a SHA but resolves to a different commit
-			  IMPOSTOR_COMMIT   - locked SHA is not in the ref's history
+			  ref-changed   - workflow ref was edited; lock needs updating
+			  misleading-sha - ref looks like a SHA but resolves to a different commit
+			  impostor-commit   - locked SHA is not in the ref's history
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows

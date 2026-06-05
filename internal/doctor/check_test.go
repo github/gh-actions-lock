@@ -126,7 +126,7 @@ func TestRunChecks(t *testing.T) {
 		extra func(t *testing.T, got []Finding)
 	}{
 		{
-			name:           "not_pinned: ref used but absent from lockfile",
+			name:           "not-pinned: ref used but absent from lockfile",
 			lockfile:       map[string][]string{},
 			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
 			wantCategories: []Category{CategoryNotPinned},
@@ -137,7 +137,7 @@ func TestRunChecks(t *testing.T) {
 			},
 		},
 		{
-			name: "sha_as_ref: workflow ref is a bare SHA",
+			name: "sha-as-ref: workflow ref is a bare SHA",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", shaCheckoutV4, shaCheckoutV4)},
 			},
@@ -145,7 +145,7 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: []Category{CategorySHAAsRef},
 		},
 		{
-			name: "ref_changed + stale: lockfile pins v4, workflow uses v3",
+			name: "ref-changed + stale: lockfile pins v4, workflow uses v3",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
@@ -159,7 +159,7 @@ func TestRunChecks(t *testing.T) {
 					}
 				}
 				if refChanged == nil || refChanged.Dependency == nil || refChanged.Dependency.SHA != shaCheckoutV4 {
-					t.Fatalf("expected ref_changed with locked sha %s, got %#v", shaCheckoutV4, refChanged)
+					t.Fatalf("expected ref-changed with locked sha %s, got %#v", shaCheckoutV4, refChanged)
 				}
 			},
 		},
@@ -188,7 +188,7 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: nil,
 		},
 		{
-			name: "ref_moved: pinned sha drifted but ancestry confirms",
+			name: "ref-moved: pinned sha drifted but ancestry confirms",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
@@ -212,7 +212,7 @@ func TestRunChecks(t *testing.T) {
 			},
 		},
 		{
-			name: "lockfile_forgery: pinned sha is not an ancestor of upstream",
+			name: "lockfile-forgery: pinned sha is not an ancestor of upstream",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 			},
@@ -242,18 +242,18 @@ func TestRunChecks(t *testing.T) {
 					}
 				}
 				if !hasForgery {
-					t.Fatalf("expected a lockfile_forgery finding, got %v", findingCategories(got))
+					t.Fatalf("expected a lockfile-forgery finding, got %v", findingCategories(got))
 				}
 			},
 		},
 		{
-			name: "impostor_commit: sha unreachable from ref and resolver doesn't know ref",
+			name: "impostor-commit: sha unreachable from ref and resolver doesn't know ref",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 			},
 			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
-				// Resolver doesn't know the ref → no ref_moved / forgery path.
+				// Resolver doesn't know the ref → no ref-moved / forgery path.
 				reach: map[stubReachKey]resolver.ReachabilityStatus{
 					{"actions", "checkout", shaImpostor, "v4"}: resolver.Unreachable,
 				},
@@ -261,7 +261,7 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: []Category{CategoryImpostorCommit},
 		},
 		{
-			name:         "misleading_sha: sha-shaped ref resolves to different commit",
+			name:         "misleading-sha: sha-shaped ref resolves to different commit",
 			lockfile:     map[string][]string{},
 			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
 			resolver: &stubCheckResolver{
@@ -283,7 +283,7 @@ func TestRunChecks(t *testing.T) {
 					}
 				}
 				if !hasMisleading {
-					t.Fatalf("expected misleading_sha finding, got %v", findingCategories(got))
+					t.Fatalf("expected misleading-sha finding, got %v", findingCategories(got))
 				}
 			},
 		},
@@ -292,8 +292,8 @@ func TestRunChecks(t *testing.T) {
 			// actions/github-script@<v9.0.0 tag-object sha>): the resolver
 			// peels via ^{commit} so res.Sha is the underlying commit, not
 			// the pinned ref, but the pin is still immutable and must not
-			// trip MISLEADING_SHA.
-			name:         "misleading_sha negative: tag-object SHA pin must not false-positive",
+			// trip misleading-sha.
+			name:         "misleading-sha negative: tag-object SHA pin must not false-positive",
 			lockfile:     map[string][]string{},
 			workflowRefs: []parserlock.ActionRef{checkRef("actions", "github-script", "d746ffe35508b1917358783b479e04febd2b8f71")},
 			resolver: &stubCheckResolver{
@@ -307,7 +307,7 @@ func TestRunChecks(t *testing.T) {
 			extra: func(t *testing.T, got []Finding) {
 				for _, f := range got {
 					if f.Category == CategoryMisleadingSHA {
-						t.Fatalf("did not expect misleading_sha for tag-object SHA pin, got %v", findingCategories(got))
+						t.Fatalf("did not expect misleading-sha for tag-object SHA pin, got %v", findingCategories(got))
 					}
 				}
 			},
@@ -326,10 +326,10 @@ func TestRunChecks(t *testing.T) {
 			// confidence-axis card: when the Compare API can't give an
 			// authoritative ancestry answer (AncestryUnknown — rate
 			// limit, transient API error, see resolver.CheckAncestry),
-			// the resulting ref_moved finding downgrades from High to
+			// the resulting ref-moved finding downgrades from High to
 			// Medium so consumers know we inferred from the SHA mismatch
 			// alone.
-			name: "ref_moved confidence: AncestryUnknown is medium",
+			name: "ref-moved confidence: AncestryUnknown is medium",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
@@ -353,9 +353,9 @@ func TestRunChecks(t *testing.T) {
 		{
 			// Positive counterpart to the AncestryUnknown→medium case:
 			// when the Compare API gives us AncestryConfirmed the
-			// ref_moved finding is High-confidence because we have
+			// ref-moved finding is High-confidence because we have
 			// authoritative upstream data.
-			name: "ref_moved confidence: AncestryConfirmed is high",
+			name: "ref-moved confidence: AncestryConfirmed is high",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
@@ -423,14 +423,14 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 	// Cover every check path runChecks dispatches to.
 	lf := checkNewLockfile(map[string][]string{
 		".github/workflows/ci.yml": {
-			checkPinKey("actions", "checkout", "v4", shaCheckoutV3), // ref_moved/forgery seed
+			checkPinKey("actions", "checkout", "v4", shaCheckoutV3), // ref-moved/forgery seed
 			checkPinKey("actions", "unused", "v1", shaSetupGoV5),    // stale seed
 		},
 	})
 	pw := checkParsedWF(".github/workflows/ci.yml",
-		checkRef("actions", "checkout", "v4"),        // ref_moved or forgery
-		checkRef("actions", "setup-node", "v3"),      // not_pinned
-		checkRef("actions", "bare-sha", shaImpostor), // sha_as_ref + misleading
+		checkRef("actions", "checkout", "v4"),        // ref-moved or forgery
+		checkRef("actions", "setup-node", "v3"),      // not-pinned
+		checkRef("actions", "bare-sha", shaImpostor), // sha-as-ref + misleading
 	)
 	r := &stubCheckResolver{
 		refs: map[stubRefKey]string{

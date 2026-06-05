@@ -18,7 +18,7 @@ name: "6: Lockfile forgery — injected SHA not in ref lineage"
 # because the forged commit descends from a fork branch, not the tag.
 #
 # RESULT:  CAUGHT ✗
-#          ✗ LOCKFILE_FORGERY — pinned SHA is not an ancestor of live SHA
+#          ✗ lockfile-forgery — pinned SHA is not an ancestor of live SHA
 #          The lockfile's integrity check catches the injected SHA.
 # =============================================================================
 

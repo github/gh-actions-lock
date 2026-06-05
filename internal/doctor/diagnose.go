@@ -54,7 +54,7 @@ type ParsedWorkflow struct {
 	DepsErr       error
 	// TrustLockfile, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
-	// (REF_MOVED, IMPOSTOR_COMMIT) are skipped and the engine relies on
+	// (ref-moved, impostor-commit) are skipped and the engine relies on
 	// purely structural validation against the on-disk lockfile. Caller
 	// is asserting "this is already pinned and I trust the prior
 	// verification" — typically set on the fast path when every direct
