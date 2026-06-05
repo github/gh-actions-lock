@@ -172,7 +172,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 	// Resolve all refs to show the SHAs they'll pin to.
 	rem.startWork(rem.workLabel(fmt.Sprintf("Resolving %s", wr.Path)))
-	resolved, _, _ := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
+	resolved, _, _ := rem.resolver.ResolveAllRecursive(rem.ctx, wr.ActionRefs)
 	rem.stopWork()
 	shaByKey := make(map[string]string)
 	for _, dep := range resolved {
@@ -208,7 +208,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 				continue
 			}
 			label := ""
-			if info, err := rem.tagLister.GetRepoInfo(ref.Owner, ref.Repo); err == nil {
+			if info, err := rem.tagLister.GetRepoInfo(rem.ctx, ref.Owner, ref.Repo); err == nil {
 				label = info.VisibilityLabel()
 				if ref.Ref == info.DefaultBranch {
 					label += " · default branch"
@@ -235,7 +235,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		if lockfile.IsFullSha(ref.Ref) {
 			commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", ref.Owner, ref.Repo, sha)
 			shaLabel := rem.output.Hyperlink(sha[:12], commitURL)
-			if tag, err := rem.tagLister.BestPatchTagForSHA(ref.Owner, ref.Repo, sha); err == nil && tag != "" {
+			if tag, err := rem.tagLister.BestPatchTagForSHA(rem.ctx, ref.Owner, ref.Repo, sha); err == nil && tag != "" {
 				tagURL := fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", ref.Owner, ref.Repo, tag)
 				rem.output.Detail("  %s → %s → %s  %s", key, tag, shaLabel, rem.output.Dim(rem.output.Hyperlink("release", tagURL)))
 			} else {
@@ -251,14 +251,14 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 
 		// Case 1: Already a full semver tag (v4.3.1) — good default, verify it's a real tag.
 		if sv, svOK := lockfile.ParseVersion(ref.Ref); svOK && sv.IsFull() {
-			if rem.tagLister.LookupTag(ref.Owner, ref.Repo, ref.Ref) != nil {
+			if rem.tagLister.LookupTag(rem.ctx, ref.Owner, ref.Repo, ref.Ref) != nil {
 				autoPin = true
 			}
 		}
 
 		// Case 2: Mutable tag (v4, v4.2) — auto-pin if there's exactly one matching patch tag.
 		if !autoPin && IsMutableVersionTag(ref.Ref) {
-			if uniqueTag, err := rem.tagLister.UniquePatchTagForRef(ref.Owner, ref.Repo, sha, ref.Ref); err == nil && uniqueTag != "" {
+			if uniqueTag, err := rem.tagLister.UniquePatchTagForRef(rem.ctx, ref.Owner, ref.Repo, sha, ref.Ref); err == nil && uniqueTag != "" {
 				displayTag = uniqueTag
 				autoPin = true
 			}
@@ -267,7 +267,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		if autoPin {
 			tagURL := fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", ref.Owner, ref.Repo, displayTag)
 			tagLink := rem.output.Dim(rem.output.Hyperlink("release", tagURL))
-			if ti := rem.tagLister.LookupTag(ref.Owner, ref.Repo, displayTag); ti != nil && ti.IsImmutable {
+			if ti := rem.tagLister.LookupTag(rem.ctx, ref.Owner, ref.Repo, displayTag); ti != nil && ti.IsImmutable {
 				tagLink = rem.output.Dim("🔒 " + rem.output.Hyperlink("immutable release", tagURL))
 			}
 			// Show verifiable SHA match: tag resolves to the same commit.
@@ -294,10 +294,10 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		// pointing at the same SHA, surface it as a narrowing hint.
 		commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", ref.Owner, ref.Repo, sha)
 		shaLabel := rem.output.Hyperlink(sha[:12], commitURL)
-		if tag, err := rem.tagLister.BestPatchTagForSHA(ref.Owner, ref.Repo, sha); err == nil && tag != "" {
+		if tag, err := rem.tagLister.BestPatchTagForSHA(rem.ctx, ref.Owner, ref.Repo, sha); err == nil && tag != "" {
 			tagURL := fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", ref.Owner, ref.Repo, tag)
 			tagLink := rem.output.Dim(rem.output.Hyperlink("release", tagURL))
-			if ti := rem.tagLister.LookupTag(ref.Owner, ref.Repo, tag); ti != nil && ti.IsImmutable {
+			if ti := rem.tagLister.LookupTag(rem.ctx, ref.Owner, ref.Repo, tag); ti != nil && ti.IsImmutable {
 				tagLink = rem.output.Dim("🔒 " + rem.output.Hyperlink("immutable release", tagURL))
 			}
 			rem.output.Detail("  %s → %s → %s  %s", key, tag, shaLabel, tagLink)
@@ -330,7 +330,7 @@ func (rem *Remediator) offerDefaultBranch(wr WorkflowReport) WorkflowReport {
 			continue
 		}
 
-		info, err := rem.tagLister.GetRepoInfo(ref.Owner, ref.Repo)
+		info, err := rem.tagLister.GetRepoInfo(rem.ctx, ref.Owner, ref.Repo)
 		if err != nil {
 			updated = append(updated, ref)
 			continue
@@ -397,7 +397,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	}
 
 	// Try to find which tags this SHA already belongs to.
-	suggestions, err := rem.tagLister.SuggestTagsForSHA(owner, repo, dep.SHA)
+	suggestions, err := rem.tagLister.SuggestTagsForSHA(rem.ctx, owner, repo, dep.SHA)
 	if err != nil {
 		rem.output.Warning("could not fetch tags: %s", err)
 		rem.Skipped++
@@ -423,7 +423,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 			}
 		}
 		// No tag match — use default branch.
-		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
+		if info, err := rem.tagLister.GetRepoInfo(rem.ctx, owner, repo); err == nil {
 			rem.output.Detail("  ↳ using %s (default branch) for %s/%s", info.DefaultBranch, owner, repo)
 			rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = info.DefaultBranch
 			return rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch)
@@ -547,7 +547,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 	case pickerShowAll:
 		return rem.handleSHATagPicker(wr, finding, owner, repo)
 	case pickerDefaultBranch:
-		info, _ := rem.tagLister.GetRepoInfo(owner, repo)
+		info, _ := rem.tagLister.GetRepoInfo(rem.ctx, owner, repo)
 		rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = info.DefaultBranch
 		if err := rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch); err != nil {
 			return err
@@ -570,7 +570,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, owner, repo string) error {
 	dep := finding.Dependency
 
-	curated, err := rem.tagLister.CuratePickerTags(owner, repo, dep.SHA)
+	curated, err := rem.tagLister.CuratePickerTags(rem.ctx, owner, repo, dep.SHA)
 	if err != nil {
 		rem.output.Warning("could not fetch tags: %s", err)
 		rem.Skipped++
@@ -661,7 +661,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 		rem.Skipped++
 		return nil
 	case pickerDefaultBranch:
-		info, _ := rem.tagLister.GetRepoInfo(owner, repo)
+		info, _ := rem.tagLister.GetRepoInfo(rem.ctx, owner, repo)
 		rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = info.DefaultBranch
 		if err := rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch); err != nil {
 			return err
@@ -695,7 +695,7 @@ func (rem *Remediator) handleRefChanged(wr WorkflowReport, finding Finding) erro
 	// a real tag, open the releases page, or skip.
 	owner, repo := dep.OwnerRepo()
 	if rem.prompter.IsInteractive() && owner != "" && newRef != "" && !lockfile.IsFullSha(newRef) {
-		if rem.tagLister.LookupTag(owner, repo, newRef) == nil {
+		if rem.tagLister.LookupTag(rem.ctx, owner, repo, newRef) == nil {
 			rem.output.Detail("  ref %q no longer exists upstream — pick a valid tag instead", newRef)
 			return rem.handleSHATagPicker(wr, finding, owner, repo)
 		}

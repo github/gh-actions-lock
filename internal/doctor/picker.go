@@ -61,7 +61,7 @@ func (rem *Remediator) defaultBranchOption(options []string, owner, repo string)
 	if !rem.isSameOwner(owner) {
 		return options, -1
 	}
-	info, err := rem.tagLister.GetRepoInfo(owner, repo)
+	info, err := rem.tagLister.GetRepoInfo(rem.ctx, owner, repo)
 	if err != nil {
 		return options, -1
 	}

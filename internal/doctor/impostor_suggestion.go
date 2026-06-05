@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"context"
+
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
@@ -10,7 +12,7 @@ import (
 // that a tag's commit is reachable from a branch in the action repo. It's
 // defined here so tests can stub it without spinning up a real resolver.
 type reachabilityChecker interface {
-	CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityResult
+	CheckReachability(ctx context.Context, owner, repo, sha, ref string) resolver.ReachabilityResult
 }
 
 // maxSaneReleaseTagsChecked bounds the per-finding tag walk so a repo with a
@@ -26,11 +28,11 @@ const maxSaneReleaseTagsChecked = 10
 // Returns ("", "") when no qualifying tag is found within the bounded walk
 // (e.g. the action has never tagged a reachable release, or all recent
 // releases are also orphaned and the user should escalate to the publisher).
-func FindSaneRelease(tl *TagLister, r reachabilityChecker, owner, repo string) (tag, sha string) {
+func FindSaneRelease(ctx context.Context, tl *TagLister, r reachabilityChecker, owner, repo string) (tag, sha string) {
 	if tl == nil || r == nil {
 		return "", ""
 	}
-	tags, err := tl.ListTags(owner, repo)
+	tags, err := tl.ListTags(ctx, owner, repo)
 	if err != nil {
 		return "", ""
 	}
@@ -46,7 +48,7 @@ func FindSaneRelease(tl *TagLister, r reachabilityChecker, owner, repo string) (
 		if t.SHA == "" {
 			continue
 		}
-		rr := r.CheckReachability(owner, repo, t.SHA, t.Name)
+		rr := r.CheckReachability(ctx, owner, repo, t.SHA, t.Name)
 		if rr.Status == resolver.Reachable {
 			return t.Name, t.SHA
 		}
@@ -68,7 +70,7 @@ func FindSaneRelease(tl *TagLister, r reachabilityChecker, owner, repo string) (
 // — the latter is itself useful signal (e.g. an action whose entire release
 // flow detaches tag commits from any branch, warranting harder escalation
 // to the publisher).
-func EnrichImpostorFindings(report *Report, tl *TagLister, r reachabilityChecker) {
+func EnrichImpostorFindings(ctx context.Context, report *Report, tl *TagLister, r reachabilityChecker) {
 	if report == nil || tl == nil || r == nil {
 		return
 	}
@@ -90,7 +92,7 @@ func EnrichImpostorFindings(report *Report, tl *TagLister, r reachabilityChecker
 			key := cachekey.ForRepo(owner, repo)
 			s, ok := cache[key]
 			if !ok {
-				t, sha := FindSaneRelease(tl, r, owner, repo)
+				t, sha := FindSaneRelease(ctx, tl, r, owner, repo)
 				s = suggestion{tag: t, sha: sha}
 				cache[key] = s
 			}

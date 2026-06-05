@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/httpmock"
@@ -56,10 +57,10 @@ func TestTagLister_CaseInsensitiveCacheKeys(t *testing.T) {
 	tl := newTagListerWithRegistry(t, reg)
 
 	// First pass: canonical lowercase.
-	if _, err := tl.ListTags("octocat", "hello-world"); err != nil {
+	if _, err := tl.ListTags(context.Background(), "octocat", "hello-world"); err != nil {
 		t.Fatalf("ListTags lowercase: %v", err)
 	}
-	if _, err := tl.GetRepoInfo("octocat", "hello-world"); err != nil {
+	if _, err := tl.GetRepoInfo(context.Background(), "octocat", "hello-world"); err != nil {
 		t.Fatalf("GetRepoInfo lowercase: %v", err)
 	}
 	if got := tl.ReleaseDate("octocat", "hello-world", "v1.0.0"); got == "" {
@@ -70,10 +71,10 @@ func TestTagLister_CaseInsensitiveCacheKeys(t *testing.T) {
 	// If any of these fall through to the network, the registry will
 	// fail with "no registered HTTP stubs matched" because each stub
 	// has already fired.
-	if _, err := tl.ListTags("Octocat", "Hello-World"); err != nil {
+	if _, err := tl.ListTags(context.Background(), "Octocat", "Hello-World"); err != nil {
 		t.Fatalf("ListTags mixed case: %v", err)
 	}
-	if _, err := tl.GetRepoInfo("OCTOCAT", "HELLO-WORLD"); err != nil {
+	if _, err := tl.GetRepoInfo(context.Background(), "OCTOCAT", "HELLO-WORLD"); err != nil {
 		t.Fatalf("GetRepoInfo upper case: %v", err)
 	}
 	if got := tl.ReleaseDate("Octocat", "Hello-World", "v1.0.0"); got == "" {

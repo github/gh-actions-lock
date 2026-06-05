@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 
 	"strings"
@@ -26,8 +27,8 @@ type PickerTag struct {
 // BestPatchTagForSHA returns the highest full-semver patch tag pointing at the
 // given SHA, or "" if none exists. This is used to narrow mutable version refs
 // (like "v4") to a specific patch version (like "v4.2.1") when pinning.
-func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error) {
-	matching, err := tl.TagsForSHA(owner, repo, sha)
+func (tl *TagLister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha string) (string, error) {
+	matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
 	if err != nil {
 		return "", err
 	}
@@ -61,13 +62,13 @@ func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error)
 // For "v9" it only considers v9.x.y tags; for "v4.2" only v4.2.x tags.
 // This is used for auto-pinning: if there's exactly one obvious patch tag,
 // we can pin without prompting.
-func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string, error) {
+func (tl *TagLister) UniquePatchTagForRef(ctx context.Context, owner, repo, sha, ref string) (string, error) {
 	refSV, refOK := lockfile.ParseVersion(ref)
 	if !refOK {
 		return "", nil
 	}
 
-	matching, err := tl.TagsForSHA(owner, repo, sha)
+	matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
 	if err != nil {
 		return "", err
 	}
@@ -99,8 +100,8 @@ func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string,
 }
 
 // TagsForSHA returns all tags whose commit SHA matches the given SHA.
-func (tl *TagLister) TagsForSHA(owner, repo, sha string) ([]TagInfo, error) {
-	all, err := tl.ListTags(owner, repo)
+func (tl *TagLister) TagsForSHA(ctx context.Context, owner, repo, sha string) ([]TagInfo, error) {
+	all, err := tl.ListTags(ctx, owner, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +117,8 @@ func (tl *TagLister) TagsForSHA(owner, repo, sha string) ([]TagInfo, error) {
 // SuggestTagsForSHA returns a curated set of tag suggestions for a pinned SHA.
 // It includes exact-match tags, plus major/minor family alternatives when the
 // match is version-like. Returns at most 5 suggestions.
-func (tl *TagLister) SuggestTagsForSHA(owner, repo, sha string) ([]TagSuggestion, error) {
-	matching, err := tl.TagsForSHA(owner, repo, sha)
+func (tl *TagLister) SuggestTagsForSHA(ctx context.Context, owner, repo, sha string) ([]TagSuggestion, error) {
+	matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +163,7 @@ func (tl *TagLister) SuggestTagsForSHA(owner, repo, sha string) ([]TagSuggestion
 
 	// Suggest major/minor family tags if the best match is semver-ish.
 	if bestFound {
-		allTags, _ := tl.ListTags(owner, repo)
+		allTags, _ := tl.ListTags(ctx, owner, repo)
 
 		// Look for the major tag (e.g. v4).
 		majorName := bestSV.MajorTag()
@@ -206,8 +207,8 @@ func (tl *TagLister) SuggestTagsForSHA(owner, repo, sha string) ([]TagSuggestion
 // CuratePickerTags returns a short list of the most useful tags for a picker.
 // Shows the latest patch per major version (up to 3 majors), marks the one
 // matching pinnedSHA as "installed", and only puts 📦 on that one.
-func (tl *TagLister) CuratePickerTags(owner, repo, pinnedSHA string) ([]PickerTag, error) {
-	all, err := tl.ListTags(owner, repo)
+func (tl *TagLister) CuratePickerTags(ctx context.Context, owner, repo, pinnedSHA string) ([]PickerTag, error) {
+	all, err := tl.ListTags(ctx, owner, repo)
 	if err != nil {
 		return nil, err
 	}

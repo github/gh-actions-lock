@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 )
 
 // LatestRef returns the highest stable tag for an action repository.
-func (r *Resolver) LatestRef(owner, repo string) (string, error) {
+func (r *Resolver) LatestRef(ctx context.Context, owner, repo string) (string, error) {
 	key := cachekey.ForRepo(owner, repo)
 	if ref, ok := r.latestRefCache.get(key); ok {
 		return ref, nil
@@ -39,7 +40,7 @@ func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 			} `json:"refs"`
 		} `json:"repository"`
 	}
-	if err := r.client.Do(query, map[string]any{"owner": owner, "name": repo}, &data); err != nil {
+	if err := r.client.DoWithContext(ctx, query, map[string]any{"owner": owner, "name": repo}, &data); err != nil {
 		return "", err
 	}
 	if data.Repository == nil {
@@ -68,7 +69,7 @@ func cacheKey(ref lockfile.ActionRef) cachekey.ActionRef {
 // dependencies from composite actions by reading their action.yml via GraphQL.
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
 // caller and safe to mutate or hold across concurrent resolver calls.
-func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.Dependency, ParentMap, error) {
+func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []lockfile.ActionRef) ([]lockfile.Dependency, ParentMap, error) {
 	seen := make(map[cachekey.ActionRef]bool)
 	var allDeps []lockfile.Dependency
 	parentMap := make(ParentMap)
@@ -118,9 +119,9 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 		var actionYMLs []string
 		var err error
 		if r.WorkerProgressFn != nil {
-			deps, actionYMLs, err = r.resolveWithActionYMLParallel(toResolve, depth, &resolveDone, &resolveTotal)
+			deps, actionYMLs, err = r.resolveWithActionYMLParallel(ctx, toResolve, depth, &resolveDone, &resolveTotal)
 		} else {
-			deps, actionYMLs, err = r.resolveWithActionYML(toResolve)
+			deps, actionYMLs, err = r.resolveWithActionYML(ctx, toResolve)
 		}
 		// Keep partial results: per-ref failures are surfaced via err, but
 		// successful resolutions in `deps` should not be discarded — downstream
@@ -212,7 +213,7 @@ func dedup(deps []lockfile.Dependency) []lockfile.Dependency {
 // resolveDone and resolveTotal are rolling counters owned by ResolveAllRecursive
 // that span every BFS depth, so a single non-jumping progress bar can cover
 // direct + transitive resolution as one phase.
-func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth int, resolveDone, resolveTotal *atomic.Int64) ([]lockfile.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []lockfile.ActionRef, depth int, resolveDone, resolveTotal *atomic.Int64) ([]lockfile.Dependency, []string, error) {
 	type resolveResult struct {
 		dep lockfile.Dependency
 		yml string
@@ -280,7 +281,7 @@ func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth
 
 			r.WorkerProgressFn(slot, "→ "+ref.NWO()+"@"+ref.Ref)
 
-			deps, ymls, keys, err := r.resolveWithActionYMLBatch([]lockfile.ActionRef{ref})
+			deps, ymls, keys, err := r.resolveWithActionYMLBatch(ctx, []lockfile.ActionRef{ref})
 			if err != nil {
 				errMu.Lock()
 				if firstErr == nil {
@@ -306,7 +307,7 @@ func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth
 	return deps, ymls, firstErr
 }
 
-func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYML(ctx context.Context, refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, error) {
 	var allDeps []lockfile.Dependency
 	var allYMLs []string
 	var uncached []lockfile.ActionRef
@@ -329,7 +330,7 @@ func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.D
 		if end > len(uncached) {
 			end = len(uncached)
 		}
-		deps, ymls, keys, err := r.resolveWithActionYMLBatch(uncached[i:end])
+		deps, ymls, keys, err := r.resolveWithActionYMLBatch(ctx, uncached[i:end])
 		// Keep partial batch results: per-ref failures shouldn't discard
 		// successful resolutions from the same batch.
 		freshDeps = append(freshDeps, deps...)
@@ -389,11 +390,11 @@ type repoResponse struct {
 	} `json:"object"`
 }
 
-func (r *Resolver) resolveWithActionYMLBatch(refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, []cachekey.ActionRef, error) {
+func (r *Resolver) resolveWithActionYMLBatch(ctx context.Context, refs []lockfile.ActionRef) ([]lockfile.Dependency, []string, []cachekey.ActionRef, error) {
 	query, vars, aliasMap := buildResolveWithFileQuery(refs)
 
 	var data map[string]json.RawMessage
-	err := r.client.Do(query, vars, &data)
+	err := r.client.DoWithContext(ctx, query, vars, &data)
 	var gqlErr *api.GraphQLError
 	if err != nil {
 		if !errors.As(err, &gqlErr) {

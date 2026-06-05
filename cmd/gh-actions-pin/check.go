@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,10 +15,39 @@ import (
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
+
+// ctxMetadataResolver adapts a *resolver.Resolver to lockfile.MetadataResolver
+// by binding a context. lockfile.Store predates the ctx retrofit and accepts
+// a ctx-less MetadataResolver; rather than churn the lockfile API for the
+// single RepoIDs callsite, this adapter binds ctx for the lifetime of the
+// command. Each command invocation creates a fresh Store with a freshly
+// bound ctx (see runCheck / runUpgrade), so the binding does not leak
+// across invocations in tests.
+type ctxMetadataResolver struct {
+	r   *resolver.Resolver
+	ctx context.Context
+}
+
+func (a ctxMetadataResolver) RepoIDs(owner, repo string) (int64, int64, error) {
+	return a.r.RepoIDs(a.ctx, owner, repo)
+}
+
+// ctxTagPeeler adapts a *resolver.Resolver to lockfile.TagObjectPeeler so the
+// lockfile's CheckSHARefMismatches helper can call PeelTagObject without
+// gaining a ctx parameter. Same scoping contract as ctxMetadataResolver.
+type ctxTagPeeler struct {
+	r   *resolver.Resolver
+	ctx context.Context
+}
+
+func (a ctxTagPeeler) PeelTagObject(owner, repo, sha string) (string, bool) {
+	return a.r.PeelTagObject(a.ctx, owner, repo, sha)
+}
 
 type checkOptions struct {
 	WorkflowPaths []string
@@ -97,7 +127,7 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
-			return runCheck(f, opts)
+			return runCheck(cmd.Context(), f, opts)
 		},
 	}
 
@@ -111,7 +141,10 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	return cmd
 }
 
-func runCheck(f *pinFactory, opts *checkOptions) error {
+func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Validate structured-output flags before any work runs. --format is
 	// orthogonal to --json: emitting both at once would produce two
 	// stdout streams competing for the same writer, so we reject the
@@ -161,7 +194,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	if err != nil {
 		return err
 	}
-	store, err := lockfile.OpenStore(".", r)
+	store, err := lockfile.OpenStore(".", ctxMetadataResolver{r: r, ctx: ctx})
 	if err != nil {
 		return fmt.Errorf("opening lockfile: %w", err)
 	}
@@ -271,7 +304,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		f.UI.UpdateLabel("Resolving actions")
 	}
 	if len(refs) > 0 {
-		_, _, _ = r.ResolveAllRecursive(refs)
+		_, _, _ = r.ResolveAllRecursive(ctx, refs)
 	}
 	// Pre-warm reachability across all networked workflows in one shot. The
 	// per-workflow diagnose pass also calls CheckReachabilityAll, but doing
@@ -296,7 +329,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		// when the union has lockfile entries to compare against;
 		// new-only scans have nothing to "move".
 		if len(networked) > 0 {
-			live, _, _ := r.ResolveAllRecursive(refs)
+			live, _, _ := r.ResolveAllRecursive(ctx, refs)
 			liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
 			liveDirect = doctor.CollectLiveDirectReachDeps(networked, live)
 		}
@@ -305,7 +338,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		// the live-SHA moved-set AND the live-direct sweep (unpinned
 		// + transitive-not-in-lockfile cases). Cache makes the call
 		// O(1) per ref; hoisting it avoids three resolver round-trips.
-		live, _, _ := r.ResolveAllRecursive(refs)
+		live, _, _ := r.ResolveAllRecursive(ctx, refs)
 		reachDeps = doctor.CollectReachDeps(networked, live)
 		liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
 		liveDirect = doctor.CollectLiveDirectReachDeps(networked, live)
@@ -315,13 +348,13 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.UpdateLabel("Verifying reachability")
 		}
 		if len(reachDeps) > 0 {
-			_ = r.CheckReachabilityAll(reachDeps)
+			_ = r.CheckReachabilityAll(ctx, reachDeps)
 		}
 		if len(liveMoved) > 0 {
-			_ = r.CheckReachabilityAll(liveMoved)
+			_ = r.CheckReachabilityAll(ctx, liveMoved)
 		}
 		if len(liveDirect) > 0 {
-			_ = r.CheckReachabilityAll(liveDirect)
+			_ = r.CheckReachabilityAll(ctx, liveDirect)
 		}
 	}
 
@@ -352,7 +385,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		tagger = doctor.NewTagLister(rc)
 	}
 
-	report := doctor.DiagnoseParsed(parsed, r, store)
+	report := doctor.DiagnoseParsed(ctx, parsed, r, store)
 
 	// Compute validity from findings.
 	valid := report.IsValid()
@@ -363,10 +396,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// skipped entirely when no impostor findings exist.
 	if hasImpostorFindings(report) {
 		if tagger != nil {
-			doctor.EnrichImpostorFindings(report, tagger, r)
+			doctor.EnrichImpostorFindings(ctx, report, tagger, r)
 		} else if rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
 			tl := doctor.NewTagLister(rc)
-			doctor.EnrichImpostorFindings(report, tl, r)
+			doctor.EnrichImpostorFindings(ctx, report, tl, r)
 		}
 	}
 
@@ -479,7 +512,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			RepoName:    repoName,
 		})
 
-		if err := rem.Remediate(report); err != nil {
+		if err := rem.Remediate(ctx, report); err != nil {
 			f.UI.StopProgress()
 			if errors.Is(err, doctor.ErrAborted) {
 				f.UI.TermWarn("Interrupted — no further changes applied")

@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 // It is a backward-compatible wrapper around ParseAll, resolver pre-warming,
 // and DiagnoseParsed. Newer callers can drive those phases directly to control
 // UI progress.
-func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
+func Diagnose(ctx context.Context, paths []string, r *resolver.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
 	var onScan func(done, total int, path string)
 	if len(onWorkflow) > 0 {
 		onScan = onWorkflow[0]
@@ -23,13 +24,13 @@ func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWor
 	if r != nil {
 		refs, deps := CollectResolvable(parsed)
 		if len(refs) > 0 {
-			_, _, _ = r.ResolveAllRecursive(refs)
+			_, _, _ = r.ResolveAllRecursive(ctx, refs)
 		}
 		if len(deps) > 0 {
-			_ = r.CheckReachabilityAll(deps)
+			_ = r.CheckReachabilityAll(ctx, deps)
 		}
 	}
-	return DiagnoseParsed(parsed, r, store)
+	return DiagnoseParsed(ctx, parsed, r, store)
 }
 
 // ParsedWorkflow holds the per-workflow parse result that both phases need.
@@ -130,7 +131,7 @@ func CollectResolvable(parsed []ParsedWorkflow) ([]lockfile.ActionRef, []lockfil
 // Assumes the resolver caches have already been warmed (calls into the
 // resolver will hit cache and stay silent). Returns a Report aggregating per-
 // workflow findings in input order.
-func DiagnoseParsed(parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) *Report {
+func DiagnoseParsed(ctx context.Context, parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) *Report {
 	report := &Report{}
 	for _, pw := range parsed {
 		effR := r
@@ -140,12 +141,12 @@ func DiagnoseParsed(parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfi
 			// falls back to structural-only checks for this entry.
 			effR = nil
 		}
-		report.Workflows = append(report.Workflows, diagnoseOneParsed(pw, effR, store))
+		report.Workflows = append(report.Workflows, diagnoseOneParsed(ctx, pw, effR, store))
 	}
 	return report
 }
 
-func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
+func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
 	wr := WorkflowReport{Path: pw.Path}
 
 	if pw.LoadErr != nil {
@@ -201,7 +202,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	var resolvedParents resolver.ParentMap
 	if r != nil {
 		var resolveErr error
-		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(pw.Refs)
+		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
 		if resolveErr != nil {
 			// Low: we're surfacing the resolver failure itself, not a
 			// verdict about any specific dependency.
@@ -234,7 +235,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
 		reach = trusted
 		if len(toCheck) > 0 {
-			reach = append(reach, r.CheckReachabilityAll(toCheck)...)
+			reach = append(reach, r.CheckReachabilityAll(ctx, toCheck)...)
 		}
 	}
 	// Independent sweep for LIVE SHAs whose tag has moved: the
@@ -247,7 +248,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	var liveMovedReach []resolver.ReachabilityResult
 	if r != nil && len(liveDeps) > 0 && len(pw.ExistingDeps) > 0 {
 		if moved := liveMovedDeps(pw.ExistingDeps, liveDeps); len(moved) > 0 {
-			liveMovedReach = r.CheckReachabilityAll(moved)
+			liveMovedReach = r.CheckReachabilityAll(ctx, moved)
 		}
 	}
 	// Pin-time parity sweep: any (NWO, Ref, LIVE SHA) that neither the
@@ -259,14 +260,14 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	var liveDirectReach []resolver.ReachabilityResult
 	if r != nil && len(liveDeps) > 0 {
 		if extra := liveDirectReachDeps(pw, liveDeps); len(extra) > 0 {
-			liveDirectReach = r.CheckReachabilityAll(extra)
+			liveDirectReach = r.CheckReachabilityAll(ctx, extra)
 		}
 	}
 	var checkR checkResolver
 	if r != nil && liveDeps != nil {
 		checkR = newPrewarmedResolver(r, liveDeps, reach, liveMovedReach, liveDirectReach)
 	}
-	rawFindings := runChecks(pw, store.File(), checkR)
+	rawFindings := runChecks(ctx, pw, store.File(), checkR)
 
 	depByKey := indexDeps(pw.ExistingDeps)
 	for _, f := range rawFindings {

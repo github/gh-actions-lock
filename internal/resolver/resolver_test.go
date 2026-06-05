@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -279,7 +280,7 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 		actionYML: "name: Setup Go\nruns:\n  using: node20\n",
 	})
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
 		{Owner: "owner", Repo: "composite", Ref: "v1"},
 	})
@@ -317,7 +318,7 @@ func TestResolveAllRecursiveMultipleParents(t *testing.T) {
 		},
 	})
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{
 		{Owner: "owner", Repo: "compositeA", Ref: "v1"},
 		{Owner: "owner", Repo: "compositeB", Ref: "v1"},
 	})
@@ -366,7 +367,7 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 		},
 	})
 
-	_, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
+	_, _, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err == nil || !strings.Contains(err.Error(), "exceeded max depth 1") {
 		t.Fatalf("expected recursion depth error, got %v", err)
 	}
@@ -393,7 +394,7 @@ func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
 		},
 	})
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -428,7 +429,7 @@ func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
 		},
 	})
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -470,7 +471,7 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 		},
 	})
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{
 		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "main"},
 	})
 	if err != nil {
@@ -522,7 +523,7 @@ func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
 		},
 	})
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -573,7 +574,7 @@ func TestNewWithTransportAndLatestRef(t *testing.T) {
 		t.Fatalf("expected hostname github.com, got %q", host)
 	}
 
-	ref, err := r.LatestRef("actions", "checkout")
+	ref, err := r.LatestRef(context.Background(), "actions", "checkout")
 	if err != nil {
 		t.Fatalf("LatestRef returned error: %v", err)
 	}
@@ -582,7 +583,7 @@ func TestNewWithTransportAndLatestRef(t *testing.T) {
 	}
 
 	// Second call should hit the cache instead of requiring another stub.
-	ref, err = r.LatestRef("actions", "checkout")
+	ref, err = r.LatestRef(context.Background(), "actions", "checkout")
 	if err != nil {
 		t.Fatalf("LatestRef cache lookup returned error: %v", err)
 	}
@@ -637,7 +638,7 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 		t.Fatalf("NewWithTransport returned error: %v", err)
 	}
 
-	deps, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
+	deps, _, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err != nil {
 		t.Fatalf("ResolveAllRecursive returned error: %v", err)
 	}
@@ -651,11 +652,11 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 
 func TestCheckReachability_Reachable(t *testing.T) {
 	r := &Resolver{
-		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+		checkReachFn: func(_ context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return Reachable, "ancestor of " + ref
 		},
 	}
-	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	result := r.CheckReachability(context.Background(), "actions", "checkout", "abc123", "v6")
 	if result.Status != Reachable {
 		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
 	}
@@ -663,11 +664,11 @@ func TestCheckReachability_Reachable(t *testing.T) {
 
 func TestCheckReachability_Unreachable(t *testing.T) {
 	r := &Resolver{
-		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+		checkReachFn: func(_ context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return Unreachable, "commit is not an ancestor of " + ref
 		},
 	}
-	result := r.CheckReachability("evil", "repo", "deadbeef", "v1")
+	result := r.CheckReachability(context.Background(), "evil", "repo", "deadbeef", "v1")
 	if result.Status != Unreachable {
 		t.Fatalf("expected Unreachable, got %s (%s)", result.Status, result.Detail)
 	}
@@ -675,11 +676,11 @@ func TestCheckReachability_Unreachable(t *testing.T) {
 
 func TestCheckReachability_Unknown(t *testing.T) {
 	r := &Resolver{
-		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+		checkReachFn: func(_ context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return ReachabilityUnknown, "clone failed"
 		},
 	}
-	result := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	result := r.CheckReachability(context.Background(), "actions", "checkout", "abc123", "v6")
 	if result.Status != ReachabilityUnknown {
 		t.Fatalf("expected Unknown, got %s (%s)", result.Status, result.Detail)
 	}
@@ -688,14 +689,14 @@ func TestCheckReachability_Unknown(t *testing.T) {
 func TestCheckReachability_CachesResults(t *testing.T) {
 	calls := 0
 	r := &Resolver{
-		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+		checkReachFn: func(_ context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			calls++
 			return Reachable, "ancestor of " + ref
 		},
 	}
 
-	r1 := r.CheckReachability("actions", "checkout", "abc123", "v6")
-	r2 := r.CheckReachability("actions", "checkout", "abc123", "v6")
+	r1 := r.CheckReachability(context.Background(), "actions", "checkout", "abc123", "v6")
+	r2 := r.CheckReachability(context.Background(), "actions", "checkout", "abc123", "v6")
 
 	if r1.Status != Reachable || r2.Status != Reachable {
 		t.Fatalf("expected both calls to return Reachable, got %s and %s", r1.Status, r2.Status)
@@ -711,7 +712,7 @@ func TestCheckReachability_CachesResults(t *testing.T) {
 func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
 	calls := 0
 	r := &Resolver{
-		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
+		checkReachFn: func(_ context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			calls++
 			return Reachable, "ancestor of " + ref
 		},
@@ -723,7 +724,7 @@ func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
 		{NWO: "actions/setup-go", Ref: "v6", SHA: "bbb"},
 	}
 
-	results := r.CheckReachabilityAll(deps)
+	results := r.CheckReachabilityAll(context.Background(), deps)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 unique results, got %d: %+v", len(results), results)
 	}
@@ -746,7 +747,7 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result := r.CheckReachability("actions", "checkout", sha, sha)
+		result := r.CheckReachability(context.Background(), "actions", "checkout", sha, sha)
 		if result.Status != Reachable {
 			t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
 		}
@@ -767,7 +768,7 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result := r.CheckReachability("actions", "checkout", sha, sha)
+		result := r.CheckReachability(context.Background(), "actions", "checkout", sha, sha)
 		if result.Status != Unreachable {
 			t.Fatalf("expected Unreachable, got %s (%s)", result.Status, result.Detail)
 		}
@@ -792,7 +793,7 @@ func TestCheckReachability_OnBranch_Reachable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("actions", "checkout", sha, "v6")
+	result := r.CheckReachability(context.Background(), "actions", "checkout", sha, "v6")
 	if result.Status != Reachable {
 		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
 	}
@@ -817,7 +818,7 @@ func TestCheckReachability_ForkInjection_Unreachable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("actions", "checkout", forkSHA, "tampered")
+	result := r.CheckReachability(context.Background(), "actions", "checkout", forkSHA, "tampered")
 	if result.Status != Unreachable {
 		t.Fatalf("expected Unreachable for fork injection, got %s (%s)", result.Status, result.Detail)
 	}
@@ -853,7 +854,7 @@ func TestCheckReachability_FoundViaFullScan_SetsFullScanUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("actions", "checkout", sha, "v1")
+	result := r.CheckReachability(context.Background(), "actions", "checkout", sha, "v1")
 	if result.Status != Reachable {
 		t.Fatalf("expected Reachable via full scan, got %s (%s)", result.Status, result.Detail)
 	}
@@ -884,7 +885,7 @@ func TestCheckReachability_FoundInCanonicalSet_NoFullScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("vercel", "next.js", sha, "canary")
+	result := r.CheckReachability(context.Background(), "vercel", "next.js", sha, "canary")
 	if result.Status != Reachable {
 		t.Fatalf("expected Reachable, got %s (%s)", result.Status, result.Detail)
 	}
@@ -956,7 +957,7 @@ func TestCheckReachability_BranchBeyondPageCap_ValidatedViaDirectFetch(t *testin
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("vercel", "next.js", sha, "canary")
+	result := r.CheckReachability(context.Background(), "vercel", "next.js", sha, "canary")
 	if result.Status != Reachable {
 		t.Fatalf("expected Reachable via direct fetch, got %s (%s)", result.Status, result.Detail)
 	}
@@ -987,7 +988,7 @@ func TestDiscoverContaining_BranchBeyondPageCap_NotImpostor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, branch, err := r.DiscoverContainingDefault("vercel", "next.js", sha, "canary", "canary")
+	_, branch, err := r.DiscoverContainingDefault(context.Background(), "vercel", "next.js", sha, "canary", "canary")
 	if err != nil {
 		t.Fatalf("unexpected error (false impostor?): %v", err)
 	}
@@ -1011,7 +1012,7 @@ func TestCheckReachability_BranchListError_ReturnsUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := r.CheckReachability("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
+	result := r.CheckReachability(context.Background(), "actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "v6")
 	if result.Status != ReachabilityUnknown {
 		t.Fatalf("expected Unknown when branches API fails, got %s (%s)", result.Status, result.Detail)
 	}
@@ -1038,7 +1039,7 @@ func TestCheckAncestry_Confirmed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, _ := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	status, _ := r.CheckAncestry(context.Background(), "actions", "checkout", pinnedSHA, liveSHA)
 	if status != AncestryConfirmed {
 		t.Fatalf("expected AncestryConfirmed, got %d", status)
 	}
@@ -1065,7 +1066,7 @@ func TestCheckAncestry_NotAncestor_DifferentMergeBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, detail := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	status, detail := r.CheckAncestry(context.Background(), "actions", "checkout", pinnedSHA, liveSHA)
 	if status != AncestryNotAncestor {
 		t.Fatalf("expected AncestryNotAncestor, got %d", status)
 	}
@@ -1087,7 +1088,7 @@ func TestCheckAncestry_NotAncestor_404(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	status, detail := r.CheckAncestry(context.Background(), "actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
 	if status != AncestryNotAncestor {
 		t.Fatalf("expected AncestryNotAncestor for 404, got %d", status)
 	}
@@ -1109,7 +1110,7 @@ func TestCheckAncestry_NotAncestor_409(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	status, detail := r.CheckAncestry(context.Background(), "actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
 	if status != AncestryNotAncestor {
 		t.Fatalf("expected AncestryNotAncestor for 409, got %d", status)
 	}
@@ -1136,9 +1137,9 @@ func TestCheckAncestry_Unknown_RateLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.sleepFn = func(time.Duration) {}
+	r.sleepFn = func(context.Context, time.Duration) {}
 
-	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	status, detail := r.CheckAncestry(context.Background(), "actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
 	if status != AncestryUnknown {
 		t.Fatalf("expected AncestryUnknown for rate limit, got %d", status)
 	}
@@ -1180,9 +1181,9 @@ func TestCheckAncestry_RetrySucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sleeps []time.Duration
-	r.sleepFn = func(d time.Duration) { sleeps = append(sleeps, d) }
+	r.sleepFn = func(_ context.Context, d time.Duration) { sleeps = append(sleeps, d) }
 
-	status, _ := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	status, _ := r.CheckAncestry(context.Background(), "actions", "checkout", pinnedSHA, liveSHA)
 	if status != AncestryConfirmed {
 		t.Fatalf("expected AncestryConfirmed after two retries, got %d", status)
 	}
@@ -1219,9 +1220,9 @@ func TestCheckAncestry_403_RateLimited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.sleepFn = func(time.Duration) {}
+	r.sleepFn = func(context.Context, time.Duration) {}
 
-	status, _ := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	status, _ := r.CheckAncestry(context.Background(), "actions", "checkout", pinnedSHA, liveSHA)
 	if status != AncestryConfirmed {
 		t.Fatalf("expected AncestryConfirmed after 403 retry, got %d", status)
 	}
@@ -1244,9 +1245,9 @@ func TestCheckAncestry_403_NotRateLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	slept := false
-	r.sleepFn = func(time.Duration) { slept = true }
+	r.sleepFn = func(context.Context, time.Duration) { slept = true }
 
-	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	status, detail := r.CheckAncestry(context.Background(), "actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
 	if status != AncestryUnknown {
 		t.Fatalf("expected AncestryUnknown for plain 403, got %d", status)
 	}
@@ -1278,9 +1279,9 @@ func TestCheckAncestry_RateLimitResetBeyondBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	slept := false
-	r.sleepFn = func(time.Duration) { slept = true }
+	r.sleepFn = func(context.Context, time.Duration) { slept = true }
 
-	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	status, detail := r.CheckAncestry(context.Background(), "actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
 	if status != AncestryUnknown {
 		t.Fatalf("expected AncestryUnknown when reset is beyond budget, got %d", status)
 	}
@@ -1331,7 +1332,7 @@ func TestPeelTagObjectAnnotatedTagOneRoundTrip(t *testing.T) {
 		t.Fatalf("NewWithTransport: %v", err)
 	}
 
-	got, ok := r.PeelTagObject("owner", "repo", tagSHA)
+	got, ok := r.PeelTagObject(context.Background(), "owner", "repo", tagSHA)
 	if !ok {
 		t.Fatalf("expected ok=true for annotated tag object")
 	}
@@ -1362,7 +1363,7 @@ func TestPeelTagObjectDeepChainStillOneRoundTrip(t *testing.T) {
 		t.Fatalf("NewWithTransport: %v", err)
 	}
 
-	got, ok := r.PeelTagObject("owner", "deep", tagSHA)
+	got, ok := r.PeelTagObject(context.Background(), "owner", "deep", tagSHA)
 	if !ok || got != commitSHA {
 		t.Fatalf("expected commit %q ok=true, got %q ok=%v", commitSHA, got, ok)
 	}
@@ -1385,14 +1386,14 @@ func TestPeelTagObjectPlainCommitNegativeCached(t *testing.T) {
 		t.Fatalf("NewWithTransport: %v", err)
 	}
 
-	if _, ok := r.PeelTagObject("owner", "plain", commitSHA); ok {
+	if _, ok := r.PeelTagObject(context.Background(), "owner", "plain", commitSHA); ok {
 		t.Fatalf("expected ok=false for plain commit SHA")
 	}
 	if r.IsKnownTagObject("owner", "plain", commitSHA) {
 		t.Fatalf("plain commit must not be marked as tag object")
 	}
 	// Second call: no new stub — proves the negative result is cached.
-	if _, ok := r.PeelTagObject("owner", "plain", commitSHA); ok {
+	if _, ok := r.PeelTagObject(context.Background(), "owner", "plain", commitSHA); ok {
 		t.Fatalf("cached negative result flipped to ok=true")
 	}
 }
@@ -1419,10 +1420,10 @@ func TestPeelTagObjectUnknownSHANotCached(t *testing.T) {
 		t.Fatalf("NewWithTransport: %v", err)
 	}
 
-	if _, ok := r.PeelTagObject("owner", "unknown", unknownSHA); ok {
+	if _, ok := r.PeelTagObject(context.Background(), "owner", "unknown", unknownSHA); ok {
 		t.Fatalf("expected ok=false when OID is unknown")
 	}
-	got, ok := r.PeelTagObject("owner", "unknown", unknownSHA)
+	got, ok := r.PeelTagObject(context.Background(), "owner", "unknown", unknownSHA)
 	if !ok || got != "5555555555555555555555555555555555555555" {
 		t.Fatalf("expected retry to succeed with peeled commit, got %q ok=%v", got, ok)
 	}
@@ -1449,10 +1450,10 @@ func TestPeelTagObjectTransientErrorNotCached(t *testing.T) {
 		t.Fatalf("NewWithTransport: %v", err)
 	}
 
-	if _, ok := r.PeelTagObject("owner", "flaky", sha); ok {
+	if _, ok := r.PeelTagObject(context.Background(), "owner", "flaky", sha); ok {
 		t.Fatalf("expected ok=false on transient error")
 	}
-	got, ok := r.PeelTagObject("owner", "flaky", sha)
+	got, ok := r.PeelTagObject(context.Background(), "owner", "flaky", sha)
 	if !ok || got != commitSHA {
 		t.Fatalf("expected retry to succeed, got %q ok=%v", got, ok)
 	}

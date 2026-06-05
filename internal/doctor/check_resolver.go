@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"context"
+
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
@@ -16,11 +18,11 @@ type checkResolver interface {
 	// PeelTagObject reports whether a hex SHA names an annotated tag
 	// object (or chain of tag-of-tag) and, if so, returns the commit OID
 	// it ultimately points at.
-	PeelTagObject(owner, repo, sha string) (commit string, ok bool)
+	PeelTagObject(ctx context.Context, owner, repo, sha string) (commit string, ok bool)
 	// CheckAncestry asks whether candidate is an ancestor of head and
 	// returns a short human-readable detail alongside the status — the
 	// rate-limit or compare-base detail callers surface to operators.
-	CheckAncestry(owner, repo, candidate, head string) (resolver.AncestryStatus, string)
+	CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolver.AncestryStatus, string)
 	// CheckReachability asks whether sha is reachable from ref's history.
 	CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus
 }
@@ -69,18 +71,18 @@ func (a *prewarmedResolver) ResolveRef(owner, repo, ref string) (string, bool) {
 	return sha, ok
 }
 
-func (a *prewarmedResolver) PeelTagObject(owner, repo, sha string) (string, bool) {
+func (a *prewarmedResolver) PeelTagObject(ctx context.Context, owner, repo, sha string) (string, bool) {
 	if a.inner == nil {
 		return "", false
 	}
-	return a.inner.PeelTagObject(owner, repo, sha)
+	return a.inner.PeelTagObject(ctx, owner, repo, sha)
 }
 
-func (a *prewarmedResolver) CheckAncestry(owner, repo, candidate, head string) (resolver.AncestryStatus, string) {
+func (a *prewarmedResolver) CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolver.AncestryStatus, string) {
 	if a.inner == nil {
 		return resolver.AncestryUnknown, ""
 	}
-	return a.inner.CheckAncestry(owner, repo, candidate, head)
+	return a.inner.CheckAncestry(ctx, owner, repo, candidate, head)
 }
 
 func (a *prewarmedResolver) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus {

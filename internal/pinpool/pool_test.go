@@ -1,6 +1,7 @@
 package pinpool
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -55,9 +56,9 @@ func TestRunSerializesReporterCalls(t *testing.T) {
 	r := reporterFunc{set: setStatus, label: updateLabel}
 
 	jobs := make([]int, 64)
-	err := Run(8, r, "Pinning", jobs,
+	err := Run(context.Background(), 8, r, "Pinning", jobs,
 		func(j int) string { return "" },
-		func(slot, j int) error { return nil },
+		func(_ context.Context, slot, j int) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -96,9 +97,9 @@ func TestRunDoesNotClearSlotBetweenJobs(t *testing.T) {
 	// Force a single worker so all status events are on slot 0 and the
 	// "between two jobs" predicate is unambiguous.
 	jobs := []int{1, 2, 3, 4, 5}
-	err := Run(1, ui, "Pinning", jobs,
+	err := Run(context.Background(), 1, ui, "Pinning", jobs,
 		func(j int) string { return fmt.Sprintf("job-%d", j) },
-		func(slot, j int) error { return nil },
+		func(_ context.Context, slot, j int) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -128,9 +129,9 @@ func TestRunDoesNotClearSlotBetweenJobs(t *testing.T) {
 
 func TestRunEmptyJobsIsNoOp(t *testing.T) {
 	ui := &fakeReporter{}
-	err := Run[int](4, ui, "Pinning", nil,
+	err := Run[int](context.Background(), 4, ui, "Pinning", nil,
 		func(j int) string { return fmt.Sprintf("%d", j) },
-		func(slot, j int) error { return nil },
+		func(_ context.Context, slot, j int) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("Run with no jobs returned error: %v", err)
@@ -145,9 +146,9 @@ func TestRunCallsRunForEveryJob(t *testing.T) {
 	jobs := []int{1, 2, 3, 4, 5, 6, 7}
 	var seen sync.Map
 	var calls atomic.Int64
-	err := Run(3, ui, "Pinning", jobs,
+	err := Run(context.Background(), 3, ui, "Pinning", jobs,
 		func(j int) string { return fmt.Sprintf("job-%d", j) },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			calls.Add(1)
 			seen.Store(j, true)
 			return nil
@@ -194,9 +195,9 @@ func TestRunReturnsFirstErrorButDrainsAllJobs(t *testing.T) {
 	jobs := []int{1, 2, 3, 4, 5, 6}
 	sentinel := errors.New("boom")
 	var calls atomic.Int64
-	err := Run(2, ui, "Pinning", jobs,
+	err := Run(context.Background(), 2, ui, "Pinning", jobs,
 		func(j int) string { return fmt.Sprintf("%d", j) },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			calls.Add(1)
 			if j == 3 || j == 5 {
 				return sentinel
@@ -216,9 +217,9 @@ func TestRunClampsWorkersToJobCount(t *testing.T) {
 	ui := &fakeReporter{}
 	jobs := []int{1, 2}
 	maxSlot := atomic.Int64{}
-	err := Run(99, ui, "Pinning", jobs,
+	err := Run(context.Background(), 99, ui, "Pinning", jobs,
 		func(j int) string { return "" },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			for {
 				cur := maxSlot.Load()
 				if int64(slot) <= cur {
@@ -246,9 +247,9 @@ func TestRunDefaultWorkersWhenNonPositive(t *testing.T) {
 		jobs[i] = i
 	}
 	var calls atomic.Int64
-	err := Run(0, ui, "Pinning", jobs,
+	err := Run(context.Background(), 0, ui, "Pinning", jobs,
 		func(j int) string { return "" },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			calls.Add(1)
 			return nil
 		},
@@ -270,9 +271,9 @@ func TestRunStallWatcherFiresHint(t *testing.T) {
 
 	ui := &fakeReporter{}
 	jobs := []int{1}
-	err := Run(1, ui, "Pinning", jobs,
+	err := Run(context.Background(), 1, ui, "Pinning", jobs,
 		func(j int) string { return fmt.Sprintf("job-%d", j) },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			time.Sleep(200 * time.Millisecond)
 			return nil
 		},
@@ -304,9 +305,9 @@ func TestRunStallWatcherClearsHintOnUpdate(t *testing.T) {
 	ui := &fakeReporter{}
 	jobs := []int{1, 2}
 	// One worker so both jobs land on slot 0 sequentially.
-	err := Run(1, ui, "Pinning", jobs,
+	err := Run(context.Background(), 1, ui, "Pinning", jobs,
 		func(j int) string { return fmt.Sprintf("job-%d", j) },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			// First job sleeps past threshold to trigger hint; second
 			// returns immediately so the watcher has a clean transition
 			// to observe.
@@ -347,9 +348,9 @@ func TestRunStallWatcherDisabledByZeroThreshold(t *testing.T) {
 
 	ui := &fakeReporter{}
 	jobs := []int{1}
-	err := Run(1, ui, "Pinning", jobs,
+	err := Run(context.Background(), 1, ui, "Pinning", jobs,
 		func(j int) string { return "" },
-		func(slot, j int) error {
+		func(_ context.Context, slot, j int) error {
 			time.Sleep(120 * time.Millisecond)
 			return nil
 		},
@@ -373,9 +374,9 @@ func TestRunStallWatcherStopsBeforeReturn(t *testing.T) {
 
 	ui := &fakeReporter{}
 	jobs := []int{1}
-	err := Run(1, ui, "Pinning", jobs,
+	err := Run(context.Background(), 1, ui, "Pinning", jobs,
 		func(j int) string { return "" },
-		func(slot, j int) error { return nil },
+		func(_ context.Context, slot, j int) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)

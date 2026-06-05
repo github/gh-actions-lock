@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"testing"
@@ -36,7 +37,7 @@ func (s *stubCheckResolver) ResolveRef(owner, repo, ref string) (string, bool) {
 	return sha, ok
 }
 
-func (s *stubCheckResolver) CheckAncestry(owner, repo, cand, head string) (resolver.AncestryStatus, string) {
+func (s *stubCheckResolver) CheckAncestry(_ context.Context, owner, repo, cand, head string) (resolver.AncestryStatus, string) {
 	if s == nil {
 		return resolver.AncestryUnknown, ""
 	}
@@ -59,7 +60,7 @@ func (s *stubCheckResolver) CheckReachability(owner, repo, sha, ref string) reso
 	return v
 }
 
-func (s *stubCheckResolver) PeelTagObject(owner, repo, sha string) (string, bool) {
+func (s *stubCheckResolver) PeelTagObject(_ context.Context, owner, repo, sha string) (string, bool) {
 	if s == nil {
 		return "", false
 	}
@@ -590,7 +591,7 @@ func TestRunChecks(t *testing.T) {
 			if !tc.noResolver && tc.resolver != nil {
 				r = tc.resolver
 			}
-			got := runChecks(pw, lf, r)
+			got := runChecks(context.Background(), pw, lf, r)
 
 			if tc.wantCategories != nil {
 				wantStrs := make([]string, len(tc.wantCategories))
@@ -646,7 +647,7 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 			{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
 		},
 	}
-	got := runChecks(pw, lf, r)
+	got := runChecks(context.Background(), pw, lf, r)
 	if len(got) == 0 {
 		t.Fatal("expected findings to exercise the confidence guard")
 	}

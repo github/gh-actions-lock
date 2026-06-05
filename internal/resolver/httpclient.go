@@ -1,11 +1,27 @@
 package resolver
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
+
+// defaultSleep waits d but returns early when ctx is canceled. Used as the
+// default sleepFn in newly constructed resolvers so the rate-limit retry
+// loop honors cancellation.
+func defaultSleep(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
 
 // New creates a resolver using the authenticated gh context.
 func New(hostname string) (*Resolver, error) {
@@ -41,7 +57,7 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		hostname:          hostname,
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 		nowFn:             time.Now,
-		sleepFn:           time.Sleep,
+		sleepFn:           defaultSleep,
 	}, nil
 }
 

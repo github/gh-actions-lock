@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 // (possibly through a chain of tag-of-tag) is content-addressed and
 // safe even though the peeled commit differs from the ref string — those
 // are skipped via PeelTagObject.
-func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
+func checkMisleadingSha(ctx context.Context, pw ParsedWorkflow, r checkResolver) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
 		if !lockfile.IsFullSha(ref.Ref) {
@@ -27,7 +28,7 @@ func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 		if strings.EqualFold(sha, ref.Ref) {
 			continue
 		}
-		if peeled, ok := r.PeelTagObject(ref.Owner, ref.Repo, ref.Ref); ok && strings.EqualFold(peeled, sha) {
+		if peeled, ok := r.PeelTagObject(ctx, ref.Owner, ref.Repo, ref.Ref); ok && strings.EqualFold(peeled, sha) {
 			continue
 		}
 		// Ref string is SHA-shaped, resolver returned a different commit,
@@ -51,7 +52,7 @@ func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 // CategoryImpostorCommit finding is emitted alongside ref-moved /
 // ancestry-unknown. Forgery suppresses the observed-SHA impostor: the
 // lockfile-tampering claim is stronger.
-func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r checkResolver) []Finding {
+func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r checkResolver) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
 		if lockfile.IsFullSha(ref.Ref) {
@@ -68,7 +69,7 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 		if strings.EqualFold(sha, pin.Hex) {
 			continue
 		}
-		ancestry, ancestryDetail := r.CheckAncestry(ref.Owner, ref.Repo, pin.Hex, sha)
+		ancestry, ancestryDetail := r.CheckAncestry(ctx, ref.Owner, ref.Repo, pin.Hex, sha)
 		f := newRefFinding(pw, ref, "", "", "")
 		f.ObservedSHA = sha
 		f.Dependency = synthDep(ref, pin.Hex)

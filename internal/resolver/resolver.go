@@ -3,6 +3,7 @@
 package resolver
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -112,13 +113,14 @@ type Resolver struct {
 	tagObjectCache syncMap[cachekey.NWOSha, tagPeel]
 
 	// checkReachFn overrides the default branch-discovery check (for tests).
-	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
+	checkReachFn func(ctx context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string)
 	// nowFn and sleepFn back CheckAncestry's rate-limit retry loop so
 	// tests can drive deterministic X-RateLimit-Reset waits without
 	// actually sleeping. Both default to the stdlib equivalents in
-	// NewWithOptions.
+	// NewWithOptions. sleepFn is ctx-aware so a canceled ctx aborts the
+	// wait promptly even when the rate-limit reset is far out.
 	nowFn   func() time.Time
-	sleepFn func(time.Duration)
+	sleepFn func(context.Context, time.Duration)
 
 	// progressMu serializes ProgressFn invocations so the single-writer spinner
 	// UI never sees concurrent updates from parallel reachability workers.
@@ -250,7 +252,7 @@ func (r *Resolver) Hostname() string {
 
 // SetCheckReachabilityFunc overrides the default REST-based reachability check.
 // Intended for tests.
-func (r *Resolver) SetCheckReachabilityFunc(fn func(owner, repo, sha, ref string) (ReachabilityStatus, string)) {
+func (r *Resolver) SetCheckReachabilityFunc(fn func(ctx context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string)) {
 	r.checkReachFn = fn
 }
 

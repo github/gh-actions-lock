@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -79,7 +80,7 @@ func TestSuggestTagsForSHA_ImmutableTagObject(t *testing.T) {
 	tl := newTagListerWithRegistry(t, reg)
 
 	// Pin to the tag-object SHA, as immutable releases do.
-	suggestions, err := tl.SuggestTagsForSHA("actions", "github-script", "d746ffe35508b1917358783b479e04febd2b8f71")
+	suggestions, err := tl.SuggestTagsForSHA(context.Background(), "actions", "github-script", "d746ffe35508b1917358783b479e04febd2b8f71")
 	if err != nil {
 		t.Fatalf("SuggestTagsForSHA: %v", err)
 	}

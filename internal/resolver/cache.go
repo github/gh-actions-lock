@@ -1,7 +1,9 @@
 package resolver
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sync"
 
@@ -66,7 +68,7 @@ func (c *syncMap[K, V]) put(k K, v V) {
 // RepoIDs returns the numeric owner ID and repo ID for a NWO, querying
 // the GitHub REST API on cache miss. Results are cached for the lifetime of
 // the resolver.
-func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
+func (r *Resolver) RepoIDs(ctx context.Context, owner, repo string) (int64, int64, error) {
 	key := cachekey.ForRepo(owner, repo)
 	if ids, ok := r.repoIDsCache.get(key); ok {
 		return ids[0], ids[1], nil
@@ -78,7 +80,7 @@ func (r *Resolver) RepoIDs(owner, repo string) (int64, int64, error) {
 		} `json:"owner"`
 	}
 	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
-	if err := r.restClient.Get(path, &resp); err != nil {
+	if err := r.restClient.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return 0, 0, fmt.Errorf("fetching %s: %w", path, err)
 	}
 	if resp.ID == 0 || resp.Owner.ID == 0 {
