@@ -367,12 +367,11 @@ scenario_impostor_commit() {
   wf=".github/workflows/1-pinned-before-hijack.yml"
   comment "Workflow pinned BEFORE the tag was hijacked"
   run show_workflow_summary "$scratch/$wf"
-  # The CLI classifies a moved tag as ref-moved regardless of whether the new
-  # SHA is in the fork network — impostor-commit is not surfaced as a distinct
-  # category for this fixture. The fork-injection narrative still holds
-  # operationally (a hijacked tag would trip the same detector).
-  # Findings only surface via --json; --rescan bypasses the lockfile fast path.
-  comment "Check detects the tag moved (would catch fork-network injection)"
+  # The live SHA isn't reachable from any branch of the upstream repo, so
+  # the detector emits impostor-commit (error) alongside ref-moved
+  # (warning). Findings only surface via --json; --rescan bypasses the
+  # lockfile fast path.
+  comment "Check detects the tag moved AND that the new SHA is in the fork network (impostor-commit)"
   echo -e "${GREEN}\$ gh actions-pin check --rescan --json $wf 2>/dev/null | jq '.findings[] | {category, severity, dependency, detail}'${RESET_COLOR}"
   ( cd "$scratch" && gh actions-pin check --rescan --json "$wf" 2>/dev/null \
       | python3 -c "import json,sys; d=json.load(sys.stdin); [print(json.dumps({'category': f['category'], 'severity': f['severity'], 'dependency': f.get('dependency',''), 'detail': f.get('detail','')}, indent=2)) for f in d['findings']]" )

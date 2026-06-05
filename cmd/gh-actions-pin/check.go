@@ -288,20 +288,34 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// fully steady-state lockfile this set is empty and we make zero reach
 	// network calls here.
 	var reachDeps []lockfile.Dependency
+	var liveMoved []lockfile.Dependency
 	if opts.Rescan {
 		reachDeps = deps
+		// Even on --rescan, the live-SHA reach sweep only matters
+		// when the union has lockfile entries to compare against;
+		// new-only scans have nothing to "move".
+		if len(networked) > 0 {
+			live, _, _ := r.ResolveAllRecursive(refs)
+			liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
+		}
 	} else {
-		// Re-resolve to populate liveDeps for the union. The cache makes
-		// this O(1) per ref; we use the result purely to drive the
-		// partition.
+		// One resolve, two uses: drive the locked-SHA partition AND
+		// the live-SHA moved-set. Cache makes the call O(1) per ref;
+		// hoisting it avoids two resolver round-trips.
 		live, _, _ := r.ResolveAllRecursive(refs)
 		reachDeps = doctor.CollectReachDeps(networked, live)
+		liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
 	}
-	if len(reachDeps) > 0 {
+	if len(reachDeps) > 0 || len(liveMoved) > 0 {
 		if showHeadlessProgress {
 			f.UI.UpdateLabel("Verifying reachability")
 		}
-		_ = r.CheckReachabilityAll(reachDeps)
+		if len(reachDeps) > 0 {
+			_ = r.CheckReachabilityAll(reachDeps)
+		}
+		if len(liveMoved) > 0 {
+			_ = r.CheckReachabilityAll(liveMoved)
+		}
 	}
 
 	if showSpinner {

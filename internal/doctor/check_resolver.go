@@ -45,11 +45,20 @@ type prewarmedResolver struct {
 // newPrewarmedResolver primes the adapter with the live resolution of
 // refs and a pre-computed reachability sweep. Pass live==nil when
 // ResolveAllRecursive failed; checks that need a ref will fail open.
-func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult) *prewarmedResolver {
+// extraReach carries reach results computed for SHAs that aren't part
+// of the canonical lockfile sweep — typically the OBSERVED SHA of a
+// moved ref, which shares its NWO@Ref dep key with the locked pin and
+// so cannot ride alongside the lockfile reach results in
+// reachabilityComplementFindings without colliding (see diagnose.go).
+func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult, extraReach ...[]resolver.ReachabilityResult) *prewarmedResolver {
+	extras := 0
+	for _, e := range extraReach {
+		extras += len(e)
+	}
 	a := &prewarmedResolver{
 		inner: r,
 		refs:  make(map[cachekey.NWORef]string, len(live)),
-		reach: make(map[cachekey.Reach]resolver.ReachabilityStatus, len(reach)),
+		reach: make(map[cachekey.Reach]resolver.ReachabilityStatus, len(reach)+extras),
 	}
 	for _, d := range live {
 		owner, repo := d.OwnerRepo()
@@ -57,6 +66,11 @@ func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reac
 	}
 	for _, rr := range reach {
 		a.reach[cachekey.ForReach(rr.Owner, rr.Repo, rr.SHA, rr.Ref)] = rr.Status
+	}
+	for _, batch := range extraReach {
+		for _, rr := range batch {
+			a.reach[cachekey.ForReach(rr.Owner, rr.Repo, rr.SHA, rr.Ref)] = rr.Status
+		}
 	}
 	return a
 }
