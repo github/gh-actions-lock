@@ -393,13 +393,8 @@ func CollectReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependency) []loc
 // should be pre-warmed. Each entry pairs an existing lockfile dep with
 // the LIVE SHA it currently resolves to, when they differ — the input
 // that lets the engine emit CategoryImpostorCommit for the
-// tag-hijacked-to-fork-network shape (where the lockfile SHA is still
-// legit but the live tag now points at a fork commit).
-//
-// Keyed on NWO@Ref+LiveSHA so the locked-SHA reach sweep
-// (CollectReachDeps) and this sweep never request the same Compare
-// path twice. Pass live as the result of a single ResolveAllRecursive
-// over the union of refs.
+// tag-hijacked-to-fork-network shape. Pass live as the result of a
+// single ResolveAllRecursive over the union of refs.
 func CollectLiveMovedReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependency) []lockfile.Dependency {
 	if len(parsed) == 0 || len(live) == 0 {
 		return nil
@@ -439,10 +434,7 @@ func CollectLiveMovedReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependen
 
 // liveMovedDeps is the per-workflow analogue of CollectLiveMovedReachDeps.
 // Returns synthetic (NWO, Ref, LIVE SHA) deps for any existing dep whose
-// live resolve differs from the recorded SHA. Used inside diagnoseOneParsed
-// to drive a second CheckReachabilityAll over the moved set so the
-// prewarmedResolver's reach cache has the (owner, repo, liveSHA, ref) entry
-// the engine needs to emit a live-SHA impostor finding.
+// live resolve differs from the recorded SHA.
 func liveMovedDeps(existing, live []lockfile.Dependency) []lockfile.Dependency {
 	if len(existing) == 0 || len(live) == 0 {
 		return nil
@@ -481,15 +473,9 @@ func liveMovedDeps(existing, live []lockfile.Dependency) []lockfile.Dependency {
 // Reachable because the freshly-resolved live deps confirm the recorded
 // (NWO, Ref, SHA) is still what the ref resolves to right now.
 //
-// When skipUnchanged is false, no synthesis happens — every existing dep
-// goes to toCheck. This is the path --rescan takes: explicit re-verify
-// every recorded pin against current upstream branches.
-//
-// The synthesis is safe because the live resolve is itself a strong
-// integrity signal: the ref still maps to the same SHA upstream, and that
-// SHA's prior reachability verdict was recorded at lockfile-write time.
-// The remaining attack surface (branch deleted out from under a still-
-// pinned tag) is exactly what --rescan exists to catch.
+// When skipUnchanged is false, every existing dep goes to toCheck. This
+// is the --rescan path: re-verify every recorded pin against current
+// upstream branches.
 func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bool) (toCheck []lockfile.Dependency, trusted []resolver.ReachabilityResult) {
 	if !skipUnchanged || len(live) == 0 {
 		return existing, nil

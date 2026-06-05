@@ -7,15 +7,9 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
-// TestPrewarmedResolver_LockedAndLiveCoexist guards the wiring that
-// powers the tag-hijacked-to-fork-network impostor-commit detection:
-// the same NWO@Ref dep can have a Reachable result for the LOCKED SHA
-// and an Unreachable result for the OBSERVED SHA, and both must
-// survive in the reach cache. The cache key includes the SHA, so
-// collisions only happen when callers (e.g.
-// reachabilityComplementFindings) key on Dependency.Key — that's why
-// diagnose.go keeps the locked- and observed-SHA sweeps in separate
-// slices.
+// TestPrewarmedResolver_LockedAndLiveCoexist verifies that locked-SHA
+// and observed-SHA reach results for the same NWO@Ref both survive in
+// the prewarmedResolver cache (the cache key includes the SHA).
 func TestPrewarmedResolver_LockedAndLiveCoexist(t *testing.T) {
 	const (
 		owner  = "owner"

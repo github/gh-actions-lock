@@ -659,9 +659,7 @@ jobs:
 // TestCheck_LockfileForgery_RateLimited verifies that when the ancestry
 // check is rate-limited, the finding surfaces as ancestry-unknown — not
 // ref-moved (which would imply a benign-but-known move) and not
-// lockfile-forgery (which requires an authoritative not-ancestor
-// answer). The pre-card behavior silently emitted CategoryValid+warning,
-// which broke consumers that expected `valid` to mean clean.
+// lockfile-forgery (which requires an authoritative not-ancestor answer).
 func TestCheck_LockfileForgery_RateLimited(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)

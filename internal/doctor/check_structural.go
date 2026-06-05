@@ -95,8 +95,6 @@ func checkRefChanged(pw ParsedWorkflow, depPins []lockfile.Pin) []Finding {
 			continue
 		}
 		p := candidates[0]
-		// High confidence: this is the lockfile-vs-workflow string mismatch
-		// — exact comparison of two strings we control, no inference.
 		f := newRefFinding(pw, ref, CategoryRefChanged, SeverityError, ConfidenceHigh)
 		f.Detail = fmt.Sprintf("workflow uses ref %q but lockfile pins %q", ref.Ref, p.Ref)
 		f.Remediation = "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line"

@@ -321,9 +321,7 @@ func TestUpgrade_WithoutNoOnboard_OnboardingExitCodeJSON(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload), "stdout=%q", stdout)
 
-	// updated[] is legitimately empty: the diff is purely Added (onboarding),
-	// and we don't dump transitive deps into updated[] to preserve the
-	// downstream JSON contract.
+	// updated[] is legitimately empty: the diff is purely Added (onboarding).
 	assert.Empty(t, payload.Updated, "onboarding-only run yields empty updated[]")
 	require.Len(t, payload.Workflows, 1, "onboarded workflow must appear in workflows[]")
 	assert.Equal(t, ".github/workflows/b.yml", payload.Workflows[0].Path)

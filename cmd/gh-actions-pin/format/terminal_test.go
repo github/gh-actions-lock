@@ -11,13 +11,10 @@ import (
 	"github.com/github/gh-actions-pin/internal/ui"
 )
 
-// newTestUI returns a UI whose narration log is sunk to io.Discard, mirroring
-// the production setup that `check.go` installs for human-terminal runs
-// (cmd/gh-actions-pin/check.go: f.UI.SetLog(io.Discard)). Term* methods
-// bypass the log and write to the returned buffer; narration helpers
-// (Success/Warning/Detail) go to the discard sink. This is the exact
-// configuration that previously caused warning findings to be silently
-// dropped — the regression guarded against here.
+// newTestUI returns a UI whose narration log sinks to io.Discard, mirroring
+// the production setup `check.go` installs for human-terminal runs. Term*
+// methods bypass the log and write to the returned buffer; narration
+// helpers (Success/Warning/Detail) go to the discard sink.
 func newTestUI() (*ui.UI, *bytes.Buffer) {
 	var buf bytes.Buffer
 	u := ui.NewPlain(&buf)
@@ -25,12 +22,9 @@ func newTestUI() (*ui.UI, *bytes.Buffer) {
 	return u, &buf
 }
 
-// TestPresentResults_WarningsReachTerminal locks in parity between the
+// TestPresentResults_WarningsReachTerminal locks parity between the
 // human-terminal renderer and the JSON renderer for warning-severity
-// findings. Before this test, ref-moved (and sibling warnings) were
-// silently swallowed because PresentResults used narration helpers that
-// route to the discarded log sink; JSON consumers saw the finding while
-// terminal users saw nothing.
+// findings.
 func TestPresentResults_WarningsReachTerminal(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -173,8 +167,8 @@ func TestPresentResults_TransitiveSHAAsRefStillSuppressed(t *testing.T) {
 }
 
 // TestPresentResults_ParseWarningsSurface guards the per-workflow
-// ParseWarnings rendering — these come from malformed `uses:` lines and
-// must reach the terminal, not just the JSON output.
+// ParseWarnings rendering: malformed `uses:` lines must reach the
+// terminal, not just JSON.
 func TestPresentResults_ParseWarningsSurface(t *testing.T) {
 	u, buf := newTestUI()
 	report := &doctor.Report{

@@ -6,12 +6,8 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
-// checkResolver is the surface the resolver-bound checks need. It exists
-// solely so the checks can be exercised with a stub in tests; the
-// production implementation is *prewarmedResolver.
-//
-// The interface is unexported because nothing outside the doctor package
-// implements it.
+// checkResolver is the surface the resolver-bound checks need. The
+// production implementation is *prewarmedResolver; tests use stubs.
 type checkResolver interface {
 	// ResolveRef returns the live SHA for owner/repo@ref. ok=false means
 	// the resolver could not answer (network failure, unknown ref); checks
@@ -19,23 +15,19 @@ type checkResolver interface {
 	ResolveRef(owner, repo, ref string) (sha string, ok bool)
 	// PeelTagObject reports whether a hex SHA names an annotated tag
 	// object (or chain of tag-of-tag) and, if so, returns the commit OID
-	// it ultimately points at. Used to distinguish a content-addressed
-	// tag-object pin (legitimate) from a branch named after a SHA (the
-	// forgery shape we want to flag).
+	// it ultimately points at.
 	PeelTagObject(owner, repo, sha string) (commit string, ok bool)
 	// CheckAncestry asks whether candidate is an ancestor of head and
-	// returns a short human-readable explanation alongside the status —
-	// the rate-limit or compare-base detail callers surface to operators
-	// (see Finding.Detail in check_misleading.go).
+	// returns a short human-readable detail alongside the status — the
+	// rate-limit or compare-base detail callers surface to operators.
 	CheckAncestry(owner, repo, candidate, head string) (resolver.AncestryStatus, string)
 	// CheckReachability asks whether sha is reachable from ref's history.
 	CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus
 }
 
 // prewarmedResolver adapts *resolver.Resolver to checkResolver. Ref
-// resolutions and reachability are pre-computed (cheaper than re-querying
-// for every check call); ancestry and tag-object peels stay on-demand and
-// delegate to the resolver's own cache.
+// resolutions and reachability are pre-computed; ancestry and tag-object
+// peels stay on-demand and delegate to the resolver's own cache.
 type prewarmedResolver struct {
 	inner *resolver.Resolver
 	refs  map[cachekey.NWORef]string                     // (owner/repo, ref) -> sha
@@ -45,11 +37,8 @@ type prewarmedResolver struct {
 // newPrewarmedResolver primes the adapter with the live resolution of
 // refs and a pre-computed reachability sweep. Pass live==nil when
 // ResolveAllRecursive failed; checks that need a ref will fail open.
-// extraReach carries reach results computed for SHAs that aren't part
-// of the canonical lockfile sweep — typically the OBSERVED SHA of a
-// moved ref, which shares its NWO@Ref dep key with the locked pin and
-// so cannot ride alongside the lockfile reach results in
-// reachabilityComplementFindings without colliding (see diagnose.go).
+// extraReach carries reach results for SHAs outside the canonical
+// lockfile sweep — typically the observed SHA of a moved ref.
 func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult, extraReach ...[]resolver.ReachabilityResult) *prewarmedResolver {
 	extras := 0
 	for _, e := range extraReach {
