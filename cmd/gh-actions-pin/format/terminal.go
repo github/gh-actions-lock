@@ -108,14 +108,15 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 					if len(sha) > 7 {
 						sha = sha[:7]
 					}
-					out.Detail("  %s suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
+					out.Detail("  %s Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
 						out.Bold("→"), nwo, f.SaneSuggestionTag, sha)
-				} else if f.SaneSuggestionSearched {
-					out.Detail("  %s no recent release was reachable from a branch — escalate to the action publisher",
-						out.Bold("→"))
 				}
-				if f.SaneSuggestionSearched {
-					out.Detail("  publishers: %s", out.DocLink(doctor.PublisherTagReleasesDocURL))
+				// Publisher-escalation footer: relevant only for the
+				// publisher-side off-branch reason (impostor commit), not
+				// consumer-side tampering (forgery / misleading SHA).
+				if f.Category == doctor.CategoryImpostorCommit {
+					out.Detail("  %s", doctor.PublisherEscalationCopy)
+					out.Detail("  see: %s", out.DocLink(doctor.PublisherTagReleasesDocURL))
 				}
 				if f.DocURL != "" {
 					out.Detail("  see: %s", out.DocLink(f.DocURL))
@@ -151,6 +152,14 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
 			if f.IsWarning() {
+				// Workflow-level "could not re-resolve actions" warnings
+				// are redundant with the per-dep unresolved summary the
+				// remediator emits at end-of-run; suppress here to avoid
+				// printing the same failure twice.
+				if f.DepKey() == "" && f.Category == doctor.CategoryReachabilityUnknown &&
+					strings.HasPrefix(f.Detail, "could not re-resolve actions") {
+					continue
+				}
 				key := f.DepKey()
 				if key == "" {
 					key = f.WorkflowPath // workflow-level warnings

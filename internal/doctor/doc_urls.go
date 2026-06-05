@@ -20,6 +20,12 @@ const securityHardeningBase = "https://docs.github.com/en/actions/security-for-g
 // fix locally beyond re-pinning to a sane release.
 const PublisherTagReleasesDocURL = "https://docs.github.com/en/actions/how-tos/create-and-publish-actions/manage-custom-actions#using-tags-for-release-management"
 
+// PublisherEscalationCopy is the standardized one-liner shown in any block
+// where a SHA fell off-branch on the publisher side. Phrased as a direct
+// instruction to maintainers so users have a copy-paste sentence to drop
+// into an issue or release-process discussion when escalating.
+const PublisherEscalationCopy = "Actions publishers should ensure released actions are reachable from a branch. Otherwise, they are indistinguishable from impostor commits"
+
 // docURLs maps every Category that can appear on a Finding to its
 // documentation URL. Categories representing "no issue" (Valid, RunOnly)
 // have no URL — they aren't rendered as findings.

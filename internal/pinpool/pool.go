@@ -183,6 +183,7 @@ func Run[T any](
 			// that made the spinner look frozen during the tail of the
 			// run.
 			defer setStatus(slot, "")
+			var lastDisplay string
 			for j := range ch {
 				// Cooperative cancellation: stop pulling new jobs once
 				// ctx is canceled. Jobs already in flight finish on
@@ -190,7 +191,17 @@ func Run[T any](
 				if ctx.Err() != nil {
 					return
 				}
-				setStatus(slot, "→ "+display(j))
+				// Flash a "✓ <prev>" between jobs so the slot visibly
+				// transitions from in-flight → complete → next-job
+				// instead of jumping straight to the next "→". Without
+				// this, finished work is invisible: the user sees the
+				// next workflow appear in-place and never sees the
+				// previous one acknowledged.
+				if lastDisplay != "" {
+					setStatus(slot, "✓ "+lastDisplay)
+				}
+				lastDisplay = display(j)
+				setStatus(slot, "→ "+lastDisplay)
 				err := run(ctx, slot, j)
 				done.Add(1)
 				updateLabel()
@@ -201,6 +212,11 @@ func Run[T any](
 					}
 					errMu.Unlock()
 				}
+			}
+			// Final acknowledgement before clearing — visible briefly
+			// during the wg.Wait() before the spinner area is erased.
+			if lastDisplay != "" {
+				setStatus(slot, "✓ "+lastDisplay)
 			}
 		}(slot)
 	}

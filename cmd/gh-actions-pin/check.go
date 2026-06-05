@@ -474,7 +474,6 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	var alertedWorkflows map[string][]string
 	var alertedReasons map[string]string
 	var alertedSuggestions map[string]string
-	var alertedSearched map[string]bool
 	var fullScanDeps []string
 	var autoFixedImpostors []doctor.AutoFixedImpostor
 	printed := false
@@ -526,18 +525,6 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		}
 
 		uniqueSkipped := len(rem.SkippedDeps)
-		if rem.Fixed > 0 {
-			f.UI.TermSuccess("%d %s fixed", rem.Fixed, ui.Pluralize(rem.Fixed, "issue", "issues"))
-			printed = true
-		}
-		if uniqueSkipped > 0 {
-			f.UI.TermWarn("%d %s skipped", uniqueSkipped, ui.Pluralize(uniqueSkipped, "action", "actions"))
-			printed = true
-		}
-		if rem.Unresolved > 0 {
-			f.UI.TermWarn("%d %s could not be resolved", rem.Unresolved, ui.Pluralize(rem.Unresolved, "action", "actions"))
-			printed = true
-		}
 		fixedCount = rem.Fixed
 		skippedCount = uniqueSkipped
 		alertedCount = rem.Alerted
@@ -547,7 +534,6 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		alertedWorkflows = rem.AlertedWorkflows
 		alertedReasons = rem.AlertedReasons
 		alertedSuggestions = rem.AlertedSuggestions
-		alertedSearched = rem.AlertedSearched
 		fullScanDeps = rem.FullScanDeps
 		unresolvedDeps = rem.UnresolvedDeps
 		autoFixedImpostors = rem.AutoFixedImpostors
@@ -559,16 +545,94 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// writes directly to the terminal.
 	f.UI.StopProgress()
 
-	// Write a structured, action-centric provenance record — what was resolved
-	// and how, deduplicated to one entry per action — and point the user at it.
+	// Build the provenance report once — it's the authoritative record of
+	// what happened during this run. Render the "Fixed: pinned" summary from
+	// it (Resolution=="pinned" is the truth; reconstructing it from
+	// remediator side state has been a source of drift and double-counting).
 	// Skipped in --json mode, which already emitted machine-readable output.
+	var prov *runlog.Report
 	if opts.JSONFields == "" {
 		repoInfo := &runlog.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.Hostname)}
 		outcomes := newProvenanceOutcomes(alertedDeps, skippedDeps, unresolvedDeps, fullScanDeps, alertedReasons)
-		prov := buildProvenanceReport(report, store, valid, repoInfo, outcomes, autoFixedImpostors)
+		prov = buildProvenanceReport(report, store, valid, repoInfo, outcomes, autoFixedImpostors)
 		if path, werr := runlog.WriteReport(prov); werr == nil {
-			defer func() { f.UI.TermDetail("Resolution record: %s", path) }()
+			defer func() {
+				f.UI.TermBlank()
+				f.UI.TermNeutral("Resolution record: %s", path)
+			}()
 		}
+	}
+
+	// Render "Fixed: pinned N actions" from the provenance report. Auto-fixed
+	// impostor rewrites have their own block below, so exclude any (NWO,
+	// workflow) pairs covered by AutoFixed to avoid listing them twice.
+	if prov != nil {
+		autoFixedPair := map[string]bool{}
+		for _, a := range prov.AutoFixed {
+			autoFixedPair[a.NWO+"|"+a.Workflow] = true
+		}
+		type pinnedRow struct {
+			label     string
+			workflows []string
+		}
+		var rows []pinnedRow
+		count := 0
+		for _, a := range prov.Actions {
+			if a.Resolution != runlog.ResolutionPinned || !a.Direct {
+				continue
+			}
+			// Skip actions that have an open alert-worthy finding
+			// (impostor / lockfile-forgery / misleading-sha): they may be
+			// in the lockfile, but they're being surfaced for human review
+			// in the "requires investigation" block below — claiming we
+			// "fixed" them is misleading.
+			if format.IsAlertedCategory(doctor.Category(a.Issue)) {
+				continue
+			}
+			kept := make([]string, 0, len(a.Workflows))
+			for _, wf := range a.Workflows {
+				if autoFixedPair[a.NWO+"|"+wf] {
+					continue
+				}
+				kept = append(kept, wf)
+			}
+			if len(kept) == 0 {
+				continue
+			}
+			short := a.SHA
+			if len(short) > 7 {
+				short = short[:7]
+			}
+			label := a.NWO + "@" + a.Ref
+			if short != "" {
+				label = fmt.Sprintf("%s (%s)", label, short)
+			}
+			rows = append(rows, pinnedRow{label: label, workflows: kept})
+			count++
+		}
+		if count > 0 {
+			workflowSet := map[string]bool{}
+			for _, row := range rows {
+				for _, wf := range row.workflows {
+					workflowSet[wf] = true
+				}
+			}
+			f.UI.TermSuccess("Pinned %d %s across %d %s",
+				count, ui.Pluralize(count, "action", "actions"),
+				len(workflowSet), ui.Pluralize(len(workflowSet), "workflow", "workflows"))
+			for _, row := range rows {
+				f.UI.TermDetail("  %s", f.UI.TermYellow(row.label))
+				for _, wf := range row.workflows {
+					f.UI.TermDetail("    └─ %s", f.UI.TermDim(wf))
+				}
+			}
+			printed = true
+		}
+	}
+	if skippedCount > 0 || unresolvedCount > 0 {
+		// Skipped/unresolved get a full per-dep render in the failure
+		// branch below; don't pre-print a duplicate summary here.
+		printed = true
 	}
 
 	// Surface any commits that were pinned only after a full-branch-scan
@@ -579,7 +643,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			f.UI.TermBlank()
 		}
 		printed = true
-		f.UI.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan:",
+		f.UI.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan",
 			len(fullScanDeps), ui.Pluralize(len(fullScanDeps), "action", "actions"))
 		for _, dep := range fullScanDeps {
 			f.UI.TermDetail("  %s", f.UI.TermYellow(dep))
@@ -599,31 +663,48 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			f.UI.TermBlank()
 		}
 		printed = true
-		f.UI.TermWarn("Auto-fixed: rewrote %d %s from impostor pin → reachable release (review for sanity):",
-			len(autoFixedImpostors), ui.Pluralize(len(autoFixedImpostors), "action", "actions"))
-		f.UI.TermDetail("  The original tag pointed at a commit that doesn't belong to any branch")
-		f.UI.TermDetail("  on the upstream repository, and may belong to a fork outside of it.")
-		f.UI.TermDetail("  Each was re-pinned to the latest release reachable from a branch.")
+		// Group by (NWO, OldSHA, NewTag, NewSHA) — provenance keeps one entry
+		// per (Workflow, NWO) for the JSON record, but the same rewrite often
+		// applies to many workflows; here we collapse repeats so the user
+		// sees one block per substitution with workflow paths under it.
+		type fixGroup struct {
+			nwo, oldRef, oldSHA, newTag, newSHA string
+			workflows                           []string
+		}
+		var groups []*fixGroup
+		idx := map[string]*fixGroup{}
 		for _, fix := range autoFixedImpostors {
-			short := fix.NewSHA
+			key := fix.NWO + "|" + fix.OldSHA + "|" + fix.NewTag + "|" + fix.NewSHA
+			g, ok := idx[key]
+			if !ok {
+				g = &fixGroup{nwo: fix.NWO, oldRef: fix.OldRef, oldSHA: fix.OldSHA, newTag: fix.NewTag, newSHA: fix.NewSHA}
+				idx[key] = g
+				groups = append(groups, g)
+			}
+			g.workflows = append(g.workflows, fix.Workflow)
+		}
+		f.UI.TermWarn("Fixed: rewrote %d %s from impostor pin → reachable release (review for sanity)",
+			len(groups), ui.Pluralize(len(groups), "action", "actions"))
+		f.UI.TermDetail("  %s", f.UI.TermBold("The original tag pointed at a commit that doesn't belong to any branch on the upstream repository, and may belong to a fork outside of it; each was re-pinned to the latest release reachable from a branch"))
+		for i, g := range groups {
+			if i > 0 {
+				f.UI.TermBlank()
+			}
+			short := g.newSHA
 			if len(short) > 7 {
 				short = short[:7]
 			}
-			f.UI.TermDetail("  %s: %s → %s (%s)", fix.NWO, fix.OldRef, fix.NewTag, short)
-			f.UI.TermDetail("    in %s", fix.Workflow)
-			if fix.OldSHA != "" {
-				commitURL := fmt.Sprintf("https://github.com/%s/commit/%s", fix.NWO, fix.OldSHA)
-				f.UI.TermDetail("    impostor commit: %s", f.UI.TermLink(commitURL, commitURL))
-				f.UI.TermDetail("      \"This commit does not belong to any branch on this repository, and may belong to a fork outside of the repository.\"")
-				if fix.NewSHA != "" {
-					compareURL := fmt.Sprintf("https://github.com/%s/compare/%s...%s", fix.NWO, fix.OldSHA, fix.NewSHA)
-					f.UI.TermDetail("    compare:         %s", f.UI.TermLink(compareURL, compareURL))
-				}
+			f.UI.TermDetail("  %s: %s → %s (%s)", g.nwo, g.oldRef, g.newTag, short)
+			for _, path := range g.workflows {
+				f.UI.TermDetail("    └─ %s", f.UI.TermDim(path))
 			}
-			releaseURL := fmt.Sprintf("https://github.com/%s/releases/tag/%s", fix.NWO, fix.NewTag)
-			f.UI.TermDetail("    new release:     %s", f.UI.TermLink(releaseURL, releaseURL))
+			if g.oldSHA != "" {
+				f.UI.TermDetail("    Impostor commit: https://github.com/%s/commit/%s", g.nwo, g.oldSHA)
+			}
+			f.UI.TermDetail("    New release:     https://github.com/%s/releases/tag/%s", g.nwo, g.newTag)
 		}
-		f.UI.TermDetail("  Publishers: %s", doctor.PublisherTagReleasesDocURL)
+		f.UI.TermDetail("  %s", doctor.PublisherEscalationCopy)
+		f.UI.TermDetail("  see: %s", f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
 	}
 
 	if valid && fixedCount == 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
@@ -645,7 +726,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 				f.UI.TermBlank()
 			}
 			printed = true
-			f.UI.TermError("%d %s %s investigation — do not auto-fix:",
+			f.UI.TermError("%d %s %s investigation — do not auto-fix",
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
 
 			// Group deps by reason, preserving first-seen order.
@@ -690,14 +771,17 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 						if sha != "" {
 							display += " (" + sha + ")"
 						}
-						f.UI.TermDetail("%s  %s suggested: re-pin to %s — latest release reachable from a branch",
+						f.UI.TermDetail("%s  %s Suggested re-pin: %s — latest release reachable from a branch",
 							indent, f.UI.TermBold("→"), f.UI.TermYellow(display))
-					} else if alertedSearched[dep] {
-						f.UI.TermDetail("%s  %s no recent release was reachable from a branch — escalate to the action publisher",
-							indent, f.UI.TermBold("→"))
 					}
-					if alertedSearched[dep] {
-						f.UI.TermDetail("%s     publishers: %s", indent, f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
+					// Publisher-escalation footer: relevant whenever the SHA
+					// fell off-branch on the publisher side (impostor reason),
+					// regardless of whether a sane-release search ran. Skip it
+					// for consumer-side tampering reasons (forgery / misleading
+					// SHA) where the publisher copy would mislead.
+					if reason == doctor.ReasonImpostorOffBranch {
+						f.UI.TermDetail("%s     %s", indent, doctor.PublisherEscalationCopy)
+						f.UI.TermDetail("%s     see: %s", indent, f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
 					}
 				}
 			}
@@ -707,7 +791,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 				f.UI.TermBlank()
 			}
 			printed = true
-			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally:",
+			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, dep := range skippedDeps {
 				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
@@ -717,10 +801,13 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			if printed {
 				f.UI.TermBlank()
 			}
-			f.UI.TermError("%d %s could not be resolved — verify the ref exists (tags are often prefixed with `v`):",
+			f.UI.TermError("%d %s could not be resolved — verify the ref exists",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, dep := range unresolvedDeps {
 				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+				for _, path := range format.WorkflowsForDep(report, dep) {
+					f.UI.TermDetail("    └─ %s", f.UI.TermDim(path))
+				}
 			}
 		}
 		return errSilent

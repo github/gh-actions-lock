@@ -815,6 +815,19 @@ func (u *UI) TermDetail(msg string, args ...any) {
 	fmt.Fprintf(u.w, "  "+msg+"\n", args...)
 }
 
+// TermNeutral prints a dimmed, neutral "-" summary line directly to the
+// terminal. Per cli/cli iconography, "-" denotes neutral/informational
+// status (not success, alert, or failure). Used for footer pointers such
+// as the resolution-record path.
+func (u *UI) TermNeutral(msg string, args ...any) {
+	text := fmt.Sprintf(msg, args...)
+	if u.headless {
+		u.headlessEmit(text)
+		return
+	}
+	fmt.Fprintf(u.w, "%s %s\n", u.TermDim(IconSkip), u.TermDim(text))
+}
+
 // TermYellow returns s in yellow for use in Term* output. Unlike Yellow, this
 // does not suppress color when a narration log sink is attached, since Term*
 // methods write directly to the terminal rather than the log.
@@ -1174,12 +1187,21 @@ func (u *UI) renderProgress() {
 		label = truncateBytes(label, budget)
 	}
 
-	if detail != "" && width > 4 {
-		budget := width - 4 // "  " indent + faint open+close
-		if !u.noColor {
-			budget -= 7
+	if detail != "" {
+		// Worker rows render a pulsing glyph only when the text starts
+		// with "→ "; UpdateProgress callers (resolver progress hooks)
+		// pass plain strings like "resolving foo@bar". Prepend the
+		// arrow so the slot animates instead of looking frozen.
+		if !strings.HasPrefix(detail, "→ ") {
+			detail = "→ " + detail
 		}
-		detail = truncateBytes(detail, budget)
+		if width > 4 {
+			budget := width - 4 // "  " indent + faint open+close
+			if !u.noColor {
+				budget -= 7
+			}
+			detail = truncateBytes(detail, budget)
+		}
 	}
 
 	// Pass detail (slot 0) to the writer; it appends worker lines on every

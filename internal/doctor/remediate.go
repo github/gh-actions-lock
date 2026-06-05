@@ -682,17 +682,28 @@ func (rem *Remediator) mergeEnrichmentForAlert(findings []Finding, nwo, ref stri
 	}
 }
 
+// Investigation reason copy, surfaced beneath each alerted dep. Exported so
+// the CLI summary can tell publisher-side reachability alerts (ReasonImpostorOffBranch)
+// — where the publisher-escalation footer applies — apart from consumer-side
+// tampering alerts (forgery / misleading SHA), where it does not.
+const (
+	ReasonImpostorOffBranch = "Pinned SHA isn't reachable from any branch — likely orphaned and benign, but could be an impostor commit; action publishers should tag releases from a branch"
+	ReasonLockfileForgery   = "Pinned SHA was never in this ref's history — possible lockfile tampering"
+	ReasonMisleadingSHA     = "Ref looks like a commit SHA but resolves to a different commit — possible deceptive ref"
+	ReasonIntegrityFailed   = "Fails an integrity check — review before pinning"
+)
+
 // reasonForCategory maps an investigation category to concise, user-facing copy.
 func reasonForCategory(c Category) string {
 	switch c {
 	case CategoryImpostorCommit:
-		return "pinned SHA isn't reachable from any branch — likely orphaned and benign, but could be an impostor commit; action publishers should tag releases from a branch"
+		return ReasonImpostorOffBranch
 	case CategoryLockfileForgery:
-		return "pinned SHA was never in this ref's history — possible lockfile tampering"
+		return ReasonLockfileForgery
 	case CategoryMisleadingSHA:
-		return "ref looks like a commit SHA but resolves to a different commit — possible deceptive ref"
+		return ReasonMisleadingSHA
 	default:
-		return "fails an integrity check — review before pinning"
+		return ReasonIntegrityFailed
 	}
 }
 
