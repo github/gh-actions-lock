@@ -1,7 +1,6 @@
 package doctor
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -28,8 +27,6 @@ func TestIsUpgrade_Cases(t *testing.T) {
 		got := IsUpgrade(tc.current, tc.latest)
 		if got != tc.want {
 			t.Errorf("IsUpgrade(%q, %q) = %v, want %v", tc.current, tc.latest, got, tc.want)
-		} else {
-			fmt.Printf("✓ %-20s → %-30s  upgrade=%v\n", tc.current, tc.latest, got)
 		}
 	}
 }

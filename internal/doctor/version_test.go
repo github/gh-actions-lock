@@ -31,9 +31,11 @@ func TestIsMutableVersionTag(t *testing.T) {
 		{"v", false},
 	}
 	for _, tc := range cases {
-		got := IsMutableVersionTag(tc.ref)
-		if got != tc.want {
-			t.Errorf("IsMutableVersionTag(%q) = %v, want %v", tc.ref, got, tc.want)
-		}
+		t.Run(tc.ref, func(t *testing.T) {
+			got := IsMutableVersionTag(tc.ref)
+			if got != tc.want {
+				t.Errorf("IsMutableVersionTag(%q) = %v, want %v", tc.ref, got, tc.want)
+			}
+		})
 	}
 }

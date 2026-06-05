@@ -36,10 +36,14 @@ const (
 type Severity string
 
 const (
-	SeverityOK      Severity = "ok"
-	SeverityInfo    Severity = "info"
+	// SeverityOK means the finding represents a clean state — no action needed.
+	SeverityOK Severity = "ok"
+	// SeverityInfo is purely informational and does not require action.
+	SeverityInfo Severity = "info"
+	// SeverityWarning indicates a concern worth surfacing but not blocking on.
 	SeverityWarning Severity = "warning"
-	SeverityError   Severity = "error"
+	// SeverityError indicates a blocking issue the operator must resolve.
+	SeverityError Severity = "error"
 )
 
 // Finding represents a single diagnosed issue (or clean bill) for a workflow.

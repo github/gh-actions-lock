@@ -47,6 +47,9 @@ func NewDefaultFactory() *pinFactory {
 	}
 }
 
+// NewRootCmd returns the cobra command for the root `actions-pin` invocation.
+// f supplies the runtime factory (HTTP transport, terminal detection, TTY hints)
+// so tests can swap in fakes.
 func NewRootCmd(f *pinFactory) *cobra.Command {
 	opts := &checkOptions{}
 
