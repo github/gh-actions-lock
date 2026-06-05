@@ -23,9 +23,9 @@ func TestUsesIndexKey(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := UsesIndexKey(tc.in)
+			got, ok := usesIndexKey(tc.in)
 			if ok != tc.wantOk || got != tc.want {
-				t.Fatalf("UsesIndexKey(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.wantOk)
+				t.Fatalf("usesIndexKey(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.wantOk)
 			}
 		})
 	}

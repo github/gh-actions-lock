@@ -125,9 +125,9 @@ func ParsePin(s string) (Pin, bool) {
 	}.Canonical(), true
 }
 
-// IsValidPin checks that a pin string matches the canonical
+// isValidPin checks that a pin string matches the canonical
 // "OWNER/REPO@REF:ALGO-HEX" form.
-func IsValidPin(s string) bool {
+func isValidPin(s string) bool {
 	_, ok := ParsePin(s)
 	return ok
 }
@@ -147,12 +147,12 @@ func IsFullSha(s string) bool {
 	return true
 }
 
-// BuildPinIndex parses a slice of plain pin strings (canonical
+// buildPinIndex parses a slice of plain pin strings (canonical
 // "OWNER/REPO@REF:ALGO-HEX" form) into a lookup map keyed by IndexKey
 // ("OWNER/REPO@REF"). Any duplicate IndexKey is an error: callers receive
 // already-deduplicated lists from the parser, so a duplicate here indicates
 // corruption upstream.
-func BuildPinIndex(deps []string) (map[string]Pin, error) {
+func buildPinIndex(deps []string) (map[string]Pin, error) {
 	index := make(map[string]Pin, len(deps))
 	for _, dep := range deps {
 		pin, ok := ParsePin(dep)

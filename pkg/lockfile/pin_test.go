@@ -60,7 +60,7 @@ func TestParsePin(t *testing.T) {
 			got, ok := ParsePin(tt.entry)
 			require.True(t, ok)
 			assert.Equal(t, tt.want, got)
-			assert.True(t, IsValidPin(tt.entry))
+			assert.True(t, isValidPin(tt.entry))
 			// Round-trip: serializing the parsed pin reproduces the entry.
 			assert.Equal(t, tt.entry, got.String())
 		})
@@ -91,7 +91,7 @@ func TestParsePin_Invalid(t *testing.T) {
 			got, ok := ParsePin(tt.entry)
 			assert.False(t, ok)
 			assert.Equal(t, Pin{}, got)
-			assert.False(t, IsValidPin(tt.entry))
+			assert.False(t, isValidPin(tt.entry))
 		})
 	}
 }
