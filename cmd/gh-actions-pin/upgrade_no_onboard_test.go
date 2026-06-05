@@ -1,7 +1,6 @@
 package main
 
-// Tests for `upgrade --no-onboard` strict mode (G9 of the Dependabot CLI
-// contract — see docs/dependabot-cli-contract.md). The flag prevents a
+// Tests for `upgrade --no-onboard` strict mode. The flag prevents a
 // dependency-update run from silently adding new entries to
 // lockfile.workflows{}; refused workflows surface as `onboarding-required`
 // findings and the run exits non-zero. Workflows already tracked in the
@@ -114,7 +113,7 @@ func readLockfile(t *testing.T) []byte {
 // TestUpgrade_NoOnboard_RefusesMissingWorkflow asserts that targeting
 // an untracked workflow with --no-onboard produces an onboarding-required
 // finding, leaves the lockfile bytes untouched, and exits non-zero. This
-// is the core G9 contract the Dependabot CLI engine flip depends on.
+// is the core contract the Dependabot CLI engine flip depends on.
 func TestUpgrade_NoOnboard_RefusesMissingWorkflow(t *testing.T) {
 	reg := &httpmock.Registry{}
 	// Refused workflow short-circuits before any resolver calls — so we
@@ -291,8 +290,7 @@ func TestUpgrade_WithoutNoOnboard_StillOnboards(t *testing.T) {
 // onboarding-exit-zero contract under --json mode: when the only effect
 // is onboarding (purely-Added diff), the updated[] array can legitimately
 // be empty, workflows[] must include the onboarded workflow, and the
-// command must exit zero. This is the regression guard for the exit-code
-// quirk surfaced during G9.
+// command must exit zero.
 func TestUpgrade_WithoutNoOnboard_OnboardingExitCodeJSON(t *testing.T) {
 	reg := &httpmock.Registry{}
 	upgradeMocks(reg, 8)
