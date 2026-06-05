@@ -1,10 +1,6 @@
-// Package findings holds the diagnostic vocabulary (categories,
-// severities, confidence levels) emitted by gh-actions-pin.
-//
-// The Category, Severity, and Confidence string values are part of the
-// public schema; renaming one is a breaking change and the frozen-string
-// tests in this package guard against it. Finding struct fields are
-// additive-only after the initial cut.
+// Package findings holds the diagnostic vocabulary emitted by gh-actions-pin.
+// Category, Severity, and Confidence string values are part of the public
+// schema.
 package findings
 
 // Category classifies the state of a workflow or action dependency.
@@ -134,13 +130,8 @@ type Subject struct {
 	SHA string
 }
 
-// Finding is a single diagnosed issue (or clean bill) emitted by a
-// producer. Producers populate the fields they know; consumers
-// tolerate empty fields.
-//
-// Internal producers (internal/doctor) carry richer per-finding
-// context on their own Finding type and translate to this shape at
-// the boundary.
+// Finding is a single diagnosed issue or clean bill. Producers populate the
+// fields they know; consumers tolerate empty fields.
 type Finding struct {
 	Category    Category
 	Severity    Severity
@@ -157,8 +148,7 @@ type Finding struct {
 	HelpURI string
 }
 
-// Report aggregates findings from a single producer run. Fields are
-// additive-only.
+// Report aggregates findings from a single producer run.
 type Report struct {
 	Findings []Finding
 }
