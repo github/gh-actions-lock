@@ -334,6 +334,15 @@ type spinnerWriter struct {
 	// isn't called.
 	stop chan struct{}
 	done chan struct{}
+
+	// deferredWrites buffers setWorkerStatus calls that happen while
+	// printLine has snapshotted-and-cleared the workers slice for an
+	// inline message print. When non-nil, setWorkerStatus writes into
+	// this map instead of workers; printLine merges the buffered writes
+	// back onto its snapshot on restore so concurrent clears/updates
+	// from the pin pool aren't clobbered by the restore. Nil during
+	// normal operation.
+	deferredWrites map[int]string
 }
 
 // workerSpinFrames is the rotating glyph shown next to each ACTIVE worker row
@@ -465,9 +474,18 @@ func (sw *spinnerWriter) setDetail(det string) {
 	sw.setWorkerStatus(0, det)
 }
 
-// setWorkerStatus sets or clears one worker's status slot.
+// setWorkerStatus sets or clears one worker's status slot. While printLine
+// has the workers slice snapshotted (deferredWrites != nil) the write is
+// buffered into the deferred map so printLine's restore phase can merge it
+// onto the snapshot — preventing the restore from clobbering clears and
+// updates issued by the pin pool during the print window.
 func (sw *spinnerWriter) setWorkerStatus(slot int, status string) {
 	sw.mu.Lock()
+	if sw.deferredWrites != nil {
+		sw.deferredWrites[slot] = status
+		sw.mu.Unlock()
+		return
+	}
 	for len(sw.workers) <= slot {
 		sw.workers = append(sw.workers, "")
 	}
@@ -498,13 +516,19 @@ func (u *UI) clearSpinnerLines() {
 func (u *UI) printLine(write func()) {
 	if u.spinner != nil && u.spinner.Active() {
 		// Snapshot and zero all worker slots so the stop-write doesn't render
-		// extra lines that we'd then fail to clear.
+		// extra lines that we'd then fail to clear. Buffer any concurrent
+		// setWorkerStatus calls into deferredWrites so the restore merges
+		// them instead of clobbering — without the buffer, pin-pool workers
+		// that clear or repaint their slot during the write window lose
+		// those updates, which is what leaves stale "→ path" rows visible
+		// after their owner worker has exited.
 		var savedWorkers []string
 		if u.spinWriter != nil {
 			u.spinWriter.mu.Lock()
 			savedWorkers = make([]string, len(u.spinWriter.workers))
 			copy(savedWorkers, u.spinWriter.workers)
 			u.spinWriter.workers = nil
+			u.spinWriter.deferredWrites = map[int]string{}
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Stop()
@@ -512,7 +536,14 @@ func (u *UI) printLine(write func()) {
 		write()
 		if u.spinWriter != nil {
 			u.spinWriter.mu.Lock()
+			for slot, status := range u.spinWriter.deferredWrites {
+				for len(savedWorkers) <= slot {
+					savedWorkers = append(savedWorkers, "")
+				}
+				savedWorkers[slot] = status
+			}
 			u.spinWriter.workers = savedWorkers
+			u.spinWriter.deferredWrites = nil
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Start()
