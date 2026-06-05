@@ -114,20 +114,43 @@ $ gh actions-pin upgrade --action actions/checkout
 }
 
 // Execute runs the root command and returns an exit code.
+//
+// Exit code contract (see docs/dependabot-cli-contract.md and INTEGRATION.md):
+//
+//   - 0: clean run, no blocking findings.
+//   - 1: blocking findings present (errSilent sentinel); stdout JSON is
+//     well-formed when --json was requested.
+//   - 2: tool failure (bad flag, IO error, network failure, malformed
+//     lockfile, future-version refusal, panic, etc.). stdout may be empty
+//     or partial; consumers should rely on stderr for diagnosis.
 func Execute() int {
 	f := NewDefaultFactory()
-	if err := NewRootCmd(f).Execute(); err != nil {
-		if !errors.Is(err, errSilent) {
-			// Detach any narration log sink first: it may have been pointed at
-			// io.Discard during the run (the JSON-less "the terminal owns the
-			// spinners" mode), in which case routing the error through
-			// f.UI.Error would silently swallow it. We want the error visible.
-			f.UI.SetLog(nil)
-			f.UI.Error("%s", err)
-		}
-		return 1
+	err := NewRootCmd(f).Execute()
+	if err != nil && !errors.Is(err, errSilent) {
+		// Detach any narration log sink first: it may have been pointed at
+		// io.Discard during the run (the JSON-less "the terminal owns the
+		// spinners" mode), in which case routing the error through
+		// f.UI.Error would silently swallow it. We want the error visible.
+		f.UI.SetLog(nil)
+		f.UI.Error("%s", err)
 	}
-	return 0
+	return exitCodeFor(err)
+}
+
+// exitCodeFor maps an error returned by the root command to a process exit
+// code. The classification rule is intentionally narrow: only the errSilent
+// sentinel (returned when blocking findings are reported via well-formed
+// JSON on stdout) maps to 1. Every other non-nil error — including
+// pkg/lockfile.ErrFutureVersion — is a tool failure and maps to 2.
+func exitCodeFor(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, errSilent):
+		return 1
+	default:
+		return 2
+	}
 }
 
 func discoverWorkflowPaths(existing []string) ([]string, error) {

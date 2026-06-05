@@ -21,25 +21,29 @@ on-disk lockfile YAML.
 | Code | Meaning |
 |------|---------|
 | 0    | `valid:true`. No blocking findings; nothing to do. |
-| 1    | **Overloaded.** Either (a) `valid:false` — blocking findings present (tampered, stale, unreachable, not-pinned, …), stdout JSON is complete and well-formed — **or** (b) actual tool failure (bad flag, IO error, network failure, etc.), stdout may be empty or partial. |
+| 1    | `valid:false`. Blocking findings present (tampered, stale, unreachable, not-pinned, …). When `--json` is set, stdout JSON is complete and well-formed. |
+| 2    | **Tool failure.** Bad flag, IO error, network failure, malformed lockfile, future-version refusal, panic, etc. stdout may be empty or partial; rely on stderr for diagnosis. |
 
 > **Footgun.** Exit 1 does **not** mean "the tool failed." It is the normal
 > exit code for a successful run that found things to fix. Shell-style "raise
 > on any non-zero exit" wrappers will misreport every unpinned-but-otherwise-fine
-> repo as broken.
+> repo as broken. Treat exit 1 as a *result*; treat exit 2 as a failure.
 
 **Recommended consumer pattern:** capture stdout regardless of exit code,
 then drive control flow off the JSON payload's `valid` and `findings[]`
 fields. Use the *shape* of stdout to distinguish blocking findings
 (well-formed JSON, `valid:false`) from a tool failure (empty or non-JSON
-stdout):
+stdout). This pattern is forward-compatible: older binaries collapsed tool
+failures and `valid:false` into exit 1, and the shape sniff distinguishes
+them without relying on the exit code.
 
 ```bash
 output=$(gh actions-pin check --no-interactive --json=valid,findings,workflows,dependencies 2>/dev/null)
 rc=$?
 
 if [ -z "$output" ] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1; then
-  # Empty / non-JSON stdout → tool failure (regardless of $rc).
+  # Empty / non-JSON stdout → tool failure. On current binaries $rc is 2;
+  # on older binaries it was 1. The shape sniff works either way.
   echo "gh actions-pin failed (exit $rc) with no parseable output" >&2
   exit 2
 fi

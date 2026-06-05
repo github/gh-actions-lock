@@ -45,6 +45,12 @@ const ExecComposite = parserlock.ExecComposite
 // package.
 const SchemaVersion = parserlock.Version
 
+// ErrFutureVersion is the sentinel returned (via errors.Is) when the parser
+// refuses to read a lockfile whose schema version is newer than this binary
+// supports. Re-exported so callers outside the lockfile boundary can match
+// it without importing pkg/lockfile directly.
+var ErrFutureVersion = parserlock.ErrFutureVersion
+
 // IsFullSha reports whether s is a full 40-hex-char SHA-1 or 64-hex-char
 // SHA-256.
 func IsFullSha(s string) bool { return parserlock.IsFullSha(s) }
