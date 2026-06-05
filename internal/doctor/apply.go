@@ -10,17 +10,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
-// splitNWO splits "owner/repo" into its components. Returns ("", "") for
-// inputs without a slash. Used to feed alertImpostor coords carved out of
-// ImpostorError.NWO, which packs owner+repo as a single field.
-func splitNWO(nwo string) (string, string) {
-	i := strings.IndexByte(nwo, '/')
-	if i < 0 {
-		return "", ""
-	}
-	return nwo[:i], nwo[i+1:]
-}
-
 // directUsesFor returns the original `uses:` text (ActionRef.Raw) for the
 // direct dep matching (owner, repo, ref), or "" if no direct ActionRef in
 // this workflow matches. The auto-fix path needs Raw to feed
@@ -175,7 +164,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	if err != nil {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
-			owner, repo := splitNWO(imp.NWO)
+			owner, repo, _ := lockfile.SplitNWO(imp.NWO)
 			rem.alertImpostor(wr.Path, owner, repo, imp.Ref, imp.Error())
 			return errWorkflowAlerted
 		}
@@ -310,7 +299,7 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	if err != nil {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
-			owner, repo := splitNWO(imp.NWO)
+			owner, repo, _ := lockfile.SplitNWO(imp.NWO)
 			rem.alertImpostor(workflowPath, owner, repo, imp.Ref, imp.Error())
 			return parentMap, errWorkflowAlerted
 		}
@@ -375,14 +364,13 @@ func (rem *Remediator) AutoFixAlertedImpostors() {
 	rem.mu.Lock()
 	byWorkflow := map[string][]pending{}
 	for depKey, sug := range rem.AlertedSuggestions {
-		slash := strings.IndexByte(depKey, '/')
-		at := strings.LastIndexByte(depKey, '@')
-		if slash <= 0 || at <= slash {
+		ar := lockfile.ParseActionRef(depKey)
+		if ar == nil {
 			continue
 		}
-		owner := depKey[:slash]
-		repo := depKey[slash+1 : at]
-		oldRef := depKey[at+1:]
+		owner := ar.Owner
+		repo := ar.Repo
+		oldRef := ar.Ref
 		newTag, newSHA := sug, ""
 		if sp := strings.IndexByte(sug, ' '); sp >= 0 {
 			newTag = sug[:sp]

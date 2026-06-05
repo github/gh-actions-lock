@@ -83,16 +83,15 @@ func ParsePin(s string) (Pin, bool) {
 	repoPath := s[:atIdx]
 	refHash := s[atIdx+1:]
 
-	slashIdx := strings.IndexByte(repoPath, '/')
-	if slashIdx <= 0 || slashIdx == len(repoPath)-1 {
+	// Sub-action paths are not part of the lockfile pin grammar: the runner
+	// downloads at repo+sha granularity. Reject any extra slashes in the
+	// repo portion so hand-edited lockfiles don't drift into a path-bearing
+	// format.
+	if strings.Count(repoPath, "/") != 1 {
 		return Pin{}, false
 	}
-	owner := repoPath[:slashIdx]
-	repo := repoPath[slashIdx+1:]
-	// Sub-action paths are not part of the lockfile pin grammar: the runner
-	// downloads at repo+sha granularity. Reject any extra slashes here so
-	// hand-edited lockfiles don't drift into a path-bearing format.
-	if strings.ContainsRune(repo, '/') {
+	owner, repo, ok := SplitNWO(repoPath)
+	if !ok {
 		return Pin{}, false
 	}
 

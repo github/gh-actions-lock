@@ -1,6 +1,8 @@
 package format
 
-import "strings"
+import (
+	"github.com/github/gh-actions-pin/internal/lockfile"
+)
 
 // TagObjectCheck reports whether the given SHA is a known annotated-tag
 // object in owner/repo. Used by DepReleaseURL so it can pick /tree/<sha>
@@ -16,27 +18,24 @@ type TagObjectCheck func(owner, repo, sha string) bool
 // commit. Non-SHA refs link to /releases/tag/<ref>. A nil isTagObject
 // (or one that returns false) falls back to the plain /commit/<sha> path.
 func DepReleaseURL(dep string, isTagObject TagObjectCheck) string {
-	nwo := dep
-	ref := ""
-	if i := strings.IndexByte(dep, '@'); i >= 0 {
-		nwo = dep[:i]
-		ref = dep[i+1:]
-	}
-	parts := strings.SplitN(nwo, "/", 3)
-	if len(parts) < 2 {
+	ar := lockfile.ParseActionRef(dep)
+	if ar == nil {
+		// ParseActionRef rejects refless inputs; fall back to splitting
+		// the bare NWO so links to dep keys without a ref still render.
+		if owner, repo, ok := lockfile.SplitNWO(dep); ok {
+			return "https://github.com/" + owner + "/" + repo + "/releases"
+		}
 		return ""
 	}
-	base := "https://github.com/" + parts[0] + "/" + parts[1]
-	if ref != "" && isHexSHA(ref) {
-		if isTagObject != nil && isTagObject(parts[0], parts[1], ref) {
+	base := "https://github.com/" + ar.Owner + "/" + ar.Repo
+	ref := ar.Ref
+	if isHexSHA(ref) {
+		if isTagObject != nil && isTagObject(ar.Owner, ar.Repo, ref) {
 			return base + "/tree/" + ref
 		}
 		return base + "/commit/" + ref
 	}
-	if ref != "" {
-		return base + "/releases/tag/" + ref
-	}
-	return base + "/releases"
+	return base + "/releases/tag/" + ref
 }
 
 // isHexSHA reports whether s looks like a full 40-character hex commit SHA.

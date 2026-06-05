@@ -17,14 +17,9 @@ func usesIndexKey(uses string) (string, bool) {
 		return "", false
 	}
 	repoPath, ref := uses[:atIdx], uses[atIdx+1:]
-	slashIdx := strings.IndexByte(repoPath, '/')
-	if slashIdx <= 0 || slashIdx == len(repoPath)-1 {
+	owner, repo, ok := SplitNWO(repoPath)
+	if !ok {
 		return "", false
-	}
-	owner, rest := repoPath[:slashIdx], repoPath[slashIdx+1:]
-	repo := rest
-	if i := strings.IndexByte(rest, '/'); i > 0 {
-		repo = rest[:i]
 	}
 	return IndexKey(owner, repo, ref), true
 }
