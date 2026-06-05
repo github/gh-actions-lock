@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // checkMisleadingSha emits CategoryMisleadingSHA when a uses: ref looks
@@ -17,7 +17,7 @@ import (
 func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if !parserlock.IsFullSha(ref.Ref) {
+		if !lockfile.IsFullSha(ref.Ref) {
 			continue
 		}
 		sha, ok := r.ResolveRef(ref.Owner, ref.Repo, ref.Ref)
@@ -47,13 +47,13 @@ func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 // resolves to a different SHA than the lockfile. If CheckAncestry
 // confirms the locked SHA is NOT an ancestor of the live SHA, the
 // finding is upgraded to CategoryLockfileForgery (mutually exclusive).
-func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, r checkResolver) []Finding {
+func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r checkResolver) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if parserlock.IsFullSha(ref.Ref) {
+		if lockfile.IsFullSha(ref.Ref) {
 			continue
 		}
-		pin, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]
+		pin, ok := depIndex[lockfile.IndexKey(ref.Owner, ref.Repo, ref.Ref)]
 		if !ok {
 			continue
 		}
@@ -102,20 +102,20 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]parserlock.P
 // checkImpostorCommit emits CategoryImpostorCommit when the locked SHA is
 // not reachable from the ref's history. Skips entries already covered by
 // a forgery finding (forgery is the stronger signal).
-func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, r checkResolver, forgeryKeys map[string]bool) []Finding {
+func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r checkResolver, forgeryKeys map[string]bool) []Finding {
 	if len(depIndex) == 0 {
 		return nil
 	}
 	var out []Finding
 	for _, ref := range pw.Refs {
-		pin, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]
+		pin, ok := depIndex[lockfile.IndexKey(ref.Owner, ref.Repo, ref.Ref)]
 		if !ok {
 			continue
 		}
-		if parserlock.IsFullSha(ref.Ref) {
+		if lockfile.IsFullSha(ref.Ref) {
 			continue
 		}
-		if forgeryKeys[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)] {
+		if forgeryKeys[lockfile.IndexKey(ref.Owner, ref.Repo, ref.Ref)] {
 			continue
 		}
 		status := r.CheckReachability(ref.Owner, ref.Repo, pin.Hex, ref.Ref)

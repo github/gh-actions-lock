@@ -5,14 +5,13 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // checkNotPinned emits CategoryNotPinned for any uses: ref that has no
 // matching lockfile entry. SHA-shaped refs are reported under their own
 // category. When the lockfile has an entry for the same action at a
 // different ref, CategoryRefChanged wins.
-func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[string]parserlock.Pin) []Finding {
+func checkNotPinned(pw ParsedWorkflow, depPins []lockfile.Pin, depIndex map[string]lockfile.Pin) []Finding {
 	if len(pw.Refs) == 0 {
 		return nil
 	}
@@ -22,10 +21,10 @@ func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[st
 	}
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if parserlock.IsFullSha(ref.Ref) {
+		if lockfile.IsFullSha(ref.Ref) {
 			continue
 		}
-		if _, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
+		if _, ok := depIndex[lockfile.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
 			continue
 		}
 		if knownAction[nwoLower(ref.Owner, ref.Repo)] {
@@ -43,17 +42,17 @@ func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[st
 // commit SHA — both bare-SHA uses with no lock entry and bare-SHA uses
 // whose lock entry just mirrors the same SHA. The anti-pattern (no
 // human-readable ref) is the same in both cases.
-func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]parserlock.Pin) []Finding {
+func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]lockfile.Pin) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if !parserlock.IsFullSha(ref.Ref) {
+		if !lockfile.IsFullSha(ref.Ref) {
 			continue
 		}
 		f := newRefFinding(pw, ref, CategorySHAAsRef, SeverityWarning, ConfidenceHigh)
 		f.Detail = "pinned to a bare SHA without a symbolic ref — weakens supply-chain traceability"
 		f.Remediation = fmt.Sprintf("pin to a tag instead: https://github.com/%s/releases", nwoLower(ref.Owner, ref.Repo))
 		lockedSha := ref.Ref
-		if locked, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
+		if locked, ok := depIndex[lockfile.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
 			lockedSha = locked.Hex
 		}
 		f.Dependency = synthDep(ref, lockedSha)
@@ -66,18 +65,18 @@ func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]parserlock.Pin) []Find
 // differs from the lockfile entry's ref for the same action (owner/repo).
 // A single action may legitimately have multiple pinned refs across
 // workflows, so this only fires when no pin matches the workflow's ref.
-func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
+func checkRefChanged(pw ParsedWorkflow, depPins []lockfile.Pin) []Finding {
 	if len(depPins) == 0 {
 		return nil
 	}
-	pinsByAction := make(map[string][]parserlock.Pin, len(depPins))
+	pinsByAction := make(map[string][]lockfile.Pin, len(depPins))
 	for _, p := range depPins {
 		k := nwoLower(p.Owner, p.Repo)
 		pinsByAction[k] = append(pinsByAction[k], p)
 	}
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if parserlock.IsFullSha(ref.Ref) {
+		if lockfile.IsFullSha(ref.Ref) {
 			continue
 		}
 		key := nwoLower(ref.Owner, ref.Repo)
@@ -111,14 +110,14 @@ func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 // ref in the workflow references. If the workflow has already been
 // rewritten to pin by SHA, the lockfile entry (keyed by the original tag)
 // is still valid — surface keys both ways so we don't false-flag.
-func checkStale(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
+func checkStale(pw ParsedWorkflow, depPins []lockfile.Pin) []Finding {
 	if len(depPins) == 0 {
 		return nil
 	}
 	used := make(map[string]bool, len(pw.Refs))
 	usedBySHA := make(map[string]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {
-		used[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)] = true
+		used[lockfile.IndexKey(ref.Owner, ref.Repo, ref.Ref)] = true
 		nwo := strings.ToLower(ref.Owner + "/" + ref.Repo)
 		usedBySHA[nwo+"@"+strings.ToLower(ref.Ref)] = true
 	}

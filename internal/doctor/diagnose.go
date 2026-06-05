@@ -7,7 +7,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // Diagnose scans a set of workflows and produces findings for each.
@@ -47,7 +46,7 @@ func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWor
 // as findings without re-loading the file.
 type ParsedWorkflow struct {
 	Path          string
-	Refs          []parserlock.ActionRef
+	Refs          []lockfile.ActionRef
 	ExistingDeps  []lockfile.Dependency
 	ParseWarnings []string
 	LoadErr       error
@@ -108,9 +107,9 @@ func ParseAll(paths []string, store *lockfile.Store, onScan func(done, total int
 // CollectResolvable returns the deduplicated union of refs and existing deps
 // across all parsed workflows. Use the returned slices to pre-warm the
 // resolver caches once before per-workflow diagnostics.
-func CollectResolvable(parsed []ParsedWorkflow) ([]parserlock.ActionRef, []lockfile.Dependency) {
+func CollectResolvable(parsed []ParsedWorkflow) ([]lockfile.ActionRef, []lockfile.Dependency) {
 	seenRef := make(map[cachekey.ActionRef]bool)
-	var refs []parserlock.ActionRef
+	var refs []lockfile.ActionRef
 	for _, pw := range parsed {
 		for _, ref := range pw.Refs {
 			key := cachekey.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)

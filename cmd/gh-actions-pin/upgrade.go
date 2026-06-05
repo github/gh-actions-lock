@@ -11,7 +11,6 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
@@ -290,7 +289,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	}
 
 	replacements := make(map[string]string)
-	var matched []parserlock.ActionRef
+	var matched []lockfile.ActionRef
 	seenPlans := make(map[string]struct{})
 
 	var planLines []string
@@ -546,7 +545,7 @@ func parseUpgradeTargets(actions []string, fromRef, version string) ([]upgradeTa
 	return targets, nil
 }
 
-func matchingUpgradeTarget(ref parserlock.ActionRef, targets []upgradeTarget) (upgradeTarget, bool) {
+func matchingUpgradeTarget(ref lockfile.ActionRef, targets []upgradeTarget) (upgradeTarget, bool) {
 	var best upgradeTarget
 	bestLen := -1
 	for _, target := range targets {
