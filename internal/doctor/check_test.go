@@ -9,11 +9,8 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
-// Typed map keys for the test stub. These mirror the shape used by
-// internal/cachekey: a small struct per lookup tuple so callers can't
-// silently drift on delimiter choice or normalization. Test-internal,
-// so we don't need cachekey's full normalization machinery — fields
-// are passed lowercase by callers (or naturally lowercase, like SHAs).
+// Typed map keys for the test stub: a small struct per lookup tuple so
+// callers can't drift on delimiter choice.
 type (
 	stubRefKey       struct{ owner, repo, ref string }
 	stubAncestryKey  struct{ owner, repo, cand, head string }
@@ -22,7 +19,7 @@ type (
 )
 
 // stubCheckResolver scripts every checkResolver call from test fixtures.
-// Missing entries return *Unknown values (fail-open semantics).
+// Missing entries return *Unknown values (fail-open).
 type stubCheckResolver struct {
 	refs            map[stubRefKey]string                        // resolved ref → sha; absence = unknown
 	ancestry        map[stubAncestryKey]resolver.AncestryStatus  // (cand, head) ancestry decision
@@ -105,15 +102,14 @@ func findingCategories(fs []Finding) []string {
 	return out
 }
 
-// TestRunChecks groups the per-category runChecks integration cases that
-// share the same lockfile + parsed-workflow + resolver setup pattern.
-// Cases that need to assert non-category aspects (Severity, ObservedSHA,
-// Dependency.SHA, Confidence) hang those off the optional `extra` hook.
+// TestRunChecks groups per-category runChecks integration cases that share
+// the same lockfile + parsed-workflow + resolver setup. Cases that need to
+// assert non-category aspects (Severity, ObservedSHA, Dependency.SHA,
+// Confidence) hang those off the optional `extra` hook.
 //
-// Tests that are NOT table-driven below intentionally:
-//   - TestRunChecks_AllFindingsCarryConfidence is a structural fail-fast
-//     guard that exercises every check path in one fixture; collapsing
-//     it into a row would dilute its purpose.
+// TestRunChecks_AllFindingsCarryConfidence stays separate: it is a
+// structural fail-fast guard that exercises every check path in one
+// fixture.
 func TestRunChecks(t *testing.T) {
 	const wfPath = ".github/workflows/ci.yml"
 
@@ -325,13 +321,10 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: nil,
 		},
 		{
-			// Compare API rate-limit fallback: when ancestry is unknown
-			// we can't classify the SHA mismatch as benign-but-known
-			// (ref-moved) or tampered (lockfile-forgery). Emit
-			// CategoryAncestryUnknown so consumers (Dependabot
-			// FindingMapper) don't conflate "scan inconclusive" with
-			// "scan clean" — the latter was the pre-card behavior
-			// when this path emitted CategoryValid+warning.
+			// Compare API rate-limit fallback: ancestry is unknown so
+			// the SHA mismatch can't be classified as ref-moved or
+			// lockfile-forgery. Emit CategoryAncestryUnknown so
+			// consumers don't conflate "scan inconclusive" with valid.
 			name: "ancestry unknown emits ancestry-unknown, not ref-moved",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},

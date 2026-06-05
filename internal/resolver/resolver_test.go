@@ -454,8 +454,8 @@ func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
 //	org/fixtures/simple-composite  (main, same tarball) -- uses -->
 //	org/fixtures-b                 (main, different repo)
 //
-// Before the fix the same-tarball edge nested→simple was pruned, so the
-// 2-levels-deep org/fixtures-b transitive dep was never discovered or pinned.
+// The same-tarball edge nested→simple must not be pruned, otherwise the
+// 2-levels-deep org/fixtures-b transitive dep is never discovered.
 func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	r := &Resolver{

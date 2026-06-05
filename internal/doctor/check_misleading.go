@@ -30,9 +30,8 @@ func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 		if peeled, ok := r.PeelTagObject(ref.Owner, ref.Repo, ref.Ref); ok && strings.EqualFold(peeled, sha) {
 			continue
 		}
-		// High confidence: ref string is SHA-shaped, resolver returned a
-		// different commit, and we ruled out the legitimate tag-object
-		// shape via PeelTagObject. Direct string comparison.
+		// Ref string is SHA-shaped, resolver returned a different commit,
+		// and PeelTagObject ruled out the legitimate tag-object shape.
 		f := newRefFinding(pw, ref, CategoryMisleadingSHA, SeverityError, ConfidenceHigh)
 		f.ObservedSHA = sha
 		f.Dependency = synthDep(ref, ref.Ref)
@@ -44,15 +43,14 @@ func checkMisleadingSha(pw ParsedWorkflow, r checkResolver) []Finding {
 }
 
 // checkRefMovedAndForgery emits CategoryRefMoved when the upstream ref
-// resolves to a different SHA than the lockfile. If CheckAncestry
-// confirms the locked SHA is NOT an ancestor of the observed SHA, the
-// finding is upgraded to CategoryLockfileForgery (mutually exclusive
-// with ref-moved). When the observed SHA is itself not reachable from
-// any branch of the upstream repo (the tag-moved-to-fork-network-commit
-// shape), an additional CategoryImpostorCommit finding is emitted
-// alongside ref-moved / ancestry-unknown — forgery suppresses the
-// observed-SHA impostor since the lockfile tampering is the stronger
-// claim.
+// resolves to a different SHA than the lockfile. If CheckAncestry confirms
+// the locked SHA is NOT an ancestor of the observed SHA, the finding is
+// upgraded to CategoryLockfileForgery (mutually exclusive with ref-moved).
+// When the observed SHA is itself unreachable from any branch of the
+// upstream repo (tag-moved-to-fork-network), an additional
+// CategoryImpostorCommit finding is emitted alongside ref-moved /
+// ancestry-unknown. Forgery suppresses the observed-SHA impostor: the
+// lockfile-tampering claim is stronger.
 func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r checkResolver) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
@@ -76,10 +74,9 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 		f.Dependency = synthDep(ref, pin.Hex)
 		switch ancestry {
 		case resolver.AncestryNotAncestor:
-			// High confidence: the Compare API gave us an authoritative
-			// "not an ancestor" answer. Forgery wins — don't double-flag
-			// with an observed-SHA impostor finding; the lockfile claim
-			// is already the stronger one.
+			// Compare API gave an authoritative not-an-ancestor verdict.
+			// Forgery wins: don't double-flag with an observed-SHA
+			// impostor finding.
 			f.Category = CategoryLockfileForgery
 			f.Severity = SeverityError
 			f.Confidence = ConfidenceHigh
@@ -87,23 +84,19 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 			f.Remediation = "investigate immediately — verify the lockfile entry against upstream history"
 			out = append(out, f)
 		case resolver.AncestryUnknown:
-			// Compare API didn't reach a verdict — typically rate
-			// limited even after CheckAncestry's bounded retry (see
-			// resolver.CheckAncestry). Surface as its own category
-			// so consumers don't conflate "we couldn't check" with
-			// "moved but benign", and append the resolver's detail
-			// so the operator sees *why* (e.g. "rate limited (HTTP
-			// 429); resets at 1717552800") instead of a generic
-			// inconclusive string.
+			// Compare API didn't reach a verdict — typically rate-limited
+			// even after CheckAncestry's bounded retry. Surface as its
+			// own category so consumers don't conflate inconclusive with
+			// benign, and append the resolver's detail so the operator
+			// sees why.
 			f.Category = CategoryAncestryUnknown
 			f.Severity = SeverityWarning
 			f.Confidence = ConfidenceMedium
 			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, shortSha(sha), shortSha(pin.Hex), suffixWith(ancestryDetail))
 			f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"
 			out = append(out, f)
-			// Independent signal: ancestry being inconclusive doesn't
-			// stop us from asking branch_commits whether the observed
-			// SHA is on any upstream branch.
+			// Inconclusive ancestry doesn't block a branch_commits check
+			// on the observed SHA.
 			if imp, ok := liveRefImpostorFinding(pw, ref, sha, r); ok {
 				out = append(out, imp)
 			}
@@ -124,12 +117,9 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 }
 
 // liveRefImpostorFinding returns an impostor-commit finding when the
-// observed SHA the ref now resolves to is not reachable from any branch
-// of the upstream repo (the tag-hijacked-to-fork-network shape).
-// Unknown reachability fails open — same fallback policy as
-// checkImpostorCommit for the locked-SHA path. Caller is responsible
-// for suppressing this in the forgery branch where the
-// lockfile-tampering claim already covers the same operator action.
+// observed SHA is not reachable from any branch of the upstream repo
+// (the tag-hijacked-to-fork-network shape). Unknown reachability fails
+// open. Caller must suppress this in the forgery branch.
 func liveRefImpostorFinding(pw ParsedWorkflow, ref lockfile.ActionRef, observedSHA string, r checkResolver) (Finding, bool) {
 	status := r.CheckReachability(ref.Owner, ref.Repo, observedSHA, ref.Ref)
 	if status != resolver.Unreachable {
@@ -143,8 +133,8 @@ func liveRefImpostorFinding(pw ParsedWorkflow, ref lockfile.ActionRef, observedS
 	return f, true
 }
 
-// suffixWith renders an optional detail as ": <detail>" so callers can
-// concatenate it into a parenthetical without checking for empty first.
+// suffixWith renders an optional detail as ": <detail>" for inline
+// concatenation, returning empty when detail is empty.
 func suffixWith(detail string) string {
 	if detail == "" {
 		return ""
@@ -175,9 +165,8 @@ func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r 
 		if status != resolver.Unreachable {
 			continue
 		}
-		// High confidence: branch_commits gave us an authoritative answer
-		// that the locked SHA is not reachable from any branch of the
-		// upstream repo (classic fork-network impostor shape).
+		// branch_commits gave an authoritative answer: the locked SHA is
+		// not on any branch of the upstream repo (fork-network impostor).
 		f := newRefFinding(pw, ref, CategoryImpostorCommit, SeverityError, ConfidenceHigh)
 		f.Dependency = synthDep(ref, pin.Hex)
 		f.Detail = fmt.Sprintf("locked %s is not reachable from %s — classic fork-network impostor-commit shape", shortSha(pin.Hex), ref.Ref)

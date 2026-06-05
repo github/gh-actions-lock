@@ -50,11 +50,10 @@ type jsonUpgradeChange struct {
 	Files  []string `json:"files"`
 }
 
-// jsonUpgradeFinding mirrors format.Finding for the upgrade command. The
-// upgrade command intentionally carries its own minimal finding shape
-// rather than pulling in the doctor.Report apparatus — upgrade only ever
-// emits structured findings for refusal/blocker cases, not for
-// dependency-state inspection.
+// jsonUpgradeFinding mirrors format.Finding for the upgrade command,
+// which carries its own minimal finding shape rather than pulling in the
+// doctor.Report apparatus — upgrade only emits structured findings for
+// refusal/blocker cases, not dependency-state inspection.
 type jsonUpgradeFinding struct {
 	Workflow    string `json:"workflow"`
 	Category    string `json:"category"`

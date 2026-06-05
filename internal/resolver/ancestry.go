@@ -25,21 +25,16 @@ const (
 	AncestryUnknown
 )
 
-// Ancestry retry tuning. Exposed as vars (not consts) so tests can dial
-// the budget down to keep retry-loop assertions snappy without dragging
-// in a full clock-injection harness for every case.
+// Ancestry retry tuning. Vars rather than consts so tests can dial the
+// budget down without a clock-injection harness.
 var (
-	// ancestryMaxAttempts is the total number of Compare API attempts —
-	// one initial request plus up to (max-1) retries on rate-limit
-	// responses.
+	// ancestryMaxAttempts caps total Compare API attempts (1 initial + retries).
 	ancestryMaxAttempts = 3
-	// ancestryRetryBudget caps the cumulative wall-clock spent sleeping
-	// between retries. We bail rather than honor an X-RateLimit-Reset
-	// that would push us past the budget.
+	// ancestryRetryBudget caps cumulative wall-clock spent sleeping between retries.
 	ancestryRetryBudget = 30 * time.Second
-	// ancestryBackoff is the per-attempt expo fallback used when no
-	// usable rate-limit header is present (index N = wait before attempt
-	// N+1 in this slice). Indices past the end clamp to the last value.
+	// ancestryBackoff is the per-attempt fallback when no usable
+	// rate-limit header is present. Indices past the end clamp to the
+	// last value.
 	ancestryBackoff = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second}
 )
 
@@ -55,13 +50,9 @@ type compareResponse struct {
 // of liveSHA. This detects lockfile forgery: if someone injects a SHA that was
 // never in the ref's lineage, merge_base(pinned, live) ≠ pinned.
 //
-// Compare API rate limits (HTTP 429 always, HTTP 403 when accompanied by
-// the documented rate-limit headers) are retried up to ancestryMaxAttempts
-// total attempts, honoring X-RateLimit-Reset when present and otherwise
-// falling back to ancestryBackoff. The cumulative wait is capped at
-// ancestryRetryBudget — a reset timestamp beyond the remaining budget
-// short-circuits to AncestryUnknown with an exhausted-budget detail
-// rather than burning the whole budget on a call that would still fail.
+// Rate-limit responses (HTTP 429 always; HTTP 403 with rate-limit headers)
+// are retried up to ancestryMaxAttempts, honoring X-RateLimit-Reset when
+// present. The cumulative wait is capped at ancestryRetryBudget.
 func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (AncestryStatus, string) {
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
 		url.PathEscape(owner), url.PathEscape(repo),
@@ -106,8 +97,6 @@ func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (Ancest
 			r.sleepFn(wait)
 		}
 	}
-	// Loop invariant guarantees one of the returns above fires; this is
-	// defensive for future refactors.
 	return AncestryUnknown, lastDetail
 }
 
