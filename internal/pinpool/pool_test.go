@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeReporter captures pool UI calls so tests can assert on the labels and
@@ -15,12 +16,19 @@ type fakeReporter struct {
 	mu       sync.Mutex
 	labels   []string
 	statuses [][2]any // [slot, status]
+	hints    [][2]any // [slot, hint]
 }
 
 func (f *fakeReporter) SetWorkerStatus(slot int, status string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statuses = append(f.statuses, [2]any{slot, status})
+}
+
+func (f *fakeReporter) SetWorkerHint(slot int, hint string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hints = append(f.hints, [2]any{slot, hint})
 }
 
 func (f *fakeReporter) UpdateLabel(label string) {
@@ -64,11 +72,17 @@ func TestRunSerializesReporterCalls(t *testing.T) {
 // struct just to hold two callbacks.
 type reporterFunc struct {
 	set   func(slot int, status string)
+	hint  func(slot int, hint string)
 	label func(label string)
 }
 
 func (f reporterFunc) SetWorkerStatus(slot int, status string) { f.set(slot, status) }
-func (f reporterFunc) UpdateLabel(label string)                { f.label(label) }
+func (f reporterFunc) SetWorkerHint(slot int, hint string) {
+	if f.hint != nil {
+		f.hint(slot, hint)
+	}
+}
+func (f reporterFunc) UpdateLabel(label string) { f.label(label) }
 
 // TestRunDoesNotClearSlotBetweenJobs guards the spinner tail UX fix: each
 // worker must keep its slot showing the previous "→ path" until it overwrites
@@ -244,5 +258,141 @@ func TestRunDefaultWorkersWhenNonPositive(t *testing.T) {
 	}
 	if got := calls.Load(); got != int64(len(jobs)) {
 		t.Fatalf("calls = %d, want %d", got, len(jobs))
+	}
+}
+
+// TestRunStallWatcherFiresHint guards Thing 1 of the stall-hint feature: when
+// a worker sits on the same status longer than the stall threshold, the
+// watcher must call SetWorkerHint with the stall text. Uses a small env-var
+// threshold so the test budget stays well under a second.
+func TestRunStallWatcherFiresHint(t *testing.T) {
+	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "30")
+
+	ui := &fakeReporter{}
+	jobs := []int{1}
+	err := Run(1, ui, "Pinning", jobs,
+		func(j int) string { return fmt.Sprintf("job-%d", j) },
+		func(slot, j int) error {
+			time.Sleep(200 * time.Millisecond)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	var sawHint bool
+	for _, h := range ui.hints {
+		if h[1].(string) == stallHintText {
+			sawHint = true
+			break
+		}
+	}
+	if !sawHint {
+		t.Fatalf("expected stall hint %q in hints; got %v", stallHintText, ui.hints)
+	}
+}
+
+// TestRunStallWatcherClearsHintOnUpdate makes sure a slot that gets a hint
+// during one slow job has it cleared when the slot transitions to a new job
+// (or exits idle). Without this, "(still working…)" leaks across jobs.
+func TestRunStallWatcherClearsHintOnUpdate(t *testing.T) {
+	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "20")
+
+	ui := &fakeReporter{}
+	jobs := []int{1, 2}
+	// One worker so both jobs land on slot 0 sequentially.
+	err := Run(1, ui, "Pinning", jobs,
+		func(j int) string { return fmt.Sprintf("job-%d", j) },
+		func(slot, j int) error {
+			// First job sleeps past threshold to trigger hint; second
+			// returns immediately so the watcher has a clean transition
+			// to observe.
+			if j == 1 {
+				time.Sleep(80 * time.Millisecond)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	var lastNonEmpty string
+	for _, h := range ui.hints {
+		if h[1].(string) != "" {
+			lastNonEmpty = h[1].(string)
+		}
+	}
+	// The final hint event for the slot should be a clear ("") so the
+	// next job doesn't inherit the stale "(still working…)" suffix.
+	if len(ui.hints) == 0 {
+		t.Fatalf("expected at least one hint call")
+	}
+	last := ui.hints[len(ui.hints)-1]
+	if last[0].(int) != 0 || last[1].(string) != "" {
+		t.Fatalf("last hint should be a clear on slot 0; got slot=%v hint=%q (had non-empty %q)",
+			last[0], last[1], lastNonEmpty)
+	}
+}
+
+// TestRunStallWatcherDisabledByZeroThreshold confirms users can opt out by
+// setting GH_ACTIONS_PIN_STALL_HINT_MS=0 — no SetWorkerHint calls at all.
+func TestRunStallWatcherDisabledByZeroThreshold(t *testing.T) {
+	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "0")
+
+	ui := &fakeReporter{}
+	jobs := []int{1}
+	err := Run(1, ui, "Pinning", jobs,
+		func(j int) string { return "" },
+		func(slot, j int) error {
+			time.Sleep(120 * time.Millisecond)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	if len(ui.hints) != 0 {
+		t.Fatalf("watcher disabled but observed hints: %v", ui.hints)
+	}
+}
+
+// TestRunStallWatcherStopsBeforeReturn guards the shutdown ordering: the
+// watcher must not fire SetWorkerHint after Run returns. We schedule a job
+// that completes before the threshold, then assert no hint events occurred
+// in a quiet window after Run returned.
+func TestRunStallWatcherStopsBeforeReturn(t *testing.T) {
+	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "25")
+
+	ui := &fakeReporter{}
+	jobs := []int{1}
+	err := Run(1, ui, "Pinning", jobs,
+		func(j int) string { return "" },
+		func(slot, j int) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	ui.mu.Lock()
+	hintsAtReturn := len(ui.hints)
+	ui.mu.Unlock()
+
+	// Sleep well past several ticker intervals; if the watcher leaked,
+	// it would observe `active[0]=false` and not fire — but that's
+	// indistinguishable from a clean stop. Stronger assertion: the
+	// hints slice must not grow at all after Run returned.
+	time.Sleep(200 * time.Millisecond)
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	if len(ui.hints) != hintsAtReturn {
+		t.Fatalf("watcher fired after Run returned: hints grew from %d to %d (%v)",
+			hintsAtReturn, len(ui.hints), ui.hints)
 	}
 }

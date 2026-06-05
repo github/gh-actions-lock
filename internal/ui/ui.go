@@ -323,6 +323,7 @@ type spinnerWriter struct {
 	mu        sync.Mutex
 	w         io.Writer
 	workers   []string // per-slot status; empty string = idle
+	hints     []string // per-slot dim suffix appended after the status
 	nRendered int      // number of worker lines written in the last tick
 	noColor   bool
 	output    *termenv.Output
@@ -343,6 +344,9 @@ type spinnerWriter struct {
 	// from the pin pool aren't clobbered by the restore. Nil during
 	// normal operation.
 	deferredWrites map[int]string
+	// deferredHints mirrors deferredWrites for hint state so concurrent
+	// stall-watcher updates aren't clobbered by printLine's restore.
+	deferredHints map[int]string
 }
 
 // workerSpinFrames is the rotating glyph shown next to each ACTIVE worker row
@@ -377,6 +381,7 @@ func (sw *spinnerWriter) renderWorkersLocked() {
 	// Per-slot phase offset so rows visibly cascade instead of all hitting
 	// the same frame in lockstep — that lockstep was what made them look
 	// frozen even when they weren't.
+	width := termWidthOf(sw.w)
 	var lines []string
 	for slot, w := range sw.workers {
 		if w == "" {
@@ -387,11 +392,39 @@ func (sw *spinnerWriter) renderWorkersLocked() {
 			frame := workerSpinFrames[(step+slot)%len(workerSpinFrames)]
 			body = frame + " " + w[len("→ "):]
 		}
+		hint := ""
+		if slot < len(sw.hints) {
+			hint = sw.hints[slot]
+		}
+		// Combined width budget: "  " indent + body + " " + hint must
+		// fit one terminal row. Hint loses first if there isn't room.
+		if width > 4 {
+			budget := width - 2 // "  " indent
+			if len(body)+1+len(hint) > budget {
+				if len(body) >= budget {
+					body = truncateBytes(body, budget)
+					hint = ""
+				} else if hint != "" {
+					hintBudget := budget - len(body) - 1
+					if hintBudget < 4 {
+						hint = ""
+					} else {
+						hint = truncateBytes(hint, hintBudget)
+					}
+				}
+			}
+		}
 		var line string
 		if !sw.noColor {
 			line = sw.output.String("  " + body).Faint().String()
+			if hint != "" {
+				line += " " + sw.output.String(hint).Faint().String()
+			}
 		} else {
 			line = "  " + body
+			if hint != "" {
+				line += " " + hint
+			}
 		}
 		lines = append(lines, line)
 	}
@@ -478,11 +511,16 @@ func (sw *spinnerWriter) setDetail(det string) {
 // has the workers slice snapshotted (deferredWrites != nil) the write is
 // buffered into the deferred map so printLine's restore phase can merge it
 // onto the snapshot — preventing the restore from clobbering clears and
-// updates issued by the pin pool during the print window.
+// updates issued by the pin pool during the print window. Setting a slot to
+// any value also clears that slot's hint so a stale "(still working…)"
+// suffix from a previous job can't bleed into the next one.
 func (sw *spinnerWriter) setWorkerStatus(slot int, status string) {
 	sw.mu.Lock()
 	if sw.deferredWrites != nil {
 		sw.deferredWrites[slot] = status
+		if sw.deferredHints != nil {
+			sw.deferredHints[slot] = ""
+		}
 		sw.mu.Unlock()
 		return
 	}
@@ -490,7 +528,26 @@ func (sw *spinnerWriter) setWorkerStatus(slot int, status string) {
 		sw.workers = append(sw.workers, "")
 	}
 	sw.workers[slot] = status
+	if slot < len(sw.hints) {
+		sw.hints[slot] = ""
+	}
 	sw.mu.Unlock()
+}
+
+// setWorkerHint sets or clears one worker's dim suffix without touching the
+// status text. Defers like setWorkerStatus while printLine has the slices
+// snapshotted.
+func (sw *spinnerWriter) setWorkerHint(slot int, hint string) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if sw.deferredHints != nil {
+		sw.deferredHints[slot] = hint
+		return
+	}
+	for len(sw.hints) <= slot {
+		sw.hints = append(sw.hints, "")
+	}
+	sw.hints[slot] = hint
 }
 
 // clearSpinnerLines erases the spinner line and any worker lines that were
@@ -523,12 +580,17 @@ func (u *UI) printLine(write func()) {
 		// those updates, which is what leaves stale "→ path" rows visible
 		// after their owner worker has exited.
 		var savedWorkers []string
+		var savedHints []string
 		if u.spinWriter != nil {
 			u.spinWriter.mu.Lock()
 			savedWorkers = make([]string, len(u.spinWriter.workers))
 			copy(savedWorkers, u.spinWriter.workers)
+			savedHints = make([]string, len(u.spinWriter.hints))
+			copy(savedHints, u.spinWriter.hints)
 			u.spinWriter.workers = nil
+			u.spinWriter.hints = nil
 			u.spinWriter.deferredWrites = map[int]string{}
+			u.spinWriter.deferredHints = map[int]string{}
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Stop()
@@ -541,9 +603,29 @@ func (u *UI) printLine(write func()) {
 					savedWorkers = append(savedWorkers, "")
 				}
 				savedWorkers[slot] = status
+				// A status update implicitly clears the hint, mirroring
+				// setWorkerStatus's normal-path semantics.
+				for len(savedHints) <= slot {
+					savedHints = append(savedHints, "")
+				}
+				savedHints[slot] = ""
+			}
+			for slot, hint := range u.spinWriter.deferredHints {
+				for len(savedHints) <= slot {
+					savedHints = append(savedHints, "")
+				}
+				// Don't overwrite a hint clear caused by a same-window
+				// status update: if deferredWrites also touched this slot,
+				// the status reset already cleared the hint above.
+				if _, statusUpdated := u.spinWriter.deferredWrites[slot]; statusUpdated {
+					continue
+				}
+				savedHints[slot] = hint
 			}
 			u.spinWriter.workers = savedWorkers
+			u.spinWriter.hints = savedHints
 			u.spinWriter.deferredWrites = nil
+			u.spinWriter.deferredHints = nil
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Start()
@@ -907,6 +989,7 @@ func (u *UI) PauseProgress() {
 		u.spinWriter.stopAnimator()
 		u.spinWriter.mu.Lock()
 		u.spinWriter.workers = nil
+		u.spinWriter.hints = nil
 		u.spinWriter.mu.Unlock()
 	}
 	u.spinner.Stop()
@@ -938,6 +1021,7 @@ func (u *UI) StopProgress() {
 			u.spinWriter.stopAnimator()
 			u.spinWriter.mu.Lock()
 			u.spinWriter.workers = nil
+			u.spinWriter.hints = nil
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Stop()
@@ -978,6 +1062,19 @@ func (u *UI) SetWorkerStatus(slot int, status string) {
 	u.spinWriter.setWorkerStatus(slot, status)
 }
 
+// SetWorkerHint sets or clears a dim suffix appended after the worker slot's
+// status text (e.g. "→ workflow.yml (still working…)"). Used by pinpool's
+// stall watcher to surface that a worker has been on the same job for longer
+// than the stall threshold without clobbering the slot's main status. No-op
+// when no spinner is active.
+func (u *UI) SetWorkerHint(slot int, hint string) {
+	u.traceProgress(fmt.Sprintf("hint[%d]", slot), hint)
+	if u.spinWriter == nil {
+		return
+	}
+	u.spinWriter.setWorkerHint(slot, hint)
+}
+
 // ClearWorkerStatuses wipes every worker slot so stale "✓ NWO" rows from a
 // completed phase don't carry into the next one. No-op when no spinner is
 // active.
@@ -988,6 +1085,9 @@ func (u *UI) ClearWorkerStatuses() {
 	u.spinWriter.mu.Lock()
 	for i := range u.spinWriter.workers {
 		u.spinWriter.workers[i] = ""
+	}
+	for i := range u.spinWriter.hints {
+		u.spinWriter.hints[i] = ""
 	}
 	u.spinWriter.mu.Unlock()
 }
@@ -1110,15 +1210,20 @@ func (u *UI) renderProgress() {
 // termWidth returns the terminal column count for the spinner writer, or 0 if
 // it cannot be determined (in which case callers skip truncation).
 func (u *UI) termWidth() int {
-	f, ok := u.w.(*os.File)
+	return termWidthOf(u.w)
+}
+
+// termWidthOf returns the terminal width of w, or 0 when it isn't a TTY.
+func termWidthOf(w io.Writer) int {
+	f, ok := w.(*os.File)
 	if !ok {
 		return 0
 	}
-	w, _, err := term.GetSize(int(f.Fd()))
-	if err != nil || w <= 0 {
+	cols, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || cols <= 0 {
 		return 0
 	}
-	return w
+	return cols
 }
 
 // truncateBytes shortens s so its UTF-8 byte length is at most max, never
