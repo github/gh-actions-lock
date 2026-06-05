@@ -24,3 +24,7 @@ demo/try-it.sh all              # run all non-interactive scenarios
 
 Fixtures are reset to clean state before each run. See `demo/try-it.sh --help` for the full list.
 
+## Related projects
+
+`gh-actions-pin` shares vocabulary with [`zizmor`](https://github.com/zizmorcore/zizmor) for the checks that overlap — `impostor-commit`, `unpinned-uses`, `ref-version-mismatch` — so findings dedup at the code-scanning level and we cite zizmor's published definitions rather than minting our own. For non-pinning audits (template injection, excessive permissions, secret handling, trigger hygiene, cache poisoning), use `zizmor`. The lockfile schema lives in [`actions-lockfile/`](./actions-lockfile/) (staging for the future [`github/actions-lockfile`](https://github.com/github/actions-lockfile) repo).
+
