@@ -9,20 +9,11 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
 
-// Diagnose scans a set of workflows and produces findings for each.
-// It performs no output — purely analytical. The optional onWorkflow callback
-// is invoked before each workflow is diagnosed, carrying 1-based progress so
-// callers can render an [i/N] indicator.
+// Diagnose scans workflows and produces findings for each.
 //
-// Diagnose is a backward-compatible wrapper that runs ParseAll, pre-resolves
-// the union of refs/deps via the resolver (cached), and then DiagnoseParsed.
-// Most callers should drive the three phases directly to control the UI:
-//
-//	parsed := doctor.ParseAll(paths, store, onScan)
-//	refs, deps := doctor.CollectResolvable(parsed)
-//	_, _ = r.ResolveAllRecursive(refs)
-//	_ = r.CheckReachabilityAll(deps)
-//	report := doctor.DiagnoseParsed(parsed, r, store)
+// It is a backward-compatible wrapper around ParseAll, resolver pre-warming,
+// and DiagnoseParsed. Newer callers can drive those phases directly to control
+// UI progress.
 func Diagnose(paths []string, r *resolver.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
 	var onScan func(done, total int, path string)
 	if len(onWorkflow) > 0 {
