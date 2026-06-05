@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
@@ -16,7 +17,7 @@ import (
 // ActionRef (for direct uses) and Dependency (for ref-tied entries).
 // DocURL and ParentNWO are attached by the caller (diagnoseOneParsed)
 // because they need lookup tables runChecks doesn't carry.
-func runChecks(pw ParsedWorkflow, lf lockfile.File, r checkResolver) []Finding {
+func runChecks(ctx context.Context, pw ParsedWorkflow, lf lockfile.File, r checkResolver) []Finding {
 	wfEntry, _ := lf.LookupWorkflow(lockfile.WorkflowKeyFromPath(pw.Path))
 	depPins, depIndex := parseWorkflowDeps(wfEntry)
 
@@ -27,8 +28,8 @@ func runChecks(pw ParsedWorkflow, lf lockfile.File, r checkResolver) []Finding {
 	out = append(out, checkStale(pw, depPins)...)
 
 	if r != nil {
-		out = append(out, checkMisleadingSha(pw, r)...)
-		refMoved := checkRefMovedAndForgery(pw, depIndex, r)
+		out = append(out, checkMisleadingSha(ctx, pw, r)...)
+		refMoved := checkRefMovedAndForgery(ctx, pw, depIndex, r)
 		out = append(out, refMoved...)
 		out = append(out, checkImpostorCommit(pw, depIndex, r, collectForgeryKeys(refMoved))...)
 	}

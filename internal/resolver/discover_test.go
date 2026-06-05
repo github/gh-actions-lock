@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -32,7 +33,7 @@ func TestDiscoverContaining_PrefersHintTag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tag, branch, err := r.DiscoverContaining("actions", "checkout", "abc", "v4.2.2")
+	tag, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "abc", "v4.2.2")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestDiscoverContaining_BranchOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tag, branch, err := r.DiscoverContaining("actions", "checkout", "def", "main")
+	tag, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "def", "main")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = r.DiscoverContaining("actions", "checkout", "dead", "poisoned")
+	_, _, err = r.DiscoverContaining(context.Background(), "actions", "checkout", "dead", "poisoned")
 	if err == nil {
 		t.Fatalf("expected error for commit with no branches")
 	}
@@ -125,7 +126,7 @@ func TestDiscoverContainingDefault_PrefersDefaultBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, branch, err := r.DiscoverContainingDefault("actions", "checkout", "abc", "", "main")
+	_, branch, err := r.DiscoverContainingDefault(context.Background(), "actions", "checkout", "abc", "", "main")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestDiscoverContaining_AutoDiscoversDefaultAndPrefersProtected(t *testing.T
 		t.Fatal(err)
 	}
 
-	_, branch, err := r.DiscoverContaining("actions", "checkout", "abc", "")
+	_, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "abc", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestDiscoverContaining_UnprotectedOnlyFallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, branch, err := r.DiscoverContaining("actions", "checkout", "abc", "main")
+	_, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "abc", "main")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestDiscoverContaining_CommitOnlyOnUnprotectedBranchFallsBack(t *testing.T)
 		t.Fatal(err)
 	}
 
-	_, branch, err := r.DiscoverContaining("actions", "checkout", "abc", "")
+	_, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "abc", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestNormalizeContaining_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) 
 		{NWO: "actions/checkout", Ref: "abc123abc123abc123abc123abc123abc123abc1", SHA: "abc123", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.NormalizeContaining(deps)
+	rewrites, err := r.NormalizeContaining(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -321,7 +322,7 @@ func TestNormalizeContaining_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v4", SHA: "abc", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.NormalizeContaining(deps)
+	rewrites, err := r.NormalizeContaining(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -351,7 +352,7 @@ func TestNormalizeContaining_FailsClosedOnImpostor(t *testing.T) {
 	deps := []lockfile.Dependency{
 		{NWO: "actions/checkout", Ref: "poisoned", SHA: "dead"},
 	}
-	_, err = r.NormalizeContaining(deps)
+	_, err = r.NormalizeContaining(context.Background(), deps)
 	if err == nil {
 		t.Fatalf("expected fail-closed error, got nil")
 	}
@@ -380,7 +381,7 @@ func TestNormalizeContaining_PreservesBranchRefOverTag(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "main", SHA: "abc", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.NormalizeContaining(deps)
+	rewrites, err := r.NormalizeContaining(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -76,7 +76,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	rem.startWork(rem.workLabel(fmt.Sprintf("Pinning %s", wr.Path)))
 	defer rem.stopWork()
 
-	deps, parentMap, err := rem.resolver.ResolveAllRecursive(wr.ActionRefs)
+	deps, parentMap, err := rem.resolver.ResolveAllRecursive(rem.ctx, wr.ActionRefs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
@@ -92,7 +92,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// rewritten if a sane-release substitution was available. Anything
 	// still reaching this loop with Status == Unreachable is unfixable
 	// (no suggestion, transitive impostor, etc.) and must alert.
-	reachResults := rem.resolver.CheckReachabilityAll(deps)
+	reachResults := rem.resolver.CheckReachabilityAll(rem.ctx, deps)
 	for _, rr := range reachResults {
 		switch rr.Status {
 		case resolver.Unreachable:
@@ -150,12 +150,12 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 			continue
 		}
 		if rem.isSameOwner(owner) {
-			info, err := rem.tagLister.GetRepoInfo(owner, repo)
+			info, err := rem.tagLister.GetRepoInfo(rem.ctx, owner, repo)
 			if err == nil && info.IsInternal() {
 				continue
 			}
 		}
-		patchTag, err := rem.tagLister.BestPatchTagForSHA(owner, repo, dep.SHA)
+		patchTag, err := rem.tagLister.BestPatchTagForSHA(rem.ctx, owner, repo, dep.SHA)
 		if err != nil || patchTag == "" {
 			continue
 		}
@@ -174,7 +174,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
 	}
-	normRewrites, err := rem.resolver.NormalizeContaining(deps)
+	normRewrites, err := rem.resolver.NormalizeContaining(rem.ctx, deps)
 	if err != nil {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
@@ -283,7 +283,7 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 	refs, _, _ := wf.ExtractActionRefs()
 	rem.startWork(fmt.Sprintf("Re-resolving %s", dep.NWO))
 	defer rem.stopWork()
-	deps, parentMap, err := rem.resolver.ResolveAllRecursive(refs)
+	deps, parentMap, err := rem.resolver.ResolveAllRecursive(rem.ctx, refs)
 	if err != nil {
 		return fmt.Errorf("resolving actions: %w", err)
 	}
@@ -319,7 +319,7 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
 	}
-	normRewrites, err := rem.resolver.NormalizeContaining(deps)
+	normRewrites, err := rem.resolver.NormalizeContaining(rem.ctx, deps)
 	if err != nil {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {

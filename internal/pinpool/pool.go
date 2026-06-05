@@ -4,6 +4,7 @@
 package pinpool
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -60,6 +61,11 @@ func resolveStallThreshold() time.Duration {
 
 // Run dispatches jobs across up to `workers` goroutines.
 //
+// The pool observes ctx: if ctx is canceled before all jobs drain, workers
+// stop pulling new jobs and Run returns ctx.Err() unless a job error
+// already won the race. Jobs in flight are left to finish; cancellation is
+// cooperative through the ctx the caller passes to run.
+//
 // Worker slots are not cleared between jobs; the next job overwrites the
 // previous status so the spinner never flickers down to a bare header. Slots
 // are cleared only when their worker exits.
@@ -71,12 +77,13 @@ func resolveStallThreshold() time.Duration {
 // Returns nil when len(jobs) == 0 without touching r. r, display, and run must
 // be non-nil when len(jobs) > 0.
 func Run[T any](
+	ctx context.Context,
 	workers int,
 	r Reporter,
 	label string,
 	jobs []T,
 	display func(T) string,
-	run func(slot int, j T) error,
+	run func(ctx context.Context, slot int, j T) error,
 ) error {
 	if len(jobs) == 0 {
 		return nil
@@ -177,8 +184,14 @@ func Run[T any](
 			// run.
 			defer setStatus(slot, "")
 			for j := range ch {
+				// Cooperative cancellation: stop pulling new jobs once
+				// ctx is canceled. Jobs already in flight finish on
+				// their own ctx-awareness inside run.
+				if ctx.Err() != nil {
+					return
+				}
 				setStatus(slot, "→ "+display(j))
-				err := run(slot, j)
+				err := run(ctx, slot, j)
 				done.Add(1)
 				updateLabel()
 				if err != nil {
@@ -197,7 +210,13 @@ func Run[T any](
 	close(stop)
 	<-stopped
 
-	return firstErr
+	if firstErr != nil {
+		return firstErr
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 // stallWatcher periodically scans per-slot activity and tags any slot that

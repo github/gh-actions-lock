@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -53,7 +54,7 @@ type compareResponse struct {
 // Rate-limit responses (HTTP 429 always; HTTP 403 with rate-limit headers)
 // are retried up to ancestryMaxAttempts, honoring X-RateLimit-Reset when
 // present. The cumulative wait is capped at ancestryRetryBudget.
-func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (AncestryStatus, string) {
+func (r *Resolver) CheckAncestry(ctx context.Context, owner, repo, pinnedSHA, liveSHA string) (AncestryStatus, string) {
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.PathEscape(pinnedSHA), url.PathEscape(liveSHA))
@@ -63,7 +64,7 @@ func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (Ancest
 
 	for attempt := 0; attempt < ancestryMaxAttempts; attempt++ {
 		var resp compareResponse
-		err := r.restClient.Get(path, &resp)
+		err := r.restClient.DoWithContext(ctx, http.MethodGet, path, nil, &resp)
 		if err == nil {
 			if strings.EqualFold(resp.MergeBaseCommit.SHA, pinnedSHA) {
 				return AncestryConfirmed, fmt.Sprintf("pinned SHA is ancestor of live SHA (compare: %s)", resp.Status)
@@ -94,7 +95,10 @@ func (r *Resolver) CheckAncestry(owner, repo, pinnedSHA, liveSHA string) (Ancest
 			return AncestryUnknown, fmt.Sprintf("%s; retry budget (%s) would be exceeded after %d attempts", lastDetail, ancestryRetryBudget, attempt+1)
 		}
 		if wait > 0 {
-			r.sleepFn(wait)
+			r.sleepFn(ctx, wait)
+		}
+		if ctx.Err() != nil {
+			return AncestryUnknown, "ancestry check canceled"
 		}
 	}
 	return AncestryUnknown, lastDetail
@@ -170,7 +174,7 @@ func shortHex(sha string) string {
 // using the documented Compare API. A 404 or 422 response (unrelated histories
 // or missing commit) is treated as a non-error false return. Results are
 // memoized in compareCache for the lifetime of the Resolver.
-func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) (bool, error) {
+func (r *Resolver) branchContainsCommit(ctx context.Context, owner, repo, sha, branchHeadSHA string) (bool, error) {
 	if strings.EqualFold(sha, branchHeadSHA) {
 		return true, nil
 	}
@@ -182,7 +186,7 @@ func (r *Resolver) branchContainsCommit(owner, repo, sha, branchHeadSHA string) 
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.PathEscape(sha), url.PathEscape(branchHeadSHA))
 	var resp compareResponse
-	if err := r.restClient.Get(path, &resp); err != nil {
+	if err := r.restClient.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) &&
 			(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {

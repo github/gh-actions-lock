@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -159,22 +160,22 @@ jobs:
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
 
 // reachableFunc returns a checkReachFn that reports all commits as reachable.
-func reachableFunc() func(string, string, string, string) (resolver.ReachabilityStatus, string) {
-	return func(owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
+func reachableFunc() func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string) {
+	return func(_ context.Context, owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
 		return resolver.Reachable, "ancestor of " + ref
 	}
 }
 
 // unreachableFunc returns a checkReachFn that reports all commits as unreachable.
-func unreachableFunc() func(string, string, string, string) (resolver.ReachabilityStatus, string) {
-	return func(owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
+func unreachableFunc() func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string) {
+	return func(_ context.Context, owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
 		return resolver.Unreachable, "commit is not an ancestor of " + ref
 	}
 }
 
 // unknownReachFunc returns a checkReachFn that reports unknown (clone failure).
-func unknownReachFunc() func(string, string, string, string) (resolver.ReachabilityStatus, string) {
-	return func(owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
+func unknownReachFunc() func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string) {
+	return func(_ context.Context, owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
 		return resolver.ReachabilityUnknown, "clone failed"
 	}
 }
@@ -257,7 +258,7 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 	return runCommandWithHTTPAndReach(t, rt, nil, args...)
 }
 
-func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(string, string, string, string) (resolver.ReachabilityStatus, string), args ...string) (string, string, error) {
+func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string), args ...string) (string, string, error) {
 	t.Helper()
 
 	stdoutR, stdoutW, err := os.Pipe()

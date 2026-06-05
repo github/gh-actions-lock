@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -30,6 +31,15 @@ type Remediator struct {
 	store     *lockfile.Store
 	output    *ui.UI
 	opts      RemediateOptions
+
+	// ctx scopes the lifetime of this remediation pass. Set once at the
+	// top of Remediate from the cobra command's context; consumed by the
+	// resolver / tag-lister / pinpool calls fanning out below. The
+	// "stash-on-struct" shape is the pragmatic seam documented in
+	// docs/specs/context-context-architecture-verdict.md — Remediate is
+	// the only entry point that needs to wire ctx, so we keep the per-
+	// method ceremony out of the dozens of helper signatures.
+	ctx context.Context
 
 	state sessionState
 
@@ -339,7 +349,11 @@ func (rem *Remediator) offerApplyAll(dep *lockfile.Dependency, tag string) {
 }
 
 // Remediate walks through a report and handles each workflow that needs attention.
-func (rem *Remediator) Remediate(report *Report) error {
+func (rem *Remediator) Remediate(ctx context.Context, report *Report) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rem.ctx = ctx
 	actionable := report.WorkflowsNeedingAttention()
 
 	// Pre-scan: count how many times each dep appears so we can offer "apply to all".
@@ -531,12 +545,13 @@ func (rem *Remediator) runPinWorkers() error {
 	// label-stem dedup collapses parent + per-worker counter into one
 	// phase line instead of emitting a second "Pinning workflows" header.
 	return pinpool.Run(
+		rem.ctx,
 		rem.pinWorkers,
 		rem.output,
 		"Pinning dependencies",
 		pins,
 		func(wr WorkflowReport) string { return wr.Path },
-		func(_ int, wr WorkflowReport) error {
+		func(_ context.Context, _ int, wr WorkflowReport) error {
 			err := rem.applyPin(wr)
 			// Security gate trips are non-fatal: the workflow is already
 			// recorded in alertedWorkflows, so keep pinning siblings.
@@ -747,7 +762,7 @@ func (rem *Remediator) repoNWO(f Finding) string {
 // pinPromptTitle returns the Select prompt title annotated with repo visibility.
 func (rem *Remediator) pinPromptTitle(nwo, owner, repo string) string {
 	title := fmt.Sprintf("Pin %s to which tag?", nwo)
-	if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
+	if info, err := rem.tagLister.GetRepoInfo(rem.ctx, owner, repo); err == nil {
 		title += fmt.Sprintf("  (%s)", info.VisibilityLabel())
 	}
 	return title

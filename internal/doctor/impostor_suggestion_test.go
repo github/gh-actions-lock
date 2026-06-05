@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/httpmock"
@@ -12,7 +13,7 @@ type fakeReachabilityChecker struct {
 	results map[string]resolver.ReachabilityStatus
 }
 
-func (f *fakeReachabilityChecker) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityResult {
+func (f *fakeReachabilityChecker) CheckReachability(_ context.Context, owner, repo, sha, ref string) resolver.ReachabilityResult {
 	status := f.results[ref]
 	if status == "" {
 		status = resolver.Unreachable
@@ -55,7 +56,7 @@ func TestFindSaneRelease_PicksFirstReachable(t *testing.T) {
 		"v1.4.0": resolver.Reachable,
 	}}
 
-	tag, sha := FindSaneRelease(tl, rc, "acme", "widget")
+	tag, sha := FindSaneRelease(context.Background(), tl, rc, "acme", "widget")
 	if tag != "v1.4.0" {
 		t.Fatalf("expected v1.4.0, got %q", tag)
 	}
@@ -76,7 +77,7 @@ func TestFindSaneRelease_NoneReachable(t *testing.T) {
 	tl := newTagListerWithRegistry(t, reg)
 	rc := &fakeReachabilityChecker{} // all Unreachable
 
-	tag, sha := FindSaneRelease(tl, rc, "acme", "widget")
+	tag, sha := FindSaneRelease(context.Background(), tl, rc, "acme", "widget")
 	if tag != "" || sha != "" {
 		t.Fatalf("expected empty suggestion, got tag=%q sha=%q", tag, sha)
 	}
@@ -105,7 +106,7 @@ func TestEnrichImpostorFindings_MarksSearched(t *testing.T) {
 		}},
 	}
 
-	EnrichImpostorFindings(report, tl, rc)
+	EnrichImpostorFindings(context.Background(), report, tl, rc)
 
 	f := report.Workflows[0].Findings[0]
 	if !f.SaneSuggestionSearched {
@@ -141,7 +142,7 @@ func TestEnrichImpostorFindings_PopulatesSuggestion(t *testing.T) {
 		}},
 	}
 
-	EnrichImpostorFindings(report, tl, rc)
+	EnrichImpostorFindings(context.Background(), report, tl, rc)
 
 	f := report.Workflows[0].Findings[0]
 	if f.SaneSuggestionTag != "v1.0.0" {

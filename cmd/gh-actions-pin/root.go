@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
+	"syscall"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -98,7 +101,7 @@ $ gh actions-pin upgrade --action actions/checkout
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
-			return runCheck(f, opts)
+			return runCheck(cmd.Context(), f, opts)
 		},
 	}
 
@@ -125,7 +128,9 @@ $ gh actions-pin upgrade --action actions/checkout
 //     or partial; consumers should rely on stderr for diagnosis.
 func Execute() int {
 	f := NewDefaultFactory()
-	err := NewRootCmd(f).Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := NewRootCmd(f).ExecuteContext(ctx)
 	if err != nil && !errors.Is(err, errSilent) {
 		// Detach any narration log sink first: it may have been pointed at
 		// io.Discard during the run (the JSON-less "the terminal owns the

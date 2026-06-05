@@ -1,7 +1,9 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -112,7 +114,7 @@ func NewTagLister(client *api.RESTClient) *TagLister {
 // mutex held; concurrent calls for the same repo are coalesced via
 // singleflight, so multiple pin workers fetching different repos proceed
 // in parallel.
-func (tl *TagLister) ListTags(owner, repo string) ([]TagInfo, error) {
+func (tl *TagLister) ListTags(ctx context.Context, owner, repo string) ([]TagInfo, error) {
 	key := cachekey.ForRepo(owner, repo).String()
 	tl.mu.Lock()
 	if cached, ok := tl.cache[key]; ok {
@@ -131,14 +133,14 @@ func (tl *TagLister) ListTags(owner, repo string) ([]TagInfo, error) {
 		}
 		tl.mu.Unlock()
 
-		tags, err := tl.fetchTags(owner, repo)
+		tags, err := tl.fetchTags(ctx, owner, repo)
 		if err != nil {
 			return nil, err
 		}
 
 		// Enrich with tag-object SHAs so we can recognize immutable-release pins,
 		// which target the annotated tag object rather than the peeled commit.
-		if objSHAs, err := tl.fetchTagObjectSHAs(owner, repo); err == nil {
+		if objSHAs, err := tl.fetchTagObjectSHAs(ctx, owner, repo); err == nil {
 			for i := range tags {
 				if obj, ok := objSHAs[tags[i].Name]; ok && !strings.EqualFold(obj, tags[i].SHA) {
 					tags[i].TagObjectSHA = obj
@@ -146,7 +148,7 @@ func (tl *TagLister) ListTags(owner, repo string) ([]TagInfo, error) {
 			}
 		}
 
-		releaseTagSet, err := tl.fetchReleaseTags(owner, repo)
+		releaseTagSet, err := tl.fetchReleaseTags(ctx, owner, repo)
 		if err != nil {
 			// Non-fatal — releases are optional enrichment.
 			releaseTagSet = make(map[string]releaseInfo)
@@ -181,8 +183,8 @@ func (tl *TagLister) ListTags(owner, repo string) ([]TagInfo, error) {
 
 // LookupTag returns the TagInfo for a specific tag name, or nil if not found.
 // Uses the cached tag list from ListTags.
-func (tl *TagLister) LookupTag(owner, repo, tagName string) *TagInfo {
-	all, err := tl.ListTags(owner, repo)
+func (tl *TagLister) LookupTag(ctx context.Context, owner, repo, tagName string) *TagInfo {
+	all, err := tl.ListTags(ctx, owner, repo)
 	if err != nil {
 		return nil
 	}
@@ -197,8 +199,8 @@ func (tl *TagLister) LookupTag(owner, repo, tagName string) *TagInfo {
 // LatestStableTag returns the latest non-major stable tag that passes cooldown.
 // It skips major-only tags (e.g. "v4"), pre-release tags, and tags younger
 // than the cooldown period. Returns ("", nil) if no suitable tag is found.
-func (tl *TagLister) LatestStableTag(owner, repo string) (string, error) {
-	all, err := tl.ListTags(owner, repo)
+func (tl *TagLister) LatestStableTag(ctx context.Context, owner, repo string) (string, error) {
+	all, err := tl.ListTags(ctx, owner, repo)
 	if err != nil {
 		return "", err
 	}
@@ -218,7 +220,7 @@ func (tl *TagLister) LatestStableTag(owner, repo string) (string, error) {
 	return "", nil
 }
 
-func (tl *TagLister) fetchTags(owner, repo string) ([]TagInfo, error) {
+func (tl *TagLister) fetchTags(ctx context.Context, owner, repo string) ([]TagInfo, error) {
 	// Use the repos/tags endpoint — it dereferences annotated tags automatically.
 	path := fmt.Sprintf("repos/%s/%s/tags?per_page=100",
 		url.PathEscape(owner), url.PathEscape(repo))
@@ -230,7 +232,7 @@ func (tl *TagLister) fetchTags(owner, repo string) ([]TagInfo, error) {
 		} `json:"commit"`
 	}
 
-	if err := tl.client.Get(path, &apiTags); err != nil {
+	if err := tl.client.DoWithContext(ctx, http.MethodGet, path, nil, &apiTags); err != nil {
 		return nil, fmt.Errorf("fetching tags for %s/%s: %w", owner, repo, err)
 	}
 
@@ -249,7 +251,7 @@ func (tl *TagLister) fetchTags(owner, repo string) ([]TagInfo, error) {
 // SHA for lightweight tags). Immutable releases are pinned to the annotated
 // tag object SHA, which the repos/tags endpoint dereferences away, so we read
 // the raw refs here to recover it.
-func (tl *TagLister) fetchTagObjectSHAs(owner, repo string) (map[string]string, error) {
+func (tl *TagLister) fetchTagObjectSHAs(ctx context.Context, owner, repo string) (map[string]string, error) {
 	path := fmt.Sprintf("repos/%s/%s/git/matching-refs/tags?per_page=100",
 		url.PathEscape(owner), url.PathEscape(repo))
 
@@ -261,7 +263,7 @@ func (tl *TagLister) fetchTagObjectSHAs(owner, repo string) (map[string]string, 
 		} `json:"object"`
 	}
 
-	if err := tl.client.Get(path, &refs); err != nil {
+	if err := tl.client.DoWithContext(ctx, http.MethodGet, path, nil, &refs); err != nil {
 		return nil, fmt.Errorf("fetching tag refs for %s/%s: %w", owner, repo, err)
 	}
 
@@ -288,7 +290,7 @@ type releaseInfo struct {
 	IsImmutable bool
 }
 
-func (tl *TagLister) fetchReleaseTags(owner, repo string) (map[string]releaseInfo, error) {
+func (tl *TagLister) fetchReleaseTags(ctx context.Context, owner, repo string) (map[string]releaseInfo, error) {
 	path := fmt.Sprintf("repos/%s/%s/releases?per_page=30",
 		url.PathEscape(owner), url.PathEscape(repo))
 
@@ -298,7 +300,7 @@ func (tl *TagLister) fetchReleaseTags(owner, repo string) (map[string]releaseInf
 		Immutable   bool   `json:"immutable"`
 	}
 
-	if err := tl.client.Get(path, &releases); err != nil {
+	if err := tl.client.DoWithContext(ctx, http.MethodGet, path, nil, &releases); err != nil {
 		return nil, err
 	}
 
@@ -392,7 +394,7 @@ func (tl *TagLister) isTagTooNew(owner, repo, tag string) bool {
 // GetRepoInfo fetches repository visibility and default branch. Cached per
 // owner/repo. Concurrent calls for different repos run in parallel; calls
 // for the same repo are coalesced via singleflight.
-func (tl *TagLister) GetRepoInfo(owner, repo string) (*RepoInfo, error) {
+func (tl *TagLister) GetRepoInfo(ctx context.Context, owner, repo string) (*RepoInfo, error) {
 	key := cachekey.ForRepo(owner, repo).String()
 	tl.mu.Lock()
 	if cached, ok := tl.repoCache[key]; ok {
@@ -417,7 +419,7 @@ func (tl *TagLister) GetRepoInfo(owner, repo string) (*RepoInfo, error) {
 			Visibility    string `json:"visibility"`
 			PushedAt      string `json:"pushed_at"`
 		}
-		if err := tl.client.Get(path, &result); err != nil {
+		if err := tl.client.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
 			return nil, err
 		}
 
@@ -438,13 +440,13 @@ func (tl *TagLister) GetRepoInfo(owner, repo string) (*RepoInfo, error) {
 }
 
 // BranchHeadSHA returns the latest commit SHA on the given branch.
-func (tl *TagLister) BranchHeadSHA(owner, repo, branch string) (string, error) {
+func (tl *TagLister) BranchHeadSHA(ctx context.Context, owner, repo, branch string) (string, error) {
 	path := fmt.Sprintf("repos/%s/%s/commits/%s",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(branch))
 	var result struct {
 		SHA string `json:"sha"`
 	}
-	if err := tl.client.Get(path, &result); err != nil {
+	if err := tl.client.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
 		return "", err
 	}
 	return result.SHA, nil

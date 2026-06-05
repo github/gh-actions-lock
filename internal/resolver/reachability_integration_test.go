@@ -12,6 +12,7 @@
 package resolver
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestIntegration_Reachable_HeadSHA(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, v1SHA, "v1")
 	assert.Equal(t, Reachable, result.Status, "HEAD SHA should be reachable from v1: %+v", result)
 }
 
@@ -73,7 +74,7 @@ func TestIntegration_Reachable_Ancestor(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, rootSHA, "v1")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, rootSHA, "v1")
 	assert.Equal(t, Reachable, result.Status, "root commit should be ancestor of v1: %+v", result)
 }
 
@@ -84,7 +85,7 @@ func TestIntegration_Reachable_NotAtHead_ButInLineage(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, parentSHA, "v1")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, parentSHA, "v1")
 	assert.Equal(t, Reachable, result.Status,
 		"commit behind HEAD should still be reachable from v1 (tag drift): %+v", result)
 }
@@ -95,7 +96,7 @@ func TestIntegration_Unreachable_OrphanCommit(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, orphanSHA, "v1")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, orphanSHA, "v1")
 	assert.Equal(t, Unreachable, result.Status, "orphan commit should not be reachable from v1: %+v", result)
 }
 
@@ -105,7 +106,7 @@ func TestIntegration_Unreachable_NonexistentSHA(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, fakeSHA, "v1")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, fakeSHA, "v1")
 	assert.Equal(t, Unreachable, result.Status, "fake SHA should be unreachable: %+v", result)
 }
 
@@ -116,7 +117,7 @@ func TestIntegration_Unreachable_ForkNetworkInjection(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, forkAttackerSHA, "v1")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, forkAttackerSHA, "v1")
 	assert.Equal(t, Unreachable, result.Status,
 		"fork-network SHA should NOT be reachable via branch_commits check: %+v", result)
 }
@@ -139,7 +140,7 @@ func TestIntegration_Unreachable_ForkNetworkInjection_PreservedLineage(t *testin
 	// Tag "tampered" now points to forkAttackerSHA (7b403c9) which descends
 	// from v1SHA through the fork network. Without the containment check,
 	// this would incorrectly pass as Reachable.
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "tampered")
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, v1SHA, "tampered")
 	assert.Equal(t, Unreachable, result.Status,
 		"fork commit via tag manipulation should be detected even with preserved lineage: %+v", result)
 	assert.Contains(t, result.Detail, "fork-network",
@@ -153,7 +154,7 @@ func TestIntegration_SHAAsRef_ReturnsReachableWithWarning(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	result := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, v1SHA)
+	result := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, v1SHA, v1SHA)
 	assert.Equal(t, Reachable, result.Status,
 		"SHA-as-ref with valid commit should return Reachable: %+v", result)
 	assert.Contains(t, result.Detail, "bare SHA",
@@ -166,8 +167,8 @@ func TestIntegration_CacheConsistency(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	r1 := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
-	r2 := r.CheckReachability(fixtureOwner, fixtureRepo, v1SHA, "v1")
+	r1 := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, v1SHA, "v1")
+	r2 := r.CheckReachability(context.Background(), fixtureOwner, fixtureRepo, v1SHA, "v1")
 	assert.Equal(t, r1.Status, r2.Status)
 	assert.Equal(t, "cached", r2.Detail, "second call should come from cache")
 }
@@ -183,7 +184,7 @@ func TestIntegration_AnnotatedTagPeeling(t *testing.T) {
 	skipWithoutAuth(t)
 	r := newLiveResolver(t)
 
-	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []lockfile.ActionRef{
 		{Owner: fixtureOwner, Repo: fixtureRepo, Ref: "annotated-v1"},
 	})
 	require.NoError(t, err, "annotated tag must resolve through the peel")

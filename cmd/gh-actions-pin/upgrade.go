@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -123,7 +124,7 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			if !cmd.Flags().Changed("write") {
 				opts.Write = true
 			}
-			return runUpgrade(f, opts)
+			return runUpgrade(cmd.Context(), f, opts)
 		},
 	}
 
@@ -143,7 +144,10 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 	return cmd
 }
 
-func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
+func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
 	if err != nil {
 		return err
@@ -160,7 +164,7 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 		return err
 	}
 
-	store, err := lockfile.OpenStore(".", r)
+	store, err := lockfile.OpenStore(".", ctxMetadataResolver{r: r, ctx: ctx})
 	if err != nil {
 		return fmt.Errorf("opening lockfile: %w", err)
 	}
@@ -241,7 +245,7 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 				if parallel {
 					f.UI.SetWorkerStatus(slot, "→ "+j.path)
 				}
-				result, err := upgradeOneFile(f, opts, j.path, r, store, targets)
+				result, err := upgradeOneFile(ctx, f, opts, j.path, r, store, targets)
 				mu.Lock()
 				if err != nil {
 					f.UI.Error("%s: %s", j.path, err)
@@ -397,7 +401,7 @@ type upgradeFileResult struct {
 	Finding *jsonUpgradeFinding
 }
 
-func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
+func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -434,7 +438,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 			targetRef = opts.Version
 		}
 		if targetRef == "" {
-			targetRef, err = r.LatestRef(ref.Owner, ref.Repo)
+			targetRef, err = r.LatestRef(ctx, ref.Owner, ref.Repo)
 			if err != nil {
 				return nil, err
 			}
@@ -502,13 +506,13 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		f.UI.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
-	deps, parentMap, err := r.ResolveAllRecursive(upgradedRefs)
+	deps, parentMap, err := r.ResolveAllRecursive(ctx, upgradedRefs)
 	if err != nil {
 		return nil, fmt.Errorf("resolving actions: %w", err)
 	}
 	directTracker := lockfile.NewDirectTracker(upgradedRefs, deps)
 
-	if mismatches := lockfile.CheckSHARefMismatches(deps, r); len(mismatches) > 0 {
+	if mismatches := lockfile.CheckSHARefMismatches(deps, ctxTagPeeler{r: r, ctx: ctx}); len(mismatches) > 0 {
 		f.UI.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
 			f.UI.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
@@ -541,7 +545,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
 	}
-	normRewrites, err := r.NormalizeContaining(deps)
+	normRewrites, err := r.NormalizeContaining(ctx, deps)
 	if err != nil {
 		return nil, fmt.Errorf("normalizing containing refs: %w", err)
 	}
