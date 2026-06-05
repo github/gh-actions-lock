@@ -174,17 +174,24 @@ scenario_check_autofix() {
 }
 
 scenario_ci_failure() {
-  banner "CI failure on ambiguous actions"
+  banner "CI gate via JSON"
   bash "$RESET"
   local scratch wf
   scratch="$(stage_workflow demo/workflows-interactive/sha-as-ref.yml)"
   wf=".github/workflows/sha-as-ref.yml"
-  comment "One action has a tag (fixable), one is a bare SHA (needs human)"
+  comment "One action has a tag (auto-fixable), one is a bare SHA (warning)"
   run grep uses: "$scratch/$wf"
-  comment "CI mode: auto-fix what you can, fail on what you cannot"
-  ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" ) || true
-  echo -e "\n${YELLOW}Exit code: $?${RESET_COLOR}"
-  echo -e "${DIM}# CI fails — developer runs 'gh actions-pin check' locally for interactive resolution${RESET_COLOR}\n"
+  comment "Non-interactive run auto-pins permissively and exits 0"
+  set +e
+  ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" )
+  local rc=$?
+  set -e
+  echo -e "\n${YELLOW}Exit code: $rc${RESET_COLOR}\n"
+  comment "JSON surfaces the residual sha-as-ref warning the human view suppresses"
+  echo -e "${GREEN}\$ gh actions-pin check --no-interactive --json $wf 2>/dev/null | jq '{valid, findings: [.findings[] | {category, severity, dependency}]}'${RESET_COLOR}"
+  ( cd "$scratch" && gh actions-pin check --no-interactive --json "$wf" 2>/dev/null \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps({'valid': d['valid'], 'findings': [{'category': f['category'], 'severity': f['severity'], 'dependency': f['dependency']} for f in d['findings']]}, indent=2))" )
+  echo
 }
 
 scenario_sha_as_ref() {
@@ -344,8 +351,14 @@ scenario_ref_moved() {
   wf=".github/workflows/5-pinned-before-update.yml"
   comment "Workflow pinned before tag moved forward (normal release)"
   run show_workflow_summary "$scratch/$wf"
+  # Human-readable view suppresses ref-moved (warning severity); the finding
+  # only surfaces via --json. --rescan bypasses the lockfile fast path so the
+  # resolver actually re-checks the upstream ref.
   comment "Check detects the tag now points to a newer commit"
-  ( cd "$scratch" && run gh actions-pin check "$wf" )
+  echo -e "${GREEN}\$ gh actions-pin check --rescan --json $wf 2>/dev/null | jq '.findings[] | {category, severity, detail}'${RESET_COLOR}"
+  ( cd "$scratch" && gh actions-pin check --rescan --json "$wf" 2>/dev/null \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); [print(json.dumps({'category': f['category'], 'severity': f['severity'], 'detail': f.get('detail','')}, indent=2)) for f in d['findings']]" )
+  echo
 }
 
 scenario_impostor_commit() {
@@ -356,8 +369,16 @@ scenario_impostor_commit() {
   wf=".github/workflows/1-pinned-before-hijack.yml"
   comment "Workflow pinned BEFORE the tag was hijacked"
   run show_workflow_summary "$scratch/$wf"
-  comment "Check detects the tag moved to a fork-network commit"
-  ( cd "$scratch" && run gh actions-pin check "$wf" )
+  # The CLI classifies a moved tag as ref-moved regardless of whether the new
+  # SHA is in the fork network — impostor-commit is not surfaced as a distinct
+  # category for this fixture. The fork-injection narrative still holds
+  # operationally (a hijacked tag would trip the same detector).
+  # Findings only surface via --json; --rescan bypasses the lockfile fast path.
+  comment "Check detects the tag moved (would catch fork-network injection)"
+  echo -e "${GREEN}\$ gh actions-pin check --rescan --json $wf 2>/dev/null | jq '.findings[] | {category, severity, dependency, detail}'${RESET_COLOR}"
+  ( cd "$scratch" && gh actions-pin check --rescan --json "$wf" 2>/dev/null \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); [print(json.dumps({'category': f['category'], 'severity': f['severity'], 'dependency': f.get('dependency',''), 'detail': f.get('detail','')}, indent=2)) for f in d['findings']]" )
+  echo
 }
 
 scenario_lockfile_forgery() {
@@ -368,8 +389,8 @@ scenario_lockfile_forgery() {
   wf=".github/workflows/6-lockfile-forgery.yml"
   comment "Lockfile was tampered with — pinned SHA replaced by a fork commit"
   run show_workflow_summary "$scratch/$wf"
-  comment "Check detects the pinned SHA is not an ancestor of the live ref"
-  ( cd "$scratch" && run gh actions-pin check "$wf" )
+  comment "Check detects the pinned SHA is not an ancestor of the live ref (--rescan bypasses the lockfile fast path)"
+  ( cd "$scratch" && run gh actions-pin check --rescan "$wf" ) || true
 }
 
 scenario_json_output() {
@@ -444,9 +465,9 @@ for name in sorted(wf_map):
         lines.append(f"    - '{pin}'")
 (outdir / "actions.lock").write_text("\n".join(lines) + "\n")
 PY
-  comment "Machine-readable output for CI pipelines"
-  echo -e "${GREEN}\$ gh actions-pin check --json .github/workflows/*.yml 2>/dev/null | jq .${RESET_COLOR}"
-  ( cd "$scratch" && gh actions-pin check --json "${wf_args[@]}" 2>/dev/null | python3 -m json.tool )
+  comment "Machine-readable output for CI pipelines (--rescan re-verifies every pin against upstream)"
+  echo -e "${GREEN}\$ gh actions-pin check --rescan --json .github/workflows/*.yml 2>/dev/null | jq .${RESET_COLOR}"
+  ( cd "$scratch" && gh actions-pin check --rescan --json "${wf_args[@]}" 2>/dev/null | python3 -m json.tool ) || true
   echo
 }
 
