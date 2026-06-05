@@ -1,14 +1,12 @@
 package doctor
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/lockfile/diagnostics"
 	"github.com/github/gh-actions-pin/internal/resolver"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // Diagnose scans a set of workflows and produces findings for each.
@@ -233,8 +231,6 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 
-	wfKey := lockfile.WorkflowKeyFromPath(pw.Path)
-	wfInput := buildEngineWorkflowInput(wfKey, pw.Refs)
 	var reach []resolver.ReachabilityResult
 	if r != nil && len(pw.ExistingDeps) > 0 {
 		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
@@ -243,24 +239,20 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			reach = append(reach, r.CheckReachabilityAll(toCheck)...)
 		}
 	}
-	var engineRes diagnostics.Resolver
+	var checkR checkResolver
 	if r != nil && liveDeps != nil {
-		engineRes = newEngineResolver(r, liveDeps, reach)
+		checkR = newPrewarmedResolver(r, liveDeps, reach)
 	}
-	engineFindings := diagnostics.Run(
-		context.Background(),
-		store.File(),
-		[]diagnostics.WorkflowInput{wfInput},
-		diagnostics.Options{Resolver: engineRes},
-	)
+	rawFindings := runChecks(pw, store.File(), checkR)
 
-	refByKey := indexRefs(pw.Refs)
 	depByKey := indexDeps(pw.ExistingDeps)
-	for _, ef := range engineFindings {
-		if ef.Code == diagnostics.CodeStale && isTransitivePin(ef, depByKey, parentMap) {
+	for _, f := range rawFindings {
+		if f.Category == CategoryStale && isTransitivePin(f, depByKey, parentMap) {
 			continue
 		}
-		wr.Findings = append(wr.Findings, translateFinding(pw.Path, ef, refByKey, depByKey, directNWOs, parentMap))
+		attachParent(&f, depByKey, directNWOs, parentMap)
+		f.DocURL = DocURLFor(f.Category)
+		wr.Findings = append(wr.Findings, f)
 	}
 
 	if len(reach) > 0 {
@@ -279,27 +271,6 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	return wr
 }
 
-func buildEngineWorkflowInput(wfKey string, refs []parserlock.ActionRef) diagnostics.WorkflowInput {
-	uses := make([]diagnostics.UsesRef, 0, len(refs))
-	for _, ref := range refs {
-		uses = append(uses, diagnostics.UsesRef{
-			Owner: ref.Owner,
-			Repo:  ref.Repo,
-			Path:  ref.Path,
-			Ref:   ref.Ref,
-		})
-	}
-	return diagnostics.WorkflowInput{Path: wfKey, Uses: uses}
-}
-
-func indexRefs(refs []parserlock.ActionRef) map[string]parserlock.ActionRef {
-	out := make(map[string]parserlock.ActionRef, len(refs))
-	for _, ref := range refs {
-		out[ref.FullName()+"@"+ref.Ref] = ref
-	}
-	return out
-}
-
 func indexDeps(deps []lockfile.Dependency) map[string]lockfile.Dependency {
 	out := make(map[string]lockfile.Dependency, len(deps))
 	for _, dep := range deps {
@@ -308,84 +279,43 @@ func indexDeps(deps []lockfile.Dependency) map[string]lockfile.Dependency {
 	return out
 }
 
-// translateFinding converts an engine diagnostic into a doctor Finding,
-// re-attaching the source ActionRef/Dependency pointers the CLI needs for
-// rendering.
-func translateFinding(
-	path string,
-	ef diagnostics.Finding,
-	refByKey map[string]parserlock.ActionRef,
-	depByKey map[string]lockfile.Dependency,
-	directNWOs map[string]bool,
-	parentMap map[string][]string,
-) Finding {
-	df := Finding{
-		WorkflowPath: path,
-		Category:     Category(ef.Code),
-		Severity:     mapEngineSeverity(ef.Severity),
-		Detail:       ef.Message,
-		Remediation:  ef.Remediation,
-		LiveSHA:      ef.LiveSha,
-		DocURL:       DocURLFor(Category(ef.Code)),
+// attachParent looks up the dep's composite-expansion parents (if any)
+// and surfaces the first one as Finding.ParentNWO. Direct (workflow-level)
+// uses don't get a parent attached even if one exists in the graph.
+//
+// Findings emitted by runChecks already carry an ActionRef for direct uses
+// and a Dependency synthesized from the workflow ref / lockfile pin. This
+// is purely about pointing the user at the composite that pulled in a
+// transitively-pinned dep.
+func attachParent(f *Finding, depByKey map[string]lockfile.Dependency, directNWOs map[string]bool, parentMap map[string][]string) {
+	if f.Dependency == nil {
+		return
 	}
-
-	fullName := ef.Owner + "/" + ef.Repo
-	if ef.Path != "" {
-		fullName += "/" + ef.Path
+	if directNWOs[f.Dependency.NWO] {
+		return
 	}
-	key := fullName + "@" + ef.Ref
-	// depByKey is indexed by dep.Key() = dep.NWO+"@"+dep.Ref, which never
-	// includes the sub-path. Look up by owner/repo@ref so sub-path actions
-	// (e.g. owner/repo/sub-action@ref) match their lockfile entry.
-	baseDepKey := ef.Owner + "/" + ef.Repo + "@" + ef.Ref
-
-	if ref, ok := refByKey[key]; ok {
-		refCopy := ref
-		df.ActionRef = &refCopy
+	// Prefer the dep snapshot from the workflow's ExistingDeps (it has the
+	// canonical NWO casing the parent map keys with). Synthesised deps
+	// already match — but the indexed lookup is cheap regardless.
+	key := f.Dependency.Key()
+	if dep, ok := depByKey[key]; ok {
+		key = dep.Key()
 	}
-	if dep, ok := depByKey[baseDepKey]; ok {
-		depCopy := dep
-		df.Dependency = &depCopy
-	} else if ef.LockedSha != "" {
-		df.Dependency = &lockfile.Dependency{
-			NWO:  ef.Owner + "/" + ef.Repo,
-			Path: ef.Path,
-			Ref:  ef.Ref,
-			SHA:  ef.LockedSha,
-		}
-	}
-
-	if df.Dependency != nil && !directNWOs[ef.Owner+"/"+ef.Repo] {
-		if parents := parentMap[df.Dependency.Key()]; len(parents) > 0 {
-			df.ParentNWO = parents[0]
-		}
-	}
-
-	return df
-}
-
-func mapEngineSeverity(s diagnostics.Severity) Severity {
-	switch s {
-	case diagnostics.SeverityError:
-		return SeverityError
-	case diagnostics.SeverityWarning:
-		return SeverityWarning
-	case diagnostics.SeverityInfo:
-		return SeverityInfo
-	default:
-		return SeverityInfo
+	if parents := parentMap[key]; len(parents) > 0 {
+		f.ParentNWO = parents[0]
 	}
 }
 
-// isTransitivePin reports whether the engine finding refers to a dep
-// reached via composite expansion (i.e. has parents in the parent map).
-func isTransitivePin(ef diagnostics.Finding, depByKey map[string]lockfile.Dependency, parentMap map[string][]string) bool {
-	key := ef.Owner + "/" + ef.Repo + "@" + ef.Ref
-	dep, ok := depByKey[key]
-	if !ok {
+// isTransitivePin reports whether the finding refers to a dep reached via
+// composite expansion (i.e. has parents in the parent map).
+func isTransitivePin(f Finding, depByKey map[string]lockfile.Dependency, parentMap map[string][]string) bool {
+	if f.Dependency == nil {
 		return false
 	}
-	return len(parentMap[dep.Key()]) > 0
+	if _, ok := depByKey[f.Dependency.Key()]; !ok {
+		return false
+	}
+	return len(parentMap[f.Dependency.Key()]) > 0
 }
 
 // CollectReachDeps returns the deduplicated union of existing deps across the
