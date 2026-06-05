@@ -432,6 +432,17 @@ func (rem *Remediator) Remediate(report *Report) error {
 	for i, wr := range actionable {
 		rem.curWorkflow = i + 1
 		rem.totalWorkflows = len(actionable)
+		// Keep the spinner header informative during Pass A: long
+		// sub-operations (SuggestTagsForSHA, GetRepoInfo, etc.) run
+		// without firing the resolver's progress callback, which used
+		// to leave the user looking at a bare "Pinning dependencies"
+		// for seconds at a time. Anchoring the label to [i/N] and
+		// pinning the current target to worker slot 0 guarantees the
+		// spinner always reflects forward motion and a current file.
+		if rem.output.IsTTY() {
+			rem.output.UpdateLabel(fmt.Sprintf("[%d/%d] Pinning dependencies", i+1, len(actionable)))
+			rem.output.SetWorkerStatus(0, "→ "+wr.Path)
+		}
 		if err := rem.remediateWorkflow(wr); err != nil {
 			if errors.Is(err, errWorkflowAlerted) {
 				// Security gate tripped for this workflow: it's already been
@@ -467,6 +478,25 @@ func (rem *Remediator) submitPin(wr WorkflowReport) error {
 	return rem.applyPin(wr)
 }
 
+// dedupePinsByPath returns pins with duplicate Path entries removed, keeping
+// the first occurrence of each path. submitPin runs once per finding, so a
+// workflow with multiple findings can end up enqueued multiple times; running
+// applyPin more than once on the same file is wasted work (it always pins
+// every action in the file in one pass) and produces stacked, identical-looking
+// sub-spinner rows in the UI.
+func dedupePinsByPath(pins []WorkflowReport) []WorkflowReport {
+	seen := make(map[string]struct{}, len(pins))
+	out := make([]WorkflowReport, 0, len(pins))
+	for _, p := range pins {
+		if _, ok := seen[p.Path]; ok {
+			continue
+		}
+		seen[p.Path] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
 // runPinWorkers drains rem.pendingPins through a bounded pool, surfacing each
 // worker's current workflow as a subdued row beneath the top spinner. Errors
 // other than errWorkflowAlerted are aggregated; the first one is returned
@@ -477,6 +507,15 @@ func (rem *Remediator) runPinWorkers() error {
 	if len(pins) == 0 {
 		return nil
 	}
+
+	// Dedupe by workflow path. submitPin is called once per *finding* (e.g.
+	// each SHA-as-ref handler ends in applySHAToTag → submitPin), so a
+	// workflow with three findings would otherwise show up three times in
+	// the pool — three workers pinning the same file in parallel, three
+	// stacked sub-spinner rows reading "codeql.yml … codeql.yml … codeql.yml".
+	// applyPin already pins every action in the file in one shot, so the
+	// extras are pure waste. Keep the first occurrence to preserve order.
+	pins = dedupePinsByPath(pins)
 
 	if dbg := os.Getenv("GH_ACTIONS_PIN_DEBUG_PINS"); dbg != "" {
 		seen := map[string]int{}
