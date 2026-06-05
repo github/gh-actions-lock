@@ -278,3 +278,85 @@ func TestStore_SaveGCHandlesCyclicUses(t *testing.T) {
 		t.Errorf("expected %s to survive GC (reachable via cyclic uses:), keys=%v", bPin, actionKeys(store2.file.Actions))
 	}
 }
+
+// TestStore_SaveIsByteDeterministic guarantees Save produces byte-identical
+// output for the same logical content across two independent runs. This is
+// the G8 contract for Dependabot: the platform diffs fetched-vs-written
+// content and drops unchanged files, so any nondeterminism (map iteration
+// order, embedded timestamps, unstable list ordering) either produces
+// phantom diffs on every run or causes real pin changes to be silently
+// dropped during grouped updates.
+//
+// If this test fails, the writer in marshalDeterministic has reintroduced
+// nondeterminism. Sort all map iterations, do not embed timestamps, and
+// keep list ordering stable.
+func TestStore_SaveIsByteDeterministic(t *testing.T) {
+// Build a non-trivial store: two workflows, multiple actions, a diamond
+// transitive dep so we exercise the parent-map / uses-list sort paths.
+deps := []Dependency{
+{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
+{NWO: "owner/b", Ref: "v2", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1", Branch: "main"},
+{NWO: "shared/dep", Ref: "v3", SHA: "cccccccccccccccccccccccccccccccccccccccc", HashAlgo: "sha1", Branch: "main"},
+{NWO: "owner/extra", Ref: "v4", SHA: "dddddddddddddddddddddddddddddddddddddddd", HashAlgo: "sha1", Branch: "main"},
+}
+parentMap := map[string][]string{
+"shared/dep@v3": {"owner/a@v1", "owner/b@v2"},
+}
+directKeys := map[string]bool{
+"owner/a@v1":     true,
+"owner/b@v2":     true,
+"owner/extra@v4": true,
+}
+
+build := func() []byte {
+dir := t.TempDir()
+if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+t.Fatal(err)
+}
+store, err := OpenStore(dir, fakeMetadataResolver{})
+if err != nil {
+t.Fatalf("opening store: %v", err)
+}
+if err := store.Set(".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
+t.Fatalf("Set ci.yml: %v", err)
+}
+if err := store.Set(".github/workflows/release.yml", deps, parentMap, directKeys); err != nil {
+t.Fatalf("Set release.yml: %v", err)
+}
+if err := store.Save(); err != nil {
+t.Fatalf("Save: %v", err)
+}
+raw, err := os.ReadFile(filepath.Join(dir, Path))
+if err != nil {
+t.Fatalf("read lockfile: %v", err)
+}
+return raw
+}
+
+first := build()
+second := build()
+
+if !bytesEqual(first, second) {
+t.Fatalf("Save is non-deterministic: byte-for-byte mismatch between runs\n--- first run (%d bytes) ---\n%s\n--- second run (%d bytes) ---\n%s",
+len(first), string(first), len(second), string(second))
+}
+
+// Sanity guard: ensure we actually wrote a non-trivial lockfile (so a
+// future refactor that accidentally short-circuits Save can't make this
+// test pass vacuously).
+if !strings.Contains(string(first), "shared/dep@v3") {
+t.Fatalf("expected lockfile to contain shared/dep@v3, got:\n%s", string(first))
+}
+}
+
+func bytesEqual(a, b []byte) bool {
+if len(a) != len(b) {
+return false
+}
+for i := range a {
+if a[i] != b[i] {
+return false
+}
+}
+return true
+}
