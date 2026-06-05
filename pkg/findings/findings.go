@@ -1,28 +1,13 @@
-// Package findings is the staged-for-extraction vocabulary of diagnostic
-// categories, severities, and confidence levels used by gh-actions-pin and
-// any future consumer that wants to reason about action-pinning findings
-// without taking a dependency on the CLI's internals.
+// Package findings holds the diagnostic vocabulary (categories,
+// severities, confidence levels) emitted by gh-actions-pin.
 //
-// This package is intentionally pure: it imports nothing outside the
-// standard library. No HTTP, no filesystem, no go-gh, no internal/*.
-// Finding is a data struct — constructors do no validation, no network
-// calls, no I/O.
-//
-// Stability contract:
-//   - Category, Severity, and Confidence string values are part of the
-//     public schema. Renaming any of them is a breaking change. The
-//     TestCategoryStringsAreFrozen / TestSeverityStringsAreFrozen /
-//     TestConfidenceStringsAreFrozen tests guard against accidental
-//     renames.
-//   - Finding struct fields are additive-only post-cut. Adding fields is
-//     fine; renaming or removing one is a breaking change.
-//   - Severity and Confidence are deliberately separate axes: how bad
-//     the issue would be if real, vs. how certain we are that it is real.
+// The Category, Severity, and Confidence string values are part of the
+// public schema; renaming one is a breaking change and the frozen-string
+// tests in this package guard against it. Finding struct fields are
+// additive-only after the initial cut.
 package findings
 
-// Category classifies the state of a workflow or individual action
-// dependency. The string values are semver-protected (see package
-// docs).
+// Category classifies the state of a workflow or action dependency.
 type Category string
 
 const (
@@ -85,100 +70,70 @@ const (
 	SeverityError Severity = "error"
 )
 
-// Confidence describes how strongly the producer stands behind a
-// finding, modeled on zizmor's audit output. It complements Severity
-// (how bad the issue would be if real) by capturing how certain we are
-// that the issue IS real. The three levels are deliberately coarse —
-// finer gradations invite bikeshedding without helping consumers act.
+// Confidence is how certain the producer is the finding is real,
+// modeled on zizmor's audit output.
 type Confidence string
 
 const (
-	// ConfidenceLow signals the finding is informational or rests on
-	// a signal that could not be fully verified (resolver/network
-	// failure, reachability inconclusive). Treat as a hint, not a
-	// verdict.
+	// ConfidenceLow: signal could not be fully verified (resolver
+	// failure, reachability inconclusive).
 	ConfidenceLow Confidence = "low"
-	// ConfidenceMedium signals the finding rests on a fallback
-	// inference — no authoritative answer was available (rate
-	// limit, partial API response) and the finding was inferred
-	// from secondary shape (tag-object peel, AncestryUnknown).
-	// Likely real but worth double-checking.
+	// ConfidenceMedium: inferred from a fallback (tag-object peel,
+	// ancestry unknown due to rate limit).
 	ConfidenceMedium Confidence = "medium"
-	// ConfidenceHigh signals the finding rests on direct,
-	// authoritative data: a string mismatch the user can verify by
-	// eye, an exact SHA comparison, or a reachability answer from
-	// the upstream API. Act on these.
+	// ConfidenceHigh: rests on authoritative data (exact SHA
+	// comparison, upstream reachability answer).
 	ConfidenceHigh Confidence = "high"
 )
 
 // Location identifies where in a source artifact a finding originated.
-// All fields are optional: an empty Location is valid for findings that
-// don't bind to a file (e.g. repo-level findings).
+// All fields are optional; an empty Location is valid for repo-level
+// findings that don't bind to a file.
 type Location struct {
-	// URI is the location's source identifier — typically a
-	// repo-relative path to a workflow YAML or lockfile YAML. May
-	// also be a URL for non-file sources.
+	// URI is typically a repo-relative path to a workflow or lockfile.
 	URI string
-	// Line is the 1-based line number; 0 means unspecified.
+	// Line is 1-based; 0 means unspecified.
 	Line int
-	// Column is the 1-based column number; 0 means unspecified.
+	// Column is 1-based; 0 means unspecified.
 	Column int
 }
 
-// Subject identifies the action dependency a finding is about.
-// All fields are optional; populate what the producer knows.
+// Subject identifies the action dependency a finding is about. All
+// fields are optional; populate what the producer knows.
 type Subject struct {
-	// NWO is the owner/repo (or owner/repo/path for subdirectory
-	// actions) the finding is about.
+	// NWO is owner/repo, or owner/repo/path for subdirectory actions.
 	NWO string
-	// Ref is the workflow-declared ref (tag, branch, or SHA) for
-	// the action.
+	// Ref is the workflow-declared ref (tag, branch, or SHA).
 	Ref string
-	// SHA is the resolved commit SHA for the action, when known.
+	// SHA is the resolved commit SHA, when known.
 	SHA string
 }
 
 // Finding is a single diagnosed issue (or clean bill) emitted by a
-// producer. It is pure data: no methods, no validation. Producers
-// populate the fields they know; consumers tolerate empty fields.
+// producer. Producers populate the fields they know; consumers
+// tolerate empty fields.
 //
-// This struct is the staged-for-extraction public shape. Internal
-// producers (internal/doctor) carry richer per-finding context on
-// their own Finding type and translate to this shape at the boundary
-// when needed.
+// Internal producers (internal/doctor) carry richer per-finding
+// context on their own Finding type and translate to this shape at
+// the boundary.
 type Finding struct {
-	// Category is the kind of finding (see Category constants).
-	Category Category
-	// Severity is how serious the finding is if real.
-	Severity Severity
-	// Confidence is how certain the producer is that the finding is
-	// real.
-	Confidence Confidence
-	// Message is a human-readable explanation of the finding.
-	Message string
-	// Remediation describes how the operator can resolve the
-	// finding.
+	Category    Category
+	Severity    Severity
+	Confidence  Confidence
+	Message     string
 	Remediation string
-	// Location identifies where in a source artifact the finding
-	// originated. May be empty for repo-level findings.
-	Location Location
-	// Subject identifies the action dependency the finding is
-	// about. May be empty for findings not tied to an action.
-	Subject Subject
-	// ObservedSHA is the SHA the resolver got at scan time,
-	// recorded when it differs from the pinned SHA (e.g.
-	// ref-moved, misleading-sha, lockfile-forgery). Empty when
-	// not applicable.
+	Location    Location
+	Subject     Subject
+	// ObservedSHA is the SHA the resolver got at scan time, recorded
+	// when it differs from the pinned SHA (ref-moved, misleading-sha,
+	// lockfile-forgery).
 	ObservedSHA string
 	// HelpURI points to documentation explaining the finding.
-	// Empty when no URL is mapped.
 	HelpURI string
 }
 
-// Report aggregates findings emitted by a single producer run. Future
-// aggregate fields (counts, summary, metadata) may be added — the
-// struct is additive-only post-cut.
+// Report aggregates findings from a single producer run. Fields are
+// additive-only.
 type Report struct {
-	// Findings is the flat list of findings the producer emitted.
 	Findings []Finding
 }
