@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
@@ -108,11 +109,11 @@ func ParseAll(paths []string, store *lockfile.Store, onScan func(done, total int
 // across all parsed workflows. Use the returned slices to pre-warm the
 // resolver caches once before per-workflow diagnostics.
 func CollectResolvable(parsed []ParsedWorkflow) ([]parserlock.ActionRef, []lockfile.Dependency) {
-	seenRef := make(map[string]bool)
+	seenRef := make(map[cachekey.ActionRef]bool)
 	var refs []parserlock.ActionRef
 	for _, pw := range parsed {
 		for _, ref := range pw.Refs {
-			key := ref.FullName() + "@" + ref.Ref
+			key := cachekey.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 			if seenRef[key] {
 				continue
 			}
@@ -194,9 +195,9 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 	}
 	wr.Deps = pw.ExistingDeps
 
-	directNWOs := make(map[string]bool, len(pw.Refs))
+	directNWOs := make(map[cachekey.Repo]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {
-		directNWOs[ref.NWO()] = true
+		directNWOs[cachekey.ForRepo(ref.Owner, ref.Repo)] = true
 	}
 
 	// Resolve live state: hits cache when ParseAll's caller pre-warmed the
@@ -222,7 +223,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 		wr.Inventory = append(wr.Inventory, InventoryEntry{
 			Dep:    dep,
 			File:   pw.Path,
-			Direct: directNWOs[owner+"/"+repo],
+			Direct: directNWOs[cachekey.ForRepo(owner, repo)],
 		})
 	}
 	parentMap := map[string][]string{}
@@ -287,11 +288,12 @@ func indexDeps(deps []lockfile.Dependency) map[string]lockfile.Dependency {
 // and a Dependency synthesized from the workflow ref / lockfile pin. This
 // is purely about pointing the user at the composite that pulled in a
 // transitively-pinned dep.
-func attachParent(f *Finding, depByKey map[string]lockfile.Dependency, directNWOs map[string]bool, parentMap map[string][]string) {
+func attachParent(f *Finding, depByKey map[string]lockfile.Dependency, directNWOs map[cachekey.Repo]bool, parentMap map[string][]string) {
 	if f.Dependency == nil {
 		return
 	}
-	if directNWOs[f.Dependency.NWO] {
+	owner, repo := f.Dependency.OwnerRepo()
+	if directNWOs[cachekey.ForRepo(owner, repo)] {
 		return
 	}
 	// Prefer the dep snapshot from the workflow's ExistingDeps (it has the
@@ -418,7 +420,7 @@ func reachabilityComplementFindings(
 	path string,
 	reach []resolver.ReachabilityResult,
 	deps []lockfile.Dependency,
-	directNWOs map[string]bool,
+	directNWOs map[cachekey.Repo]bool,
 	parentMap map[string][]string,
 	existing []Finding,
 ) []Finding {
@@ -446,7 +448,7 @@ func reachabilityComplementFindings(
 		}
 		depCopy := dep
 		owner, repo := dep.OwnerRepo()
-		direct := directNWOs[owner+"/"+repo]
+		direct := directNWOs[cachekey.ForRepo(owner, repo)]
 		parent := ""
 		if parents := parentMap[rr.DepKey]; len(parents) > 0 {
 			parent = parents[0]

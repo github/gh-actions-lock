@@ -10,11 +10,12 @@ import (
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/doctor/pinpool"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
+	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // RemediateOptions controls the remediation flow.
@@ -1073,7 +1074,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	// Session memory: reuse prior internal ref choice for same-owner repos (any SHA).
 	if rem.isSameOwner(owner) {
 		nwo := owner + "/" + repo
-		if priorRef, ok := rem.state.internalRefChoices[nwo]; ok {
+		if priorRef, ok := rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)]; ok {
 			rem.output.Detail("  ↳ reusing prior choice for %s: %s", nwo, priorRef)
 			return rem.applySHAToTag(wr, dep, owner, repo, priorRef)
 		}
@@ -1106,8 +1107,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 				commitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, dep.SHA)
 				shaLabel := rem.output.Hyperlink(dep.SHA[:12], commitURL)
 				rem.output.Detail("  ↳ already installed to %s (%s)  %s", tag.Name, shaLabel, tagLink)
-				nwo := owner + "/" + repo
-				rem.state.internalRefChoices[nwo] = tag.Name
+				rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = tag.Name
 				rem.state.recordChoice(dep, tag.Name)
 				return rem.applySHAToTag(wr, dep, owner, repo, tag.Name)
 			}
@@ -1115,8 +1115,7 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 		// No tag match — use default branch.
 		if info, err := rem.tagLister.GetRepoInfo(owner, repo); err == nil {
 			rem.output.Detail("  ↳ using %s (default branch) for %s/%s", info.DefaultBranch, owner, repo)
-			nwo := owner + "/" + repo
-			rem.state.internalRefChoices[nwo] = info.DefaultBranch
+			rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = info.DefaultBranch
 			return rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch)
 		}
 	}
@@ -1213,7 +1212,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 		}
 		rem.output.Detail("  ↳ only one tag available — pinning to %s  %s", selectedTag.Name, tagLink)
 		if rem.isSameOwner(owner) {
-			rem.state.internalRefChoices[owner+"/"+repo] = selectedTag.Name
+			rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = selectedTag.Name
 		}
 		if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
 			return err
@@ -1239,7 +1238,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 		return rem.handleSHATagPicker(wr, finding, owner, repo)
 	case pickerDefaultBranch:
 		info, _ := rem.tagLister.GetRepoInfo(owner, repo)
-		rem.state.internalRefChoices[owner+"/"+repo] = info.DefaultBranch
+		rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = info.DefaultBranch
 		if err := rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch); err != nil {
 			return err
 		}
@@ -1248,7 +1247,7 @@ func (rem *Remediator) handleSHAWithSuggestions(wr WorkflowReport, finding Findi
 	default:
 		selectedTag := reordered[result.TagIndex].Tag
 		if rem.isSameOwner(owner) {
-			rem.state.internalRefChoices[owner+"/"+repo] = selectedTag.Name
+			rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = selectedTag.Name
 		}
 		if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
 			return err
@@ -1301,7 +1300,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 		}
 		rem.output.Detail("  ↳ only one tag available — pinning to %s  %s", selectedTag.Name, tagLink)
 		if rem.isSameOwner(owner) {
-			rem.state.internalRefChoices[owner+"/"+repo] = selectedTag.Name
+			rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = selectedTag.Name
 		}
 		if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
 			return err
@@ -1353,7 +1352,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 		return nil
 	case pickerDefaultBranch:
 		info, _ := rem.tagLister.GetRepoInfo(owner, repo)
-		rem.state.internalRefChoices[owner+"/"+repo] = info.DefaultBranch
+		rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = info.DefaultBranch
 		if err := rem.applySHAToTag(wr, dep, owner, repo, info.DefaultBranch); err != nil {
 			return err
 		}
@@ -1362,7 +1361,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 	default:
 		selectedTag := curated[result.TagIndex].Tag
 		if rem.isSameOwner(owner) {
-			rem.state.internalRefChoices[owner+"/"+repo] = selectedTag.Name
+			rem.state.internalRefChoices[cachekey.ForRepo(owner, repo)] = selectedTag.Name
 		}
 		if err := rem.applySHAToTag(wr, dep, owner, repo, selectedTag.Name); err != nil {
 			return err

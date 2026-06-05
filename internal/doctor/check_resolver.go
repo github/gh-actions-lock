@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
@@ -34,8 +35,8 @@ type checkResolver interface {
 // delegate to the resolver's own cache.
 type prewarmedResolver struct {
 	inner *resolver.Resolver
-	refs  map[string]string                      // owner/repo@ref -> sha
-	reach map[string]resolver.ReachabilityStatus // owner/repo@sha@ref -> status
+	refs  map[cachekey.NWORef]string                     // (owner/repo, ref) -> sha
+	reach map[cachekey.Reach]resolver.ReachabilityStatus // (owner/repo, sha, ref) -> status
 }
 
 // newPrewarmedResolver primes the adapter with the live resolution of
@@ -44,21 +45,21 @@ type prewarmedResolver struct {
 func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult) *prewarmedResolver {
 	a := &prewarmedResolver{
 		inner: r,
-		refs:  make(map[string]string, len(live)),
-		reach: make(map[string]resolver.ReachabilityStatus, len(reach)),
+		refs:  make(map[cachekey.NWORef]string, len(live)),
+		reach: make(map[cachekey.Reach]resolver.ReachabilityStatus, len(reach)),
 	}
 	for _, d := range live {
-		a.refs[d.NWO+"@"+d.Ref] = d.SHA
+		owner, repo := d.OwnerRepo()
+		a.refs[cachekey.ForNWORef(owner, repo, d.Ref)] = d.SHA
 	}
 	for _, rr := range reach {
-		key := rr.Owner + "/" + rr.Repo + "@" + rr.SHA + "@" + rr.Ref
-		a.reach[key] = rr.Status
+		a.reach[cachekey.ForReach(rr.Owner, rr.Repo, rr.SHA, rr.Ref)] = rr.Status
 	}
 	return a
 }
 
 func (a *prewarmedResolver) ResolveRef(owner, repo, ref string) (string, bool) {
-	sha, ok := a.refs[owner+"/"+repo+"@"+ref]
+	sha, ok := a.refs[cachekey.ForNWORef(owner, repo, ref)]
 	return sha, ok
 }
 
@@ -78,7 +79,7 @@ func (a *prewarmedResolver) CheckAncestry(owner, repo, candidate, head string) r
 }
 
 func (a *prewarmedResolver) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus {
-	if s, ok := a.reach[owner+"/"+repo+"@"+sha+"@"+ref]; ok {
+	if s, ok := a.reach[cachekey.ForReach(owner, repo, sha, ref)]; ok {
 		return s
 	}
 	return resolver.ReachabilityUnknown

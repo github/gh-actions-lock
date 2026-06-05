@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 )
@@ -74,7 +75,7 @@ func EnrichImposterFindings(report *Report, tl *TagLister, r reachabilityChecker
 	// Cache per owner/repo so multiple imposter findings against the same
 	// action share a single tag walk + reachability sweep.
 	type suggestion struct{ tag, sha string }
-	cache := make(map[string]suggestion)
+	cache := make(map[cachekey.Repo]suggestion)
 	for i := range report.Workflows {
 		wf := &report.Workflows[i]
 		for j := range wf.Findings {
@@ -86,7 +87,7 @@ func EnrichImposterFindings(report *Report, tl *TagLister, r reachabilityChecker
 			if owner == "" || repo == "" {
 				continue
 			}
-			key := owner + "/" + repo
+			key := cachekey.ForRepo(owner, repo)
 			s, ok := cache[key]
 			if !ok {
 				t, sha := FindSaneRelease(tl, r, owner, repo)
