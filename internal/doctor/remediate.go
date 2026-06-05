@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/doctor/pinpool"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
@@ -329,7 +329,7 @@ func (rem *Remediator) markUnresolved(key string) {
 // pinPoolSize is the default size of the parallel pin worker pool.
 // Matches resolver.reachabilityConcurrency so the two phases consume the
 // same rough number of in-flight HTTP requests per pinning session.
-const pinPoolSize = 8
+const pinPoolSize = pinpool.DefaultWorkers
 
 // incFixed / incSkipped / incAlerted increment summary counters under the
 // Remediator mutex. They exist so apply.go callers (which may run from the
@@ -495,18 +495,10 @@ func (rem *Remediator) runPinWorkers() error {
 		fmt.Fprintf(os.Stderr, "\n[debug] pendingPins total=%d unique=%d dups=%v\n", len(pins), len(seen), dups)
 	}
 
-	workers := rem.pinWorkers
-	if workers <= 0 {
-		workers = pinPoolSize
-	}
-	if workers > len(pins) {
-		workers = len(pins)
-	}
-
-	// Hand the spinner over to per-worker rows: the top label tracks
-	// progress, the resolver's own callback is hushed (workers own the
-	// detail area now), and slot 0's "Pinning dependencies" detail is wiped
-	// so the first worker row doesn't appear to be paired with stale text.
+	// Hand the spinner over to per-worker rows: the resolver's own callback
+	// is hushed (workers own the detail area now) and slot 0's "Pinning
+	// dependencies" detail is wiped so the first worker row doesn't appear
+	// to be paired with stale text.
 	if rem.output.IsTTY() {
 		rem.output.UpdateProgress("")
 		rem.output.ClearWorkerStatuses()
@@ -521,52 +513,25 @@ func (rem *Remediator) runPinWorkers() error {
 		}
 	}()
 
-	total := int64(len(pins))
-	var done atomic.Int64
-	updateLabel := func() {
-		// Match the parent "Pinning dependencies" wording so the headless
-		// label-stem dedup collapses parent + per-worker counter into one
-		// phase line instead of emitting a second "Pinning workflows" header.
-		rem.output.UpdateLabel(fmt.Sprintf("[%d/%d] Pinning dependencies", done.Load(), total))
-	}
-	updateLabel()
-
-	jobs := make(chan WorkflowReport, len(pins))
-	for _, wr := range pins {
-		jobs <- wr
-	}
-	close(jobs)
-
-	var (
-		wg       sync.WaitGroup
-		firstErr error
-		errMu    sync.Mutex
-	)
-	for slot := 0; slot < workers; slot++ {
-		wg.Add(1)
-		go func(slot int) {
-			defer wg.Done()
-			for wr := range jobs {
-				rem.output.SetWorkerStatus(slot, "→ "+wr.Path)
-				err := rem.applyPin(wr)
-				done.Add(1)
-				updateLabel()
-				if err != nil && !errors.Is(err, errWorkflowAlerted) {
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					errMu.Unlock()
-					rem.output.SetWorkerStatus(slot, "")
-					continue
-				}
-				rem.output.SetWorkerStatus(slot, "")
+	// Match the parent "Pinning dependencies" wording so the headless
+	// label-stem dedup collapses parent + per-worker counter into one
+	// phase line instead of emitting a second "Pinning workflows" header.
+	return pinpool.Run(
+		rem.pinWorkers,
+		rem.output,
+		"Pinning dependencies",
+		pins,
+		func(wr WorkflowReport) string { return wr.Path },
+		func(_ int, wr WorkflowReport) error {
+			err := rem.applyPin(wr)
+			// Security gate trips are non-fatal: the workflow is already
+			// recorded in alertedWorkflows, so keep pinning siblings.
+			if errors.Is(err, errWorkflowAlerted) {
+				return nil
 			}
-		}(slot)
-	}
-	wg.Wait()
-
-	return firstErr
+			return err
+		},
+	)
 }
 
 // workLabel prefixes a spinner label with the current [i/N] workflow counter
