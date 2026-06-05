@@ -4,11 +4,11 @@ import "testing"
 
 func TestSplitNWO(t *testing.T) {
 	cases := []struct {
-		name      string
-		in        string
-		owner     string
-		repo      string
-		ok        bool
+		name  string
+		in    string
+		owner string
+		repo  string
+		ok    bool
 	}{
 		{"empty", "", "", "", false},
 		{"no slash", "owner", "", "", false},

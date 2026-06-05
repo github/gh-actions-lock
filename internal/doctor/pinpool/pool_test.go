@@ -12,8 +12,8 @@ import (
 // worker rows the pool produced. All methods are mutex-guarded because
 // the pool calls them from worker goroutines.
 type fakeReporter struct {
-	mu      sync.Mutex
-	labels  []string
+	mu       sync.Mutex
+	labels   []string
 	statuses [][2]any // [slot, status]
 }
 
@@ -34,8 +34,8 @@ func TestRunSerializesReporterCalls(t *testing.T) {
 	// locking. If the pool ever calls Reporter from two goroutines at
 	// once, -race trips on this Reporter.
 	type racyReporter struct {
-		labels  []string
-		latest  int
+		labels   []string
+		latest   int
 		statuses int
 	}
 	rr := &racyReporter{}
@@ -111,7 +111,6 @@ func TestRunDoesNotClearSlotBetweenJobs(t *testing.T) {
 		t.Fatalf("expected final status on slot 0 to be \"\" (exit-time clear), got %v", slot0)
 	}
 }
-
 
 func TestRunEmptyJobsIsNoOp(t *testing.T) {
 	ui := &fakeReporter{}

@@ -84,28 +84,28 @@ func TestIsReusableWorkflow(t *testing.T) {
 }
 
 func TestIsFullSha(t *testing.T) {
-tests := []struct {
-name  string
-input string
-want  bool
-}{
-{name: "valid lowercase sha", input: "11bd71901bbe5b1630ceea73d27597364c9af683", want: true},
-{name: "valid uppercase sha", input: "11BD71901BBE5B1630CEEA73D27597364C9AF683", want: true},
-{name: "valid mixed case sha", input: "11bd71901BBE5b1630ceea73d27597364C9AF683", want: true},
-{name: "too short", input: "11bd71901bbe5b1630ceea73d2759736", want: false},
-{name: "too long", input: "11bd71901bbe5b1630ceea73d27597364c9af683aa", want: false},
-{name: "tag ref", input: "v4", want: false},
-{name: "branch ref", input: "main", want: false},
-{name: "empty", input: "", want: false},
-{name: "non-hex chars", input: "ggbd71901bbe5b1630ceea73d27597364c9af683", want: false},
-{name: "sha256 length", input: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", want: true},
-{name: "41 chars not valid", input: "11bd71901bbe5b1630ceea73d27597364c9af683a", want: false},
-{name: "63 chars not valid", input: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b", want: false},
-}
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "valid lowercase sha", input: "11bd71901bbe5b1630ceea73d27597364c9af683", want: true},
+		{name: "valid uppercase sha", input: "11BD71901BBE5B1630CEEA73D27597364C9AF683", want: true},
+		{name: "valid mixed case sha", input: "11bd71901BBE5b1630ceea73d27597364C9AF683", want: true},
+		{name: "too short", input: "11bd71901bbe5b1630ceea73d2759736", want: false},
+		{name: "too long", input: "11bd71901bbe5b1630ceea73d27597364c9af683aa", want: false},
+		{name: "tag ref", input: "v4", want: false},
+		{name: "branch ref", input: "main", want: false},
+		{name: "empty", input: "", want: false},
+		{name: "non-hex chars", input: "ggbd71901bbe5b1630ceea73d27597364c9af683", want: false},
+		{name: "sha256 length", input: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", want: true},
+		{name: "41 chars not valid", input: "11bd71901bbe5b1630ceea73d27597364c9af683a", want: false},
+		{name: "63 chars not valid", input: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b", want: false},
+	}
 
-for _, tt := range tests {
-t.Run(tt.name, func(t *testing.T) {
-assert.Equal(t, tt.want, IsFullSha(tt.input))
-})
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsFullSha(tt.input))
+		})
+	}
 }
