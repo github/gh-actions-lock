@@ -1,16 +1,5 @@
-// Package resolver resolves action refs to commit SHAs via the GitHub GraphQL
-// API and recursively discovers transitive dependencies from composite actions.
-//
-// The package is split across several files within this directory:
-//
-//   - resolver.go    — Resolver struct, core types, cross-cutting helpers
-//   - httpclient.go  — gh API client setup (New, NewWithOptions, NewWithTransport)
-//   - cache.go       — cache value types and the small set/get helpers under cacheMu
-//   - ancestry.go    — CheckAncestry and the Compare API plumbing
-//   - peel.go        — tag-object peeling, reachability checks, and the
-//     branch-discovery / containing-ref machinery
-//   - discovery.go   — ResolveAllRecursive engine, LatestRef, and GraphQL plumbing
-//   - retry.go       — retry transport for transient 5xx/429 errors
+// Package resolver resolves action refs to commit SHAs and recursively
+// discovers transitive dependencies from composite actions.
 package resolver
 
 import (
