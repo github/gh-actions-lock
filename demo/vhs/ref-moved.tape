@@ -10,7 +10,7 @@ Set PlaybackSpeed 1.5
 Set TypingSpeed 50ms
 Set Theme "GitHub Dark"
 
-Type "echo '# Tag moved forward — routine upstream release (REF_MOVED is a warning, not an error)'"
+Type "echo '# Tag moved forward — routine upstream release (ref-moved is a warning, not an error)'"
 Enter
 Sleep 1s
 

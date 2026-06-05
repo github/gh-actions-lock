@@ -53,12 +53,12 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			}
 		}
 
-		// Count categories; render per-dep detail only for non-NOT_PINNED.
+		// Count categories; render per-dep detail only for non-not-pinned.
 		catCounts := map[doctor.Category]int{}
 		for _, dep := range depOrder {
 			dg := depMap[dep]
 
-			// Tally and check if this dep is NOT_PINNED only.
+			// Tally and check if this dep is not-pinned only.
 			allNotPinned := true
 			for _, f := range dg.findings {
 				catCounts[f.Category]++
@@ -73,7 +73,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			// Render per-dep detail for actionable categories.
 			for _, f := range dg.findings {
 				if f.Category == doctor.CategoryNotPinned {
-					continue // skip NOT_PINNED lines in mixed groups too
+					continue // skip not-pinned lines in mixed groups too
 				}
 				label := strings.ToUpper(string(f.Category))
 				icon := "!"
@@ -161,7 +161,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		}
 	}
 
-	// Collect workflow-level NOT_PINNED warnings separately for collapsing.
+	// Collect workflow-level not-pinned warnings separately for collapsing.
 	var unpinnedWorkflows []string
 	var otherWarnings []string
 	for _, key := range warnOrder {
@@ -184,13 +184,13 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
 		}
 	}
-	// Separate SHA_AS_REF warnings into direct (aggregate) and transitive (suppressed).
+	// Separate sha-as-ref warnings into direct (aggregate) and transitive (suppressed).
 	// TODO: Transitive deps pinned to bare SHAs are silently swallowed for now.
 	// We need to figure out how to coexist better with composite actions that
 	// don't use dependency pinning — warning on every transitive dep is noisy
 	// and not actionable by the consumer. Revisit when we have a story for
 	// composite action authors to adopt pinning.
-	// Collect REF_MOVED warnings for compact display.
+	// Collect ref-moved warnings for compact display.
 	var bareSHADeps []string
 	var refMovedWarnings []string
 	var otherDetailWarnings []string
@@ -202,7 +202,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			if !isTransitive {
 				bareSHADeps = append(bareSHADeps, key)
 			}
-			// transitive SHA_AS_REF: silently swallowed (see TODO above)
+			// transitive sha-as-ref: silently swallowed (see TODO above)
 		} else if f.Category == doctor.CategoryRefMoved {
 			refMovedWarnings = append(refMovedWarnings, key)
 		} else if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityWarning &&

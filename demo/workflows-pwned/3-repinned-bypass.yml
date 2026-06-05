@@ -6,12 +6,12 @@ name: "3: Re-pinned after backward move — false baseline"
 #   1. Maintainer releases @bypassed → ea53476 (legitimate)
 #   2. You pin: lockfile records ea53476 ✓
 #   3. Attacker moves tag backward to 38b3412 (parent of ea53476)
-#   4. You run `gh actions-pin check` → REF_MOVED ⚠
+#   4. You run `gh actions-pin check` → ref-moved ⚠
 #   5. You think "oh, just a routine update" and re-pin with `gh actions-pin`
 #   6. Lockfile now records 38b3412 — the attacker's chosen SHA
 #   7. You run `gh actions-pin check` → ALL CLEAR. Attacker wins.
 #
-# This is the continuation of scenario 2. The victim saw the REF_MOVED
+# This is the continuation of scenario 2. The victim saw the ref-moved
 # warning, assumed it was a routine update, and re-pinned. The attacker's
 # SHA is now the lockfile's known-good baseline.
 #
@@ -23,10 +23,10 @@ name: "3: Re-pinned after backward move — false baseline"
 # NOTE: This scenario only works with same-repo tag movement (scenario 2).
 # Fork injection (scenario 1) cannot be re-pinned — `gh actions-pin` now
 # runs reachability checks at pin time and refuses to pin fork-network
-# commits (IMPOSTOR_COMMIT blocks the pin operation).
+# commits (impostor-commit blocks the pin operation).
 #
 # The lockfile is a tamper-EVIDENT seal, not tamper-proof. For same-repo
-# backward moves, REF_MOVED is the only signal — and if the victim
+# backward moves, ref-moved is the only signal — and if the victim
 # accepts it, the attacker's SHA becomes the new baseline.
 #
 # MITIGATIONS (outside lockfile scope):

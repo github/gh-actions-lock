@@ -10,7 +10,7 @@ import (
 // runChecks evaluates all enabled validators against the given parsed
 // workflow and returns findings in catalog order. The lockfile snapshot
 // scopes the structural checks; the resolver enables the resolver-bound
-// checks (misleading_sha, ref_moved, forgery, impostor). When r is nil,
+// checks (misleading-sha, ref-moved, forgery, impostor). When r is nil,
 // resolver-bound checks are skipped silently.
 //
 // Returned findings have their primitive fields populated, plus

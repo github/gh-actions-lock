@@ -187,7 +187,7 @@ func (s *Store) AllDeps() []Dependency {
 // resolver parent map. A dep that is both a direct use and a composite
 // transitive dep (e.g. actions/setup-go used directly and also pulled in by a
 // composite) has a parent in the parent map but must still be recorded as a
-// workflow-direct pin — otherwise it is perpetually re-flagged as not_pinned.
+// workflow-direct pin — otherwise it is perpetually re-flagged as not-pinned.
 type DirectTracker struct {
 	direct []bool
 }

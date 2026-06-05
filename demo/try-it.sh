@@ -282,7 +282,7 @@ YML
   comment "Developer (or Dependabot) edits the workflow ref"
   run sed -i '' 's/checkout@v4.2.0/checkout@v4.3.0/g' "$scratch/$wf"
   run grep checkout "$scratch/$wf"
-  comment "Check surfaces a REF_CHANGED diagnostic (note the docs hyperlink)"
+  comment "Check surfaces a ref-changed diagnostic (note the docs hyperlink)"
   ( cd "$scratch" && gh actions-pin check --no-interactive "$wf" ) || true
   echo
   comment "After auto-fix, lockfile pins the new ref"

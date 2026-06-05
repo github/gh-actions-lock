@@ -10,7 +10,7 @@ import (
 
 // TestBuildProvenanceReport_RecordsObservedSHA verifies that a finding carrying a
 // resolver ObservedSHA distinct from the pinned SHA surfaces on the run record.
-// This makes MISLEADING_SHA / REF_MOVED claims falsifiable: a reader can
+// This makes misleading-sha / ref-moved claims falsifiable: a reader can
 // compare what's pinned vs. what upstream resolves to right now without
 // re-running the resolver.
 func TestBuildProvenanceReport_RecordsObservedSHA(t *testing.T) {
@@ -24,7 +24,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA(t *testing.T) {
 	}
 	finding := doctor.Finding{
 		WorkflowPath: ".github/workflows/ci.yml",
-		Category:     doctor.Category("misleading_sha"),
+		Category:     doctor.Category("misleading-sha"),
 		Severity:     doctor.SeverityWarning,
 		Confidence:   doctor.ConfidenceHigh,
 		Dependency:   dep,
@@ -95,8 +95,8 @@ var _ = runlog.Action{} // keep runlog imported for future field references
 
 // TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories pins down the
 // invariant that motivates ObservedSHA: for every finding category where the
-// resolver's live SHA is the falsifiability evidence — MISLEADING_SHA,
-// REF_MOVED, LOCKFILE_FORGERY — buildProvenanceReport must surface it on the
+// resolver's live SHA is the falsifiability evidence — misleading-sha,
+// ref-moved, lockfile-forgery — buildProvenanceReport must surface it on the
 // run record. Without this, claims like "the lockfile is forged" are
 // unverifiable from the run record alone; a reader would have to re-run the
 // resolver to compare. omitempty stays correct because most actions in a run
@@ -105,7 +105,7 @@ var _ = runlog.Action{} // keep runlog imported for future field references
 func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *testing.T) {
 	const pinnedSHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 	const observedSHA = "8e8c483db84b4bee98b60c0593521ed34d9990e8"
-	// MISLEADING_SHA's pinned SHA is the SHA-shaped ref itself.
+	// misleading-sha's pinned SHA is the SHA-shaped ref itself.
 	const misleadingPinned = "d746ffe35508b1917358783b479e04febd2b8f71"
 	const misleadingLive = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
 
@@ -117,21 +117,21 @@ func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *tes
 		ref         string
 	}{
 		{
-			name:        "ref_moved",
+			name:        "ref-moved",
 			category:    doctor.CategoryRefMoved,
 			pinnedSHA:   pinnedSHA,
 			observedSHA: observedSHA,
 			ref:         "v4",
 		},
 		{
-			name:        "lockfile_forgery",
+			name:        "lockfile-forgery",
 			category:    doctor.CategoryLockfileForgery,
 			pinnedSHA:   pinnedSHA,
 			observedSHA: observedSHA,
 			ref:         "v4",
 		},
 		{
-			name:        "misleading_sha",
+			name:        "misleading-sha",
 			category:    doctor.CategoryMisleadingSHA,
 			pinnedSHA:   misleadingPinned,
 			observedSHA: misleadingLive,

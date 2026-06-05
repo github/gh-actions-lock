@@ -6,7 +6,7 @@ name: "5: Pinned before routine update — legitimate tag movement"
 #   1. Maintainer releases @updated → 38b3412 (legitimate)
 #   2. You pin: lockfile records 38b3412 ✓
 #   3. Maintainer pushes a new commit, moves @updated → ea53476 (descendant)
-#   4. You run `gh actions-pin check` → REF_MOVED ⚠
+#   4. You run `gh actions-pin check` → ref-moved ⚠
 #
 # The normal case: a maintainer cuts a new release and moves the tag
 # forward. The new SHA (ea53476) is a descendant of the pinned SHA
@@ -14,17 +14,17 @@ name: "5: Pinned before routine update — legitimate tag movement"
 # upstream repo, so branch_commits confirms it's reachable.
 #
 # RESULT:  WARNING ONLY ⚠ (informational, not an attack)
-#          ⚠ REF_MOVED — live SHA (ea53476) ≠ pinned SHA (38b3412)
+#          ⚠ ref-moved — live SHA (ea53476) ≠ pinned SHA (38b3412)
 #          ✓ REACHABLE — ea53476 is on branch(es) in the upstream repo
 #
-# REF_MOVED is a warning, not an error. The check passes — your lockfile
+# ref-moved is a warning, not an error. The check passes — your lockfile
 # is still valid, just behind upstream. Use `gh actions-pin upgrade` to
 # accept the new version and update the lockfile.
 #
 # CONTRAST WITH SCENARIO 1:
-#   Both show REF_MOVED. The difference: scenario 1's new SHA (7b403c9)
+#   Both show ref-moved. The difference: scenario 1's new SHA (7b403c9)
 #   is a fork-network commit with no branches in the upstream repo →
-#   IMPOSTOR_COMMIT fires. Here, the new SHA is on a real branch →
+#   impostor-commit fires. Here, the new SHA is on a real branch →
 #   reachability passes. branch_commits distinguishes the two cases
 #   that the old compare-API approach could not.
 #

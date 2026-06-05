@@ -69,7 +69,7 @@ type Action struct {
 	HashAlgo string `json:"hash_algo,omitempty"`
 	// ObservedSHA is the SHA the resolver got when it looked up Ref during
 	// this run. Recorded when it differs from SHA (the pinned value) — e.g.
-	// MISLEADING_SHA, REF_MOVED, LOCKFILE_FORGERY. Makes a finding
+	// misleading-sha, ref-moved, lockfile-forgery. Makes a finding
 	// falsifiable: a reader can compare what was pinned against what
 	// upstream actually resolved to at scan time, without re-running the
 	// resolver. Empty when the run did not surface a divergence.
@@ -79,7 +79,7 @@ type Action struct {
 	// How is concise, human-readable provenance ("locked ref v4 to <sha>",
 	// "verified via full branch scan", a security reason, etc.).
 	How string `json:"how,omitempty"`
-	// Issue is the originating finding category (e.g. MISSING, REF_MOVED) when
+	// Issue is the originating finding category (e.g. MISSING, ref-moved) when
 	// the action needed work; empty when it was already valid.
 	Issue string `json:"issue,omitempty"`
 	// CanonicalBranch reports whether the commit was found on a canonical

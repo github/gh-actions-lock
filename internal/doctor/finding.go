@@ -10,26 +10,30 @@ type Category string
 
 const (
 	// CategoryNotPinned means the workflow has action refs but no dependencies: section.
-	CategoryNotPinned Category = "not_pinned"
+	// Sibling of zizmor's `unpinned-uses`, but our semantics differ (we
+	// flag the lockfile mismatch, not the workflow-level unpinned ref),
+	// so we keep our own ID.
+	CategoryNotPinned Category = "not-pinned"
 	// CategorySHAAsRef means a dependency is pinned to a bare SHA with no tag ref.
-	CategorySHAAsRef Category = "sha_as_ref"
+	CategorySHAAsRef Category = "sha-as-ref"
 	// CategoryStale means the pinned SHA no longer matches what the ref resolves to.
 	CategoryStale Category = "stale"
 	// CategoryRefChanged means the uses: ref was manually changed (e.g. v6.2.0 → v6).
-	CategoryRefChanged Category = "ref_changed"
+	CategoryRefChanged Category = "ref-changed"
 	// CategoryImpostorCommit means the pinned SHA is not in the ref's git history (possible fork-network commit).
-	CategoryImpostorCommit Category = "impostor_commit"
+	// Matches zizmor's `impostor-commit` audit ID.
+	CategoryImpostorCommit Category = "impostor-commit"
 	// CategoryMisleadingSHA means a ref looks like a SHA but resolves to a different commit.
-	CategoryMisleadingSHA Category = "misleading_sha"
+	CategoryMisleadingSHA Category = "misleading-sha"
 	// CategoryLockfileForgery means the pinned SHA is not an ancestor of the
 	// current ref — the lockfile entry was likely injected or tampered with.
-	CategoryLockfileForgery Category = "lockfile_forgery"
+	CategoryLockfileForgery Category = "lockfile-forgery"
 	// CategoryRefMoved means the upstream tag now resolves to a different SHA than what's locked.
-	CategoryRefMoved Category = "ref_moved"
+	CategoryRefMoved Category = "ref-moved"
 	// CategoryValid means the dependency is pinned and verified.
 	CategoryValid Category = "valid"
 	// CategoryRunOnly means the workflow has no action refs (only run: steps).
-	CategoryRunOnly Category = "run_only"
+	CategoryRunOnly Category = "run-only"
 )
 
 // Confidence describes how strongly the check stands behind a finding,
@@ -93,8 +97,8 @@ type Finding struct {
 	// Remediation describes what doctor can do about it.
 	Remediation string
 	// ObservedSHA is the SHA the resolver got at scan time, recorded when
-	// it differs from the pinned SHA (e.g. REF_MOVED, MISLEADING_SHA,
-	// LOCKFILE_FORGERY).
+	// it differs from the pinned SHA (e.g. ref-moved, misleading-sha,
+	// lockfile-forgery).
 	ObservedSHA string
 	// DocURL points to docs explaining the finding. Populated by the
 	// engine adapter so it's parity-aligned with the editor's

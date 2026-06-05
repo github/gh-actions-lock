@@ -362,12 +362,12 @@ jobs:
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["ref_moved"], "should detect SHA changed: %+v", payload.Findings)
-	assert.True(t, categories["impostor_commit"], "should detect unreachable commit: %+v", payload.Findings)
+	assert.True(t, categories["ref-moved"], "should detect SHA changed: %+v", payload.Findings)
+	assert.True(t, categories["impostor-commit"], "should detect unreachable commit: %+v", payload.Findings)
 }
 
 // TestCheck_UnreachableOnly verifies that when a pinned SHA matches live
-// resolution but is not reachable from the ref, an IMPOSTOR_COMMIT error is reported.
+// resolution but is not reachable from the ref, an impostor-commit error is reported.
 func TestCheck_UnreachableOnly(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -409,7 +409,7 @@ jobs:
 
 	hasUnreachable := false
 	for _, f := range payload.Findings {
-		if f.Category == "impostor_commit" {
+		if f.Category == "impostor-commit" {
 			hasUnreachable = true
 		}
 	}
@@ -512,15 +512,15 @@ jobs:
 // ==========================================================================
 // Lockfile Forgery Detection Tests
 //
-// These tests verify that the ancestry check promotes REF_MOVED to
-// LOCKFILE_FORGERY when the pinned SHA is not an ancestor of the live SHA.
+// These tests verify that the ancestry check promotes ref-moved to
+// lockfile-forgery when the pinned SHA is not an ancestor of the live SHA.
 // This detects cases where someone manually injected a SHA into the lockfile
 // that was never part of the ref's legitimate history.
 // ==========================================================================
 
 // TestCheck_LockfileForgery_NotAncestor verifies that when the Compare API
 // shows the pinned SHA is NOT an ancestor of the live SHA, the finding is
-// promoted from REF_MOVED to LOCKFILE_FORGERY.
+// promoted from ref-moved to lockfile-forgery.
 func TestCheck_LockfileForgery_NotAncestor(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -577,13 +577,13 @@ jobs:
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["lockfile_forgery"], "should detect lockfile forgery: %+v", payload.Findings)
-	assert.False(t, categories["ref_moved"], "should NOT have ref_moved (promoted to forgery): %+v", payload.Findings)
+	assert.True(t, categories["lockfile-forgery"], "should detect lockfile forgery: %+v", payload.Findings)
+	assert.False(t, categories["ref-moved"], "should NOT have ref-moved (promoted to forgery): %+v", payload.Findings)
 }
 
 // TestCheck_LockfileForgery_LegitAncestor verifies that when the Compare API
 // confirms the pinned SHA IS an ancestor of the live SHA, the finding stays
-// as REF_MOVED (legitimate tag movement, not forgery).
+// as ref-moved (legitimate tag movement, not forgery).
 func TestCheck_LockfileForgery_LegitAncestor(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -626,25 +626,25 @@ jobs:
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
-	require.NoError(t, err, "ref_moved is a warning, should not error")
+	require.NoError(t, err, "ref-moved is a warning, should not error")
 
 	var payload struct {
 		Valid    bool             `json:"valid"`
 		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
+	assert.True(t, payload.Valid, "ref-moved is a warning, workflow is still valid")
 
 	categories := map[string]bool{}
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["ref_moved"], "should keep as ref_moved for legit ancestor: %+v", payload.Findings)
-	assert.False(t, categories["lockfile_forgery"], "should NOT have lockfile_forgery: %+v", payload.Findings)
+	assert.True(t, categories["ref-moved"], "should keep as ref-moved for legit ancestor: %+v", payload.Findings)
+	assert.False(t, categories["lockfile-forgery"], "should NOT have lockfile-forgery: %+v", payload.Findings)
 }
 
 // TestCheck_LockfileForgery_RateLimited verifies that when the ancestry check
-// is rate-limited, the finding stays as REF_MOVED (fail open).
+// is rate-limited, the finding stays as ref-moved (fail open).
 func TestCheck_LockfileForgery_RateLimited(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -682,25 +682,25 @@ jobs:
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
 		"check", "--rescan", "--json=valid,findings", workflowPath,
 	)
-	require.NoError(t, err, "ref_moved is a warning, should not error")
+	require.NoError(t, err, "ref-moved is a warning, should not error")
 
 	var payload struct {
 		Valid    bool             `json:"valid"`
 		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.True(t, payload.Valid, "ref_moved is a warning, workflow is still valid")
+	assert.True(t, payload.Valid, "ref-moved is a warning, workflow is still valid")
 
 	categories := map[string]bool{}
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["ref_moved"], "should keep as ref_moved when rate limited: %+v", payload.Findings)
-	assert.False(t, categories["lockfile_forgery"], "should NOT have lockfile_forgery when rate limited: %+v", payload.Findings)
+	assert.True(t, categories["ref-moved"], "should keep as ref-moved when rate limited: %+v", payload.Findings)
+	assert.False(t, categories["lockfile-forgery"], "should NOT have lockfile-forgery when rate limited: %+v", payload.Findings)
 
 	// Verify the detail mentions the inconclusive ancestry check.
 	for _, f := range payload.Findings {
-		if f.Category == "ref_moved" {
+		if f.Category == "ref-moved" {
 			assert.Contains(t, f.Detail, "ancestry check inconclusive")
 		}
 	}

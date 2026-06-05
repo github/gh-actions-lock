@@ -128,7 +128,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	}
 
 	// Narrow mutable version tags (v4, v4.2) to specific patch tags (v4.2.1)
-	// so that REF_MOVED signals are meaningful — patch tags should never move.
+	// so that ref-moved signals are meaningful — patch tags should never move.
 	// Skip narrowing for same-owner internal repos — broad tags are fine
 	// within your own org's private actions. Public repos always narrow.
 	//

@@ -743,8 +743,8 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 		// Suppress stale alerts on deps that were already auto-converted from
 		// a SHA pin to a canonical tag earlier in this run. This is the
 		// common case for actions like actions/github-script where a single
-		// uses: line trips both sha_as_ref (which auto-pins to a tag) and
-		// misleading_sha (which alerts because the ref was an annotated tag
+		// uses: line trips both sha-as-ref (which auto-pins to a tag) and
+		// misleading-sha (which alerts because the ref was an annotated tag
 		// SHA, not a commit). Once the ref is rewritten the alert no longer
 		// describes the file on disk.
 		if finding.Dependency != nil && rem.shaConvertedForNWO(finding.Dependency.NWO) {
@@ -754,7 +754,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			}
 		}
 
-		// For non-interactive SHA_AS_REF, check if this dep was already printed.
+		// For non-interactive sha-as-ref, check if this dep was already printed.
 		// If so, skip silently (no header, no blank line).
 		if !rem.prompter.IsInteractive() && finding.Category == CategorySHAAsRef {
 			if finding.Dependency != nil {
@@ -820,13 +820,13 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			rem.addAlertedDep(finding)
 
 		case CategoryLockfileForgery:
-			rem.output.Error("LOCKFILE_FORGERY %s: %s", rem.depKey(finding), finding.Detail)
+			rem.output.Error("lockfile-forgery %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("The pinned SHA was never in this ref's lineage — possible lockfile tampering.")
 			rem.Alerted++
 			rem.addAlertedDep(finding)
 
 		case CategoryMisleadingSHA:
-			rem.output.Error("MISLEADING_SHA %s: %s", rem.depKey(finding), finding.Detail)
+			rem.output.Error("misleading-sha %s: %s", rem.depKey(finding), finding.Detail)
 			rem.output.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 			rem.Alerted++
 			rem.addAlertedDep(finding)

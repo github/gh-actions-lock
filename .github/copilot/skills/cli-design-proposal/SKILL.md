@@ -186,9 +186,9 @@ These are the user-facing finding categories shown in CLI output and JSON:
 
 | Category | Meaning |
 |---|---|
-| `REF_MOVED` | Locked SHA no longer matches upstream (expected for mutable tags like v4) |
+| `ref-moved` | Locked SHA no longer matches upstream (expected for mutable tags like v4) |
 | `MISSING` | Action in workflow has no lock entry |
 | `STALE` | Lock entry references an action no longer in the workflow |
-| `REF_CHANGED` | Workflow ref was edited; lock needs updating |
-| `MISLEADING_SHA` | Ref looks like a SHA but resolves to a different commit |
-| `IMPOSTOR_COMMIT` | Locked SHA is not in the ref's history |
+| `ref-changed` | Workflow ref was edited; lock needs updating |
+| `misleading-sha` | Ref looks like a SHA but resolves to a different commit |
+| `impostor-commit` | Locked SHA is not in the ref's history |

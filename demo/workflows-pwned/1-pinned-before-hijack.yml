@@ -18,8 +18,8 @@ name: "1: Pinned before attack — fork-network injection (caught by branch_comm
 # is NOT on any branch of the upstream repo.
 #
 # RESULT:  FULLY CAUGHT ✗✗
-#          ⚠ REF_MOVED       — live SHA (7b403c9) ≠ pinned SHA (ea53476)
-#          ✗ IMPOSTOR_COMMIT — 7b403c9 is not on any branch in
+#          ⚠ ref-moved       — live SHA (7b403c9) ≠ pinned SHA (ea53476)
+#          ✗ impostor-commit — 7b403c9 is not on any branch in
 #                              nodeselector/actions-test-fixtures
 #                              (fork-network injection detected via
 #                              branch_commits endpoint)
@@ -29,12 +29,12 @@ name: "1: Pinned before attack — fork-network injection (caught by branch_comm
 # live in GitHub's shared object store but have no branches in the
 # upstream repo — branch_commits returns empty → impostor.
 #
-# REF_MOVED is a warning (tag movement is expected for routine
-# releases). IMPOSTOR_COMMIT is the error — the commit doesn't
+# ref-moved is a warning (tag movement is expected for routine
+# releases). impostor-commit is the error — the commit doesn't
 # belong to this repo.
 #
 # CONTRAST WITH SCENARIO 5:
-#   Both show REF_MOVED. Scenario 5 is a genuine release where the
+#   Both show ref-moved. Scenario 5 is a genuine release where the
 #   new SHA is on a branch — reachability passes. Here the SHA is a
 #   fork commit with no branches — impostor detected.
 #

@@ -18,7 +18,7 @@ Type "grep -E 'uses:|  -' demo/workflows-pwned/2-pinned-before-lineage-rewrite.y
 Enter
 Sleep 2s
 
-Type "echo '# REF_MOVED warning fires — commit is real (on a branch), not a fork injection'"
+Type "echo '# ref-moved warning fires — commit is real (on a branch), not a fork injection'"
 Enter
 Sleep 1s
 
