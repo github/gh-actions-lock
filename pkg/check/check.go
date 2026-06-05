@@ -1,12 +1,8 @@
-// Package check defines the deterministic Input fact bundle and Check
-// interface that rule implementations operate over. Rule impls live in
-// internal/doctor; this package stays import-light (stdlib + pkg/findings
-// + pkg/lockfile) so future consumers can depend on the shapes without
-// pulling in the CLI's resolver, HTTP, or orchestration code.
+// Package check defines the Input fact bundle and Check interface that rule
+// implementations operate over.
 //
-// Public reachability string values and exported field/method shapes are
-// frozen by tests in this package — see TestReachabilityStringsAreFrozen,
-// TestInputShapeIsFrozen, TestFactShapesAreFrozen, TestCheckInterfaceIsFrozen.
+// Public reachability string values and exported field/method shapes are frozen
+// by tests in this package.
 package check
 
 import (
@@ -30,16 +26,11 @@ type Input struct {
 	// per-action metadata). Producers without a resolver may leave
 	// fields zero; checks must tolerate that.
 	Resolutions ResolutionFacts
-	// Options shapes evaluator behavior (rule allowlist, severity
-	// overrides, future toggles). The zero value selects defaults.
+	// Options shapes evaluator behavior. The zero value selects defaults.
 	Options Options
 }
 
-// WorkflowFacts captures the extracted facts about a single workflow
-// file. Producers populate Path and any action refs they parsed; richer
-// per-workflow diagnostics (parse warnings as structured Diagnostic
-// values, job/step structure) will be added additively as the checks
-// that need them move over.
+// WorkflowFacts captures the extracted facts about a single workflow file.
 type WorkflowFacts struct {
 	// Path is the repo-relative path to the workflow YAML file.
 	Path string
@@ -59,11 +50,7 @@ type ActionRefFact struct {
 }
 
 // ResolutionFacts bundles the resolver-side facts a check may consume.
-// Producers without a resolver leave fields zero; checks degrade
-// accordingly (typically by emitting a low-confidence finding or
-// skipping). Future fact families (ancestry results, tag-object peel
-// results, transitive-parent maps) will be added additively here as
-// their checks move over from internal/doctor.
+// Producers without a resolver leave fields zero; checks degrade accordingly.
 type ResolutionFacts struct {
 	// ResolvedRefs holds the live resolution of each `uses:` ref the
 	// producer asked the resolver about. May be empty.
@@ -113,9 +100,8 @@ type ResolvedRef struct {
 	RepoID int64
 }
 
-// ReachabilityStatus reports whether a pinned SHA is on the lineage of
-// a named ref. The string values are part of the public schema (see
-// TestReachabilityStringsAreFrozen).
+// ReachabilityStatus reports whether a pinned SHA is on the lineage of a named
+// ref. The string values are part of the public schema.
 type ReachabilityStatus string
 
 const (
@@ -158,17 +144,11 @@ type Reachability struct {
 	FullScanUsed bool
 }
 
-// Options shapes evaluator behavior. The zero value selects defaults;
-// add fields additively as future toggles (rule allowlists, severity
-// overrides, doc-URL roots) are needed.
+// Options shapes evaluator behavior. The zero value selects defaults.
 type Options struct{}
 
-// Check is the unit of rule evaluation. A Check is pure: given the same
-// Input it must produce the same findings, on every platform, with no
-// network, filesystem, or wall-clock dependency. Implementations live
-// outside this package today; this interface exists so the future
-// migration of rule code from internal/doctor to pkg/check is a
-// shape-stable move.
+// Check is the unit of rule evaluation. Given the same Input, it must produce
+// the same findings without network, filesystem, or wall-clock dependency.
 type Check interface {
 	// Name returns the stable kebab-case identifier for this check.
 	// Names align with findings.Category values where a rule
