@@ -134,7 +134,7 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Diff, "diff", true, "Show the full dependency diff vs existing pins")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the upgraded refs and dependencies back to the workflow file")
-	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (updated)")
+	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified diff `fields` (updated). findings[] and workflows[] are always emitted alongside.")
 	cmd.Flags().Lookup("json").NoOptDefVal = "updated"
 	cmd.Flags().BoolVar(&opts.NoOnboard, "no-onboard", false, "Refuse to add new workflow entries to the lockfile. Workflows not already tracked in lockfile.workflows{} are skipped with an onboarding-required finding. Required for dependency-update tools (e.g. Dependabot) that must not silently expand the tracked workflow set.")
 

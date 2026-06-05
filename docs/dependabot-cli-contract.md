@@ -432,6 +432,10 @@ formalize symmetric version check.
   YAML lockfile.
 - `internal/runlog/provenance-v1.json` is a separate JSON schema for run
   provenance, also versioned (`v1`).
+- `upgrade --json=<fields>` gates only the `updated[]` diff payload; the
+  `findings[]` and `workflows[]` diagnostic arrays are always emitted so
+  downstream consumers (Dependabot) can detect blockers and know which
+  files to commit regardless of selector.
 
 **Commitment:** The CLI's JSON contract — field names, shapes, version
 fields — is treated as a **first-class API surface** equal to the Go
