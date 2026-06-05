@@ -38,7 +38,7 @@ func FindSaneRelease(tl *TagLister, r reachabilityChecker, owner, repo string) (
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := lockfile.ParseSemver(t.Name)
+		sv, ok := lockfile.ParseVersion(t.Name)
 		if !ok || sv.Rest != "" {
 			continue
 		}

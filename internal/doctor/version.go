@@ -10,23 +10,23 @@ import (
 // (major-only like "v4" or minor-only like "v4.2") that should be narrowed
 // to a specific patch version for pinning.
 func IsMutableVersionTag(ref string) bool {
-	sv, ok := lockfile.ParseSemver(ref)
+	sv, ok := lockfile.ParseVersion(ref)
 	if !ok {
 		return false
 	}
-	return !sv.IsFullSemver()
+	return !sv.IsFull()
 }
 
 // IsNarrowedVersion returns true if narrowed is a more specific patch version
 // of mutable. For example: mutable="v4", narrowed="v4.1.0" → true.
 // mutable="v4.2", narrowed="v4.2.1" → true. mutable="v4", narrowed="v5.0.0" → false.
 func IsNarrowedVersion(mutable, narrowed string) bool {
-	mv, mOK := lockfile.ParseSemver(mutable)
-	nv, nOK := lockfile.ParseSemver(narrowed)
+	mv, mOK := lockfile.ParseVersion(mutable)
+	nv, nOK := lockfile.ParseVersion(narrowed)
 	if !mOK || !nOK {
 		return false
 	}
-	if !nv.IsFullSemver() {
+	if !nv.IsFull() {
 		return false
 	}
 	if mv.Major != nv.Major {
@@ -45,8 +45,8 @@ func IsUpgrade(currentRef, latestRef string) bool {
 	if currentRef == latestRef {
 		return false
 	}
-	cur, curOK := lockfile.ParseSemver(currentRef)
-	lat, latOK := lockfile.ParseSemver(latestRef)
+	cur, curOK := lockfile.ParseVersion(currentRef)
+	lat, latOK := lockfile.ParseVersion(latestRef)
 	if !curOK || !latOK {
 		if !latOK {
 			return false

@@ -1203,10 +1203,10 @@ func pickPreferredTag(candidates []string, hintRef string) string {
 		return hit
 	}
 	var best string
-	var bestVer lockfile.Semver
+	var bestVer lockfile.Version
 	haveSemver := false
 	for _, c := range candidates {
-		sv, ok := lockfile.ParseSemver(c)
+		sv, ok := lockfile.ParseVersion(c)
 		if !ok {
 			continue
 		}
@@ -2089,7 +2089,7 @@ func selectLatestTag(tags []string) string {
 			bestFallback = tag
 		}
 
-		sv, ok := lockfile.ParseSemver(tag)
+		sv, ok := lockfile.ParseVersion(tag)
 		if !ok || !sv.IsStable() {
 			continue
 		}
@@ -2099,7 +2099,7 @@ func selectLatestTag(tags []string) string {
 			bestMajorTag = tag
 		}
 
-		version := sv.Version()
+		version := [3]int{sv.Major, sv.Minor, sv.Patch}
 		if version[0] > bestVersion[0] ||
 			(version[0] == bestVersion[0] && version[1] > bestVersion[1]) ||
 			(version[0] == bestVersion[0] && version[1] == bestVersion[1] && version[2] > bestVersion[2]) {

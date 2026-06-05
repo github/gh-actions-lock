@@ -32,14 +32,14 @@ func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error)
 		return "", err
 	}
 
-	var best lockfile.Semver
+	var best lockfile.Version
 	bestFound := false
 	for _, t := range matching {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := lockfile.ParseSemver(t.Name)
-		if !ok || !sv.IsFullSemver() {
+		sv, ok := lockfile.ParseVersion(t.Name)
+		if !ok || !sv.IsFull() {
 			continue
 		}
 		if !bestFound || sv.Major > best.Major ||
@@ -62,7 +62,7 @@ func (tl *TagLister) BestPatchTagForSHA(owner, repo, sha string) (string, error)
 // This is used for auto-pinning: if there's exactly one obvious patch tag,
 // we can pin without prompting.
 func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string, error) {
-	refSV, refOK := lockfile.ParseSemver(ref)
+	refSV, refOK := lockfile.ParseVersion(ref)
 	if !refOK {
 		return "", nil
 	}
@@ -72,13 +72,13 @@ func (tl *TagLister) UniquePatchTagForRef(owner, repo, sha, ref string) (string,
 		return "", err
 	}
 
-	var candidates []lockfile.Semver
+	var candidates []lockfile.Version
 	for _, t := range matching {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := lockfile.ParseSemver(t.Name)
-		if !ok || !sv.IsFullSemver() {
+		sv, ok := lockfile.ParseVersion(t.Name)
+		if !ok || !sv.IsFull() {
 			continue
 		}
 		// Must be in the same family as the original ref.
@@ -129,10 +129,10 @@ func (tl *TagLister) SuggestTagsForSHA(owner, repo, sha string) ([]TagSuggestion
 	var suggestions []TagSuggestion
 
 	// Find the best semver match to derive family tags.
-	var bestSV lockfile.Semver
+	var bestSV lockfile.Version
 	bestFound := false
 	for _, t := range matching {
-		if sv, ok := lockfile.ParseSemver(t.Name); ok && sv.Rest == "" && !t.IsMajor {
+		if sv, ok := lockfile.ParseVersion(t.Name); ok && sv.Rest == "" && !t.IsMajor {
 			if !bestFound || sv.Major > bestSV.Major ||
 				(sv.Major == bestSV.Major && sv.Minor > bestSV.Minor) ||
 				(sv.Major == bestSV.Major && sv.Minor == bestSV.Minor && sv.Patch > bestSV.Patch) {
@@ -227,7 +227,7 @@ func (tl *TagLister) CuratePickerTags(owner, repo, pinnedSHA string) ([]PickerTa
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := lockfile.ParseSemver(t.Name)
+		sv, ok := lockfile.ParseVersion(t.Name)
 		if !ok || sv.Rest != "" {
 			continue
 		}

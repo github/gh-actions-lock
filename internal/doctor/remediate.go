@@ -974,7 +974,7 @@ func (rem *Remediator) handleNotPinned(wr WorkflowReport) error {
 		autoPin := false
 
 		// Case 1: Already a full semver tag (v4.3.1) — good default, verify it's a real tag.
-		if sv, svOK := lockfile.ParseSemver(ref.Ref); svOK && sv.IsFullSemver() {
+		if sv, svOK := lockfile.ParseVersion(ref.Ref); svOK && sv.IsFull() {
 			if rem.tagLister.LookupTag(ref.Owner, ref.Repo, ref.Ref) != nil {
 				autoPin = true
 			}
@@ -1161,8 +1161,8 @@ func (rem *Remediator) handleSHAAsRef(wr WorkflowReport, finding Finding) error 
 	if len(suggestions) > 0 && !rem.isSameOwner(owner) {
 		var fullSemverTags []TagSuggestion
 		for _, s := range suggestions {
-			sv, ok := lockfile.ParseSemver(s.Tag.Name)
-			if ok && sv.IsFullSemver() {
+			sv, ok := lockfile.ParseVersion(s.Tag.Name)
+			if ok && sv.IsFull() {
 				fullSemverTags = append(fullSemverTags, s)
 			}
 		}
@@ -1352,7 +1352,7 @@ func (rem *Remediator) handleSHATagPicker(wr WorkflowReport, finding Finding, ow
 	// `gh actions-pin upgrade` lets them shift to a different version later.
 	if defaultBranchIdx == -1 && len(curated) > 0 {
 		top := curated[0].Tag
-		if sv, ok := lockfile.ParseSemver(top.Name); ok && sv.IsFullSemver() && top.IsRelease {
+		if sv, ok := lockfile.ParseVersion(top.Name); ok && sv.IsFull() && top.IsRelease {
 			tagURL := TagURL(owner, repo, top.Name)
 			tagLink := rem.output.Dim(rem.output.Hyperlink("release", tagURL))
 			if top.IsImmutable {

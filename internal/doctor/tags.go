@@ -205,7 +205,7 @@ func (tl *TagLister) LatestStableTag(owner, repo string) (string, error) {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := lockfile.ParseSemver(t.Name)
+		sv, ok := lockfile.ParseVersion(t.Name)
 		if !ok || sv.Rest != "" {
 			continue // skip pre-release, non-semver
 		}

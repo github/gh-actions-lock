@@ -12,13 +12,13 @@ func TestParseSemver_RejectsOverflow(t *testing.T) {
 		"v1.0.99999999999999999999",
 	}
 	for _, tag := range overflow {
-		if _, ok := ParseSemver(tag); ok {
-			t.Errorf("ParseSemver(%q) = ok; want rejected", tag)
+		if _, ok := ParseVersion(tag); ok {
+			t.Errorf("ParseVersion(%q) = ok; want rejected", tag)
 		}
 	}
 }
 
-func TestSemver_Greater(t *testing.T) {
+func TestVersion_Greater(t *testing.T) {
 	tests := []struct {
 		name string
 		a, b string
@@ -35,13 +35,13 @@ func TestSemver_Greater(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a, ok := ParseSemver(tt.a)
+			a, ok := ParseVersion(tt.a)
 			if !ok {
-				t.Fatalf("ParseSemver(%q) failed", tt.a)
+				t.Fatalf("ParseVersion(%q) failed", tt.a)
 			}
-			b, ok := ParseSemver(tt.b)
+			b, ok := ParseVersion(tt.b)
 			if !ok {
-				t.Fatalf("ParseSemver(%q) failed", tt.b)
+				t.Fatalf("ParseVersion(%q) failed", tt.b)
 			}
 			if got := a.Greater(b); got != tt.want {
 				t.Errorf("%q.Greater(%q) = %v; want %v", tt.a, tt.b, got, tt.want)
