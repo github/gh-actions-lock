@@ -35,6 +35,20 @@ All three modes share one HTTP client construction path
 (`internal/resolver/httpclient.go`). No mode-specific branching, no
 mode-specific headers — the env decides everything.
 
+> **Developer-mode footnote — SSO and `GH_TOKEN`.** If you have a
+> `GH_TOKEN` env var set to a user PAT and resolution fails on
+> `actions/*` with a SAML/SSO error, the cause is that env-var PATs
+> are subject to per-org SAML enforcement and the `actions` org
+> enforces SSO for user tokens. The keyring-stored OAuth token from
+> `gh auth login --web` flows through gh's normal auth path and may
+> already be SSO-authorized for that org. Workaround:
+> `env -u GH_TOKEN gh actions-pin ...` — unsetting the env var makes
+> go-gh fall through to the keyring token. Permanent fix:
+> `gh auth login --web` and approve SSO for the `actions` org in the
+> browser. This is a dev-machine quirk only; CI and hosted Dependabot
+> use app-installation tokens, which are not subject to user-PAT SAML
+> enforcement.
+
 ## What WILL break this contract
 
 If you are tempted to do any of the following, **don't** — and if you
