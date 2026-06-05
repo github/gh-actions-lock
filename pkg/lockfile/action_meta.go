@@ -17,12 +17,9 @@ const (
 	ExecUnknown   ExecutionType = "unknown"
 )
 
-// ActionMeta is the parsed subset of `action.yml` (or `action.yaml`)
-// relevant to dependency resolution: the action's name, how it executes,
-// and — for composite actions — the list of `uses:` strings of its
-// nested steps. Other fields (inputs, outputs, branding, etc.) are
-// intentionally not surfaced; consumers that need them should parse
-// the YAML themselves.
+// ActionMeta is the parsed subset of `action.yml` (or `action.yaml`) relevant
+// to dependency resolution: the action's name, how it executes, and composite
+// action nested `uses:` strings.
 type ActionMeta struct {
 	Name       string
 	Execution  ExecutionType
