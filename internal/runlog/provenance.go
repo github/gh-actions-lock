@@ -32,6 +32,12 @@ type Report struct {
 	Repo        *RepoInfo `json:"repo,omitempty"`
 	Summary     Summary   `json:"summary"`
 	Actions     []Action  `json:"actions"`
+	// AutoFixed records the auto-fix rewrites the run applied (impostor
+	// pins replaced with a sane release). Surfaces what was changed for
+	// each (workflow, action) pair, so Dependabot and other downstream
+	// consumers can audit the rewrite without diffing the workflow file.
+	// Empty when no auto-fixes happened.
+	AutoFixed []AutoFix `json:"auto_fixed,omitempty"`
 }
 
 // ToolInfo identifies the tool and version that produced the report.
@@ -90,6 +96,20 @@ type Action struct {
 	Workflows []string `json:"workflows"`
 	// RequiredBy lists parent composite actions for transitive dependencies.
 	RequiredBy []string `json:"required_by,omitempty"`
+}
+
+// AutoFix records a single (workflow, action) auto-fix rewrite performed
+// during remediation. Today this fires for impostor pins where diagnose
+// attached a sane-release suggestion and the pre-pin auto-fix swapped the
+// uses: line accordingly.
+type AutoFix struct {
+	Workflow string `json:"workflow"`
+	NWO      string `json:"nwo"`
+	FromRef  string `json:"from_ref"`
+	FromSHA  string `json:"from_sha,omitempty"`
+	ToRef    string `json:"to_ref"`
+	ToSHA    string `json:"to_sha,omitempty"`
+	Reason   string `json:"reason"`
 }
 
 // WriteReport garbage-collects old logs, writes r as a pretty-printed JSON

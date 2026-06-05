@@ -122,6 +122,7 @@ func TestSchema_DefsMatchStructs(t *testing.T) {
 		{"repo", reflect.TypeOf(RepoInfo{})},
 		{"summary", reflect.TypeOf(Summary{})},
 		{"action", reflect.TypeOf(Action{})},
+		{"auto_fix", reflect.TypeOf(AutoFix{})},
 	}
 	for _, c := range cases {
 		obj, ok := doc.Defs[c.def]

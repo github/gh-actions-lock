@@ -289,6 +289,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// network calls here.
 	var reachDeps []lockfile.Dependency
 	var liveMoved []lockfile.Dependency
+	var liveDirect []lockfile.Dependency
 	if opts.Rescan {
 		reachDeps = deps
 		// Even on --rescan, the live-SHA reach sweep only matters
@@ -297,16 +298,19 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		if len(networked) > 0 {
 			live, _, _ := r.ResolveAllRecursive(refs)
 			liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
+			liveDirect = doctor.CollectLiveDirectReachDeps(networked, live)
 		}
 	} else {
-		// One resolve, two uses: drive the locked-SHA partition AND
-		// the live-SHA moved-set. Cache makes the call O(1) per ref;
-		// hoisting it avoids two resolver round-trips.
+		// One resolve, three uses: drive the locked-SHA partition AND
+		// the live-SHA moved-set AND the live-direct sweep (unpinned
+		// + transitive-not-in-lockfile cases). Cache makes the call
+		// O(1) per ref; hoisting it avoids three resolver round-trips.
 		live, _, _ := r.ResolveAllRecursive(refs)
 		reachDeps = doctor.CollectReachDeps(networked, live)
 		liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
+		liveDirect = doctor.CollectLiveDirectReachDeps(networked, live)
 	}
-	if len(reachDeps) > 0 || len(liveMoved) > 0 {
+	if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
 		if showHeadlessProgress {
 			f.UI.UpdateLabel("Verifying reachability")
 		}
@@ -315,6 +319,9 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		}
 		if len(liveMoved) > 0 {
 			_ = r.CheckReachabilityAll(liveMoved)
+		}
+		if len(liveDirect) > 0 {
+			_ = r.CheckReachabilityAll(liveDirect)
 		}
 	}
 
@@ -481,13 +488,6 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			return err
 		}
 
-		// Pass C: convert any alerted impostors that already carry a
-		// sane-release suggestion into actual rewrites + re-pins. Runs
-		// after Remediate so applyPin/applySHAToTag have had a chance to
-		// surface the impostor signal first; the rewrites consume the
-		// alerted-suggestions map populated by alertImpostor.
-		rem.AutoFixAlertedImpostors()
-
 		if err := store.Save(); err != nil {
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
@@ -532,7 +532,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	if opts.JSONFields == "" {
 		repoInfo := &runlog.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.Hostname)}
 		outcomes := newProvenanceOutcomes(alertedDeps, skippedDeps, unresolvedDeps, fullScanDeps, alertedReasons)
-		prov := buildProvenanceReport(report, store, valid, repoInfo, outcomes)
+		prov := buildProvenanceReport(report, store, valid, repoInfo, outcomes, autoFixedImpostors)
 		if path, werr := runlog.WriteReport(prov); werr == nil {
 			defer func() { f.UI.TermDetail("Resolution record: %s", path) }()
 		}
@@ -566,7 +566,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			f.UI.TermBlank()
 		}
 		printed = true
-		f.UI.TermWarn("%d %s auto-pinned to a safer release — review for sanity:",
+		f.UI.TermWarn("Auto-fixed: rewrote %d %s from impostor pin → reachable release (review for sanity):",
 			len(autoFixedImpostors), ui.Pluralize(len(autoFixedImpostors), "action", "actions"))
 		for _, fix := range autoFixedImpostors {
 			short := fix.NewSHA

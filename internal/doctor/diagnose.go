@@ -250,9 +250,21 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			liveMovedReach = r.CheckReachabilityAll(moved)
 		}
 	}
+	// Pin-time parity sweep: any (NWO, Ref, LIVE SHA) that neither the
+	// locked-SHA sweep nor the tag-moved sweep covers gets a fresh reach
+	// check here. Catches the NotPinned-direct impostor case and any
+	// transitive composite live dep that isn't in the lockfile yet. With
+	// this in place, applyPin's reach-loop Unreachable branch becomes a
+	// fail-loud invariant rather than a primary detection path.
+	var liveDirectReach []resolver.ReachabilityResult
+	if r != nil && len(liveDeps) > 0 {
+		if extra := liveDirectReachDeps(pw, liveDeps); len(extra) > 0 {
+			liveDirectReach = r.CheckReachabilityAll(extra)
+		}
+	}
 	var checkR checkResolver
 	if r != nil && liveDeps != nil {
-		checkR = newPrewarmedResolver(r, liveDeps, reach, liveMovedReach)
+		checkR = newPrewarmedResolver(r, liveDeps, reach, liveMovedReach, liveDirectReach)
 	}
 	rawFindings := runChecks(pw, store.File(), checkR)
 
@@ -268,6 +280,9 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 
 	if len(reach) > 0 {
 		wr.Findings = append(wr.Findings, reachabilityComplementFindings(pw.Path, reach, pw.ExistingDeps, directNWOs, parentMap, wr.Findings)...)
+	}
+	if len(liveDirectReach) > 0 {
+		wr.Findings = append(wr.Findings, liveReachImpostorFindings(pw.Path, liveDirectReach, liveDeps, directNWOs, parentMap, wr.Findings)...)
 	}
 
 	if !hasIssues(wr.Findings) {
@@ -419,6 +434,96 @@ func CollectLiveMovedReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependen
 			seen[k] = true
 			out = append(out, synthetic)
 		}
+	}
+	return out
+}
+
+// liveDirectReachDeps returns live-resolved deps whose (NWO, Ref, SHA)
+// isn't already covered by the locked-SHA sweep (partitionReachByLive) or
+// the tag-moved sweep (liveMovedDeps), so the engine can give them a
+// fresh reachability check before pinning. Covers two pin-time impostor
+// shapes that the existing diagnose paths miss:
+//
+//   - NotPinned workflow: no ExistingDep at all, so the locked-SHA sweep
+//     never runs. Without this, applyPin's reach loop is the only thing
+//     catching these — diagnose now fires the CategoryImpostorCommit
+//     finding pre-pin so the auto-fix runs via tryAutoFixImpostors.
+//   - Transitive composite dep that ResolveAllRecursive discovered but
+//     isn't yet in the lockfile. The locked-SHA sweep can't see it; the
+//     live-moved sweep only fires when an ExistingDep exists for the same
+//     dep key with a different SHA.
+//
+// Dedup by cachekey.Reach across direct + transitive entries.
+func liveDirectReachDeps(pw ParsedWorkflow, live []lockfile.Dependency) []lockfile.Dependency {
+	if len(live) == 0 {
+		return nil
+	}
+	covered := make(map[cachekey.Reach]bool, len(pw.ExistingDeps)+len(live))
+	existingByDepKey := make(map[string]lockfile.Dependency, len(pw.ExistingDeps))
+	for _, d := range pw.ExistingDeps {
+		owner, repo := d.OwnerRepo()
+		covered[cachekey.ForReach(owner, repo, d.SHA, d.Ref)] = true
+		existingByDepKey[d.Key()] = d
+	}
+	for _, d := range live {
+		ed, ok := existingByDepKey[d.Key()]
+		if !ok || strings.EqualFold(ed.SHA, d.SHA) {
+			continue
+		}
+		owner, repo := d.OwnerRepo()
+		covered[cachekey.ForReach(owner, repo, d.SHA, d.Ref)] = true
+	}
+	seen := make(map[cachekey.Reach]bool, len(live))
+	var out []lockfile.Dependency
+	for _, d := range live {
+		owner, repo := d.OwnerRepo()
+		k := cachekey.ForReach(owner, repo, d.SHA, d.Ref)
+		if covered[k] || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+// CollectLiveDirectReachDeps is the cmd-level pre-warm analogue of
+// liveDirectReachDeps. Returns the deduplicated set of synthetic live
+// deps across all parsed workflows that need a fresh reachability check
+// because they're outside both the locked-SHA and live-moved sweeps. On
+// a fully steady-state lockfile this is empty; on a brand-new repo (no
+// lockfile yet) it's the full live set.
+func CollectLiveDirectReachDeps(parsed []ParsedWorkflow, live []lockfile.Dependency) []lockfile.Dependency {
+	if len(parsed) == 0 || len(live) == 0 {
+		return nil
+	}
+	covered := make(map[cachekey.Reach]bool)
+	existingByDepKey := make(map[string]lockfile.Dependency)
+	for _, pw := range parsed {
+		for _, d := range pw.ExistingDeps {
+			owner, repo := d.OwnerRepo()
+			covered[cachekey.ForReach(owner, repo, d.SHA, d.Ref)] = true
+			existingByDepKey[d.Key()] = d
+		}
+	}
+	for _, d := range live {
+		ed, ok := existingByDepKey[d.Key()]
+		if !ok || strings.EqualFold(ed.SHA, d.SHA) {
+			continue
+		}
+		owner, repo := d.OwnerRepo()
+		covered[cachekey.ForReach(owner, repo, d.SHA, d.Ref)] = true
+	}
+	seen := make(map[cachekey.Reach]bool, len(live))
+	var out []lockfile.Dependency
+	for _, d := range live {
+		owner, repo := d.OwnerRepo()
+		k := cachekey.ForReach(owner, repo, d.SHA, d.Ref)
+		if covered[k] || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, d)
 	}
 	return out
 }
@@ -576,6 +681,83 @@ func reachabilityComplementFindings(
 				Remediation:  remediation,
 			})
 		}
+	}
+	return out
+}
+
+// liveReachImpostorFindings emits CategoryImpostorCommit for live-resolved
+// SHAs that come back Unreachable from the live-direct sweep. Operates on
+// synthetic live deps (not pw.ExistingDeps), so it fires for unpinned and
+// transitive-not-in-lockfile cases that reachabilityComplementFindings
+// (keyed on existing deps) can't see.
+//
+// Suppresses duplicates against any prior impostor/forgery finding for the
+// same dep key — the engine's checkImpostorCommit may have already emitted
+// for a direct ref via the live-ref-vs-locked compare in check_misleading.
+func liveReachImpostorFindings(
+	path string,
+	reach []resolver.ReachabilityResult,
+	live []lockfile.Dependency,
+	directNWOs map[cachekey.Repo]bool,
+	parentMap map[string][]string,
+	existing []Finding,
+) []Finding {
+	if len(reach) == 0 {
+		return nil
+	}
+	covered := map[string]bool{}
+	for _, f := range existing {
+		if f.Dependency == nil {
+			continue
+		}
+		switch f.Category {
+		case CategoryImpostorCommit, CategoryLockfileForgery:
+			covered[f.Dependency.Key()] = true
+		}
+	}
+	liveByReachKey := make(map[cachekey.Reach]lockfile.Dependency, len(live))
+	for _, d := range live {
+		owner, repo := d.OwnerRepo()
+		liveByReachKey[cachekey.ForReach(owner, repo, d.SHA, d.Ref)] = d
+	}
+	var out []Finding
+	for _, rr := range reach {
+		if rr.Status != resolver.Unreachable {
+			continue
+		}
+		dep, ok := liveByReachKey[cachekey.ForReach(rr.Owner, rr.Repo, rr.SHA, rr.Ref)]
+		if !ok {
+			continue
+		}
+		if covered[dep.Key()] {
+			continue
+		}
+		depCopy := dep
+		owner, repo := dep.OwnerRepo()
+		direct := directNWOs[cachekey.ForRepo(owner, repo)]
+		parent := ""
+		if !direct {
+			if parents := parentMap[dep.Key()]; len(parents) > 0 {
+				parent = parents[0]
+			}
+		}
+		detail := rr.Detail
+		if detail == "" {
+			detail = fmt.Sprintf("live resolve of %s/%s@%s → %s is not reachable from any branch", owner, repo, dep.Ref, dep.SHA)
+		}
+		out = append(out, Finding{
+			WorkflowPath: path,
+			Category:     CategoryImpostorCommit,
+			Severity:     SeverityError,
+			Confidence:   ConfidenceHigh,
+			Dependency:   &depCopy,
+			ParentNWO:    parent,
+			Detail:       detail,
+			Remediation:  "investigate immediately — the live ref resolves to a commit that is not reachable from any branch",
+			DocURL:       DocURLFor(CategoryImpostorCommit),
+		})
+		// Mark covered so a second reach result for the same dep doesn't double-emit.
+		covered[dep.Key()] = true
 	}
 	return out
 }

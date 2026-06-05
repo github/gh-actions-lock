@@ -23,6 +23,11 @@
       "description": "Deduplicated list of action dependencies, one entry per unique action@ref.",
       "type": "array",
       "items": { "$ref": "#/$defs/action" }
+    },
+    "auto_fixed": {
+      "description": "Auto-fix rewrites the run applied (impostor pins replaced with a sane release). One entry per (workflow, action) pair. Omitted when no auto-fixes happened.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/auto_fix" }
     }
   },
   "$defs": {
@@ -135,6 +140,42 @@
           "description": "Parent composite actions for transitive dependencies.",
           "type": "array",
           "items": { "type": "string" }
+        }
+      }
+    },
+    "auto_fix": {
+      "description": "A single auto-fix rewrite applied during remediation. Records what the workflow used to reference and what the run rewrote it to.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow", "nwo", "from_ref", "to_ref", "reason"],
+      "properties": {
+        "workflow": {
+          "description": "Workflow file path the rewrite was applied to.",
+          "type": "string"
+        },
+        "nwo": {
+          "description": "Owner/name of the action's repository.",
+          "type": "string"
+        },
+        "from_ref": {
+          "description": "The ref the workflow originally used (before the rewrite).",
+          "type": "string"
+        },
+        "from_sha": {
+          "description": "The commit SHA the original ref resolved to, when known. Empty when the original ref was a tag and the SHA wasn't recorded.",
+          "type": "string"
+        },
+        "to_ref": {
+          "description": "The ref the workflow now uses (after the rewrite).",
+          "type": "string"
+        },
+        "to_sha": {
+          "description": "The commit SHA the new ref resolves to. Empty when unknown.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Human-readable explanation of why the rewrite was performed.",
+          "type": "string"
         }
       }
     }

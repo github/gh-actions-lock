@@ -42,7 +42,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA(t *testing.T) {
 	}
 	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
 
-	rep := buildProvenanceReport(report, store, false, nil, out)
+	rep := buildProvenanceReport(report, store, false, nil, out, nil)
 
 	if len(rep.Actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(rep.Actions))
@@ -81,7 +81,7 @@ func TestBuildProvenanceReport_OmitsObservedSHAWhenEqual(t *testing.T) {
 	}
 	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
 
-	rep := buildProvenanceReport(report, store, true, nil, out)
+	rep := buildProvenanceReport(report, store, true, nil, out, nil)
 
 	if len(rep.Actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(rep.Actions))
@@ -166,7 +166,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *tes
 			}
 			out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
 
-			rep := buildProvenanceReport(report, store, false, nil, out)
+			rep := buildProvenanceReport(report, store, false, nil, out, nil)
 
 			if len(rep.Actions) != 1 {
 				t.Fatalf("expected 1 action, got %d", len(rep.Actions))
@@ -185,5 +185,65 @@ func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *tes
 				t.Errorf("Issue: got %q, want %q", a.Issue, tc.category)
 			}
 		})
+	}
+}
+
+// TestBuildProvenanceReport_RecordsAutoFixed verifies that AutoFixedImpostor
+// records flow through to the runlog.AutoFixed array. Downstream consumers
+// (Dependabot, audit tooling) read this to confirm what the run rewrote.
+func TestBuildProvenanceReport_RecordsAutoFixed(t *testing.T) {
+	report := &doctor.Report{
+		Workflows: []doctor.WorkflowReport{{Path: ".github/workflows/ci.yml"}},
+	}
+	store, err := lockfile.OpenStore(t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+
+	fixes := []doctor.AutoFixedImpostor{{
+		Workflow: ".github/workflows/ci.yml",
+		NWO:      "evil/action",
+		OldRef:   "v1",
+		OldSHA:   "ffffffffffffffffffffffffffffffffffffffff",
+		NewTag:   "v3.0.3",
+		NewSHA:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+
+	rep := buildProvenanceReport(report, store, true, nil, out, fixes)
+
+	if len(rep.AutoFixed) != 1 {
+		t.Fatalf("expected 1 auto-fix entry, got %d", len(rep.AutoFixed))
+	}
+	af := rep.AutoFixed[0]
+	want := runlog.AutoFix{
+		Workflow: ".github/workflows/ci.yml",
+		NWO:      "evil/action",
+		FromRef:  "v1",
+		FromSHA:  "ffffffffffffffffffffffffffffffffffffffff",
+		ToRef:    "v3.0.3",
+		ToSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Reason:   "impostor pin rewritten to reachable release",
+	}
+	if af != want {
+		t.Errorf("AutoFixed[0] = %+v, want %+v", af, want)
+	}
+}
+
+// TestBuildProvenanceReport_OmitsAutoFixedWhenEmpty verifies the AutoFixed
+// array is omitted (nil) when nothing was auto-fixed — keeps the JSON
+// surface clean for the steady-state case.
+func TestBuildProvenanceReport_OmitsAutoFixedWhenEmpty(t *testing.T) {
+	report := &doctor.Report{Workflows: nil}
+	store, err := lockfile.OpenStore(t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+
+	rep := buildProvenanceReport(report, store, true, nil, out, nil)
+
+	if rep.AutoFixed != nil {
+		t.Errorf("expected AutoFixed to be nil (omitempty), got %+v", rep.AutoFixed)
 	}
 }
