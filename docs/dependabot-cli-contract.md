@@ -216,8 +216,11 @@ We will not knowingly add CLI-owned `Authorization` header injection in any
 future release. If a feature ever needs to, it must be gated behind an opt-in
 flag and documented as incompatible with the Dependabot proxy mode.
 
-**Action required on this side:** None for ship. Follow-up card to add
-`docs/auth-tokenless-mode.md` and a smoke test.
+**Action required on this side:** None for ship. The contract is
+unpacked in [`auth-tokenless-mode.md`](auth-tokenless-mode.md) and
+enforced by `internal/resolver/auth_boundary_test.go`, which fails
+CI if any CLI code introduces an `"Authorization"` string literal as
+a header key.
 
 ---
 
