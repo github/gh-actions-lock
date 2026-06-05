@@ -24,7 +24,7 @@ name: "5: Pinned before routine update — legitimate tag movement"
 # CONTRAST WITH SCENARIO 1:
 #   Both show REF_MOVED. The difference: scenario 1's new SHA (7b403c9)
 #   is a fork-network commit with no branches in the upstream repo →
-#   IMPOSTER_COMMIT fires. Here, the new SHA is on a real branch →
+#   IMPOSTOR_COMMIT fires. Here, the new SHA is on a real branch →
 #   reachability passes. branch_commits distinguishes the two cases
 #   that the old compare-API approach could not.
 #

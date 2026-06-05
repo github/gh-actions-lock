@@ -23,7 +23,7 @@ name: "3: Re-pinned after backward move — false baseline"
 # NOTE: This scenario only works with same-repo tag movement (scenario 2).
 # Fork injection (scenario 1) cannot be re-pinned — `gh actions-pin` now
 # runs reachability checks at pin time and refuses to pin fork-network
-# commits (IMPOSTER_COMMIT blocks the pin operation).
+# commits (IMPOSTOR_COMMIT blocks the pin operation).
 #
 # The lockfile is a tamper-EVIDENT seal, not tamper-proof. For same-repo
 # backward moves, REF_MOVED is the only signal — and if the victim

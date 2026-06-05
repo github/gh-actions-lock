@@ -191,4 +191,4 @@ These are the user-facing finding categories shown in CLI output and JSON:
 | `STALE` | Lock entry references an action no longer in the workflow |
 | `REF_CHANGED` | Workflow ref was edited; lock needs updating |
 | `MISLEADING_SHA` | Ref looks like a SHA but resolves to a different commit |
-| `IMPOSTER_COMMIT` | Locked SHA is not in the ref's history |
+| `IMPOSTOR_COMMIT` | Locked SHA is not in the ref's history |

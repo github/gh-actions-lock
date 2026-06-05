@@ -12,7 +12,7 @@ import (
 )
 
 // splitNWO splits "owner/repo" into its components. Returns ("", "") for
-// inputs without a slash. Used to feed alertImposter coords carved out of
+// inputs without a slash. Used to feed alertImpostor coords carved out of
 // ImpostorError.NWO, which packs owner+repo as a single field.
 func splitNWO(nwo string) (string, string) {
 	i := strings.IndexByte(nwo, '/')
@@ -109,7 +109,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	for _, rr := range reachResults {
 		switch rr.Status {
 		case resolver.Unreachable:
-			rem.alertImposter(wr.Path, rr.Owner, rr.Repo, rr.Ref,
+			rem.alertImpostor(wr.Path, rr.Owner, rr.Repo, rr.Ref,
 				fmt.Sprintf("refusing to pin: impostor commit detected for %s/%s@%s — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
 			return errWorkflowAlerted
 		case resolver.ReachabilityUnknown:
@@ -177,7 +177,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
 			owner, repo := splitNWO(imp.NWO)
-			rem.alertImposter(wr.Path, owner, repo, imp.Ref, imp.Error())
+			rem.alertImpostor(wr.Path, owner, repo, imp.Ref, imp.Error())
 			return errWorkflowAlerted
 		}
 		return fmt.Errorf("%s: normalizing containing refs: %w", wr.Path, err)
@@ -312,7 +312,7 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 		var imp *resolver.ImpostorError
 		if errors.As(err, &imp) {
 			owner, repo := splitNWO(imp.NWO)
-			rem.alertImposter(workflowPath, owner, repo, imp.Ref, imp.Error())
+			rem.alertImpostor(workflowPath, owner, repo, imp.Ref, imp.Error())
 			return parentMap, errWorkflowAlerted
 		}
 		return parentMap, fmt.Errorf("%s: normalizing containing refs: %w", workflowPath, err)
@@ -353,16 +353,16 @@ func writeWorkflowFile(path string, content []byte) error {
 	return os.WriteFile(path, content, mode)
 }
 
-// AutoFixAlertedImposters walks the alerted-impostor state populated during
+// AutoFixAlertedImpostors walks the alerted-impostor state populated during
 // Remediate and rewrites uses: lines for any dep that already has a
 // sane-release suggestion attached. Each matched workflow is rewritten to
 // the suggested tag and re-pinned via applyPin. Successful fixes are moved
-// from the alerted summary into AutoFixedImposters so the end-of-run output
+// from the alerted summary into AutoFixedImpostors so the end-of-run output
 // can announce them as "auto-pinned — review for sanity" instead of
 // continuing to flag them as unfixable. Workflows whose re-pin fails (e.g.
 // the suggested tag is also unreachable) are left in the alerted set with
 // the rewritten file on disk so the user can inspect manually.
-func (rem *Remediator) AutoFixAlertedImposters() {
+func (rem *Remediator) AutoFixAlertedImpostors() {
 	if len(rem.AlertedSuggestions) == 0 {
 		return
 	}
@@ -439,7 +439,7 @@ func (rem *Remediator) AutoFixAlertedImposters() {
 			continue
 		}
 		for _, fx := range fixes {
-			rem.recordAutoFixedImposter(wp, fx.owner+"/"+fx.repo, fx.oldRef, fx.newTag, fx.newSHA)
+			rem.recordAutoFixedImpostor(wp, fx.owner+"/"+fx.repo, fx.oldRef, fx.newTag, fx.newSHA)
 			fixedKeys[fx.depKey] = true
 		}
 	}

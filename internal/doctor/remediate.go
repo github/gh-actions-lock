@@ -92,7 +92,7 @@ type Remediator struct {
 
 	// AlertedSuggestions maps an alerted dep key to a sane-release
 	// suggestion (e.g. "v1.4.0 a1b2c3d") computed by
-	// doctor.EnrichImposterFindings — the most recent stable release whose
+	// doctor.EnrichImpostorFindings — the most recent stable release whose
 	// commit is still reachable from a branch. Empty for deps with no
 	// available suggestion. Rendered alongside the reason in the summary.
 	AlertedSuggestions map[string]string
@@ -110,18 +110,18 @@ type Remediator struct {
 	// order preserved.
 	FullScanDeps []string
 
-	// AutoFixedImposters records impostor refs that were silently rewritten
+	// AutoFixedImpostors records impostor refs that were silently rewritten
 	// to the latest reachable release tag during pinning. The end-of-run
 	// summary surfaces these as a "✓ auto-pinned to a safer release —
 	// review for sanity" section so the user can verify the substitution
 	// (which may cross a major-version boundary) wasn't disruptive.
 	// Insertion order preserved; deduplicated by (Workflow, NWO).
-	AutoFixedImposters []AutoFixedImposter
+	AutoFixedImpostors []AutoFixedImpostor
 }
 
-// AutoFixedImposter records a single auto-substitution made when an
+// AutoFixedImpostor records a single auto-substitution made when an
 // unreachable pinned ref had a sane-release suggestion available.
-type AutoFixedImposter struct {
+type AutoFixedImpostor struct {
 	Workflow string // workflow path the rewrite was applied to
 	NWO      string // owner/repo (no path)
 	OldRef   string // ref as written before the rewrite (tag or SHA)
@@ -145,22 +145,22 @@ func (rem *Remediator) recordFullScanDep(depKey string) {
 	rem.FullScanDeps = append(rem.FullScanDeps, depKey)
 }
 
-// recordAutoFixedImposter notes that an impostor ref was silently rewritten
+// recordAutoFixedImpostor notes that an impostor ref was silently rewritten
 // to a sane-release tag during pinning. Deduplicated by (Workflow, NWO);
 // first write wins so a workflow with multiple findings against the same
 // action is only surfaced once.
-func (rem *Remediator) recordAutoFixedImposter(workflow, nwo, oldRef, newTag, newSHA string) {
+func (rem *Remediator) recordAutoFixedImpostor(workflow, nwo, oldRef, newTag, newSHA string) {
 	if workflow == "" || nwo == "" || newTag == "" {
 		return
 	}
 	rem.mu.Lock()
 	defer rem.mu.Unlock()
-	for _, fix := range rem.AutoFixedImposters {
+	for _, fix := range rem.AutoFixedImpostors {
 		if fix.Workflow == workflow && fix.NWO == nwo {
 			return
 		}
 	}
-	rem.AutoFixedImposters = append(rem.AutoFixedImposters, AutoFixedImposter{
+	rem.AutoFixedImpostors = append(rem.AutoFixedImpostors, AutoFixedImpostor{
 		Workflow: workflow,
 		NWO:      nwo,
 		OldRef:   oldRef,
@@ -169,7 +169,7 @@ func (rem *Remediator) recordAutoFixedImposter(workflow, nwo, oldRef, newTag, ne
 	})
 }
 
-// tryAutoFixImposters rewrites a workflow's uses: lines for any impostor
+// tryAutoFixImpostors rewrites a workflow's uses: lines for any impostor
 // findings that have an enriched sane-release suggestion AND appear as a
 // direct dep (matching one of wr.ActionRefs). Mutates wr.Findings in place
 // to drop the auto-fixed impostors so the per-finding loop won't alert them
@@ -177,10 +177,10 @@ func (rem *Remediator) recordAutoFixedImposter(workflow, nwo, oldRef, newTag, ne
 // when at least one rewrite was applied — caller should then run applyPin
 // to resolve and pin against the new tag.
 //
-// Auto-fix only applies when SaneSuggestionTag is set (EnrichImposterFindings
+// Auto-fix only applies when SaneSuggestionTag is set (EnrichImpostorFindings
 // already ran) and the dep is direct: transitive composite-action edges
 // can't be fixed by editing the consumer's workflow file.
-func (rem *Remediator) tryAutoFixImposters(wr *WorkflowReport) bool {
+func (rem *Remediator) tryAutoFixImpostors(wr *WorkflowReport) bool {
 	if wr == nil {
 		return false
 	}
@@ -194,7 +194,7 @@ func (rem *Remediator) tryAutoFixImposters(wr *WorkflowReport) bool {
 	var pending []pendingFix
 	keep := wr.Findings[:0:0]
 	for _, f := range wr.Findings {
-		if f.Category != CategoryImposterCommit || f.Dependency == nil || f.SaneSuggestionTag == "" {
+		if f.Category != CategoryImpostorCommit || f.Dependency == nil || f.SaneSuggestionTag == "" {
 			keep = append(keep, f)
 			continue
 		}
@@ -238,7 +238,7 @@ func (rem *Remediator) tryAutoFixImposters(wr *WorkflowReport) bool {
 	wr.ActionRefs = refs2
 	wr.Findings = keep
 	for _, fix := range pending {
-		rem.recordAutoFixedImposter(wr.Path, fix.nwo, fix.oldRef, fix.newTag, fix.newSHA)
+		rem.recordAutoFixedImpostor(wr.Path, fix.nwo, fix.oldRef, fix.newTag, fix.newSHA)
 	}
 	return true
 }
@@ -283,15 +283,15 @@ func (rem *Remediator) alertWorkflow(workflowPath, depKey, reason, detail string
 	rem.AlertedWorkflows[depKey] = append(rem.AlertedWorkflows[depKey], workflowPath)
 }
 
-// alertImposter wraps alertWorkflow with a sane-release lookup against the
+// alertImpostor wraps alertWorkflow with a sane-release lookup against the
 // action repo so the end-of-run summary can suggest a re-pin target (or
 // signal that no recent release is reachable). Call sites that already
 // produce a Finding go through addAlertedDep + recordAlertSuggestion; this
 // path covers the pin-time refusal in apply.go where only the dep coords
 // are in hand.
-func (rem *Remediator) alertImposter(workflowPath, owner, repo, ref, detail string) {
+func (rem *Remediator) alertImpostor(workflowPath, owner, repo, ref, detail string) {
 	depKey := owner + "/" + repo + "@" + ref
-	rem.alertWorkflow(workflowPath, depKey, reasonForCategory(CategoryImposterCommit), detail)
+	rem.alertWorkflow(workflowPath, depKey, reasonForCategory(CategoryImpostorCommit), detail)
 	tag, sha := FindSaneRelease(rem.tagLister, rem.resolver, owner, repo)
 	rem.mu.Lock()
 	defer rem.mu.Unlock()
@@ -620,7 +620,7 @@ func (rem *Remediator) recordAlertSuggestion(depKey string, f Finding) {
 // reasonForCategory maps an investigation category to concise, user-facing copy.
 func reasonForCategory(c Category) string {
 	switch c {
-	case CategoryImposterCommit:
+	case CategoryImpostorCommit:
 		return "pinned SHA isn't reachable from any branch — likely orphaned and benign, but could be an impostor commit; action publishers should tag releases from a branch"
 	case CategoryLockfileForgery:
 		return "pinned SHA was never in this ref's history — possible lockfile tampering"
@@ -715,9 +715,9 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 	// workflow lacks a suggestion (or is transitive) we don't auto-fix any
 	// of them: the consumer needs the alert anyway, and a half-rewritten
 	// workflow would obscure the unfixable cases.
-	if rem.tryAutoFixImposters(&wr) {
+	if rem.tryAutoFixImpostors(&wr) {
 		// All impostor findings handled — return so we don't re-process
-		// stale CategoryImposterCommit entries from before the rewrite.
+		// stale CategoryImpostorCommit entries from before the rewrite.
 		return rem.applyPin(wr)
 	}
 
@@ -749,7 +749,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 		// describes the file on disk.
 		if finding.Dependency != nil && rem.shaConvertedForNWO(finding.Dependency.NWO) {
 			switch finding.Category {
-			case CategoryMisleadingSHA, CategoryImposterCommit, CategoryLockfileForgery:
+			case CategoryMisleadingSHA, CategoryImpostorCommit, CategoryLockfileForgery:
 				continue
 			}
 		}
@@ -765,13 +765,13 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 			}
 		}
 
-		// Alerted-only categories (Imposter/Forgery/Misleading) were already
+		// Alerted-only categories (Impostor/Forgery/Misleading) were already
 		// fully presented by presentCheckResults in non-interactive mode.
 		// Just register the alert here without re-printing the per-workflow
 		// header or finding details.
 		if !rem.prompter.IsInteractive() {
 			switch finding.Category {
-			case CategoryImposterCommit, CategoryLockfileForgery, CategoryMisleadingSHA:
+			case CategoryImpostorCommit, CategoryLockfileForgery, CategoryMisleadingSHA:
 				rem.Alerted++
 				rem.addAlertedDep(finding)
 				continue
@@ -813,7 +813,7 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 				return err
 			}
 
-		case CategoryImposterCommit:
+		case CategoryImpostorCommit:
 			rem.output.Error("%s", finding.Detail)
 			rem.output.Hint("This may indicate a fork-network injection attack. Do not auto-fix.")
 			rem.Alerted++

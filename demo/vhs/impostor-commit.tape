@@ -1,4 +1,4 @@
-Output demo/vhs/out/imposter-commit.gif
+Output demo/vhs/out/impostor-commit.gif
 
 Set Shell "zsh"
 Set FontFamily "JetBrainsMono Nerd Font"
@@ -18,7 +18,7 @@ Type "grep -E 'uses:|  -' demo/workflows-pwned/1-pinned-before-hijack.yml"
 Enter
 Sleep 2s
 
-Type "echo '# branch_commits detects the fork injection — IMPOSTER_COMMIT fires'"
+Type "echo '# branch_commits detects the fork injection — IMPOSTOR_COMMIT fires'"
 Enter
 Sleep 1s
 

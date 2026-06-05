@@ -60,7 +60,7 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			  STALE         - lock entry references an action no longer in the workflow
 			  REF_CHANGED   - workflow ref was edited; lock needs updating
 			  MISLEADING_SHA - ref looks like a SHA but resolves to a different commit
-			  IMPOSTER_COMMIT   - locked SHA is not in the ref's history
+			  IMPOSTOR_COMMIT   - locked SHA is not in the ref's history
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows
@@ -282,7 +282,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// Build a shared REST client + TagLister up-front. The diagnostics
 	// engine now uses the resolver's PeelTagObject directly to recognize
 	// annotated-tag-object SHA pins, so no tagger is needed for that path.
-	// The TagLister is still reused by EnrichImposterFindings and the
+	// The TagLister is still reused by EnrichImpostorFindings and the
 	// Remediator (best-patch-for-SHA lookups, release tag hints) so we
 	// don't refetch tags downstream.
 	hostname := resolveHostname(opts.Hostname)
@@ -298,16 +298,16 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// Compute validity from findings.
 	valid := report.IsValid()
 
-	// Enrich imposter-commit findings with a suggested re-pin target — the
+	// Enrich impostor-commit findings with a suggested re-pin target — the
 	// most recent stable release whose commit is still reachable from a
 	// branch in the action repo. Bounded network walk per affected action;
-	// skipped entirely when no imposter findings exist.
-	if hasImposterFindings(report) {
+	// skipped entirely when no impostor findings exist.
+	if hasImpostorFindings(report) {
 		if tagger != nil {
-			doctor.EnrichImposterFindings(report, tagger, r)
+			doctor.EnrichImpostorFindings(report, tagger, r)
 		} else if rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
 			tl := doctor.NewTagLister(rc)
-			doctor.EnrichImposterFindings(report, tl, r)
+			doctor.EnrichImpostorFindings(report, tl, r)
 		}
 	}
 
@@ -351,7 +351,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	var alertedSuggestions map[string]string
 	var alertedSearched map[string]bool
 	var fullScanDeps []string
-	var autoFixedImposters []doctor.AutoFixedImposter
+	var autoFixedImpostors []doctor.AutoFixedImpostor
 	printed := false
 
 	var repoOwner, repoName string
@@ -400,8 +400,8 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		// sane-release suggestion into actual rewrites + re-pins. Runs
 		// after Remediate so applyPin/applySHAToTag have had a chance to
 		// surface the impostor signal first; the rewrites consume the
-		// alerted-suggestions map populated by alertImposter.
-		rem.AutoFixAlertedImposters()
+		// alerted-suggestions map populated by alertImpostor.
+		rem.AutoFixAlertedImpostors()
 
 		if err := store.Save(); err != nil {
 			return fmt.Errorf("saving lockfile: %w", err)
@@ -432,7 +432,7 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		alertedSearched = rem.AlertedSearched
 		fullScanDeps = rem.FullScanDeps
 		unresolvedDeps = rem.UnresolvedDeps
-		autoFixedImposters = rem.AutoFixedImposters
+		autoFixedImpostors = rem.AutoFixedImpostors
 	}
 
 	// Terminal end-state: spinners and narration are done; print the summary.
@@ -473,14 +473,14 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// pin rewrote uses: to that tag instead of alerting. The substitution may
 	// cross a major-version boundary (e.g. v1.25.0 → v3.0.3) so the user
 	// must eyeball each one — flag it loudly with the publisher-docs link.
-	if len(autoFixedImposters) > 0 {
+	if len(autoFixedImpostors) > 0 {
 		if printed {
 			f.UI.TermBlank()
 		}
 		printed = true
 		f.UI.TermWarn("%d %s auto-pinned to a safer release — review for sanity:",
-			len(autoFixedImposters), ui.Pluralize(len(autoFixedImposters), "action", "actions"))
-		for _, fix := range autoFixedImposters {
+			len(autoFixedImpostors), ui.Pluralize(len(autoFixedImpostors), "action", "actions"))
+		for _, fix := range autoFixedImpostors {
 			short := fix.NewSHA
 			if len(short) > 7 {
 				short = short[:7]
@@ -617,16 +617,16 @@ func isFullyRecorded(pw doctor.ParsedWorkflow) bool {
 	return true
 }
 
-// hasImposterFindings reports whether any workflow in the report carries a
-// CategoryImposterCommit finding. Used to gate the bounded tag-walk that
+// hasImpostorFindings reports whether any workflow in the report carries a
+// CategoryImpostorCommit finding. Used to gate the bounded tag-walk that
 // enriches those findings with a sane-release suggestion.
-func hasImposterFindings(r *doctor.Report) bool {
+func hasImpostorFindings(r *doctor.Report) bool {
 	if r == nil {
 		return false
 	}
 	for _, wr := range r.Workflows {
 		for _, f := range wr.Findings {
-			if f.Category == doctor.CategoryImposterCommit {
+			if f.Category == doctor.CategoryImpostorCommit {
 				return true
 			}
 		}

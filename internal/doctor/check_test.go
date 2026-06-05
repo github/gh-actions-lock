@@ -59,7 +59,7 @@ const (
 	shaCheckoutV4 = "8e8c483db84b4bee98b60c0593521ed34d9990e8"
 	shaCheckoutV3 = "11bd71901bbe5b1630ceea73d27597364c9af683"
 	shaSetupGoV5  = "0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	shaImposter   = "ffffffffffffffffffffffffffffffffffffffff"
+	shaImpostor   = "ffffffffffffffffffffffffffffffffffffffff"
 )
 
 func checkPinKey(owner, repo, ref, sha string) string {
@@ -191,7 +191,7 @@ func TestRunChecks_RefMoved(t *testing.T) {
 
 func TestRunChecks_LockfileForgery(t *testing.T) {
 	lf := checkNewLockfile(map[string][]string{
-		".github/workflows/ci.yml": {checkPinKey("actions", "checkout", "v4", shaImposter)},
+		".github/workflows/ci.yml": {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 	})
 	pw := checkParsedWF(".github/workflows/ci.yml", checkRef("actions", "checkout", "v4"))
 	r := &stubCheckResolver{
@@ -199,7 +199,7 @@ func TestRunChecks_LockfileForgery(t *testing.T) {
 			"actions/checkout@v4": shaCheckoutV4,
 		},
 		ancestry: map[string]resolver.AncestryStatus{
-			"actions/checkout:" + shaImposter + ":" + shaCheckoutV4: resolver.AncestryNotAncestor,
+			"actions/checkout:" + shaImpostor + ":" + shaCheckoutV4: resolver.AncestryNotAncestor,
 		},
 	}
 	got := runChecks(pw, lf, r)
@@ -216,8 +216,8 @@ func TestRunChecks_LockfileForgery(t *testing.T) {
 			if f.ObservedSHA != shaCheckoutV4 {
 				t.Fatalf("ObservedSHA: got %q, want %q (resolver output, makes claim falsifiable)", f.ObservedSHA, shaCheckoutV4)
 			}
-			if f.Dependency == nil || f.Dependency.SHA != shaImposter {
-				t.Fatalf("Dependency.SHA: want pinned %s, got %#v", shaImposter, f.Dependency)
+			if f.Dependency == nil || f.Dependency.SHA != shaImpostor {
+				t.Fatalf("Dependency.SHA: want pinned %s, got %#v", shaImpostor, f.Dependency)
 			}
 		}
 	}
@@ -226,20 +226,20 @@ func TestRunChecks_LockfileForgery(t *testing.T) {
 	}
 }
 
-func TestRunChecks_ImposterCommit(t *testing.T) {
+func TestRunChecks_ImpostorCommit(t *testing.T) {
 	lf := checkNewLockfile(map[string][]string{
-		".github/workflows/ci.yml": {checkPinKey("actions", "checkout", "v4", shaImposter)},
+		".github/workflows/ci.yml": {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 	})
 	pw := checkParsedWF(".github/workflows/ci.yml", checkRef("actions", "checkout", "v4"))
 	r := &stubCheckResolver{
 		// Resolver doesn't know the ref → no ref_moved / forgery path.
 		reach: map[string]resolver.ReachabilityStatus{
-			"actions/checkout:" + shaImposter + ":v4": resolver.Unreachable,
+			"actions/checkout:" + shaImpostor + ":v4": resolver.Unreachable,
 		},
 	}
 	got := runChecks(pw, lf, r)
-	if len(got) != 1 || got[0].Category != CategoryImposterCommit {
-		t.Fatalf("expected single imposter_commit finding, got %#v", got)
+	if len(got) != 1 || got[0].Category != CategoryImpostorCommit {
+		t.Fatalf("expected single impostor_commit finding, got %#v", got)
 	}
 }
 

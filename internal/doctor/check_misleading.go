@@ -85,10 +85,10 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]parserlock.P
 	return out
 }
 
-// checkImposterCommit emits CategoryImposterCommit when the locked SHA is
+// checkImpostorCommit emits CategoryImpostorCommit when the locked SHA is
 // not reachable from the ref's history. Skips entries already covered by
 // a forgery finding (forgery is the stronger signal).
-func checkImposterCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, r checkResolver, forgeryKeys map[string]bool) []Finding {
+func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, r checkResolver, forgeryKeys map[string]bool) []Finding {
 	if len(depIndex) == 0 {
 		return nil
 	}
@@ -108,9 +108,9 @@ func checkImposterCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, 
 		if status != resolver.Unreachable {
 			continue
 		}
-		f := newRefFinding(pw, ref, CategoryImposterCommit, SeverityError)
+		f := newRefFinding(pw, ref, CategoryImpostorCommit, SeverityError)
 		f.Dependency = synthDep(ref, pin.Hex)
-		f.Detail = fmt.Sprintf("locked %s is not reachable from %s — classic fork-network imposter-commit shape", shortSha(pin.Hex), ref.Ref)
+		f.Detail = fmt.Sprintf("locked %s is not reachable from %s — classic fork-network impostor-commit shape", shortSha(pin.Hex), ref.Ref)
 		f.Remediation = "investigate immediately — the lockfile entry may have been injected"
 		out = append(out, f)
 	}

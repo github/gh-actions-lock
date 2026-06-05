@@ -119,7 +119,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		for _, cat := range []doctor.Category{
 			doctor.CategoryLockfileForgery,
 			doctor.CategoryRefChanged, doctor.CategoryNotPinned,
-			doctor.CategoryStale, doctor.CategoryMisleadingSHA, doctor.CategoryImposterCommit,
+			doctor.CategoryStale, doctor.CategoryMisleadingSHA, doctor.CategoryImpostorCommit,
 		} {
 			if n, ok := catCounts[cat]; ok {
 				parts = append(parts, fmt.Sprintf("%d %s", n, string(cat)))
@@ -257,7 +257,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c doctor.Category) bool {
 	switch c {
-	case doctor.CategoryImposterCommit, doctor.CategoryLockfileForgery, doctor.CategoryMisleadingSHA:
+	case doctor.CategoryImpostorCommit, doctor.CategoryLockfileForgery, doctor.CategoryMisleadingSHA:
 		return true
 	}
 	return false
