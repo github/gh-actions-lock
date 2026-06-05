@@ -4,8 +4,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // Typed map keys for the test stub. These mirror the shape used by
@@ -78,19 +78,19 @@ func checkPinKey(owner, repo, ref, sha string) string {
 	return owner + "/" + repo + "@" + ref + ":sha1-" + sha
 }
 
-func checkNewLockfile(workflows map[string][]string) parserlock.File {
-	return parserlock.File{
-		Version:   parserlock.Version,
+func checkNewLockfile(workflows map[string][]string) lockfile.File {
+	return lockfile.File{
+		Version:   lockfile.SchemaVersion,
 		Workflows: workflows,
 	}
 }
 
-func checkParsedWF(path string, uses ...parserlock.ActionRef) ParsedWorkflow {
+func checkParsedWF(path string, uses ...lockfile.ActionRef) ParsedWorkflow {
 	return ParsedWorkflow{Path: path, Refs: uses}
 }
 
-func checkRef(owner, repo, ref string) parserlock.ActionRef {
-	return parserlock.ActionRef{Owner: owner, Repo: repo, Ref: ref}
+func checkRef(owner, repo, ref string) lockfile.ActionRef {
+	return lockfile.ActionRef{Owner: owner, Repo: repo, Ref: ref}
 }
 
 func findingCategories(fs []Finding) []string {
@@ -117,7 +117,7 @@ func TestRunChecks(t *testing.T) {
 	cases := []struct {
 		name           string
 		lockfile       map[string][]string
-		workflowRefs   []parserlock.ActionRef
+		workflowRefs   []lockfile.ActionRef
 		resolver       *stubCheckResolver
 		noResolver     bool // when true, runChecks gets nil instead of resolver
 		wantCategories []Category
@@ -128,7 +128,7 @@ func TestRunChecks(t *testing.T) {
 		{
 			name:           "not-pinned: ref used but absent from lockfile",
 			lockfile:       map[string][]string{},
-			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs:   []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			wantCategories: []Category{CategoryNotPinned},
 			extra: func(t *testing.T, got []Finding) {
 				if got[0].Severity != SeverityError {
@@ -141,7 +141,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", shaCheckoutV4, shaCheckoutV4)},
 			},
-			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
+			workflowRefs:   []lockfile.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
 			wantCategories: []Category{CategorySHAAsRef},
 		},
 		{
@@ -149,7 +149,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
-			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", "v3")},
+			workflowRefs:   []lockfile.ActionRef{checkRef("actions", "checkout", "v3")},
 			wantCategories: []Category{CategoryRefChanged, CategoryStale},
 			extra: func(t *testing.T, got []Finding) {
 				var refChanged *Finding
@@ -176,7 +176,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
@@ -192,7 +192,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
@@ -216,7 +216,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
@@ -251,7 +251,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				// Resolver doesn't know the ref → no ref-moved / forgery path.
 				reach: map[stubReachKey]resolver.ReachabilityStatus{
@@ -263,7 +263,7 @@ func TestRunChecks(t *testing.T) {
 		{
 			name:         "misleading-sha: sha-shaped ref resolves to different commit",
 			lockfile:     map[string][]string{},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", shaCheckoutV4}: shaSetupGoV5,
@@ -295,7 +295,7 @@ func TestRunChecks(t *testing.T) {
 			// trip misleading-sha.
 			name:         "misleading-sha negative: tag-object SHA pin must not false-positive",
 			lockfile:     map[string][]string{},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "github-script", "d746ffe35508b1917358783b479e04febd2b8f71")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "github-script", "d746ffe35508b1917358783b479e04febd2b8f71")},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "github-script", "d746ffe35508b1917358783b479e04febd2b8f71"}: shaSetupGoV5,
@@ -317,7 +317,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
-			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs:   []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			noResolver:     true,
 			wantCategories: nil,
 		},
@@ -333,7 +333,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
@@ -359,7 +359,7 @@ func TestRunChecks(t *testing.T) {
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,

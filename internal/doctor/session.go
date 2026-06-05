@@ -3,7 +3,6 @@ package doctor
 import (
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // sessionState tracks user decisions across multiple workflows during
@@ -61,19 +60,19 @@ func (s *sessionState) recallChoice(dep *lockfile.Dependency) (string, bool) {
 }
 
 // refKey returns a session memory key for an unpinned action ref.
-func refKey(ref parserlock.ActionRef) cachekey.ActionRef {
+func refKey(ref lockfile.ActionRef) cachekey.ActionRef {
 	return cachekey.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 }
 
 // markRefsApproved records all action refs as approved for auto-pinning.
-func (s *sessionState) markRefsApproved(refs []parserlock.ActionRef) {
+func (s *sessionState) markRefsApproved(refs []lockfile.ActionRef) {
 	for _, ref := range refs {
 		s.approvedRefs[refKey(ref)] = true
 	}
 }
 
 // allRefsApproved returns true if every ref was already approved in a prior workflow.
-func (s *sessionState) allRefsApproved(refs []parserlock.ActionRef) bool {
+func (s *sessionState) allRefsApproved(refs []lockfile.ActionRef) bool {
 	if len(refs) == 0 {
 		return false
 	}

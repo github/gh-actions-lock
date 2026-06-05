@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	parserlock "github.com/github/gh-actions-pin/pkg/lockfile"
 )
 
 // runChecks evaluates all enabled validators against the given parsed
@@ -17,7 +16,7 @@ import (
 // ActionRef (for direct uses) and Dependency (for ref-tied entries).
 // DocURL and ParentNWO are attached by the caller (diagnoseOneParsed)
 // because they need lookup tables runChecks doesn't carry.
-func runChecks(pw ParsedWorkflow, lf parserlock.File, r checkResolver) []Finding {
+func runChecks(pw ParsedWorkflow, lf lockfile.File, r checkResolver) []Finding {
 	wfEntry, _ := lf.LookupWorkflow(lockfile.WorkflowKeyFromPath(pw.Path))
 	depPins, depIndex := parseWorkflowDeps(wfEntry)
 
@@ -38,12 +37,12 @@ func runChecks(pw ParsedWorkflow, lf parserlock.File, r checkResolver) []Finding
 
 // parseWorkflowDeps decodes a workflow's dependency pin strings into Pins
 // plus an index keyed by "owner/repo@ref". Unparseable entries are
-// dropped silently — they're surfaced separately by parserlock.Parse callers.
-func parseWorkflowDeps(rawDeps []string) ([]parserlock.Pin, map[string]parserlock.Pin) {
-	pins := make([]parserlock.Pin, 0, len(rawDeps))
-	idx := make(map[string]parserlock.Pin, len(rawDeps))
+// dropped silently — they're surfaced separately by lockfile.Parse callers.
+func parseWorkflowDeps(rawDeps []string) ([]lockfile.Pin, map[string]lockfile.Pin) {
+	pins := make([]lockfile.Pin, 0, len(rawDeps))
+	idx := make(map[string]lockfile.Pin, len(rawDeps))
 	for _, raw := range rawDeps {
-		pin, ok := parserlock.ParsePin(raw)
+		pin, ok := lockfile.ParsePin(raw)
 		if !ok {
 			continue
 		}
@@ -65,7 +64,7 @@ func collectForgeryKeys(findings []Finding) map[string]bool {
 			continue
 		}
 		ar := f.ActionRef
-		out[parserlock.IndexKey(ar.Owner, ar.Repo, ar.Ref)] = true
+		out[lockfile.IndexKey(ar.Owner, ar.Repo, ar.Ref)] = true
 	}
 	return out
 }
@@ -74,7 +73,7 @@ func collectForgeryKeys(findings []Finding) map[string]bool {
 // from a uses: ref. Category/Severity can be empty when the caller fills
 // them in based on a downstream branch (e.g. ref-moved vs forgery).
 // Confidence is required at construction — see Finding.Confidence.
-func newRefFinding(pw ParsedWorkflow, ref parserlock.ActionRef, cat Category, sev Severity, conf Confidence) Finding {
+func newRefFinding(pw ParsedWorkflow, ref lockfile.ActionRef, cat Category, sev Severity, conf Confidence) Finding {
 	refCopy := ref
 	return Finding{
 		WorkflowPath: pw.Path,
@@ -88,7 +87,7 @@ func newRefFinding(pw ParsedWorkflow, ref parserlock.ActionRef, cat Category, se
 // synthDep builds a lockfile.Dependency from an ActionRef + locked SHA.
 // Used by checks that surface lock-state but don't have a real
 // Dependency pointer from the store.
-func synthDep(ref parserlock.ActionRef, sha string) *lockfile.Dependency {
+func synthDep(ref lockfile.ActionRef, sha string) *lockfile.Dependency {
 	return &lockfile.Dependency{
 		NWO:  ref.Owner + "/" + ref.Repo,
 		Path: ref.Path,
