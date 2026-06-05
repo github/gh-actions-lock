@@ -256,3 +256,142 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// TestMergeEnrichmentForAlert_NoSaneRelease covers the impostor-without-
+// suggestion shape that was visibly regressing on next.js: a tag-pinned
+// uses: line resolves to an unreachable SHA, EnrichImpostorFindings ran
+// but found no sane release. Apply.go's reach loop calls alertWorkflow
+// (bare path); without mergeEnrichmentForAlert the renderer would skip
+// the "→ no recent release was reachable — escalate" line, losing the
+// actionable signal users had under the pre-c58919b binary.
+func TestMergeEnrichmentForAlert_NoSaneRelease(t *testing.T) {
+	rem := &Remediator{}
+	findings := []Finding{
+		{
+			Category:               CategoryImpostorCommit,
+			Dependency:             &lockfile.Dependency{NWO: "mmastrac/mmm-matrix", Ref: "v1.0.5", SHA: "3edd85c30addba11887c770740309c979a446aa9"},
+			SaneSuggestionSearched: true,
+			// SaneSuggestionTag deliberately empty — the "looked, found nothing" shape
+		},
+	}
+
+	rem.mergeEnrichmentForAlert(findings, "mmastrac/mmm-matrix", "v1.0.5")
+
+	depKey := "mmastrac/mmm-matrix@v1.0.5"
+	if !rem.AlertedSearched[depKey] {
+		t.Fatalf("AlertedSearched[%q] = false, want true (renderer needs this for the escalate line)", depKey)
+	}
+	if got, ok := rem.AlertedSuggestions[depKey]; ok {
+		t.Fatalf("AlertedSuggestions[%q] = %q, want unset (no sane tag found)", depKey, got)
+	}
+}
+
+// TestMergeEnrichmentForAlert_SaneRelease covers the impostor-with-suggestion
+// shape: an unreachable tag has a sibling sane release that EnrichImpostorFindings
+// found. The merged alert must carry the suggestion so the renderer prints
+// "→ suggested: re-pin to <tag>" instead of falling back to the escalate line.
+func TestMergeEnrichmentForAlert_SaneRelease(t *testing.T) {
+	rem := &Remediator{}
+	findings := []Finding{
+		{
+			Category:               CategoryImpostorCommit,
+			Dependency:             &lockfile.Dependency{NWO: "foo/bar", Ref: "v1.0.5", SHA: "deadbeef00000000000000000000000000000000"},
+			SaneSuggestionSearched: true,
+			SaneSuggestionTag:      "v2.0.0",
+			SaneSuggestionSHA:      "abc1234defabc1234defabc1234defabc1234def",
+		},
+	}
+
+	rem.mergeEnrichmentForAlert(findings, "foo/bar", "v1.0.5")
+
+	depKey := "foo/bar@v1.0.5"
+	if !rem.AlertedSearched[depKey] {
+		t.Fatalf("AlertedSearched[%q] = false, want true", depKey)
+	}
+	want := "v2.0.0 abc1234"
+	if got := rem.AlertedSuggestions[depKey]; got != want {
+		t.Fatalf("AlertedSuggestions[%q] = %q, want %q", depKey, got, want)
+	}
+}
+
+// TestMergeEnrichmentForAlert_NoMatch confirms the helper is a no-op when no
+// matching impostor finding exists (e.g. the alertWorkflow call was for a
+// non-impostor reach failure like ReachabilityUnknown). The registry must
+// stay empty so the renderer doesn't show a phantom escalate line.
+func TestMergeEnrichmentForAlert_NoMatch(t *testing.T) {
+	rem := &Remediator{}
+	findings := []Finding{
+		{
+			Category:               CategoryImpostorCommit,
+			Dependency:             &lockfile.Dependency{NWO: "different/action", Ref: "v1", SHA: "deadbeef00000000000000000000000000000000"},
+			SaneSuggestionSearched: true,
+		},
+	}
+
+	rem.mergeEnrichmentForAlert(findings, "foo/bar", "v1.0.5")
+
+	if len(rem.AlertedSearched) != 0 {
+		t.Fatalf("AlertedSearched = %v, want empty (no matching finding)", rem.AlertedSearched)
+	}
+	if len(rem.AlertedSuggestions) != 0 {
+		t.Fatalf("AlertedSuggestions = %v, want empty", rem.AlertedSuggestions)
+	}
+}
+
+// TestMergeEnrichmentForAlert_NotSearched proves the helper skips findings
+// that haven't been through EnrichImpostorFindings yet — recordAlertSuggestion
+// is a no-op for those, but we don't want the helper to record them either,
+// because rendering depends on SaneSuggestionSearched semantics ("looked and
+// found nothing" vs "didn't look"). A finding that hasn't been enriched
+// shouldn't produce an AlertedSearched entry that misleads the renderer.
+func TestMergeEnrichmentForAlert_NotSearched(t *testing.T) {
+	rem := &Remediator{}
+	findings := []Finding{
+		{
+			Category:               CategoryImpostorCommit,
+			Dependency:             &lockfile.Dependency{NWO: "foo/bar", Ref: "v1.0.5", SHA: "deadbeef00000000000000000000000000000000"},
+			SaneSuggestionSearched: false,
+		},
+	}
+
+	rem.mergeEnrichmentForAlert(findings, "foo/bar", "v1.0.5")
+
+	if len(rem.AlertedSearched) != 0 {
+		t.Fatalf("AlertedSearched = %v, want empty (finding wasn't enriched)", rem.AlertedSearched)
+	}
+}
+
+// TestMergeEnrichmentForAlert_NilFindings exercises the
+// normalizeAndRewrite-from-applyReResolve case where callers may pass nil
+// findings (or an empty slice). The helper must be a clean no-op without
+// panicking; the alert just stays bare in that case.
+func TestMergeEnrichmentForAlert_NilFindings(t *testing.T) {
+	rem := &Remediator{}
+	rem.mergeEnrichmentForAlert(nil, "foo/bar", "v1.0.5")
+	rem.mergeEnrichmentForAlert([]Finding{}, "foo/bar", "v1.0.5")
+
+	if len(rem.AlertedSearched) != 0 {
+		t.Fatalf("AlertedSearched = %v, want empty", rem.AlertedSearched)
+	}
+}
+
+// TestMergeEnrichmentForAlert_SkipsNonImpostor guards against accidentally
+// folding enrichment from a non-impostor finding (e.g. a CategoryRefMoved
+// finding that happens to share NWO+Ref with the alerted dep). Only
+// CategoryImpostorCommit findings carry the sane-release search semantics.
+func TestMergeEnrichmentForAlert_SkipsNonImpostor(t *testing.T) {
+	rem := &Remediator{}
+	findings := []Finding{
+		{
+			Category:               CategoryRefMoved,
+			Dependency:             &lockfile.Dependency{NWO: "foo/bar", Ref: "v1.0.5"},
+			SaneSuggestionSearched: true, // contrived: shouldn't be set on non-impostor anyway
+		},
+	}
+
+	rem.mergeEnrichmentForAlert(findings, "foo/bar", "v1.0.5")
+
+	if len(rem.AlertedSearched) != 0 {
+		t.Fatalf("AlertedSearched = %v, want empty (non-impostor category)", rem.AlertedSearched)
+	}
+}

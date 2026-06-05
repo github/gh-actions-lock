@@ -106,6 +106,13 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 			depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
 			rem.alertWorkflow(wr.Path, depKey, reasonForCategory(CategoryImpostorCommit),
 				fmt.Sprintf("refusing to pin: impostor commit detected for %s/%s@%s — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
+			// Diagnose-time impostor findings carry enrichment from
+			// EnrichImpostorFindings (SaneSuggestionSearched, optional
+			// SaneSuggestionTag). The apply-time alertWorkflow path doesn't
+			// have a Finding handle, so we look up the matching Finding here
+			// to preserve the renderer's "→ no recent release was
+			// reachable — escalate" / "→ suggested: re-pin" line.
+			rem.mergeEnrichmentForAlert(wr.Findings, rr.Owner+"/"+rr.Repo, rr.Ref)
 			return errWorkflowAlerted
 		case resolver.ReachabilityUnknown:
 			rem.alertWorkflow(wr.Path, rr.Owner+"/"+rr.Repo+"@"+rr.Ref,
@@ -173,6 +180,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		if errors.As(err, &imp) {
 			depKey := imp.NWO + "@" + imp.Ref
 			rem.alertWorkflow(wr.Path, depKey, reasonForCategory(CategoryImpostorCommit), imp.Error())
+			rem.mergeEnrichmentForAlert(wr.Findings, imp.NWO, imp.Ref)
 			return errWorkflowAlerted
 		}
 		return fmt.Errorf("%s: normalizing containing refs: %w", wr.Path, err)
@@ -281,7 +289,7 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 	}
 	directTracker := lockfile.NewDirectTracker(refs, deps)
 
-	parentMap, err = rem.normalizeAndRewrite(wr.Path, deps, parentMap)
+	parentMap, err = rem.normalizeAndRewrite(wr.Path, deps, parentMap, wr.Findings)
 	if err != nil {
 		return err
 	}
@@ -301,7 +309,12 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 // `deps` and `parentMap` may be mutated; callers should treat them as live
 // after the call and pass the (rekeyed) parentMap on to store.Set.
 // Returns an error if any commit has no containing branch (impostor signal).
-func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency, parentMap resolver.ParentMap) (resolver.ParentMap, error) {
+//
+// findings is the diagnose-time finding list for the workflow (typically
+// wr.Findings); it's used to preserve enrichment on any impostor alert
+// emitted from this path. Pass nil if no findings are available — the
+// enrichment merge becomes a no-op.
+func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency, parentMap resolver.ParentMap, findings []Finding) (resolver.ParentMap, error) {
 	preNormKeys := make([]string, len(deps))
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
@@ -312,6 +325,7 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 		if errors.As(err, &imp) {
 			depKey := imp.NWO + "@" + imp.Ref
 			rem.alertWorkflow(workflowPath, depKey, reasonForCategory(CategoryImpostorCommit), imp.Error())
+			rem.mergeEnrichmentForAlert(findings, imp.NWO, imp.Ref)
 			return parentMap, errWorkflowAlerted
 		}
 		return parentMap, fmt.Errorf("%s: normalizing containing refs: %w", workflowPath, err)
