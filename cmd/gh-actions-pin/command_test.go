@@ -17,42 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// branchListResponse builds a REST list-branches response body for httpmock.
-// pairs are (name, sha) alternating: branchListResponse("main", "abc", "dev", "def")
-// All entries are marked protected:true so tests model trusted-upstream branches.
-func branchListResponse(pairs ...string) any {
-	out := make([]map[string]any, 0, len(pairs)/2)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		out = append(out, map[string]any{
-			"name":      pairs[i],
-			"commit":    map[string]any{"sha": pairs[i+1]},
-			"protected": true,
-		})
-	}
-	return out
-}
-
-// tagListResponse builds a REST list-tags response body for httpmock.
-// pairs are (name, sha) alternating.
-func tagListResponse(pairs ...string) any {
-	out := make([]map[string]any, 0, len(pairs)/2)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		out = append(out, map[string]any{
-			"name":   pairs[i],
-			"commit": map[string]any{"sha": pairs[i+1]},
-		})
-	}
-	return out
-}
-
-// compareAncestorResponse builds a Compare API response indicating sha is an ancestor.
-func compareAncestorResponse(mergeBaseSHA string) any {
-	return map[string]any{
-		"status":            "ahead",
-		"merge_base_commit": map[string]any{"sha": mergeBaseSHA},
-	}
-}
-
 func TestUpgradeCommand_WriteWithHTTPMocks(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -88,19 +52,19 @@ func TestUpgradeCommand_WriteWithHTTPMocks(t *testing.T) {
 	// actions/checkout: two SHAs (v4 and v6), no exact HEAD match → compare path.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "co-head-sha")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "co-head-sha")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/34e114`),
-		httpmock.JSONResponse(compareAncestorResponse("34e114876b0b11c390a56381ad16ebd13914f8d5")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("34e114876b0b11c390a56381ad16ebd13914f8d5")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/de0fac`),
-		httpmock.JSONResponse(compareAncestorResponse("de0fac2e4500dabe0009e67214ff5f5447ce83dd")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("de0fac2e4500dabe0009e67214ff5f5447ce83dd")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse(
+		httpmock.JSONResponse(httpmock.TagListResponse(
 			"v4", "34e114876b0b11c390a56381ad16ebd13914f8d5",
 			"v6", "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
 		)),
@@ -108,11 +72,11 @@ func TestUpgradeCommand_WriteWithHTTPMocks(t *testing.T) {
 	// actions/setup-go: exact HEAD match → no compare needed.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/setup-go/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "4a3601121dd01d1626a1e23e37211e3254c1c06c")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "4a3601121dd01d1626a1e23e37211e3254c1c06c")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/setup-go/tags`),
-		httpmock.JSONResponse(tagListResponse("v6", "4a3601121dd01d1626a1e23e37211e3254c1c06c")),
+		httpmock.JSONResponse(httpmock.TagListResponse("v6", "4a3601121dd01d1626a1e23e37211e3254c1c06c")),
 	)
 
 	workflowPath := writeTempWorkflow(t, `
