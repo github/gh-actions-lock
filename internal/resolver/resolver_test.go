@@ -755,7 +755,7 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 		// Bare-SHA ref: main HEAD == sha → exact match → Reachable.
 		reg.Register(
 			httpmock.REST("GET", `repos/actions/checkout/branches`),
-			httpmock.JSONResponse(branchListResponse("main", sha)),
+			httpmock.JSONResponse(httpmock.BranchListResponse("main", sha)),
 		)
 		r, err := NewWithTransport("github.com", reg)
 		if err != nil {
@@ -776,7 +776,7 @@ func TestCheckReachability_SHAAsRef_ChecksViaBranchCommits(t *testing.T) {
 		probeBranchesEmpty(reg)
 		reg.Register(
 			httpmock.REST("GET", `repos/actions/checkout/branches`),
-			httpmock.JSONResponse(branchListResponse()),
+			httpmock.JSONResponse(httpmock.BranchListResponse()),
 		)
 		r, err := NewWithTransport("github.com", reg)
 		if err != nil {
@@ -799,7 +799,7 @@ func TestCheckReachability_OnBranch_Reachable(t *testing.T) {
 	// Fast path: releases/v6 HEAD == sha → exact match → Reachable.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("releases/v6", sha)),
+		httpmock.JSONResponse(httpmock.BranchListResponse("releases/v6", sha)),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -824,7 +824,7 @@ func TestCheckReachability_ForkInjection_Unreachable(t *testing.T) {
 	probeBranchesEmpty(reg)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse()),
+		httpmock.JSONResponse(httpmock.BranchListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -855,12 +855,12 @@ func TestCheckReachability_FoundViaFullScan_SetsFullScanUsed(t *testing.T) {
 	// ancestry (Compare) slow path rather than an exact-HEAD match.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("feature/x", "fx000")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("feature/x", "fx000")),
 	)
 	// Compare confirms sha is an ancestor of the branch HEAD → reachable.
 	reg.Register(
 		httpmock.REST("GET", "repos/actions/checkout/compare/"),
-		httpmock.JSONResponse(compareAncestorResponse(sha)),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse(sha)),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -994,7 +994,7 @@ func TestDiscoverContaining_BranchBeyondPageCap_NotImpostor(t *testing.T) {
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/vercel/next.js/tags`),
-		httpmock.JSONResponse(tagListResponse()),
+		httpmock.JSONResponse(httpmock.TagListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)

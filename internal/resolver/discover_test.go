@@ -8,56 +8,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/lockfile"
 )
 
-// branchListResponse returns a REST branches response for httpmock. All
-// entries are marked protected:true so tests model the trusted-upstream
-// case by default. Use branchListResponseProtected to mix protected and
-// unprotected branches.
-func branchListResponse(pairs ...string) any {
-	out := make([]map[string]any, 0, len(pairs)/2)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		out = append(out, map[string]any{
-			"name":      pairs[i],
-			"commit":    map[string]any{"sha": pairs[i+1]},
-			"protected": true,
-		})
-	}
-	return out
-}
-
-// branchListResponseProtected returns a REST branches response where each
-// entry is a (name, sha, protected) triple.
-func branchListResponseProtected(triples ...any) any {
-	out := make([]map[string]any, 0, len(triples)/3)
-	for i := 0; i+2 < len(triples); i += 3 {
-		out = append(out, map[string]any{
-			"name":      triples[i],
-			"commit":    map[string]any{"sha": triples[i+1]},
-			"protected": triples[i+2],
-		})
-	}
-	return out
-}
-
-// tagListResponse returns a REST tags response for httpmock.
-func tagListResponse(pairs ...string) any {
-	out := make([]map[string]any, 0, len(pairs)/2)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		out = append(out, map[string]any{
-			"name":   pairs[i],
-			"commit": map[string]any{"sha": pairs[i+1]},
-		})
-	}
-	return out
-}
-
-// compareResponse returns a Compare API response indicating sha is an ancestor of the head.
-func compareAncestorResponse(mergeBaseSHA string) any {
-	return map[string]any{
-		"status":            "ahead",
-		"merge_base_commit": map[string]any{"sha": mergeBaseSHA},
-	}
-}
-
 func TestDiscoverContaining_PrefersHintTag(t *testing.T) {
 	// sha="abc", hintRef="v4.2.2" (a tag, not a branch name)
 	// Neither branch HEAD matches "abc", so compare is needed.
@@ -66,15 +16,15 @@ func TestDiscoverContaining_PrefersHintTag(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "m000", "releases/v4", "rv4000")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "m000", "releases/v4", "rv4000")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/abc`),
-		httpmock.JSONResponse(compareAncestorResponse("abc")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("abc")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse("v4", "abc", "v4.2.1", "abc", "v4.2.2", "abc")),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc", "v4.2.1", "abc", "v4.2.2", "abc")),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -100,11 +50,11 @@ func TestDiscoverContaining_BranchOnly(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "def")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "def")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse()),
+		httpmock.JSONResponse(httpmock.TagListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -130,12 +80,12 @@ func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 	// Phase 1: listProtectedBranches (query contains "protected=true") returns empty.
 	reg.Register(
 		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
-		httpmock.JSONResponse(branchListResponse()),
+		httpmock.JSONResponse(httpmock.BranchListResponse()),
 	)
 	// Phase 2: listBranches (full listing) also returns empty → impostor error.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse()),
+		httpmock.JSONResponse(httpmock.BranchListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -159,15 +109,15 @@ func TestDiscoverContainingDefault_PrefersDefaultBranch(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("feature/x", "fx000", "main", "m000", "zzz", "z000")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("feature/x", "fx000", "main", "m000", "zzz", "z000")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/abc`),
-		httpmock.JSONResponse(compareAncestorResponse("abc")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("abc")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse()),
+		httpmock.JSONResponse(httpmock.TagListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -198,7 +148,7 @@ func TestDiscoverContaining_AutoDiscoversDefaultAndPrefersProtected(t *testing.T
 	// Phase 1: listProtectedBranches returns only the truly-protected branches.
 	reg.Register(
 		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
-		httpmock.JSONResponse(branchListResponseProtected(
+		httpmock.JSONResponse(httpmock.BranchListResponseProtected(
 			"main", "m000", true,
 			"releases/v4", "rv4000", true,
 		)),
@@ -206,16 +156,16 @@ func TestDiscoverContaining_AutoDiscoversDefaultAndPrefersProtected(t *testing.T
 	// First compare hit: abc...m000 (default branch) — not an ancestor.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/abc\.\.\.m000`),
-		httpmock.JSONResponse(compareAncestorResponse("0000")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("0000")),
 	)
 	// Second compare hit: abc...rv4000 (protected) — match.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/abc\.\.\.rv4000`),
-		httpmock.JSONResponse(compareAncestorResponse("abc")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("abc")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse()),
+		httpmock.JSONResponse(httpmock.TagListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -239,14 +189,14 @@ func TestDiscoverContaining_UnprotectedOnlyFallsBack(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponseProtected(
+		httpmock.JSONResponse(httpmock.BranchListResponseProtected(
 			"main", "abc", false,
 			"dev", "d000", false,
 		)),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse()),
+		httpmock.JSONResponse(httpmock.TagListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -272,26 +222,26 @@ func TestDiscoverContaining_CommitOnlyOnUnprotectedBranchFallsBack(t *testing.T)
 	// Phase 1: listProtectedBranches returns only main.
 	reg.Register(
 		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
-		httpmock.JSONResponse(branchListResponseProtected(
+		httpmock.JSONResponse(httpmock.BranchListResponseProtected(
 			"main", "m000", true,
 		)),
 	)
 	// Phase 1 compare: abc not an ancestor of main.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/compare/abc\.\.\.m000`),
-		httpmock.JSONResponse(compareAncestorResponse("0000")),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse("0000")),
 	)
 	// Phase 2: full branch listing includes unprotected dev.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponseProtected(
+		httpmock.JSONResponse(httpmock.BranchListResponseProtected(
 			"main", "m000", true,
 			"dev", "abc", false,
 		)),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse()),
+		httpmock.JSONResponse(httpmock.TagListResponse()),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -314,11 +264,11 @@ func TestNormalizeContaining_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) 
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "abc123")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "abc123")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse("v4", "abc123")),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc123")),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -355,11 +305,11 @@ func TestNormalizeContaining_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "abc")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "abc")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse("v4", "abc")),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc")),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
@@ -391,7 +341,7 @@ func TestNormalizeContaining_FailsClosedOnImpostor(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse()),
+		httpmock.JSONResponse(httpmock.BranchListResponse()),
 	)
 	r, err := NewWithTransport("github.com", reg)
 	if err != nil {
@@ -414,11 +364,11 @@ func TestNormalizeContaining_PreservesBranchRefOverTag(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(branchListResponse("main", "abc", "releases/v4", "xyz")),
+		httpmock.JSONResponse(httpmock.BranchListResponse("main", "abc", "releases/v4", "xyz")),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(tagListResponse("v4", "abc", "v4.3.1", "abc")),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc", "v4.3.1", "abc")),
 	)
 
 	r, err := NewWithTransport("github.com", reg)
