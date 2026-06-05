@@ -23,9 +23,12 @@ func (rem *Remediator) remediateWorkflow(wr WorkflowReport) error {
 	// of them: the consumer needs the alert anyway, and a half-rewritten
 	// workflow would obscure the unfixable cases.
 	if rem.tryAutoFixImpostors(&wr) {
-		// All impostor findings handled — return so we don't re-process
-		// stale CategoryImpostorCommit entries from before the rewrite.
-		return rem.applyPin(wr)
+		// All impostor findings handled — defer to Pass B so the
+		// rewrite+pin happens inside a pinpool worker slot alongside
+		// SHA-as-ref and NotPinned, instead of blocking Pass A on a
+		// synchronous applyPin (which is what froze the spinner on
+		// next.js-class repos).
+		return rem.submitPin(wr)
 	}
 
 	headerPrinted := false

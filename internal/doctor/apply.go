@@ -202,7 +202,18 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	return nil
 }
 
-// applySHAToTag rewrites a uses: line from @SHA to @tag and re-resolves.
+// applySHAToTag rewrites a uses: line from @SHA to @tag and hands the
+// rewritten workflow to the pin pool. The file write and ref re-extract run
+// here in Pass A so callers' session-state side effects (recordChoice,
+// internalRefChoices, offerApplyAll) stay synchronous and visible to the
+// next finding's shaConvertedForNWO check; the network-bound resolve +
+// reachability + normalize + store.Set are deferred to the pinpool worker
+// in Pass B via submitPin. That's what lets the per-worker "→ path" rows
+// render on SHA-as-ref-heavy repos instead of one stuck spinner detail.
+//
+// Errors from the cheap rewrite (file load, write, ref extract) still abort
+// Pass A immediately. Errors from the deferred pin surface in Pass B after
+// the pool drains — same flow as handleNotPinned.
 func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency, owner, repo, tag string) error {
 	wf, err := lockfile.Load(wr.Path)
 	if err != nil {
@@ -223,35 +234,28 @@ func (rem *Remediator) applySHAToTag(wr WorkflowReport, dep *lockfile.Dependency
 		return nil
 	}
 
-	// Write the rewritten content, then re-parse and re-resolve to get correct lockfile.
 	if err := writeWorkflowFile(wr.Path, content); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
 
-	// Re-load, re-extract, re-resolve, write to store.
+	// Re-extract refs from the rewritten file so the deferred applyPin
+	// resolves the *new* (tag) ref, not the SHA we just rewrote away from.
+	// Hard-fail on a failed reload or an empty extract: we successfully
+	// changed the file on disk, so silently falling back to stale refs
+	// would let the worker record a lockfile that contradicts the
+	// workflow. An empty result after a confirmed rewrite (changed > 0)
+	// means the parser disagrees with itself between Rewrite and Extract
+	// — bail instead of pinning nothing.
 	wf2, err := lockfile.Load(wr.Path)
 	if err != nil {
-		return err
+		return fmt.Errorf("reloading after rewrite: %w", err)
 	}
-	rem.startWork(fmt.Sprintf("Re-pinning %s", dep.NWO))
-	defer rem.stopWork()
 	refs, _, _ := wf2.ExtractActionRefs()
-	deps, parentMap, err := rem.resolver.ResolveAllRecursive(refs)
-	if err != nil {
-		return fmt.Errorf("re-resolving after ref change: %w", err)
-	}
-	directTracker := lockfile.NewDirectTracker(refs, deps)
-	parentMap, err = rem.normalizeAndRewrite(wr.Path, deps, parentMap)
-	if err != nil {
-		return err
-	}
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
-		return fmt.Errorf("recording dependencies in lockfile: %w", err)
+	if len(refs) == 0 {
+		return fmt.Errorf("%s: no action refs after rewrite to %s", wr.Path, newUses)
 	}
 
-	rem.output.Success("Converted %s from SHA to %s and re-pinned", dep.NWO, tag)
-	rem.incFixed()
-	return nil
+	return rem.submitPin(WorkflowReport{Path: wr.Path, ActionRefs: refs})
 }
 
 // applyReResolve re-resolves a single stale dependency.
