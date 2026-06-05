@@ -90,3 +90,97 @@ func TestBuildProvenanceReport_OmitsLiveSHAWhenEqual(t *testing.T) {
 }
 
 var _ = runlog.Action{} // keep runlog imported for future field references
+
+// TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories pins down the
+// invariant that motivates LiveSHA: for every finding category where the
+// resolver's live SHA is the falsifiability evidence — MISLEADING_SHA,
+// REF_MOVED, LOCKFILE_FORGERY — buildProvenanceReport must surface it on the
+// run record. Without this, claims like "the lockfile is forged" are
+// unverifiable from the run record alone; a reader would have to re-run the
+// resolver to compare. omitempty stays correct because most actions in a run
+// don't diverge (already-pinned, valid); the contract is "populated whenever
+// the divergence categories fire", enforced here.
+func TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories(t *testing.T) {
+	const pinnedSHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
+	const liveSHA = "8e8c483db84b4bee98b60c0593521ed34d9990e8"
+	// MISLEADING_SHA's pinned SHA is the SHA-shaped ref itself.
+	const misleadingPinned = "d746ffe35508b1917358783b479e04febd2b8f71"
+	const misleadingLive = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
+
+	cases := []struct {
+		name        string
+		category    doctor.Category
+		pinnedSHA   string
+		liveSHA     string
+		ref         string
+	}{
+		{
+			name:      "ref_moved",
+			category:  doctor.CategoryRefMoved,
+			pinnedSHA: pinnedSHA,
+			liveSHA:   liveSHA,
+			ref:       "v4",
+		},
+		{
+			name:      "lockfile_forgery",
+			category:  doctor.CategoryLockfileForgery,
+			pinnedSHA: pinnedSHA,
+			liveSHA:   liveSHA,
+			ref:       "v4",
+		},
+		{
+			name:      "misleading_sha",
+			category:  doctor.CategoryMisleadingSHA,
+			pinnedSHA: misleadingPinned,
+			liveSHA:   misleadingLive,
+			ref:       misleadingPinned, // ref looks like a SHA
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := &lockfile.Dependency{
+				NWO: "actions/checkout",
+				Ref: tc.ref,
+				SHA: tc.pinnedSHA,
+			}
+			finding := doctor.Finding{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     tc.category,
+				Severity:     doctor.SeverityError,
+				Dependency:   dep,
+				LiveSHA:      tc.liveSHA,
+			}
+			report := &doctor.Report{
+				Workflows: []doctor.WorkflowReport{{
+					Path:     ".github/workflows/ci.yml",
+					Findings: []doctor.Finding{finding},
+				}},
+			}
+			store, err := lockfile.OpenStore(t.TempDir(), nil)
+			if err != nil {
+				t.Fatalf("OpenStore: %v", err)
+			}
+			out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+
+			rep := buildProvenanceReport(report, store, false, nil, out)
+
+			if len(rep.Actions) != 1 {
+				t.Fatalf("expected 1 action, got %d", len(rep.Actions))
+			}
+			a := rep.Actions[0]
+			if a.SHA != tc.pinnedSHA {
+				t.Errorf("SHA: got %q, want %q (pinned)", a.SHA, tc.pinnedSHA)
+			}
+			if a.LiveSHA == "" {
+				t.Fatalf("LiveSHA empty for %s — claim is unfalsifiable from the run record", tc.category)
+			}
+			if a.LiveSHA != tc.liveSHA {
+				t.Errorf("LiveSHA: got %q, want %q (resolver output)", a.LiveSHA, tc.liveSHA)
+			}
+			if a.Issue != string(tc.category) {
+				t.Errorf("Issue: got %q, want %q", a.Issue, tc.category)
+			}
+		})
+	}
+}

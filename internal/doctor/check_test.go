@@ -213,6 +213,12 @@ func TestRunChecks_LockfileForgery(t *testing.T) {
 			if f.Severity != SeverityError {
 				t.Fatalf("expected error severity, got %s", f.Severity)
 			}
+			if f.LiveSHA != shaCheckoutV4 {
+				t.Fatalf("LiveSHA: got %q, want %q (resolver output, makes claim falsifiable)", f.LiveSHA, shaCheckoutV4)
+			}
+			if f.Dependency == nil || f.Dependency.SHA != shaImposter {
+				t.Fatalf("Dependency.SHA: want pinned %s, got %#v", shaImposter, f.Dependency)
+			}
 		}
 	}
 	if !hasForgery {
@@ -251,6 +257,12 @@ func TestRunChecks_MisleadingSha(t *testing.T) {
 	for _, f := range got {
 		if f.Category == CategoryMisleadingSHA {
 			hasMisleading = true
+			if f.LiveSHA != shaSetupGoV5 {
+				t.Fatalf("LiveSHA: got %q, want %q (resolver output, makes claim falsifiable)", f.LiveSHA, shaSetupGoV5)
+			}
+			if f.Dependency == nil || f.Dependency.SHA != shaCheckoutV4 {
+				t.Fatalf("Dependency.SHA: want pinned %s (the SHA-shaped ref), got %#v", shaCheckoutV4, f.Dependency)
+			}
 		}
 	}
 	if !hasMisleading {
