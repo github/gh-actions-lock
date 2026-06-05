@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gh.io/gh-actions-pin/provenance-v1.json",
+  "title": "gh-actions-pin run provenance",
+  "description": "Structured, action-centric provenance document written at the end of a `gh actions-pin` run. Records what was resolved and how, deduplicating actions (one entry per unique action@ref) and listing the workflows that reference each one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "generated_at", "tool", "summary", "actions"],
+  "properties": {
+    "schema": {
+      "description": "Provenance schema version. Major-only versioning (no minor/patch): a v1 reader will refuse v2 documents outright.",
+      "const": "gh-actions-pin/provenance/v1"
+    },
+    "generated_at": {
+      "description": "RFC 3339 timestamp marking when the report was written.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "tool": { "$ref": "#/$defs/tool" },
+    "repo": { "$ref": "#/$defs/repo" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "actions": {
+      "description": "Deduplicated list of action dependencies, one entry per unique action@ref.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/action" }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "description": "Identifies the tool and version that produced the report.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "repo": {
+      "description": "Identifies the repository the run scanned.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": { "type": "string" },
+        "name": { "type": "string" },
+        "host": { "type": "string" }
+      }
+    },
+    "summary": {
+      "description": "Run roll-up: counts by resolution plus overall validity.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflows",
+        "actions",
+        "valid",
+        "pinned",
+        "already_pinned",
+        "full_scan",
+        "needs_investigation",
+        "skipped",
+        "unresolved"
+      ],
+      "properties": {
+        "workflows": { "type": "integer", "minimum": 0 },
+        "actions": { "type": "integer", "minimum": 0 },
+        "valid": { "type": "boolean" },
+        "pinned": { "type": "integer", "minimum": 0 },
+        "already_pinned": { "type": "integer", "minimum": 0 },
+        "full_scan": { "type": "integer", "minimum": 0 },
+        "needs_investigation": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "unresolved": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "action": {
+      "description": "A single deduplicated action dependency and the provenance of how it was resolved.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nwo", "ref", "direct", "resolution", "workflows"],
+      "properties": {
+        "nwo": {
+          "description": "Owner/name of the action's repository (e.g. actions/checkout).",
+          "type": "string"
+        },
+        "ref": {
+          "description": "The ref the workflow asked for (tag, branch, or SHA).",
+          "type": "string"
+        },
+        "sha": {
+          "description": "The pinned commit, in algo-prefixed digest form (e.g. sha1-...). Omitted when the run did not produce a pin.",
+          "type": "string"
+        },
+        "hash_algo": {
+          "description": "Hash algorithm of `sha` (e.g. sha1, sha256). Omitted when `sha` is omitted.",
+          "type": "string"
+        },
+        "observed_sha": {
+          "description": "The SHA the resolver got when it looked up `ref` during this run. Recorded when it differs from `sha` (the pinned value) — e.g. MISLEADING_SHA, REF_MOVED, LOCKFILE_FORGERY. Empty when the run did not surface a divergence.",
+          "type": "string"
+        },
+        "direct": {
+          "description": "True when the action is referenced directly by a workflow; false when it is a transitive dependency of a composite action.",
+          "type": "boolean"
+        },
+        "resolution": {
+          "description": "What was done to this action during the run.",
+          "type": "string",
+          "enum": [
+            "pinned",
+            "already-pinned",
+            "needs-investigation",
+            "skipped",
+            "unresolved"
+          ]
+        },
+        "how": {
+          "description": "Concise, human-readable provenance (e.g. \"locked ref v4 to <sha>\", \"verified via full branch scan\", a security reason).",
+          "type": "string"
+        },
+        "issue": {
+          "description": "Originating finding category (e.g. MISSING, REF_MOVED) when the action needed work; empty when it was already valid. Loose string — the finding taxonomy is owned by the CLI and may evolve independently of this schema.",
+          "type": "string"
+        },
+        "canonical_branch": {
+          "description": "Whether the commit was found on a canonical branch. Omitted when reachability was not decided (e.g. unresolved actions).",
+          "type": "boolean"
+        },
+        "workflows": {
+          "description": "Every workflow file that references this action, so the action is recorded once rather than repeated per workflow.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "required_by": {
+          "description": "Parent composite actions for transitive dependencies.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
