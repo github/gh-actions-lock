@@ -1,8 +1,4 @@
-// Package format renders a doctor.Report into either machine-readable JSON
-// or terminal-friendly output for the `check` command. The functions here
-// are pure: they read a report (and a few flags) and write to an
-// io.Writer or *ui.UI. Network calls and lockfile mutations live in the
-// caller.
+// Package format renders doctor reports for the `check` command.
 package format
 
 import (
