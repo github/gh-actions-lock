@@ -266,8 +266,8 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		r.WorkerProgressFn = func(slot int, status string) { f.UI.SetWorkerStatus(slot, status) }
 	} else if showHeadlessProgress && (len(refs) > 0 || (opts.Rescan && len(deps) > 0)) {
 		// Headless: announce the phase once, without per-ref worker callbacks.
-		// We deliberately leave r.WorkerProgressFn unset so the resolver
-		// stays in batched-GraphQL mode.
+		// Leave r.WorkerProgressFn unset so the resolver stays in
+		// batched-GraphQL mode.
 		f.UI.UpdateLabel("Resolving actions")
 	}
 	if len(refs) > 0 {

@@ -115,11 +115,11 @@ func Run[T any](
 		go func(slot int) {
 			defer wg.Done()
 			// Clear the slot once when the goroutine exits (channel
-			// drained). The inner loop deliberately does NOT clear
-			// between jobs so the slot keeps showing the most recent
-			// "→ path" until the next job overwrites it — eliminating
-			// the empty-window flicker that made the spinner look frozen
-			// during the tail of the run.
+			// drained). The inner loop does not clear between jobs so the
+			// slot keeps showing the most recent "→ path" until the next
+			// job overwrites it, which avoids the empty-window flicker
+			// that made the spinner look frozen during the tail of the
+			// run.
 			defer setStatus(slot, "")
 			for j := range ch {
 				setStatus(slot, "→ "+display(j))

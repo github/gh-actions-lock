@@ -283,12 +283,11 @@ func TestStore_SaveGCHandlesCyclicUses(t *testing.T) {
 }
 
 // TestStore_SaveIsByteDeterministic guarantees Save produces byte-identical
-// output for the same logical content across two independent runs. This is
-// the G8 contract for Dependabot: the platform diffs fetched-vs-written
-// content and drops unchanged files, so any nondeterminism (map iteration
-// order, embedded timestamps, unstable list ordering) either produces
-// phantom diffs on every run or causes real pin changes to be silently
-// dropped during grouped updates.
+// output for the same logical content across two independent runs.
+// Dependabot diffs fetched-vs-written content and drops unchanged files, so
+// any nondeterminism (map iteration order, embedded timestamps, unstable
+// list ordering) either produces phantom diffs on every run or causes real
+// pin changes to be silently dropped during grouped updates.
 //
 // If this test fails, the writer in marshalDeterministic has reintroduced
 // nondeterminism. Sort all map iterations, do not embed timestamps, and
