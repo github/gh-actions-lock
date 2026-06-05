@@ -123,6 +123,22 @@
           "description": "Concise, human-readable provenance (e.g. \"locked ref v4 to <sha>\", \"verified via full branch scan\", a security reason).",
           "type": "string"
         },
+        "reason": {
+          "description": "Human-facing investigation copy the terminal summary shows for actions left for review (impostor / lockfile-forgery / misleading-sha). Present only when resolution is needs-investigation.",
+          "type": "string"
+        },
+        "suggestion": {
+          "description": "Sane re-pin hint in \"tag short-sha\" form, recorded when the run found a release reachable from a branch to replace an off-branch pin.",
+          "type": "string"
+        },
+        "escalate": {
+          "description": "Whether the publisher-escalation footer applies: set for publisher-side off-branch alerts (impostor) and cleared for consumer-side tampering (forgery / misleading SHA).",
+          "type": "boolean"
+        },
+        "resolve_failed": {
+          "description": "Marks actions the remediator actively failed to resolve, apart from actions that merely carry no SHA on record (e.g. self / reusable-workflow refs). Drives the terminal \"could not be resolved\" block.",
+          "type": "boolean"
+        },
         "issue": {
           "description": "Originating finding category (e.g. MISSING, REF_MOVED) when the action needed work; empty when it was already valid. Loose string — the finding taxonomy is owned by the CLI and may evolve independently of this schema.",
           "type": "string"

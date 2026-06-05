@@ -553,7 +553,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	var prov *runlog.Report
 	if opts.JSONFields == "" {
 		repoInfo := &runlog.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.Hostname)}
-		outcomes := newProvenanceOutcomes(alertedDeps, skippedDeps, unresolvedDeps, fullScanDeps, alertedReasons)
+		outcomes := newProvenanceOutcomes(alertedDeps, skippedDeps, unresolvedDeps, fullScanDeps, alertedReasons, alertedSuggestions, alertedWorkflows)
 		prov = buildProvenanceReport(report, store, valid, repoInfo, outcomes, autoFixedImpostors)
 		if path, werr := runlog.WriteReport(prov); werr == nil {
 			defer func() {
@@ -637,16 +637,26 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 
 	// Surface any commits that were pinned only after a full-branch-scan
 	// fallback: they are valid but not on a canonical branch, which is worth
-	// a red heads-up even when the run otherwise succeeds.
-	if len(fullScanDeps) > 0 {
+	// a red heads-up even when the run otherwise succeeds. Sourced from the
+	// provenance report: a pinned action whose commit was not on a canonical
+	// branch (CanonicalBranch explicitly false).
+	var fullScanActions []runlog.Action
+	if prov != nil {
+		for _, a := range prov.Actions {
+			if a.Resolution == runlog.ResolutionPinned && a.CanonicalBranch != nil && !*a.CanonicalBranch {
+				fullScanActions = append(fullScanActions, a)
+			}
+		}
+	}
+	if len(fullScanActions) > 0 {
 		if printed {
 			f.UI.TermBlank()
 		}
 		printed = true
 		f.UI.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan",
-			len(fullScanDeps), ui.Pluralize(len(fullScanDeps), "action", "actions"))
-		for _, dep := range fullScanDeps {
-			f.UI.TermDetail("  %s", f.UI.TermYellow(dep))
+			len(fullScanActions), ui.Pluralize(len(fullScanActions), "action", "actions"))
+		for _, a := range fullScanActions {
+			f.UI.TermDetail("  %s", f.UI.TermYellow(a.NWO+"@"+a.Ref))
 		}
 	}
 
@@ -658,12 +668,12 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// leaving the terminal: the impostor commit (with GitHub's own
 	// "doesn't belong to any branch" copy), the release the workflow now
 	// points at, and a diff between old and new.
-	if len(autoFixedImpostors) > 0 {
+	if prov != nil && len(prov.AutoFixed) > 0 {
 		if printed {
 			f.UI.TermBlank()
 		}
 		printed = true
-		// Group by (NWO, OldSHA, NewTag, NewSHA) — provenance keeps one entry
+		// Group by (NWO, FromSHA, ToRef, ToSHA) — provenance keeps one entry
 		// per (Workflow, NWO) for the JSON record, but the same rewrite often
 		// applies to many workflows; here we collapse repeats so the user
 		// sees one block per substitution with workflow paths under it.
@@ -673,11 +683,11 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		}
 		var groups []*fixGroup
 		idx := map[string]*fixGroup{}
-		for _, fix := range autoFixedImpostors {
-			key := fix.NWO + "|" + fix.OldSHA + "|" + fix.NewTag + "|" + fix.NewSHA
+		for _, fix := range prov.AutoFixed {
+			key := fix.NWO + "|" + fix.FromSHA + "|" + fix.ToRef + "|" + fix.ToSHA
 			g, ok := idx[key]
 			if !ok {
-				g = &fixGroup{nwo: fix.NWO, oldRef: fix.OldRef, oldSHA: fix.OldSHA, newTag: fix.NewTag, newSHA: fix.NewSHA}
+				g = &fixGroup{nwo: fix.NWO, oldRef: fix.FromRef, oldSHA: fix.FromSHA, newTag: fix.ToRef, newSHA: fix.ToSHA}
 				idx[key] = g
 				groups = append(groups, g)
 			}
@@ -729,15 +739,24 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			f.UI.TermError("%d %s %s investigation — do not auto-fix",
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
 
-			// Group deps by reason, preserving first-seen order.
-			var reasonOrder []string
-			byReason := map[string][]string{}
-			for _, dep := range alertedDeps {
-				reason := alertedReasons[dep]
-				if _, seen := byReason[reason]; !seen {
-					reasonOrder = append(reasonOrder, reason)
+			// Group investigate actions by reason, preserving first-seen order.
+			// Each action carries its own Reason/Suggestion/Workflows/Escalate,
+			// so the security block is a pure walk of prov.Actions.
+			var alertedActions []runlog.Action
+			if prov != nil {
+				for _, a := range prov.Actions {
+					if a.Resolution == runlog.ResolutionInvestigate {
+						alertedActions = append(alertedActions, a)
+					}
 				}
-				byReason[reason] = append(byReason[reason], dep)
+			}
+			var reasonOrder []string
+			byReason := map[string][]runlog.Action{}
+			for _, a := range alertedActions {
+				if _, seen := byReason[a.Reason]; !seen {
+					reasonOrder = append(reasonOrder, a.Reason)
+				}
+				byReason[a.Reason] = append(byReason[a.Reason], a)
 			}
 			for _, reason := range reasonOrder {
 				if reason != "" {
@@ -747,27 +766,20 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 				if reason != "" {
 					indent = "    "
 				}
-				for _, dep := range byReason[reason] {
+				for _, a := range byReason[reason] {
+					dep := a.NWO + "@" + a.Ref
 					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
-					paths := alertedWorkflows[dep]
-					if len(paths) == 0 {
-						paths = format.WorkflowsForDep(report, dep)
-					}
-					for _, path := range paths {
+					for _, path := range a.Workflows {
 						f.UI.TermDetail("%s  └─ %s", indent, f.UI.TermDim(path))
 					}
-					if sug := alertedSuggestions[dep]; sug != "" {
-						nwo := dep
-						if i := strings.IndexByte(dep, '@'); i >= 0 {
-							nwo = dep[:i]
-						}
+					if sug := a.Suggestion; sug != "" {
 						// sug is "tag short-sha"; split for clean display.
 						tag, sha := sug, ""
 						if sp := strings.IndexByte(sug, ' '); sp >= 0 {
 							tag = sug[:sp]
 							sha = sug[sp+1:]
 						}
-						display := nwo + "@" + tag
+						display := a.NWO + "@" + tag
 						if sha != "" {
 							display += " (" + sha + ")"
 						}
@@ -779,7 +791,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 					// regardless of whether a sane-release search ran. Skip it
 					// for consumer-side tampering reasons (forgery / misleading
 					// SHA) where the publisher copy would mislead.
-					if reason == doctor.ReasonImpostorOffBranch {
+					if a.Escalate {
 						f.UI.TermDetail("%s     %s", indent, doctor.PublisherEscalationCopy)
 						f.UI.TermDetail("%s     see: %s", indent, f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
 					}
@@ -793,7 +805,11 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			printed = true
 			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
-			for _, dep := range skippedDeps {
+			for _, a := range prov.Actions {
+				if a.Resolution != runlog.ResolutionSkipped {
+					continue
+				}
+				dep := a.NWO + "@" + a.Ref
 				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 			}
 		}
@@ -803,9 +819,13 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			}
 			f.UI.TermError("%d %s could not be resolved — verify the ref exists",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
-			for _, dep := range unresolvedDeps {
+			for _, a := range prov.Actions {
+				if !a.ResolveFailed {
+					continue
+				}
+				dep := a.NWO + "@" + a.Ref
 				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
-				for _, path := range format.WorkflowsForDep(report, dep) {
+				for _, path := range a.Workflows {
 					f.UI.TermDetail("    └─ %s", f.UI.TermDim(path))
 				}
 			}

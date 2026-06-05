@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/doctor"
@@ -40,7 +41,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+	out := newProvenanceOutcomes(nil, nil, nil, nil, nil, nil, nil)
 
 	rep := buildProvenanceReport(report, store, false, nil, out, nil)
 
@@ -79,7 +80,7 @@ func TestBuildProvenanceReport_OmitsObservedSHAWhenEqual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+	out := newProvenanceOutcomes(nil, nil, nil, nil, nil, nil, nil)
 
 	rep := buildProvenanceReport(report, store, true, nil, out, nil)
 
@@ -164,7 +165,7 @@ func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *tes
 			if err != nil {
 				t.Fatalf("OpenStore: %v", err)
 			}
-			out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+			out := newProvenanceOutcomes(nil, nil, nil, nil, nil, nil, nil)
 
 			rep := buildProvenanceReport(report, store, false, nil, out, nil)
 
@@ -199,7 +200,7 @@ func TestBuildProvenanceReport_RecordsAutoFixed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+	out := newProvenanceOutcomes(nil, nil, nil, nil, nil, nil, nil)
 
 	fixes := []doctor.AutoFixedImpostor{{
 		Workflow: ".github/workflows/ci.yml",
@@ -230,6 +231,111 @@ func TestBuildProvenanceReport_RecordsAutoFixed(t *testing.T) {
 	}
 }
 
+// TestBuildProvenanceReport_SynthesizesAlertedActions locks the
+// security-critical synthesis invariant: an alerted dependency key that never
+// appears in any workflow inventory or finding (it reaches buildProvenanceReport
+// only through the remediator's alerted slice) must still yield a renderable
+// Action. The terminal investigation block is a pure walk of prov.Actions, so a
+// missing synthesized row would silently drop a security alert. Each case
+// asserts the synthesized action carries the supplied reason and workflows,
+// splits NWO@Ref correctly (sub-action paths included), and sets Escalate only
+// for the publisher-side off-branch reason.
+func TestBuildProvenanceReport_SynthesizesAlertedActions(t *testing.T) {
+	cases := []struct {
+		name         string
+		key          string
+		reason       string
+		workflows    []string
+		wantNWO      string
+		wantRef      string
+		wantEscalate bool
+	}{
+		{
+			name:         "off-branch impostor escalates",
+			key:          "mmastrac/mmm-matrix@v1.0.5",
+			reason:       doctor.ReasonImpostorOffBranch,
+			workflows:    []string{".github/workflows/build_and_deploy.yml"},
+			wantNWO:      "mmastrac/mmm-matrix",
+			wantRef:      "v1.0.5",
+			wantEscalate: true,
+		},
+		{
+			name:         "lockfile forgery does not escalate",
+			key:          "evil/action@v2",
+			reason:       doctor.ReasonLockfileForgery,
+			workflows:    []string{".github/workflows/ci.yml", ".github/workflows/release.yml"},
+			wantNWO:      "evil/action",
+			wantRef:      "v2",
+			wantEscalate: false,
+		},
+		{
+			name:         "misleading sha does not escalate",
+			key:          "deceptive/dep@v1",
+			reason:       doctor.ReasonMisleadingSHA,
+			workflows:    []string{".github/workflows/ci.yml"},
+			wantNWO:      "deceptive/dep",
+			wantRef:      "v1",
+			wantEscalate: false,
+		},
+		{
+			name:         "sub-action path splits on last @",
+			key:          "actions/cache/save@v4",
+			reason:       doctor.ReasonImpostorOffBranch,
+			workflows:    []string{".github/workflows/cache.yml"},
+			wantNWO:      "actions/cache/save",
+			wantRef:      "v4",
+			wantEscalate: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// An empty report guarantees the alerted key is absent from every
+			// inventory and finding, so the only way an Action can exist is the
+			// synthesis pass.
+			report := &doctor.Report{}
+			store, err := lockfile.OpenStore(t.TempDir(), nil)
+			if err != nil {
+				t.Fatalf("OpenStore: %v", err)
+			}
+			out := newProvenanceOutcomes(
+				[]string{tc.key}, nil, nil, nil,
+				map[string]string{tc.key: tc.reason},
+				nil,
+				map[string][]string{tc.key: tc.workflows},
+			)
+
+			rep := buildProvenanceReport(report, store, false, nil, out, nil)
+
+			if len(rep.Actions) != 1 {
+				t.Fatalf("expected 1 synthesized action, got %d", len(rep.Actions))
+			}
+			a := rep.Actions[0]
+			if a.Resolution != runlog.ResolutionInvestigate {
+				t.Errorf("Resolution: got %q, want %q", a.Resolution, runlog.ResolutionInvestigate)
+			}
+			if a.NWO != tc.wantNWO {
+				t.Errorf("NWO: got %q, want %q", a.NWO, tc.wantNWO)
+			}
+			if a.Ref != tc.wantRef {
+				t.Errorf("Ref: got %q, want %q", a.Ref, tc.wantRef)
+			}
+			if a.Reason != tc.reason {
+				t.Errorf("Reason: got %q, want %q", a.Reason, tc.reason)
+			}
+			if !slices.Equal(a.Workflows, tc.workflows) {
+				t.Errorf("Workflows: got %v, want %v", a.Workflows, tc.workflows)
+			}
+			if a.Escalate != tc.wantEscalate {
+				t.Errorf("Escalate: got %v, want %v (reason %q)", a.Escalate, tc.wantEscalate, tc.reason)
+			}
+			if rep.Summary.Investigate != 1 {
+				t.Errorf("Summary.Investigate: got %d, want 1", rep.Summary.Investigate)
+			}
+		})
+	}
+}
+
 // TestBuildProvenanceReport_OmitsAutoFixedWhenEmpty verifies the AutoFixed
 // array is omitted (nil) when nothing was auto-fixed — keeps the JSON
 // surface clean for the steady-state case.
@@ -239,7 +345,7 @@ func TestBuildProvenanceReport_OmitsAutoFixedWhenEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
-	out := newProvenanceOutcomes(nil, nil, nil, nil, nil)
+	out := newProvenanceOutcomes(nil, nil, nil, nil, nil, nil, nil)
 
 	rep := buildProvenanceReport(report, store, true, nil, out, nil)
 

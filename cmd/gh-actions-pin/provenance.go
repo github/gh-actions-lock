@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
@@ -9,16 +10,23 @@ import (
 )
 
 // provenanceOutcomes carries the per-action resolution sets collected by the
-// remediator, keyed by dependency key (NWO@Ref).
+// remediator, keyed by dependency key (NWO@Ref). The ordered slices preserve
+// the remediator's first-seen order so synthesized actions land in the report
+// in the same order the live summary used to emit them.
 type provenanceOutcomes struct {
-	alerted    map[string]bool
-	skipped    map[string]bool
-	unresolved map[string]bool
-	fullScan   map[string]bool
-	reasons    map[string]string
+	alerted          map[string]bool
+	skipped          map[string]bool
+	unresolved       map[string]bool
+	fullScan         map[string]bool
+	reasons          map[string]string
+	suggestions      map[string]string
+	alertedWorkflows map[string][]string
+	alertedOrder     []string
+	skippedOrder     []string
+	unresolvedOrder  []string
 }
 
-func newProvenanceOutcomes(alerted, skipped, unresolved, fullScan []string, reasons map[string]string) provenanceOutcomes {
+func newProvenanceOutcomes(alerted, skipped, unresolved, fullScan []string, reasons, suggestions map[string]string, alertedWorkflows map[string][]string) provenanceOutcomes {
 	set := func(keys []string) map[string]bool {
 		m := make(map[string]bool, len(keys))
 		for _, k := range keys {
@@ -29,12 +37,23 @@ func newProvenanceOutcomes(alerted, skipped, unresolved, fullScan []string, reas
 	if reasons == nil {
 		reasons = map[string]string{}
 	}
+	if suggestions == nil {
+		suggestions = map[string]string{}
+	}
+	if alertedWorkflows == nil {
+		alertedWorkflows = map[string][]string{}
+	}
 	return provenanceOutcomes{
-		alerted:    set(alerted),
-		skipped:    set(skipped),
-		unresolved: set(unresolved),
-		fullScan:   set(fullScan),
-		reasons:    reasons,
+		alerted:          set(alerted),
+		skipped:          set(skipped),
+		unresolved:       set(unresolved),
+		fullScan:         set(fullScan),
+		reasons:          reasons,
+		suggestions:      suggestions,
+		alertedWorkflows: alertedWorkflows,
+		alertedOrder:     alerted,
+		skippedOrder:     skipped,
+		unresolvedOrder:  unresolved,
 	}
 }
 
@@ -145,6 +164,25 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 		}
 	}
 
+	// Tertiary pass: guarantee an action exists for every key the remediator
+	// flagged. Alerted and unresolved keys can use the display form (NWO with
+	// sub-action path, or the original uses-ref) that never matches an
+	// inventory or finding entry keyed by the resolved Dependency.Key(). Without
+	// this, a security alert could have no action to render. Synthesize a bare
+	// action per missing key; classifyAction below assigns its resolution.
+	ensure := func(keys []string) {
+		for _, key := range keys {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			nwo, ref := splitDepKey(key)
+			upsert(key, nwo, ref, true, "", nil)
+		}
+	}
+	ensure(out.alertedOrder)
+	ensure(out.unresolvedOrder)
+	ensure(out.skippedOrder)
+
 	var actions []runlog.Action
 	var sum runlog.Summary
 	for _, key := range order {
@@ -155,6 +193,15 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 		}
 		a.Issue = issueByKey[key]
 		classifyAction(&a, key, out)
+
+		// For alerted actions, prefer the remediator's blocked-workflow list so
+		// the investigation block renders exactly the paths the live summary did
+		// (alertWorkflow precedence), even when the action was synthesized.
+		if a.Resolution == runlog.ResolutionInvestigate {
+			if wfs := out.alertedWorkflows[key]; len(wfs) > 0 {
+				a.Workflows = wfs
+			}
+		}
 
 		switch a.Resolution {
 		case runlog.ResolutionPinned:
@@ -173,11 +220,6 @@ func buildProvenanceReport(report *doctor.Report, store *lockfile.Store, valid b
 		}
 		actions = append(actions, a)
 	}
-
-	// Use the remediator's alerted count directly: some alerted dep keys don't
-	// match any lockfile entry (e.g. base NWO without sub-path) and would be
-	// missed by the per-action ResolutionInvestigate sweep above.
-	sum.Investigate = len(out.alerted)
 
 	sum.Workflows = len(report.Workflows)
 	sum.Actions = len(actions)
@@ -212,8 +254,12 @@ func classifyAction(a *runlog.Action, key string, out provenanceOutcomes) {
 	case out.alerted[key]:
 		a.Resolution = runlog.ResolutionInvestigate
 		a.How = out.reasons[key]
+		a.Reason = out.reasons[key]
+		a.Suggestion = out.suggestions[key]
+		a.Escalate = out.reasons[key] == doctor.ReasonImpostorOffBranch
 	case out.unresolved[key]:
 		a.Resolution = runlog.ResolutionUnresolved
+		a.ResolveFailed = true
 		a.How = "ref could not be resolved to a commit"
 	case out.skipped[key]:
 		a.Resolution = runlog.ResolutionSkipped
@@ -260,6 +306,16 @@ func findingIdentity(f doctor.Finding) (nwo, ref, sha string) {
 		sha = f.ObservedSHA
 	}
 	return nwo, ref, sha
+}
+
+// splitDepKey splits a dependency key "NWO@Ref" into its NWO and ref halves on
+// the final '@'. Refs never contain '@', so the last separator is the boundary;
+// the NWO half preserves any sub-action path the key carried.
+func splitDepKey(key string) (nwo, ref string) {
+	if i := strings.LastIndexByte(key, '@'); i >= 0 {
+		return key[:i], key[i+1:]
+	}
+	return key, ""
 }
 
 // isHexSHA reports whether s looks like a full 40-character hex commit SHA.

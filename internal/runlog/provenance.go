@@ -85,6 +85,26 @@ type Action struct {
 	// How is concise, human-readable provenance ("locked ref v4 to <sha>",
 	// "verified via full branch scan", a security reason, etc.).
 	How string `json:"how,omitempty"`
+	// Reason is the human-facing investigation copy the terminal summary shows
+	// for actions left for review (impostor / lockfile-forgery / misleading-sha).
+	// Carried as its own field so the renderer reads it structurally instead of
+	// parsing How. Empty unless Resolution is needs-investigation.
+	Reason string `json:"reason,omitempty"`
+	// Suggestion is a sane re-pin hint in "tag short-sha" form, recorded when
+	// the run found a release reachable from a branch to replace an off-branch
+	// pin. Empty when no suggestion was found.
+	Suggestion string `json:"suggestion,omitempty"`
+	// Escalate reports whether the publisher-escalation footer applies: set for
+	// publisher-side off-branch alerts (impostor) and cleared for consumer-side
+	// tampering (forgery / misleading SHA), where the publisher copy would
+	// mislead.
+	Escalate bool `json:"escalate,omitempty"`
+	// ResolveFailed marks actions the remediator actively failed to resolve (a
+	// real "could not be resolved" error) apart from actions that merely carry
+	// no SHA on record (e.g. self / reusable-workflow refs). Both share
+	// Resolution=="unresolved"; only ResolveFailed drives the terminal
+	// "could not be resolved" block.
+	ResolveFailed bool `json:"resolve_failed,omitempty"`
 	// Issue is the originating finding category (e.g. MISSING, ref-moved) when
 	// the action needed work; empty when it was already valid.
 	Issue string `json:"issue,omitempty"`
