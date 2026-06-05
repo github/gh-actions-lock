@@ -258,6 +258,13 @@ func TestUpgrade_NoOnboard_AllPresent_Succeeds(t *testing.T) {
 // without --no-onboard against an untracked workflow continues to onboard
 // it. The flag is opt-in strict mode for tooling (Dependabot) — humans
 // keep the convenience default.
+//
+// This also exercises the onboarding exit-code fix: when the only effect
+// of a run is to add a previously-untracked workflow to lockfile.workflows{}
+// (so the diff is purely Added and contributes 0 entries to the
+// updated[] JSON), the command must still exit zero. Previously this
+// path emitted "No matching actions found" and exited non-zero, which
+// broke scripts that treat exit code as truth.
 func TestUpgrade_WithoutNoOnboard_StillOnboards(t *testing.T) {
 	reg := &httpmock.Registry{}
 	upgradeMocks(reg, 8)
@@ -267,20 +274,63 @@ func TestUpgrade_WithoutNoOnboard_StillOnboards(t *testing.T) {
 		[]string{"a.yml"}, // b.yml untracked
 	)
 
-	// Note: current upgrade UX emits "No matching actions found" and exits
-	// non-zero when the diff is purely Added (the onboarding case), even
-	// when the file write + store.Set + Save() all succeed. That's a
-	// pre-existing UX quirk — out of scope for G9. What matters here is
-	// that the lockfile DOES gain a workflows{} entry for b.yml, proving
-	// the upgrade command still onboards by default.
-	_, _, _ = runCommandWithHTTP(t, reg,
+	stdout, stderr, err := runCommandWithHTTP(t, reg,
 		"upgrade",
 		"--action", "actions/checkout@v6",
 		"--from", "v5",
 		"--write",
 		".github/workflows/b.yml",
 	)
+	require.NoError(t, err, "onboarding-only upgrade must exit zero; stdout=%q stderr=%q", stdout, stderr)
 
 	lock := string(readLockfile(t))
 	assert.Contains(t, lock, "'.github/workflows/b.yml'", "default behavior must onboard the previously-untracked workflow")
+}
+
+// TestUpgrade_WithoutNoOnboard_OnboardingExitCodeJSON asserts the same
+// onboarding-exit-zero contract under --json mode: when the only effect
+// is onboarding (purely-Added diff), the updated[] array can legitimately
+// be empty, workflows[] must include the onboarded workflow, and the
+// command must exit zero. This is the regression guard for the exit-code
+// quirk surfaced during G9.
+func TestUpgrade_WithoutNoOnboard_OnboardingExitCodeJSON(t *testing.T) {
+	reg := &httpmock.Registry{}
+	upgradeMocks(reg, 8)
+
+	writeMultiWorkflowFixture(t,
+		[]string{"a.yml", "b.yml"},
+		[]string{"a.yml"}, // b.yml untracked
+	)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg,
+		"upgrade",
+		"--action", "actions/checkout@v6",
+		"--from", "v5",
+		"--write",
+		"--json=updated,workflows",
+		".github/workflows/b.yml",
+	)
+	require.NoError(t, err, "onboarding-only upgrade must exit zero; stdout=%q stderr=%q", stdout, stderr)
+
+	var payload struct {
+		Updated []struct {
+			NWO string `json:"nwo"`
+		} `json:"updated"`
+		Workflows []struct {
+			Path string `json:"path"`
+		} `json:"workflows"`
+		Findings []map[string]any `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload), "stdout=%q", stdout)
+
+	// updated[] is legitimately empty: the diff is purely Added (onboarding),
+	// and we don't dump transitive deps into updated[] to preserve the
+	// downstream JSON contract.
+	assert.Empty(t, payload.Updated, "onboarding-only run yields empty updated[]")
+	require.Len(t, payload.Workflows, 1, "onboarded workflow must appear in workflows[]")
+	assert.Equal(t, ".github/workflows/b.yml", payload.Workflows[0].Path)
+	assert.Empty(t, payload.Findings, "no findings on a clean onboarding run")
+
+	lock := string(readLockfile(t))
+	assert.Contains(t, lock, "'.github/workflows/b.yml'")
 }

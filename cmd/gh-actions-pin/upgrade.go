@@ -170,6 +170,15 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	var allChanges []jsonUpgradeChange
 	var findings []jsonUpgradeFinding
 	var savedWorkflows []jsonUpgradeWorkflow
+	// anyMatched tracks whether ANY workflow contained a ref matching the
+	// --action filter (independent of whether resolution produced a non-empty
+	// diff). Onboarding a previously-untracked workflow produces a
+	// purely-Added diff that contributes 0 entries to allChanges but is
+	// nonetheless a successful upgrade — without this signal the "No
+	// matching actions found" branch would fire and flip exit code to
+	// non-zero. See cmd/gh-actions-pin/upgrade_no_onboard_test.go for the
+	// regression guard.
+	var anyMatched bool
 	total := len(opts.WorkflowPaths)
 
 	// Attach a run log so detailed narration goes to a file, leaving the
@@ -238,6 +247,9 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 				}
 				if result != nil {
 					allChanges = append(allChanges, result.Changes...)
+					if result.Matched {
+						anyMatched = true
+					}
 					if result.Finding != nil {
 						findings = append(findings, *result.Finding)
 					}
@@ -299,10 +311,31 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 		return errSilent
 	}
 
-	if len(allChanges) == 0 && len(opts.Actions) > 0 && len(findings) == 0 {
+	if len(allChanges) == 0 && len(opts.Actions) > 0 && len(findings) == 0 && !anyMatched {
 		f.UI.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
 		f.UI.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
 		return errSilent
+	}
+
+	// When the matched action(s) only triggered onboarding (purely-Added
+	// diff entries that aren't surfaced in allChanges to preserve the
+	// updated[] JSON shape), say so explicitly rather than printing the
+	// misleading "Upgraded 0 action(s)".
+	if len(allChanges) == 0 && anyMatched && len(savedWorkflows) > 0 {
+		f.UI.TermSuccess("Onboarded %d workflow(s); no action refs needed upgrading", len(savedWorkflows))
+		for _, w := range savedWorkflows {
+			f.UI.TermDetail("%s", w.Path)
+		}
+		for _, fnd := range findings {
+			f.UI.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
+			if fnd.Remediation != "" {
+				f.UI.TermDetail("%s", fnd.Remediation)
+			}
+		}
+		if hadBlockingFinding {
+			return errSilent
+		}
+		return nil
 	}
 
 	verb := "Upgraded"
@@ -347,13 +380,20 @@ func writeUpgradeJSON(w io.Writer, changes []jsonUpgradeChange, findings []jsonU
 
 // upgradeFileResult is the per-workflow return shape from upgradeOneFile.
 // Saved=true means the workflow was upgraded and written through to the
-// in-memory lockfile store (caller decides whether to persist). Finding
-// is populated when the workflow was refused (e.g. --no-onboard on an
-// untracked workflow) or when any other per-workflow blocker fires; the
-// caller propagates it into the run's findings[] payload.
+// in-memory lockfile store (caller decides whether to persist). Matched=true
+// means at least one ref in the workflow matched the --action filter,
+// regardless of whether the resulting diff produced any Changes entries
+// (onboarding a previously-untracked workflow yields a purely-Added diff,
+// which contributes 0 entries to Changes but is nonetheless a successful
+// match — the caller uses Matched to gate the "No matching actions found"
+// exit-code branch). Finding is populated when the workflow was refused
+// (e.g. --no-onboard on an untracked workflow) or when any other
+// per-workflow blocker fires; the caller propagates it into the run's
+// findings[] payload.
 type upgradeFileResult struct {
 	Changes []jsonUpgradeChange
 	Saved   bool
+	Matched bool
 	Finding *jsonUpgradeFinding
 }
 
@@ -436,7 +476,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 			Remediation: "Run `gh actions-pin` (without --no-onboard) on this repository to onboard the workflow into the lockfile, then re-run the upgrade.",
 			DocURL:      doctor.DocURLFor(doctor.CategoryOnboardingRequired),
 		}
-		return &upgradeFileResult{Finding: finding}, nil
+		return &upgradeFileResult{Matched: true, Finding: finding}, nil
 	}
 
 	f.UI.Header("%s", workflowPath)
@@ -542,7 +582,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 
 	if !opts.Write {
 		f.UI.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
-		return &upgradeFileResult{Changes: changes}, nil
+		return &upgradeFileResult{Changes: changes, Matched: true}, nil
 	}
 
 	if err := os.WriteFile(workflowPath, updatedContent, 0o644); err != nil {
@@ -557,7 +597,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	for _, c := range changes {
 		f.UI.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
 	}
-	return &upgradeFileResult{Changes: changes, Saved: true}, nil
+	return &upgradeFileResult{Changes: changes, Saved: true, Matched: true}, nil
 }
 
 func actionMatchesFilter(nwo, filter string) bool {
