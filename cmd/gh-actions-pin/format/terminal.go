@@ -182,14 +182,13 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		}
 	}
 	if len(unpinnedWorkflows) > 0 {
+		out.TermWarn("%d %s not yet pinned",
+			len(unpinnedWorkflows),
+			ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
 		if willRemediate {
-			out.TermWarn("%d %s not yet pinned — resolving below",
-				len(unpinnedWorkflows),
-				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
+			out.TermDetail("↳ resolving below")
 		} else {
-			out.TermWarn("%d %s not yet pinned (run `gh actions-pin` to fix)",
-				len(unpinnedWorkflows),
-				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
+			out.TermDetail("↳ run `gh actions-pin` to pin them")
 		}
 	}
 	// Separate sha-as-ref warnings into direct (aggregate) and transitive (suppressed).
@@ -231,9 +230,12 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		}
 	}
 	if len(refMovedWarnings) > 0 {
-		out.TermWarn("%d %s moved upstream — run `gh actions-pin upgrade` to update",
+		out.TermWarn("%d %s moved upstream",
 			len(refMovedWarnings),
 			ui.Pluralize(len(refMovedWarnings), "ref has", "refs have"))
+		// RefMoved is skipped by the remediator (see remediate_strategies.go),
+		// so the manual hint applies regardless of willRemediate.
+		out.TermDetail("↳ run `gh actions-pin upgrade` to update")
 		for _, key := range refMovedWarnings {
 			wg := warnMap[key]
 			f := wg.finding
@@ -256,6 +258,9 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 				label = f.WorkflowPath
 			}
 			out.TermWarn("%s: %s", label, f.Detail)
+			if f.Remediation != "" {
+				out.TermDetail("↳ %s", f.Remediation)
+			}
 		}
 	}
 }
