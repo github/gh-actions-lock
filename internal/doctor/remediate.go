@@ -121,6 +121,7 @@ type AutoFixedImpostor struct {
 	Workflow string // workflow path the rewrite was applied to
 	NWO      string // owner/repo (no path)
 	OldRef   string // ref as written before the rewrite (tag or SHA)
+	OldSHA   string // commit SHA the impostor ref resolved to (full); empty when unknown
 	NewTag   string // tag the workflow was rewritten to
 	NewSHA   string // commit SHA the new tag points to (full)
 }
@@ -145,7 +146,7 @@ func (rem *Remediator) recordFullScanDep(depKey string) {
 // to a sane-release tag during pinning. Deduplicated by (Workflow, NWO);
 // first write wins so a workflow with multiple findings against the same
 // action is only surfaced once.
-func (rem *Remediator) recordAutoFixedImpostor(workflow, nwo, oldRef, newTag, newSHA string) {
+func (rem *Remediator) recordAutoFixedImpostor(workflow, nwo, oldRef, oldSHA, newTag, newSHA string) {
 	if workflow == "" || nwo == "" || newTag == "" {
 		return
 	}
@@ -160,6 +161,7 @@ func (rem *Remediator) recordAutoFixedImpostor(workflow, nwo, oldRef, newTag, ne
 		Workflow: workflow,
 		NWO:      nwo,
 		OldRef:   oldRef,
+		OldSHA:   oldSHA,
 		NewTag:   newTag,
 		NewSHA:   newSHA,
 	})
@@ -183,6 +185,7 @@ func (rem *Remediator) tryAutoFixImpostors(wr *WorkflowReport) bool {
 	type pendingFix struct {
 		nwo    string
 		oldRef string
+		oldSHA string
 		newTag string
 		newSHA string
 	}
@@ -208,6 +211,7 @@ func (rem *Remediator) tryAutoFixImpostors(wr *WorkflowReport) bool {
 		pending = append(pending, pendingFix{
 			nwo:    owner + "/" + repo,
 			oldRef: f.Dependency.Ref,
+			oldSHA: f.Dependency.SHA,
 			newTag: f.SaneSuggestionTag,
 			newSHA: f.SaneSuggestionSHA,
 		})
@@ -222,7 +226,7 @@ func (rem *Remediator) tryAutoFixImpostors(wr *WorkflowReport) bool {
 	wr.ActionRefs = refs
 	wr.Findings = keep
 	for _, fix := range pending {
-		rem.recordAutoFixedImpostor(wr.Path, fix.nwo, fix.oldRef, fix.newTag, fix.newSHA)
+		rem.recordAutoFixedImpostor(wr.Path, fix.nwo, fix.oldRef, fix.oldSHA, fix.newTag, fix.newSHA)
 	}
 	return true
 }

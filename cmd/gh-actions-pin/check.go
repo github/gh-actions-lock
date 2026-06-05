@@ -557,7 +557,10 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 	// from any branch but where a recent stable release tag was reachable, so
 	// pin rewrote uses: to that tag instead of alerting. The substitution may
 	// cross a major-version boundary (e.g. v1.25.0 → v3.0.3) so the user
-	// must eyeball each one — flag it loudly with the publisher-docs link.
+	// must eyeball each one. Surface enough links to investigate without
+	// leaving the terminal: the impostor commit (with GitHub's own
+	// "doesn't belong to any branch" copy), the release the workflow now
+	// points at, and a diff between old and new.
 	if len(autoFixedImpostors) > 0 {
 		if printed {
 			f.UI.TermBlank()
@@ -572,6 +575,17 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 			}
 			f.UI.TermDetail("  %s: %s → %s (%s)", fix.NWO, fix.OldRef, fix.NewTag, short)
 			f.UI.TermDetail("    in %s", fix.Workflow)
+			if fix.OldSHA != "" {
+				commitURL := fmt.Sprintf("https://github.com/%s/commit/%s", fix.NWO, fix.OldSHA)
+				f.UI.TermDetail("    impostor commit: %s", f.UI.TermLink(commitURL, commitURL))
+				f.UI.TermDetail("      \"This commit does not belong to any branch on this repository, and may belong to a fork outside of the repository.\"")
+				if fix.NewSHA != "" {
+					compareURL := fmt.Sprintf("https://github.com/%s/compare/%s...%s", fix.NWO, fix.OldSHA, fix.NewSHA)
+					f.UI.TermDetail("    compare:         %s", f.UI.TermLink(compareURL, compareURL))
+				}
+			}
+			releaseURL := fmt.Sprintf("https://github.com/%s/releases/tag/%s", fix.NWO, fix.NewTag)
+			f.UI.TermDetail("    new release:     %s", f.UI.TermLink(releaseURL, releaseURL))
 		}
 		f.UI.TermDetail("  Publishers: %s", doctor.PublisherTagReleasesDocURL)
 	}

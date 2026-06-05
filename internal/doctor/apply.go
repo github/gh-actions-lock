@@ -457,7 +457,15 @@ func (rem *Remediator) AutoFixAlertedImpostors() {
 			continue
 		}
 		for _, fx := range fixes {
-			rem.recordAutoFixedImpostor(wp, fx.owner+"/"+fx.repo, fx.oldRef, fx.newTag, fx.newSHA)
+			// Best-effort OldSHA: when the impostor ref was SHA-pinned the
+			// ref string IS the resolved SHA. For tag-pinned cases this
+			// path doesn't carry the resolved SHA, so leave it empty —
+			// the display omits the commit link gracefully.
+			oldSHA := ""
+			if lockfile.IsFullSha(fx.oldRef) {
+				oldSHA = fx.oldRef
+			}
+			rem.recordAutoFixedImpostor(wp, fx.owner+"/"+fx.repo, fx.oldRef, oldSHA, fx.newTag, fx.newSHA)
 			fixedKeys[fx.depKey] = true
 		}
 	}
