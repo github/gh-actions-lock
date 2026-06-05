@@ -413,9 +413,13 @@ func (rem *Remediator) Remediate(report *Report) error {
 	}
 
 	// Pass A: serial walk through findings. Prompts run in order so
-	// interactive UX is preserved. NotPinned workflows go to applyPin
-	// indirectly via submitPin, which appends them to pendingPins for
-	// Pass B to drain in parallel.
+	// interactive UX is preserved. Workflows whose pin can be deferred —
+	// NotPinned, SHA-as-ref (auto-pick converts the file then enqueues),
+	// and impostor auto-fix (file rewrite in tryAutoFixImpostors then
+	// enqueue) — all route to submitPin and land in pendingPins for Pass B
+	// to drain through the worker pool. Last-wins replacement in submitPin
+	// keeps multiple SHA-as-ref findings on the same workflow at one entry
+	// with the post-rewrite refs.
 	rem.deferPins = true
 	for i, wr := range actionable {
 		rem.curWorkflow = i + 1
@@ -454,24 +458,40 @@ func (rem *Remediator) Remediate(report *Report) error {
 }
 
 // submitPin enqueues a workflow for the parallel pin pass when deferPins is
-// set, otherwise applies the pin synchronously. NotPinned handlers call this
-// instead of applyPin directly so Remediate can batch the network-heavy work.
+// set, otherwise applies the pin synchronously. NotPinned and SHA-as-ref
+// handlers both call this instead of applyPin directly so Remediate can
+// batch the network-heavy work.
+//
+// When an entry for the same Path is already pending (the common case for
+// SHA-as-ref where each finding rewrites the workflow and re-submits with
+// the post-rewrite ActionRefs), the new wr replaces the old one. Last-wins
+// is the right semantics because the latest submission carries refs that
+// reflect every rewrite Pass A has done so far — earlier entries are stale
+// and would make applyPin's resolver call run against pre-rewrite refs.
+// NotPinned submits exactly once per workflow so the replacement path is a
+// no-op for it; the virtual ActionRefs produced by offerDefaultBranch are
+// preserved by construction.
 func (rem *Remediator) submitPin(wr WorkflowReport) error {
 	if rem.deferPins {
 		rem.mu.Lock()
+		defer rem.mu.Unlock()
+		for i, p := range rem.pendingPins {
+			if p.Path == wr.Path {
+				rem.pendingPins[i] = wr
+				return nil
+			}
+		}
 		rem.pendingPins = append(rem.pendingPins, wr)
-		rem.mu.Unlock()
 		return nil
 	}
 	return rem.applyPin(wr)
 }
 
-// dedupePinsByPath returns pins with duplicate Path entries removed, keeping
-// the first occurrence of each path. submitPin runs once per finding, so a
-// workflow with multiple findings can end up enqueued multiple times; running
-// applyPin more than once on the same file is wasted work (it always pins
-// every action in the file in one pass) and produces stacked, identical-looking
-// sub-spinner rows in the UI.
+// dedupePinsByPath is retained as a defense-in-depth safety net. submitPin's
+// last-wins replacement already prevents duplicates from being enqueued, so
+// this should be a no-op in production. Keeping it (and its test) means a
+// future code path that bypasses submitPin can't quietly reintroduce the
+// stacked-workers-on-one-file behavior the original UX fix prevented.
 func dedupePinsByPath(pins []WorkflowReport) []WorkflowReport {
 	seen := make(map[string]struct{}, len(pins))
 	out := make([]WorkflowReport, 0, len(pins))
@@ -496,13 +516,11 @@ func (rem *Remediator) runPinWorkers() error {
 		return nil
 	}
 
-	// Dedupe by workflow path. submitPin is called once per *finding* (e.g.
-	// each SHA-as-ref handler ends in applySHAToTag → submitPin), so a
-	// workflow with three findings would otherwise show up three times in
-	// the pool — three workers pinning the same file in parallel, three
-	// stacked sub-spinner rows reading "codeql.yml … codeql.yml … codeql.yml".
-	// applyPin already pins every action in the file in one shot, so the
-	// extras are pure waste. Keep the first occurrence to preserve order.
+	// Dedupe by workflow path. With submitPin's last-wins replacement
+	// this should already be a no-op (each path appears at most once in
+	// pendingPins). Kept as defense-in-depth: a future code path that
+	// appends directly to pendingPins without going through submitPin
+	// would otherwise reintroduce stacked workers on the same file.
 	pins = dedupePinsByPath(pins)
 
 	if dbg := os.Getenv("GH_ACTIONS_PIN_DEBUG_PINS"); dbg != "" {
