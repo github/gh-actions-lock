@@ -271,11 +271,9 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	}
 	wg.Wait()
 
-	// Persist only when at least one workflow upgraded successfully.
-	// store.Save() is atomic (tmp+rename) per the G8 contract, so a
-	// partial-success save still leaves the on-disk lockfile consistent.
-	// When every workflow was refused or errored, skip Save entirely so
-	// the lockfile bytes stay untouched.
+	// store.Save() is atomic (tmp+rename), so a partial-success save still
+	// leaves the on-disk lockfile consistent. When every workflow was
+	// refused or errored, skip Save entirely so the bytes stay untouched.
 	if opts.Write && len(savedWorkflows) > 0 {
 		if err := store.Save(); err != nil {
 			f.UI.StopProgress()
@@ -463,11 +461,10 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 		return nil, nil
 	}
 
-	// --no-onboard strict mode (G9): refuse to onboard a workflow that is
-	// not already in lockfile.workflows{}. The check fires AFTER plan
-	// construction but BEFORE any resolver work or file writes — saves a
-	// pile of API calls for refused workflows, and crucially guarantees
-	// store.Set is never reached for an untracked workflow.
+	// --no-onboard refuses workflows that are not already in
+	// lockfile.workflows{}. The check fires after plan construction but
+	// before resolver work or file writes, so store.Set is never reached
+	// for an untracked workflow.
 	if opts.NoOnboard && !store.HasWorkflow(wfKey) {
 		f.UI.Warning("%s: refusing to onboard (--no-onboard); workflow has no entry in actions.lock", workflowPath)
 		finding := &jsonUpgradeFinding{

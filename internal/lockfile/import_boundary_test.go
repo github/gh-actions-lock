@@ -113,8 +113,8 @@ func isAllowed(relSlash string, prefixes []string) bool {
 
 // findRepoRoot walks up from this test file until it finds the directory
 // containing the top-level go.mod (module github.com/github/gh-actions-pin).
-// It deliberately ignores pkg/lockfile/go.mod, which belongs to the
-// soon-to-be-extracted submodule.
+// pkg/lockfile/go.mod is skipped; it belongs to the soon-to-be-extracted
+// submodule.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

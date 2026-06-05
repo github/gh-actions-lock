@@ -2,7 +2,7 @@ package format
 
 // SARIF 2.1.0 emitter for `gh actions-pin check --format=sarif`.
 //
-// Wire-format contract (spec-locked, do not re-litigate):
+// Wire format:
 //   - SARIF schema: 2.1.0
 //     (https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 //   - Rule IDs match zizmor where the audit definition overlaps

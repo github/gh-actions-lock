@@ -1,12 +1,11 @@
-// This test locks the G4 tokenless+proxy auth contract: no CLI code may
+// This test locks the tokenless+proxy auth contract: no CLI code may
 // set its own `Authorization` header on outbound HTTP requests. Hosted
 // Dependabot routes egress through an auth-injecting proxy; any
 // CLI-owned `Authorization` header would collide with the proxy's and
 // silently break the contract. See docs/auth-tokenless-mode.md.
 //
-// The check is intentionally crude — an AST walk for string literals
-// equal to "Authorization" in non-test Go source. That catches the
-// common regression vectors:
+// The check is an AST walk for string literals equal to "Authorization"
+// in non-test Go source. That catches the common regression vectors:
 //
 //   - req.Header.Set("Authorization", ...)
 //   - headers["Authorization"] = ...

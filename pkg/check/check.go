@@ -6,31 +6,26 @@
 // Dependabot, an editor LSP — agree on the contract without depending
 // on the CLI's resolver/HTTP/orchestration code.
 //
-// This package is intentionally pure: it imports only the standard
-// library, pkg/findings (the public diagnostic vocabulary), and
-// pkg/lockfile (the public schema/grammar). No HTTP, no filesystem
-// access, no go-gh, no internal/*. A Check given the same Input must
-// produce the same findings on every platform.
+// A Check given the same Input must produce the same findings on every
+// platform. The package imports only the standard library, pkg/findings,
+// and pkg/lockfile; no HTTP, filesystem, go-gh, or internal/*.
 //
-// Stability contract:
+// Stability:
 //   - Reachability status string values ("reachable", "unreachable",
 //     "unknown") are part of the public schema; TestReachabilityStringsAreFrozen
 //     guards against accidental renames.
 //   - Public struct field names and types are additive-only post-cut.
-//     Adding a new exported field is fine; renaming or removing one is
-//     a breaking change. TestInputShapeIsFrozen / TestFactShapesAreFrozen
-//     pin the existing fields without asserting field count, so future
-//     facts (ancestry, tag-object peels, parent maps, parse diagnostics)
-//     can be added additively as their checks move over from
-//     internal/doctor.
+//     Renaming or removing an exported field is a breaking change.
+//     TestInputShapeIsFrozen / TestFactShapesAreFrozen pin existing
+//     fields without asserting count, so new facts can land additively
+//     as their checks move over from internal/doctor.
 //   - The Check interface method set is frozen; TestCheckInterfaceIsFrozen
 //     pins Name() and Evaluate(Input) []findings.Finding.
 //
-// Scope: this first cut is interface-only. No rule logic has moved from
-// internal/doctor. A future cut will land per-rule Check implementations
-// and an aggregate Run(Input) findings.Report driver once the doctor
-// engine can be driven from a fact bundle and prove parity with existing
-// tests (see pkg-library-boundary.md, "pkg/check versus pkg/findings").
+// This first cut is interface-only. A future cut will land per-rule
+// Check implementations and an aggregate Run(Input) findings.Report
+// driver once the doctor engine can be driven from a fact bundle and
+// prove parity with existing tests (see pkg-library-boundary.md).
 package check
 
 import (

@@ -8,9 +8,9 @@ import (
 
 // dependencyToPin converts a Dependency into a parserlock.Pin without any
 // case-normalization — callers should rely on Pin.String / Pin.Canonical for
-// the canonical form. Sub-action path is intentionally dropped: the lockfile
-// pin grammar identifies a downloaded tarball at repo+sha granularity, and
-// distinct subpaths in the same repo+ref collapse to one entry.
+// the canonical form. Sub-action path is dropped: the lockfile pin grammar
+// identifies a downloaded tarball at repo+sha granularity, and distinct
+// subpaths in the same repo+ref collapse to one entry.
 func dependencyToPin(d Dependency) (parserlock.Pin, error) {
 	owner, repo := d.OwnerRepo()
 	if owner == "" || repo == "" {

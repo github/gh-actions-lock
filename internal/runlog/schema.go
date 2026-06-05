@@ -6,10 +6,10 @@ import _ "embed"
 // document shape. It is the published contract for the report WriteReport
 // emits, mirroring how pkg/lockfile embeds its lockfile schema.
 //
-// Provenance versioning is major-only by design — there is no v1.0.1 or
-// v1.1.0, only v1, v2, etc. The file is named provenance-v1.json
-// (intentionally asymmetric with lockfile's semver-named lockfile-v0.0.1.json):
-// any breaking change ships a new major and a new file.
+// Provenance versioning is major-only: there is no v1.0.1 or v1.1.0,
+// only v1, v2, etc. The file is named provenance-v1.json (asymmetric
+// with lockfile's semver-named lockfile-v0.0.1.json): any breaking
+// change ships a new major and a new file.
 //
 //go:embed provenance-v1.json
 var schemaV1 []byte
