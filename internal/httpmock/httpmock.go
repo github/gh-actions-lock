@@ -256,6 +256,25 @@ func StatusResponse(code int) Responder {
 	}
 }
 
+// StatusResponseWithHeaders is StatusResponse with response headers — used
+// by tests that exercise rate-limit fallbacks keyed off Retry-After or
+// X-RateLimit-Reset / X-RateLimit-Remaining.
+func StatusResponseWithHeaders(code int, headers map[string]string) Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		h := http.Header{}
+		for k, v := range headers {
+			h.Set(k, v)
+		}
+		return &http.Response{
+			StatusCode: code,
+			Header:     h,
+			Body:       io.NopCloser(bytes.NewBuffer(nil)),
+			Request:    req,
+			Status:     fmt.Sprintf("%d", code),
+		}, nil
+	}
+}
+
 func decodeJSONBody(req *http.Request, dest any) error {
 	b, err := readBody(req)
 	if err != nil {

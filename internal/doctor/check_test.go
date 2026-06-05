@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
@@ -23,10 +24,11 @@ type (
 // stubCheckResolver scripts every checkResolver call from test fixtures.
 // Missing entries return *Unknown values (fail-open semantics).
 type stubCheckResolver struct {
-	refs       map[stubRefKey]string                        // resolved ref → sha; absence = unknown
-	ancestry   map[stubAncestryKey]resolver.AncestryStatus  // (cand, head) ancestry decision
-	reach      map[stubReachKey]resolver.ReachabilityStatus // sha-reachable-from-ref decision
-	tagObjects map[stubTagObjectKey]string                  // sha → peeled commit
+	refs            map[stubRefKey]string                        // resolved ref → sha; absence = unknown
+	ancestry        map[stubAncestryKey]resolver.AncestryStatus  // (cand, head) ancestry decision
+	ancestryDetails map[stubAncestryKey]string                   // optional per-key detail string; absence = ""
+	reach           map[stubReachKey]resolver.ReachabilityStatus // sha-reachable-from-ref decision
+	tagObjects      map[stubTagObjectKey]string                  // sha → peeled commit
 }
 
 func (s *stubCheckResolver) ResolveRef(owner, repo, ref string) (string, bool) {
@@ -37,15 +39,16 @@ func (s *stubCheckResolver) ResolveRef(owner, repo, ref string) (string, bool) {
 	return sha, ok
 }
 
-func (s *stubCheckResolver) CheckAncestry(owner, repo, cand, head string) resolver.AncestryStatus {
+func (s *stubCheckResolver) CheckAncestry(owner, repo, cand, head string) (resolver.AncestryStatus, string) {
 	if s == nil {
-		return resolver.AncestryUnknown
+		return resolver.AncestryUnknown, ""
 	}
-	v, ok := s.ancestry[stubAncestryKey{owner, repo, cand, head}]
+	key := stubAncestryKey{owner, repo, cand, head}
+	v, ok := s.ancestry[key]
 	if !ok {
-		return resolver.AncestryUnknown
+		return resolver.AncestryUnknown, s.ancestryDetails[key]
 	}
-	return v
+	return v, s.ancestryDetails[key]
 }
 
 func (s *stubCheckResolver) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus {
@@ -381,6 +384,38 @@ func TestRunChecks(t *testing.T) {
 			extra: func(t *testing.T, got []Finding) {
 				if got[0].Confidence != ConfidenceHigh {
 					t.Errorf("Confidence: got %q, want %q (AncestryConfirmed is authoritative)", got[0].Confidence, ConfidenceHigh)
+				}
+			},
+		},
+		{
+			// Detail plumbing: when CheckAncestry returns a non-empty
+			// rate-limit detail (e.g. "rate limited (HTTP 429); resets
+			// at 1717552800"), the AncestryUnknown finding must surface
+			// it inside the parenthetical so operators don't see a
+			// generic "ancestry check inconclusive".
+			name: "ancestry unknown surfaces resolver detail",
+			lockfile: map[string][]string{
+				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
+			},
+			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
+			resolver: &stubCheckResolver{
+				refs: map[stubRefKey]string{
+					{"actions", "checkout", "v4"}: shaCheckoutV4,
+				},
+				ancestryDetails: map[stubAncestryKey]string{
+					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: "rate limited (HTTP 429); resets at 1717552800; retry budget exhausted after 3 attempts",
+				},
+				reach: map[stubReachKey]resolver.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+				},
+			},
+			wantCategories: []Category{CategoryAncestryUnknown},
+			extra: func(t *testing.T, got []Finding) {
+				if !strings.Contains(got[0].Detail, "rate limited (HTTP 429)") {
+					t.Errorf("Detail: expected resolver rate-limit detail, got %q", got[0].Detail)
+				}
+				if !strings.Contains(got[0].Detail, "resets at 1717552800") {
+					t.Errorf("Detail: expected reset timestamp in finding, got %q", got[0].Detail)
 				}
 			},
 		},

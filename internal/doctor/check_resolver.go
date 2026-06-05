@@ -23,8 +23,11 @@ type checkResolver interface {
 	// tag-object pin (legitimate) from a branch named after a SHA (the
 	// forgery shape we want to flag).
 	PeelTagObject(owner, repo, sha string) (commit string, ok bool)
-	// CheckAncestry asks whether candidate is an ancestor of head.
-	CheckAncestry(owner, repo, candidate, head string) resolver.AncestryStatus
+	// CheckAncestry asks whether candidate is an ancestor of head and
+	// returns a short human-readable explanation alongside the status —
+	// the rate-limit or compare-base detail callers surface to operators
+	// (see Finding.Detail in check_misleading.go).
+	CheckAncestry(owner, repo, candidate, head string) (resolver.AncestryStatus, string)
 	// CheckReachability asks whether sha is reachable from ref's history.
 	CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus
 }
@@ -70,12 +73,11 @@ func (a *prewarmedResolver) PeelTagObject(owner, repo, sha string) (string, bool
 	return a.inner.PeelTagObject(owner, repo, sha)
 }
 
-func (a *prewarmedResolver) CheckAncestry(owner, repo, candidate, head string) resolver.AncestryStatus {
+func (a *prewarmedResolver) CheckAncestry(owner, repo, candidate, head string) (resolver.AncestryStatus, string) {
 	if a.inner == nil {
-		return resolver.AncestryUnknown
+		return resolver.AncestryUnknown, ""
 	}
-	s, _ := a.inner.CheckAncestry(owner, repo, candidate, head)
-	return s
+	return a.inner.CheckAncestry(owner, repo, candidate, head)
 }
 
 func (a *prewarmedResolver) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus {
