@@ -630,6 +630,42 @@ func (rem *Remediator) recordAlertSuggestion(depKey string, f Finding) {
 	}
 }
 
+// mergeEnrichmentForAlert folds enrichment from a matching diagnose-time
+// CategoryImpostorCommit finding into the just-emitted alertWorkflow
+// registry entry for (nwo, ref).
+//
+// Why this exists: alertWorkflow is the bare alert path — it inserts the
+// dep into AlertedDeps but doesn't carry SaneSuggestionSearched /
+// SaneSuggestionTag flags, because its callers (apply.go reach loop,
+// NormalizeContaining ImpostorError) don't have a Finding handle. The
+// renderer's "→ no recent release was reachable — escalate" and
+// "→ suggested: re-pin to <tag>" lines depend on AlertedSearched /
+// AlertedSuggestions being populated, which only happens through
+// recordAlertSuggestion. EnrichImpostorFindings already walked all impostor
+// findings at diagnose time and set SaneSuggestionSearched=true (plus
+// SaneSuggestionTag if a sane release was found). We look up the matching
+// Finding here so the apply-time alert keeps the diagnose-time enrichment.
+//
+// No-op if no match. Linear scan is fine: per-workflow finding counts are
+// small and this only fires on the unhappy paths.
+func (rem *Remediator) mergeEnrichmentForAlert(findings []Finding, nwo, ref string) {
+	depKey := nwo + "@" + ref
+	for i := range findings {
+		f := &findings[i]
+		if f.Category != CategoryImpostorCommit || f.Dependency == nil {
+			continue
+		}
+		if f.Dependency.NWO != nwo || f.Dependency.Ref != ref {
+			continue
+		}
+		if !f.SaneSuggestionSearched {
+			continue
+		}
+		rem.recordAlertSuggestion(depKey, *f)
+		return
+	}
+}
+
 // reasonForCategory maps an investigation category to concise, user-facing copy.
 func reasonForCategory(c Category) string {
 	switch c {
