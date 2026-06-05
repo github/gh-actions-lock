@@ -65,3 +65,9 @@ func ParsePin(s string) (Pin, bool) { return parserlock.ParsePin(s) }
 func IndexKey(owner, repo, ref string) string {
 	return parserlock.IndexKey(owner, repo, ref)
 }
+
+// SplitNWO splits "owner/repo[/path]" into (owner, repo, ok). Multi-slash
+// inputs collapse to (owner, repo) at repo granularity. See pkg/lockfile.SplitNWO.
+func SplitNWO(nwo string) (owner, repo string, ok bool) {
+	return parserlock.SplitNWO(nwo)
+}

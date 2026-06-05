@@ -95,11 +95,8 @@ func (d Dependency) Key() string {
 
 // OwnerRepo splits NWO into owner and repo components.
 func (d Dependency) OwnerRepo() (string, string) {
-	parts := strings.SplitN(d.NWO, "/", 3)
-	if len(parts) < 2 {
-		return "", ""
-	}
-	return parts[0], parts[1]
+	owner, repo, _ := SplitNWO(d.NWO)
+	return owner, repo
 }
 
 // HashAlgoOrDetect returns the hash algorithm, falling back to detection from SHA length.
