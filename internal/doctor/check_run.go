@@ -73,12 +73,14 @@ func collectForgeryKeys(findings []Finding) map[string]bool {
 // newRefFinding builds a Finding with the common header fields populated
 // from a uses: ref. Category/Severity can be empty when the caller fills
 // them in based on a downstream branch (e.g. ref-moved vs forgery).
-func newRefFinding(pw ParsedWorkflow, ref parserlock.ActionRef, cat Category, sev Severity) Finding {
+// Confidence is required at construction — see Finding.Confidence.
+func newRefFinding(pw ParsedWorkflow, ref parserlock.ActionRef, cat Category, sev Severity, conf Confidence) Finding {
 	refCopy := ref
 	return Finding{
 		WorkflowPath: pw.Path,
 		Category:     cat,
 		Severity:     sev,
+		Confidence:   conf,
 		ActionRef:    &refCopy,
 	}
 }

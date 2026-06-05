@@ -19,6 +19,7 @@ type Finding struct {
 	Workflow    string `json:"workflow"`
 	Category    string `json:"category"`
 	Severity    string `json:"severity"`
+	Confidence  string `json:"confidence,omitempty"`
 	Dependency  string `json:"dependency,omitempty"`
 	RequiredBy  string `json:"required_by,omitempty"`
 	Detail      string `json:"detail"`
@@ -52,6 +53,7 @@ func findingFromDoctor(f doctor.Finding) Finding {
 		Workflow:    f.WorkflowPath,
 		Category:    string(f.Category),
 		Severity:    string(f.Severity),
+		Confidence:  string(f.Confidence),
 		Detail:      f.Detail,
 		Remediation: f.Remediation,
 		DocURL:      f.DocURL,

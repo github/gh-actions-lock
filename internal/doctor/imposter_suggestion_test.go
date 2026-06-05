@@ -99,6 +99,7 @@ func TestEnrichImposterFindings_MarksSearched(t *testing.T) {
 			Path: ".github/workflows/test.yml",
 			Findings: []Finding{{
 				Category:   CategoryImposterCommit,
+				Confidence: ConfidenceHigh,
 				Dependency: &lockfile.Dependency{NWO: "acme/widget", Ref: "v1"},
 			}},
 		}},
@@ -134,6 +135,7 @@ func TestEnrichImposterFindings_PopulatesSuggestion(t *testing.T) {
 			Path: ".github/workflows/test.yml",
 			Findings: []Finding{{
 				Category:   CategoryImposterCommit,
+				Confidence: ConfidenceHigh,
 				Dependency: &lockfile.Dependency{NWO: "acme/widget", Ref: "v1"},
 			}},
 		}},

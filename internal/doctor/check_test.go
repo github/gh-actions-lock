@@ -306,3 +306,116 @@ func TestRunChecks_NoResolver_SkipsResolverChecks(t *testing.T) {
 		t.Fatalf("expected zero findings with no resolver, got %#v", got)
 	}
 }
+
+// TestRunChecks_AllFindingsCarryConfidence is the fail-fast guard the
+// confidence-axis card requires: every finding emitted by any check
+// path must carry a non-empty Confidence. A zero value here would mean
+// a new check (or an edit to an existing one) forgot to set the field,
+// and the JSON/SARIF surface would leak `""`.
+func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
+// Cover every check path runChecks dispatches to.
+lf := checkNewLockfile(map[string][]string{
+".github/workflows/ci.yml": {
+checkPinKey("actions", "checkout", "v4", shaCheckoutV3), // ref_moved/forgery seed
+checkPinKey("actions", "unused", "v1", shaSetupGoV5),    // stale seed
+},
+})
+pw := checkParsedWF(".github/workflows/ci.yml",
+checkRef("actions", "checkout", "v4"),       // ref_moved or forgery
+checkRef("actions", "setup-node", "v3"),     // not_pinned
+checkRef("actions", "bare-sha", shaImposter), // sha_as_ref + misleading
+)
+r := &stubCheckResolver{
+refs: map[string]string{
+"actions/checkout@v4":         shaCheckoutV4,
+"actions/bare-sha@" + shaImposter: shaSetupGoV5,
+},
+ancestry: map[string]resolver.AncestryStatus{
+"actions/checkout:" + shaCheckoutV3 + ":" + shaCheckoutV4: resolver.AncestryConfirmed,
+},
+reach: map[string]resolver.ReachabilityStatus{
+"actions/checkout:" + shaCheckoutV3 + ":v4": resolver.Reachable,
+},
+}
+got := runChecks(pw, lf, r)
+if len(got) == 0 {
+t.Fatal("expected findings to exercise the confidence guard")
+}
+for i, f := range got {
+if f.Confidence == "" {
+t.Errorf("finding[%d] category=%s has empty Confidence — every construction site must set it", i, f.Category)
+}
+}
+}
+
+// TestRunChecks_RefMoved_AncestryUnknown_IsMedium pins the
+// rate-limit-fallback contract from the confidence-axis card: when the
+// Compare API can't give us an authoritative ancestry answer
+// (AncestryUnknown — rate limit, transient API error, see
+// resolver/resolver.go CheckAncestry), the resulting ref_moved finding
+// downgrades from High to Medium so consumers know we inferred from the
+// SHA mismatch alone.
+func TestRunChecks_RefMoved_AncestryUnknown_IsMedium(t *testing.T) {
+lf := checkNewLockfile(map[string][]string{
+".github/workflows/ci.yml": {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
+})
+pw := checkParsedWF(".github/workflows/ci.yml", checkRef("actions", "checkout", "v4"))
+r := &stubCheckResolver{
+refs: map[string]string{
+"actions/checkout@v4": shaCheckoutV4,
+},
+// No ancestry entry → stub returns AncestryUnknown.
+reach: map[string]resolver.ReachabilityStatus{
+"actions/checkout:" + shaCheckoutV3 + ":v4": resolver.Reachable,
+},
+}
+got := runChecks(pw, lf, r)
+var rm *Finding
+for i := range got {
+if got[i].Category == CategoryRefMoved {
+rm = &got[i]
+break
+}
+}
+if rm == nil {
+t.Fatalf("expected a ref_moved finding, got %v", findingCategories(got))
+}
+if rm.Confidence != ConfidenceMedium {
+t.Errorf("Confidence: got %q, want %q (AncestryUnknown is the rate-limit fallback path)", rm.Confidence, ConfidenceMedium)
+}
+}
+
+// TestRunChecks_RefMoved_AncestryConfirmed_IsHigh is the positive counterpart:
+// when the Compare API gives us AncestryConfirmed the ref_moved finding is
+// High-confidence because we have authoritative upstream data.
+func TestRunChecks_RefMoved_AncestryConfirmed_IsHigh(t *testing.T) {
+lf := checkNewLockfile(map[string][]string{
+".github/workflows/ci.yml": {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
+})
+pw := checkParsedWF(".github/workflows/ci.yml", checkRef("actions", "checkout", "v4"))
+r := &stubCheckResolver{
+refs: map[string]string{
+"actions/checkout@v4": shaCheckoutV4,
+},
+ancestry: map[string]resolver.AncestryStatus{
+"actions/checkout:" + shaCheckoutV3 + ":" + shaCheckoutV4: resolver.AncestryConfirmed,
+},
+reach: map[string]resolver.ReachabilityStatus{
+"actions/checkout:" + shaCheckoutV3 + ":v4": resolver.Reachable,
+},
+}
+got := runChecks(pw, lf, r)
+var rm *Finding
+for i := range got {
+if got[i].Category == CategoryRefMoved {
+rm = &got[i]
+break
+}
+}
+if rm == nil {
+t.Fatalf("expected a ref_moved finding, got %v", findingCategories(got))
+}
+if rm.Confidence != ConfidenceHigh {
+t.Errorf("Confidence: got %q, want %q (AncestryConfirmed is authoritative)", rm.Confidence, ConfidenceHigh)
+}
+}

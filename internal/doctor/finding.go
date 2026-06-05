@@ -32,6 +32,30 @@ const (
 	CategoryRunOnly Category = "run_only"
 )
 
+// Confidence describes how strongly the check stands behind a finding,
+// modeled on zizmor's audit output. It complements Severity (how bad the
+// issue would be if real) by capturing how certain we are that it IS
+// real. The three levels are deliberately coarse — finer gradations
+// invite bikeshedding without helping consumers act.
+type Confidence string
+
+const (
+	// ConfidenceLow signals the finding is informational or rests on a
+	// signal we couldn't fully verify (e.g. resolver/network failure,
+	// reachability inconclusive). Treat as a hint, not a verdict.
+	ConfidenceLow Confidence = "low"
+	// ConfidenceMedium signals the finding rests on a fallback inference
+	// — we couldn't get an authoritative answer (rate limit, partial
+	// API response) and inferred from secondary shape (e.g. tag-object
+	// peel, AncestryUnknown). Likely real but worth double-checking.
+	ConfidenceMedium Confidence = "medium"
+	// ConfidenceHigh signals the finding rests on direct, authoritative
+	// data: a string mismatch the user can verify by eye, an exact SHA
+	// comparison, or an ancestry/reachability answer we got from the
+	// upstream API. Act on these.
+	ConfidenceHigh Confidence = "high"
+)
+
 // Severity indicates how serious a finding is.
 type Severity string
 
@@ -54,6 +78,10 @@ type Finding struct {
 	Category Category
 	// Severity of the finding.
 	Severity Severity
+	// Confidence of the finding — see the Confidence type docs. Always
+	// populated at construction; an empty value is a bug and the
+	// no-empty-confidence test will catch it.
+	Confidence Confidence
 	// ActionRef is the action reference this finding relates to (nil for workflow-level findings).
 	ActionRef *parserlock.ActionRef
 	// Dependency is the existing pinned dep if any.

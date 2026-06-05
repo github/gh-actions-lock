@@ -163,8 +163,10 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			WorkflowPath: pw.Path,
 			Category:     CategoryNotPinned,
 			Severity:     SeverityError,
-			Detail:       fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
-			DocURL:       DocURLFor(CategoryNotPinned),
+			// High: the YAML failed to load — concrete, file-level fact.
+			Confidence:  ConfidenceHigh,
+			Detail:      fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
+			DocURL:      DocURLFor(CategoryNotPinned),
 		})
 		return wr
 	}
@@ -177,6 +179,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			WorkflowPath: pw.Path,
 			Category:     CategoryRunOnly,
 			Severity:     SeverityOK,
+			Confidence:   ConfidenceHigh,
 			Detail:       "no action references found",
 		})
 		return wr
@@ -187,6 +190,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			WorkflowPath: pw.Path,
 			Category:     CategoryNotPinned,
 			Severity:     SeverityError,
+			Confidence:   ConfidenceHigh,
 			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
 			Remediation:  "fix or regenerate the dependencies: section with `gh actions-pin`",
 			DocURL:       DocURLFor(CategoryNotPinned),
@@ -209,10 +213,13 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 		var resolveErr error
 		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(pw.Refs)
 		if resolveErr != nil {
+			// Low: we're surfacing the resolver failure itself, not a
+			// verdict about any specific dependency.
 			wr.Findings = append(wr.Findings, Finding{
 				WorkflowPath: pw.Path,
 				Category:     CategoryValid,
 				Severity:     SeverityWarning,
+				Confidence:   ConfidenceLow,
 				Detail:       fmt.Sprintf("could not re-resolve actions: %s", resolveErr),
 			})
 		}
@@ -265,6 +272,7 @@ func diagnoseOneParsed(pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.
 			WorkflowPath: pw.Path,
 			Category:     CategoryValid,
 			Severity:     SeverityOK,
+			Confidence:   ConfidenceHigh,
 			Detail:       "all dependencies pinned and verified",
 		})
 	}
@@ -461,10 +469,13 @@ func reachabilityComplementFindings(
 			if forgeryKeys[rr.DepKey] {
 				continue
 			}
+			// High: branch_commits returned an authoritative
+			// "unreachable" for this transitive pin.
 			out = append(out, Finding{
 				WorkflowPath: path,
 				Category:     CategoryImposterCommit,
 				Severity:     SeverityError,
+				Confidence:   ConfidenceHigh,
 				Dependency:   &depCopy,
 				ParentNWO:    parent,
 				Detail:       rr.Detail,
@@ -476,10 +487,12 @@ func reachabilityComplementFindings(
 			if direct {
 				remediation = "reachability check inconclusive — retry when network/API is available"
 			}
+			// Low: we couldn't get a reachability answer at all.
 			out = append(out, Finding{
 				WorkflowPath: path,
 				Category:     CategoryValid,
 				Severity:     SeverityWarning,
+				Confidence:   ConfidenceLow,
 				Dependency:   &depCopy,
 				ParentNWO:    parent,
 				Detail:       rr.Detail,
