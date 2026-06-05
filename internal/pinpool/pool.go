@@ -1,7 +1,6 @@
-// Package pinpool runs the parallel pin pass for `gh actions pin doctor`.
-//
-// A pin can involve several network round-trips, so Run spreads workflow jobs
-// across worker goroutines and returns the first error after all jobs finish.
+// Package pinpool is a small generic worker pool with a Reporter hook for
+// per-slot UI status. Run dispatches jobs across goroutines and returns the
+// first non-nil error after all workers finish.
 package pinpool
 
 import (
