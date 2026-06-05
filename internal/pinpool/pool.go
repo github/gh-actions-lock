@@ -5,13 +5,27 @@ package pinpool
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // DefaultWorkers is a reasonable number of concurrent pins to run when
 // run is called with workers <= 0.
 const DefaultWorkers = 8
+
+// DefaultStallThreshold is how long a slot may sit on the same status before
+// the watcher tags it with a "(still working…)" hint. Tunable via the
+// GH_ACTIONS_PIN_STALL_HINT_MS env var; set to 0 to disable the watcher.
+const DefaultStallThreshold = 5 * time.Second
+
+// stallHintText is the dim suffix the watcher appends to a stalled slot. Kept
+// generic — without per-slot resolver instrumentation, we can't say which
+// network call is hanging, but the suffix still defeats the "frozen spinner"
+// perception when a single pin takes 30+ seconds.
+const stallHintText = "(still working…)"
 
 // Reporter is the small surface the pool calls back into so the caller
 // can show progress. `*internal/ui.UI` satisfies it.
@@ -19,8 +33,29 @@ type Reporter interface {
 	// SetWorkerStatus paints (or clears, with "") the status row for a
 	// given worker slot. Slots are stable for the lifetime of a Run call.
 	SetWorkerStatus(slot int, status string)
+	// SetWorkerHint sets (or clears, with "") a dim suffix appended after
+	// the slot's status text. Used by the stall watcher to flag workers
+	// that have been on the same status longer than the stall threshold
+	// without disturbing the main status text. A subsequent
+	// SetWorkerStatus call is expected to clear any active hint as a side
+	// effect so a stale hint can't bleed into the next job.
+	SetWorkerHint(slot int, hint string)
 	// UpdateLabel replaces the spinner's top label.
 	UpdateLabel(label string)
+}
+
+// resolveStallThreshold reads GH_ACTIONS_PIN_STALL_HINT_MS. "0" disables; any
+// other unparseable value falls back to the default. Parsed once per Run.
+func resolveStallThreshold() time.Duration {
+	v := os.Getenv("GH_ACTIONS_PIN_STALL_HINT_MS")
+	if v == "" {
+		return DefaultStallThreshold
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return DefaultStallThreshold
+	}
+	return time.Duration(n) * time.Millisecond
 }
 
 // Run dispatches jobs across up to `workers` goroutines.
@@ -64,9 +99,35 @@ func Run[T any](
 	// without a lock of its own, so the pool defends its own callers
 	// rather than racing the terminal.
 	var rMu sync.Mutex
+
+	// stallMu guards the per-slot activity tracking the stall watcher
+	// reads. Kept separate from rMu so the watcher can read state
+	// without serializing against in-flight reporter calls — the watcher
+	// only acquires rMu when it actually fires a SetWorkerHint.
+	var stallMu sync.Mutex
+	lastUpdate := make([]time.Time, workers)
+	active := make([]bool, workers)
+	hinted := make([]bool, workers)
+	now := time.Now()
+	for i := range lastUpdate {
+		lastUpdate[i] = now
+	}
+
 	setStatus := func(slot int, s string) {
+		stallMu.Lock()
+		lastUpdate[slot] = time.Now()
+		active[slot] = s != ""
+		wasHinted := hinted[slot]
+		hinted[slot] = false
+		stallMu.Unlock()
+
 		rMu.Lock()
 		r.SetWorkerStatus(slot, s)
+		if wasHinted {
+			// SetWorkerStatus implicitly clears the hint, but be explicit
+			// for Reporter implementations that don't tie the two together.
+			r.SetWorkerHint(slot, "")
+		}
 		rMu.Unlock()
 	}
 	updateLabel := func() {
@@ -75,6 +136,23 @@ func Run[T any](
 		rMu.Unlock()
 	}
 	updateLabel()
+
+	threshold := resolveStallThreshold()
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	if threshold > 0 {
+		// Tick at threshold/4 (clamped) so a stalled slot is flagged
+		// within ~1.25× the threshold worst case. The watcher checks
+		// `stop` before every reporter call and exits cleanly when Run
+		// closes the channel.
+		tick := threshold / 4
+		if tick < 25*time.Millisecond {
+			tick = 25 * time.Millisecond
+		}
+		go stallWatcher(stop, stopped, tick, threshold, workers, &stallMu, lastUpdate, active, hinted, &rMu, r)
+	} else {
+		close(stopped)
+	}
 
 	ch := make(chan T, len(jobs))
 	for _, j := range jobs {
@@ -114,6 +192,79 @@ func Run[T any](
 		}(slot)
 	}
 	wg.Wait()
+	// Stop the watcher before returning so it can't race a caller that
+	// resets the UI immediately after Run.
+	close(stop)
+	<-stopped
 
 	return firstErr
+}
+
+// stallWatcher periodically scans per-slot activity and tags any slot that
+// has been on the same status for at least `threshold` with the stall hint.
+// It clears its own previously-set hint as soon as the slot updates again or
+// goes idle — setStatus also clears the hint via the Reporter, so the
+// watcher's view stays in sync without coordination.
+func stallWatcher(
+	stop <-chan struct{},
+	stopped chan<- struct{},
+	tick, threshold time.Duration,
+	slots int,
+	stallMu *sync.Mutex,
+	lastUpdate []time.Time,
+	active, hinted []bool,
+	rMu *sync.Mutex,
+	r Reporter,
+) {
+	defer close(stopped)
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		// Re-check stop after tick wakeup so we don't fire a hint after
+		// Run has logically completed.
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		now := time.Now()
+		// Snapshot slot transitions that need a reporter call so we
+		// don't hold stallMu across rMu acquisition.
+		type op struct {
+			slot int
+			set  bool
+		}
+		var ops []op
+		stallMu.Lock()
+		for s := 0; s < slots; s++ {
+			if active[s] && !hinted[s] && now.Sub(lastUpdate[s]) >= threshold {
+				hinted[s] = true
+				ops = append(ops, op{slot: s, set: true})
+			}
+		}
+		stallMu.Unlock()
+		if len(ops) == 0 {
+			continue
+		}
+		// Check stop one more time before mutating UI state.
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		rMu.Lock()
+		for _, o := range ops {
+			if o.set {
+				r.SetWorkerHint(o.slot, stallHintText)
+			} else {
+				r.SetWorkerHint(o.slot, "")
+			}
+		}
+		rMu.Unlock()
+	}
 }
