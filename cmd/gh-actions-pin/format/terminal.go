@@ -9,11 +9,19 @@ import (
 )
 
 // PresentResults renders human-readable output from a doctor report.
+//
+// Warning surfaces (RepoFindings, ParseWarnings, not-pinned, sha-as-ref,
+// ref-moved, inconclusive) use the Term* family so they reach the
+// terminal even when check.go has routed the narration log to
+// io.Discard. The error block and the "All N valid" success line still
+// use narration helpers — both are re-rendered by check.go's
+// post-remediation Term* summary, so we'd duplicate output if we
+// surfaced them here too.
 func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate bool) {
 	for _, f := range report.RepoFindings {
-		out.Warning("%s", f.Detail)
+		out.TermWarn("%s", f.Detail)
 		if f.DocURL != "" {
-			out.Detail("  see: %s", out.DocLink(f.DocURL))
+			out.TermDetail("see: %s", out.TermLink(f.DocURL, f.DocURL))
 		}
 	}
 
@@ -157,7 +165,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			}
 		}
 		for _, pw := range wr.ParseWarnings {
-			out.Warning("%s: %s", wr.Path, pw)
+			out.TermWarn("%s: %s", wr.Path, pw)
 		}
 	}
 
@@ -175,11 +183,11 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 	}
 	if len(unpinnedWorkflows) > 0 {
 		if willRemediate {
-			out.Warning("%d %s not yet pinned — resolving below",
+			out.TermWarn("%d %s not yet pinned — resolving below",
 				len(unpinnedWorkflows),
 				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
 		} else {
-			out.Warning("%d %s not yet pinned (run `gh actions-pin` to fix)",
+			out.TermWarn("%d %s not yet pinned (run `gh actions-pin` to fix)",
 				len(unpinnedWorkflows),
 				ui.Pluralize(len(unpinnedWorkflows), "workflow", "workflows"))
 		}
@@ -213,27 +221,27 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		}
 	}
 	if len(bareSHADeps) > 0 {
-		out.Warning("%d %s pinned to a bare SHA without a tag ref",
+		out.TermWarn("%d %s pinned to a bare SHA without a tag ref",
 			len(bareSHADeps),
 			ui.Pluralize(len(bareSHADeps), "action is", "actions are"))
 		if willRemediate {
-			out.Detail("  ↳ resolving below")
+			out.TermDetail("↳ resolving below")
 		} else {
-			out.Detail("  ↳ run `gh actions-pin upgrade` to pin to tagged releases")
+			out.TermDetail("↳ run `gh actions-pin upgrade` to pin to tagged releases")
 		}
 	}
 	if len(refMovedWarnings) > 0 {
-		out.Warning("%d %s moved upstream — run `gh actions-pin upgrade` to update",
+		out.TermWarn("%d %s moved upstream — run `gh actions-pin upgrade` to update",
 			len(refMovedWarnings),
 			ui.Pluralize(len(refMovedWarnings), "ref has", "refs have"))
 		for _, key := range refMovedWarnings {
 			wg := warnMap[key]
 			f := wg.finding
-			out.Detail("  ↳ %s: %s", key, f.Detail)
+			out.TermDetail("↳ %s: %s", key, f.Detail)
 			if f.Dependency != nil && f.ObservedSHA != "" {
 				owner, repo := f.Dependency.OwnerRepo()
 				if owner != "" {
-					out.Detail("    %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA[:12], f.ObservedSHA[:12])))
+					out.TermDetail("  %s", out.TermDim(fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, f.Dependency.SHA[:12], f.ObservedSHA[:12])))
 				}
 			}
 		}
@@ -247,7 +255,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			if label == "" {
 				label = f.WorkflowPath
 			}
-			out.Warning("%s: %s", label, f.Detail)
+			out.TermWarn("%s: %s", label, f.Detail)
 		}
 	}
 }
