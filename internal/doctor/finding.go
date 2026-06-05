@@ -17,8 +17,8 @@ const (
 	CategoryStale Category = "stale"
 	// CategoryRefChanged means the uses: ref was manually changed (e.g. v6.2.0 → v6).
 	CategoryRefChanged Category = "ref_changed"
-	// CategoryImposterCommit means the pinned SHA is not in the ref's git history (possible fork-network commit).
-	CategoryImposterCommit Category = "imposter_commit"
+	// CategoryImpostorCommit means the pinned SHA is not in the ref's git history (possible fork-network commit).
+	CategoryImpostorCommit Category = "impostor_commit"
 	// CategoryMisleadingSHA means a ref looks like a SHA but resolves to a different commit.
 	CategoryMisleadingSHA Category = "misleading_sha"
 	// CategoryLockfileForgery means the pinned SHA is not an ancestor of the
@@ -74,7 +74,7 @@ type Finding struct {
 	DocURL string
 	// SaneSuggestionTag is the most recent stable tag whose commit is
 	// reachable from a branch, populated for unreachable-SHA findings
-	// (CategoryImposterCommit) when one can be found. Empty otherwise.
+	// (CategoryImpostorCommit) when one can be found. Empty otherwise.
 	SaneSuggestionTag string
 	// SaneSuggestionSHA is the commit SHA the suggested tag points to.
 	SaneSuggestionSHA string

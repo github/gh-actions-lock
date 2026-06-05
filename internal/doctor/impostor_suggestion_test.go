@@ -82,10 +82,10 @@ func TestFindSaneRelease_NoneReachable(t *testing.T) {
 	}
 }
 
-// TestEnrichImposterFindings_MarksSearched flags imposter findings with the
+// TestEnrichImpostorFindings_MarksSearched flags impostor findings with the
 // search outcome even when no suggestion is found so renderers can surface
 // the "escalate to publisher" hint.
-func TestEnrichImposterFindings_MarksSearched(t *testing.T) {
+func TestEnrichImpostorFindings_MarksSearched(t *testing.T) {
 	reg := &httpmock.Registry{}
 	registerTagWalk(reg, "acme", "widget", []map[string]any{
 		{"name": "v1.0.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
@@ -98,13 +98,13 @@ func TestEnrichImposterFindings_MarksSearched(t *testing.T) {
 		Workflows: []WorkflowReport{{
 			Path: ".github/workflows/test.yml",
 			Findings: []Finding{{
-				Category:   CategoryImposterCommit,
+				Category:   CategoryImpostorCommit,
 				Dependency: &lockfile.Dependency{NWO: "acme/widget", Ref: "v1"},
 			}},
 		}},
 	}
 
-	EnrichImposterFindings(report, tl, rc)
+	EnrichImpostorFindings(report, tl, rc)
 
 	f := report.Workflows[0].Findings[0]
 	if !f.SaneSuggestionSearched {
@@ -115,10 +115,10 @@ func TestEnrichImposterFindings_MarksSearched(t *testing.T) {
 	}
 }
 
-// TestEnrichImposterFindings_PopulatesSuggestion attaches the discovered tag
+// TestEnrichImpostorFindings_PopulatesSuggestion attaches the discovered tag
 // to the finding so downstream renderers (presentCheckResults, summary) can
 // surface a concrete re-pin target.
-func TestEnrichImposterFindings_PopulatesSuggestion(t *testing.T) {
+func TestEnrichImpostorFindings_PopulatesSuggestion(t *testing.T) {
 	reg := &httpmock.Registry{}
 	registerTagWalk(reg, "acme", "widget", []map[string]any{
 		{"name": "v1.0.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
@@ -133,13 +133,13 @@ func TestEnrichImposterFindings_PopulatesSuggestion(t *testing.T) {
 		Workflows: []WorkflowReport{{
 			Path: ".github/workflows/test.yml",
 			Findings: []Finding{{
-				Category:   CategoryImposterCommit,
+				Category:   CategoryImpostorCommit,
 				Dependency: &lockfile.Dependency{NWO: "acme/widget", Ref: "v1"},
 			}},
 		}},
 	}
 
-	EnrichImposterFindings(report, tl, rc)
+	EnrichImpostorFindings(report, tl, rc)
 
 	f := report.Workflows[0].Findings[0]
 	if f.SaneSuggestionTag != "v1.0.0" {

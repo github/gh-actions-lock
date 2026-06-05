@@ -20,7 +20,7 @@ const maxSaneReleaseTagsChecked = 10
 
 // FindSaneRelease walks the action repo's tags newest-first and returns the
 // first stable release whose commit is reachable from a branch. It's the
-// remediation half of the CategoryImposterCommit detection: when we flag a
+// remediation half of the CategoryImpostorCommit detection: when we flag a
 // pinned SHA as orphaned, this answers "what should the user re-pin to?"
 //
 // Returns ("", "") when no qualifying tag is found within the bounded walk
@@ -58,8 +58,8 @@ func FindSaneRelease(tl *TagLister, r reachabilityChecker, owner, repo string) (
 	return "", ""
 }
 
-// EnrichImposterFindings walks the report and attaches a sane-release
-// suggestion to every CategoryImposterCommit finding when one is available.
+// EnrichImpostorFindings walks the report and attaches a sane-release
+// suggestion to every CategoryImpostorCommit finding when one is available.
 // Mutates findings in place. Safe to call when tl or r is nil — becomes a
 // no-op so non-network code paths (tests, --offline) don't trigger lookups.
 //
@@ -68,11 +68,11 @@ func FindSaneRelease(tl *TagLister, r reachabilityChecker, owner, repo string) (
 // — the latter is itself useful signal (e.g. an action whose entire release
 // flow detaches tag commits from any branch, warranting harder escalation
 // to the publisher).
-func EnrichImposterFindings(report *Report, tl *TagLister, r reachabilityChecker) {
+func EnrichImpostorFindings(report *Report, tl *TagLister, r reachabilityChecker) {
 	if report == nil || tl == nil || r == nil {
 		return
 	}
-	// Cache per owner/repo so multiple imposter findings against the same
+	// Cache per owner/repo so multiple impostor findings against the same
 	// action share a single tag walk + reachability sweep.
 	type suggestion struct{ tag, sha string }
 	cache := make(map[cachekey.Repo]suggestion)
@@ -80,7 +80,7 @@ func EnrichImposterFindings(report *Report, tl *TagLister, r reachabilityChecker
 		wf := &report.Workflows[i]
 		for j := range wf.Findings {
 			f := &wf.Findings[j]
-			if f.Category != CategoryImposterCommit || f.Dependency == nil {
+			if f.Category != CategoryImpostorCommit || f.Dependency == nil {
 				continue
 			}
 			owner, repo := f.Dependency.OwnerRepo()

@@ -54,7 +54,7 @@ type ParsedWorkflow struct {
 	DepsErr       error
 	// TrustLockfile, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
-	// (REF_MOVED, IMPOSTER_COMMIT) are skipped and the engine relies on
+	// (REF_MOVED, IMPOSTOR_COMMIT) are skipped and the engine relies on
 	// purely structural validation against the on-disk lockfile. Caller
 	// is asserting "this is already pinned and I trust the prior
 	// verification" — typically set on the fast path when every direct
@@ -411,7 +411,7 @@ func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bo
 }
 
 // reachabilityComplementFindings covers the cases the engine doesn't:
-//   - Imposter for transitive (composite-expanded) deps the engine never
+//   - Impostor for transitive (composite-expanded) deps the engine never
 //     visits because they aren't in workflow uses.
 //   - Reachability-Unknown warnings for all deps (engine fails open on
 //     Unknown). Direct + transitive both get a warning so the user knows
@@ -456,20 +456,20 @@ func reachabilityComplementFindings(
 		switch rr.Status {
 		case resolver.Unreachable:
 			if direct {
-				continue // engine emits imposter for direct uses
+				continue // engine emits impostor for direct uses
 			}
 			if forgeryKeys[rr.DepKey] {
 				continue
 			}
 			out = append(out, Finding{
 				WorkflowPath: path,
-				Category:     CategoryImposterCommit,
+				Category:     CategoryImpostorCommit,
 				Severity:     SeverityError,
 				Dependency:   &depCopy,
 				ParentNWO:    parent,
 				Detail:       rr.Detail,
 				Remediation:  "investigate immediately — the lockfile entry may have been injected",
-				DocURL:       DocURLFor(CategoryImposterCommit),
+				DocURL:       DocURLFor(CategoryImpostorCommit),
 			})
 		case resolver.ReachabilityUnknown:
 			remediation := "transitive dependency pinned to a bare SHA — reachability cannot be verified"

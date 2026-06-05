@@ -10,7 +10,7 @@ import (
 // runChecks evaluates all enabled validators against the given parsed
 // workflow and returns findings in catalog order. The lockfile snapshot
 // scopes the structural checks; the resolver enables the resolver-bound
-// checks (misleading_sha, ref_moved, forgery, imposter). When r is nil,
+// checks (misleading_sha, ref_moved, forgery, impostor). When r is nil,
 // resolver-bound checks are skipped silently.
 //
 // Returned findings have their primitive fields populated, plus
@@ -31,7 +31,7 @@ func runChecks(pw ParsedWorkflow, lf parserlock.File, r checkResolver) []Finding
 		out = append(out, checkMisleadingSha(pw, r)...)
 		refMoved := checkRefMovedAndForgery(pw, depIndex, r)
 		out = append(out, refMoved...)
-		out = append(out, checkImposterCommit(pw, depIndex, r, collectForgeryKeys(refMoved))...)
+		out = append(out, checkImpostorCommit(pw, depIndex, r, collectForgeryKeys(refMoved))...)
 	}
 	return out
 }
@@ -54,7 +54,7 @@ func parseWorkflowDeps(rawDeps []string) ([]parserlock.Pin, map[string]parserloc
 }
 
 // collectForgeryKeys returns the set of IndexKeys flagged as forgery so
-// the imposter check can skip them.
+// the impostor check can skip them.
 func collectForgeryKeys(findings []Finding) map[string]bool {
 	if len(findings) == 0 {
 		return nil

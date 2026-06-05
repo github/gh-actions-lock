@@ -17,14 +17,14 @@ name: "2: Pinned before attack — tag moved backward (same-repo rollback)"
 #          ✓ REACHABLE — 38b3412 is on branch(es) in the upstream repo
 #                        (it's a real commit, just older)
 #
-# Why no IMPOSTER_COMMIT? The branch_commits endpoint checks whether the
+# Why no IMPOSTOR_COMMIT? The branch_commits endpoint checks whether the
 # tag's CURRENT target is on any branch of the repo. Since 38b3412 is a
 # legitimate commit in nodeselector/actions-test-fixtures, it passes.
 # The old compare-API approach detected backward moves by checking if
 # the pinned SHA was an ancestor of the live SHA — but that conflated
 # "tag moved backward" with "fork injection". With branch_commits, we
 # separate the concerns:
-#   • Fork injection (foreign code) → IMPOSTER_COMMIT (error)
+#   • Fork injection (foreign code) → IMPOSTOR_COMMIT (error)
 #   • Tag movement (same-repo code) → REF_MOVED (warning)
 #
 # A backward move to same-repo code is suspicious but not code injection.

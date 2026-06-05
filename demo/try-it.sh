@@ -124,7 +124,7 @@ scenarios=(
   "ref-changed"
   "stale"
   "ref-moved"
-  "imposter-commit"
+  "impostor-commit"
   "lockfile-forgery"
   "json-output"
 )
@@ -149,7 +149,7 @@ usage() {
   echo "    ref-changed        Workflow ref edited; lockfile pins different ref"
   echo "    stale              Lockfile entry orphaned (no uses: references it)"
   echo "    ref-moved          Tag moved forward (routine release)"
-  echo "    imposter-commit    Tag hijacked to fork-network commit (fork injection)"
+  echo "    impostor-commit    Tag hijacked to fork-network commit (fork injection)"
   echo "    lockfile-forgery   Lockfile entry replaced with fork commit SHA"
   echo "    json-output        JSON output for CI integration"
   echo ""
@@ -348,8 +348,8 @@ scenario_ref_moved() {
   ( cd "$scratch" && run gh actions-pin check "$wf" )
 }
 
-scenario_imposter_commit() {
-  banner "Imposter commit — fork injection"
+scenario_impostor_commit() {
+  banner "Impostor commit — fork injection"
   bash "$RESET"
   local scratch wf
   scratch="$(stage_workflow demo/workflows-pwned/1-pinned-before-hijack.yml)"
@@ -461,7 +461,7 @@ run_all() {
   scenario_ref_changed
   scenario_stale
   scenario_ref_moved
-  scenario_imposter_commit
+  scenario_impostor_commit
   scenario_lockfile_forgery
   scenario_json_output
   banner "All non-interactive scenarios complete"
@@ -481,9 +481,9 @@ case "${1}" in
   ref-changed)        scenario_ref_changed ;;
   stale)              scenario_stale ;;
   ref-moved)          scenario_ref_moved ;;
-  imposter-commit|imposter) scenario_imposter_commit ;;
+  impostor-commit|impostor) scenario_impostor_commit ;;
   lockfile-forgery|forgery) scenario_lockfile_forgery ;;
-  tamper-detection|tamper) scenario_ref_moved; scenario_imposter_commit; scenario_lockfile_forgery ;;
+  tamper-detection|tamper) scenario_ref_moved; scenario_impostor_commit; scenario_lockfile_forgery ;;
   json-output|json)   scenario_json_output ;;
   all)                run_all ;;
   *)                  echo "Unknown scenario: $1"; echo; usage ;;
