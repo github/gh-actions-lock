@@ -137,6 +137,9 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified diff `fields` (updated). findings[] and workflows[] are always emitted alongside.")
 	cmd.Flags().Lookup("json").NoOptDefVal = "updated"
 	cmd.Flags().BoolVar(&opts.NoOnboard, "no-onboard", false, "Refuse to add new workflow entries to the lockfile. Workflows not already tracked in lockfile.workflows{} are skipped with an onboarding-required finding. Required for dependency-update tools (e.g. Dependabot) that must not silently expand the tracked workflow set.")
+	// Accepted for symmetry with `check`; upgrade is non-interactive already, so this is a no-op.
+	var noInteractive bool
+	cmd.Flags().BoolVar(&noInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 
 	return cmd
 }

@@ -95,6 +95,15 @@ func TestParseUpgradeTargetsRejectsMixedVersionSources(t *testing.T) {
 	}
 }
 
+// Dependabot passes --no-interactive to both `check` and `upgrade`; if upgrade
+// rejects it the relock breaks at the flag parser.
+func TestUpgradeAcceptsNoInteractiveFlag(t *testing.T) {
+	cmd := newUpgradeCmd(&pinFactory{})
+	if cmd.Flags().Lookup("no-interactive") == nil {
+		t.Fatal("upgrade command must accept --no-interactive for symmetry with check")
+	}
+}
+
 func TestMatchingUpgradeTargetHonorsCurrentRefSelector(t *testing.T) {
 	targets, err := parseUpgradeTargets([]string{"actions/checkout"}, "v5", "v6")
 	if err != nil {
