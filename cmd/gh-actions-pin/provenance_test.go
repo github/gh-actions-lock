@@ -8,14 +8,14 @@ import (
 	"github.com/github/gh-actions-pin/internal/runlog"
 )
 
-// TestBuildProvenanceReport_RecordsLiveSHA verifies that a finding carrying a
-// resolver LiveSHA distinct from the pinned SHA surfaces on the run record.
+// TestBuildProvenanceReport_RecordsObservedSHA verifies that a finding carrying a
+// resolver ObservedSHA distinct from the pinned SHA surfaces on the run record.
 // This makes MISLEADING_SHA / REF_MOVED claims falsifiable: a reader can
 // compare what's pinned vs. what upstream resolves to right now without
 // re-running the resolver.
-func TestBuildProvenanceReport_RecordsLiveSHA(t *testing.T) {
+func TestBuildProvenanceReport_RecordsObservedSHA(t *testing.T) {
 	const pinnedSHA = "d746ffe35508b1917358783b479e04febd2b8f71"
-	const liveSHA = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
+	const observedSHA = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
 
 	dep := &lockfile.Dependency{
 		NWO: "actions/github-script",
@@ -27,7 +27,7 @@ func TestBuildProvenanceReport_RecordsLiveSHA(t *testing.T) {
 		Category:     doctor.Category("misleading_sha"),
 		Severity:     doctor.SeverityWarning,
 		Dependency:   dep,
-		LiveSHA:      liveSHA,
+		ObservedSHA:  observedSHA,
 	}
 	report := &doctor.Report{
 		Workflows: []doctor.WorkflowReport{{
@@ -50,14 +50,14 @@ func TestBuildProvenanceReport_RecordsLiveSHA(t *testing.T) {
 	if a.SHA != pinnedSHA {
 		t.Errorf("SHA: got %q, want %q (pinned ref)", a.SHA, pinnedSHA)
 	}
-	if a.LiveSHA != liveSHA {
-		t.Errorf("LiveSHA: got %q, want %q (resolver output)", a.LiveSHA, liveSHA)
+	if a.ObservedSHA != observedSHA {
+		t.Errorf("ObservedSHA: got %q, want %q (resolver output)", a.ObservedSHA, observedSHA)
 	}
 }
 
-// TestBuildProvenanceReport_OmitsLiveSHAWhenEqual verifies the run record does
-// not duplicate the SHA into LiveSHA when the resolver and the pin agree.
-func TestBuildProvenanceReport_OmitsLiveSHAWhenEqual(t *testing.T) {
+// TestBuildProvenanceReport_OmitsObservedSHAWhenEqual verifies the run record does
+// not duplicate the SHA into ObservedSHA when the resolver and the pin agree.
+func TestBuildProvenanceReport_OmitsObservedSHAWhenEqual(t *testing.T) {
 	const sha = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
 	dep := &lockfile.Dependency{NWO: "actions/github-script", Ref: "v9.0.0", SHA: sha}
 	finding := doctor.Finding{
@@ -65,7 +65,7 @@ func TestBuildProvenanceReport_OmitsLiveSHAWhenEqual(t *testing.T) {
 		Category:     doctor.Category("stale"),
 		Severity:     doctor.SeverityInfo,
 		Dependency:   dep,
-		LiveSHA:      sha, // matches pinned SHA — nothing to flag
+		ObservedSHA:  sha, // matches pinned SHA — nothing to flag
 	}
 	report := &doctor.Report{
 		Workflows: []doctor.WorkflowReport{{
@@ -84,15 +84,15 @@ func TestBuildProvenanceReport_OmitsLiveSHAWhenEqual(t *testing.T) {
 	if len(rep.Actions) != 1 {
 		t.Fatalf("expected 1 action, got %d", len(rep.Actions))
 	}
-	if got := rep.Actions[0].LiveSHA; got != "" {
-		t.Errorf("LiveSHA: got %q, want empty (matches pinned SHA)", got)
+	if got := rep.Actions[0].ObservedSHA; got != "" {
+		t.Errorf("ObservedSHA: got %q, want empty (matches pinned SHA)", got)
 	}
 }
 
 var _ = runlog.Action{} // keep runlog imported for future field references
 
-// TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories pins down the
-// invariant that motivates LiveSHA: for every finding category where the
+// TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories pins down the
+// invariant that motivates ObservedSHA: for every finding category where the
 // resolver's live SHA is the falsifiability evidence — MISLEADING_SHA,
 // REF_MOVED, LOCKFILE_FORGERY — buildProvenanceReport must surface it on the
 // run record. Without this, claims like "the lockfile is forged" are
@@ -100,9 +100,9 @@ var _ = runlog.Action{} // keep runlog imported for future field references
 // resolver to compare. omitempty stays correct because most actions in a run
 // don't diverge (already-pinned, valid); the contract is "populated whenever
 // the divergence categories fire", enforced here.
-func TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories(t *testing.T) {
+func TestBuildProvenanceReport_RecordsObservedSHA_AllDivergenceCategories(t *testing.T) {
 	const pinnedSHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
-	const liveSHA = "8e8c483db84b4bee98b60c0593521ed34d9990e8"
+	const observedSHA = "8e8c483db84b4bee98b60c0593521ed34d9990e8"
 	// MISLEADING_SHA's pinned SHA is the SHA-shaped ref itself.
 	const misleadingPinned = "d746ffe35508b1917358783b479e04febd2b8f71"
 	const misleadingLive = "3a2844b7e9c422d3c10d287c895573f7108da1b3"
@@ -111,29 +111,29 @@ func TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories(t *testing
 		name        string
 		category    doctor.Category
 		pinnedSHA   string
-		liveSHA     string
+		observedSHA string
 		ref         string
 	}{
 		{
-			name:      "ref_moved",
-			category:  doctor.CategoryRefMoved,
-			pinnedSHA: pinnedSHA,
-			liveSHA:   liveSHA,
-			ref:       "v4",
+			name:        "ref_moved",
+			category:    doctor.CategoryRefMoved,
+			pinnedSHA:   pinnedSHA,
+			observedSHA: observedSHA,
+			ref:         "v4",
 		},
 		{
-			name:      "lockfile_forgery",
-			category:  doctor.CategoryLockfileForgery,
-			pinnedSHA: pinnedSHA,
-			liveSHA:   liveSHA,
-			ref:       "v4",
+			name:        "lockfile_forgery",
+			category:    doctor.CategoryLockfileForgery,
+			pinnedSHA:   pinnedSHA,
+			observedSHA: observedSHA,
+			ref:         "v4",
 		},
 		{
-			name:      "misleading_sha",
-			category:  doctor.CategoryMisleadingSHA,
-			pinnedSHA: misleadingPinned,
-			liveSHA:   misleadingLive,
-			ref:       misleadingPinned, // ref looks like a SHA
+			name:        "misleading_sha",
+			category:    doctor.CategoryMisleadingSHA,
+			pinnedSHA:   misleadingPinned,
+			observedSHA: misleadingLive,
+			ref:         misleadingPinned, // ref looks like a SHA
 		},
 	}
 
@@ -149,7 +149,7 @@ func TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories(t *testing
 				Category:     tc.category,
 				Severity:     doctor.SeverityError,
 				Dependency:   dep,
-				LiveSHA:      tc.liveSHA,
+				ObservedSHA:  tc.observedSHA,
 			}
 			report := &doctor.Report{
 				Workflows: []doctor.WorkflowReport{{
@@ -172,11 +172,11 @@ func TestBuildProvenanceReport_RecordsLiveSHA_AllDivergenceCategories(t *testing
 			if a.SHA != tc.pinnedSHA {
 				t.Errorf("SHA: got %q, want %q (pinned)", a.SHA, tc.pinnedSHA)
 			}
-			if a.LiveSHA == "" {
-				t.Fatalf("LiveSHA empty for %s — claim is unfalsifiable from the run record", tc.category)
+			if a.ObservedSHA == "" {
+				t.Fatalf("ObservedSHA empty for %s — claim is unfalsifiable from the run record", tc.category)
 			}
-			if a.LiveSHA != tc.liveSHA {
-				t.Errorf("LiveSHA: got %q, want %q (resolver output)", a.LiveSHA, tc.liveSHA)
+			if a.ObservedSHA != tc.observedSHA {
+				t.Errorf("ObservedSHA: got %q, want %q (resolver output)", a.ObservedSHA, tc.observedSHA)
 			}
 			if a.Issue != string(tc.category) {
 				t.Errorf("Issue: got %q, want %q", a.Issue, tc.category)
