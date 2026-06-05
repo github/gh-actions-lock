@@ -20,26 +20,34 @@ func (f *fakeReachabilityChecker) CheckReachability(owner, repo, sha, ref string
 	return resolver.ReachabilityResult{Owner: owner, Repo: repo, SHA: sha, Ref: ref, Status: status}
 }
 
+// registerTagWalk wires the three endpoints TagLister hits during a
+// publisher walk: GET /tags, GET /git/matching-refs/tags, GET /releases.
+// Tests parameterize only the /tags payload; matching-refs and releases
+// are registered empty so the walk completes deterministically.
+func registerTagWalk(reg *httpmock.Registry, owner, repo string, tags []map[string]any) {
+	reg.Register(
+		httpmock.REST("GET", `repos/`+owner+`/`+repo+`/tags`),
+		httpmock.JSONResponse(tags),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/`+owner+`/`+repo+`/git/matching-refs/tags`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/`+owner+`/`+repo+`/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+}
+
 // TestFindSaneRelease_PicksFirstReachable walks tags newest-first and stops at
 // the first stable tag whose commit is reachable from a branch.
 func TestFindSaneRelease_PicksFirstReachable(t *testing.T) {
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/tags`),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": "v1.5.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
-			{"name": "v1.4.0", "commit": map[string]any{"sha": "bbbbbbb2222222222222222222222222222222bb"}},
-			{"name": "v1.3.0", "commit": map[string]any{"sha": "ccccccc3333333333333333333333333333333cc"}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/git/matching-refs/tags`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/releases`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
+	registerTagWalk(reg, "acme", "widget", []map[string]any{
+		{"name": "v1.5.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
+		{"name": "v1.4.0", "commit": map[string]any{"sha": "bbbbbbb2222222222222222222222222222222bb"}},
+		{"name": "v1.3.0", "commit": map[string]any{"sha": "ccccccc3333333333333333333333333333333cc"}},
+	})
 
 	tl := newTagListerWithRegistry(t, reg)
 	rc := &fakeReachabilityChecker{results: map[string]resolver.ReachabilityStatus{
@@ -60,21 +68,10 @@ func TestFindSaneRelease_PicksFirstReachable(t *testing.T) {
 // detached from a branch — signal for the caller to escalate to the publisher.
 func TestFindSaneRelease_NoneReachable(t *testing.T) {
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/tags`),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": "v1.2.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
-			{"name": "v1.1.0", "commit": map[string]any{"sha": "bbbbbbb2222222222222222222222222222222bb"}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/git/matching-refs/tags`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/releases`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
+	registerTagWalk(reg, "acme", "widget", []map[string]any{
+		{"name": "v1.2.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
+		{"name": "v1.1.0", "commit": map[string]any{"sha": "bbbbbbb2222222222222222222222222222222bb"}},
+	})
 
 	tl := newTagListerWithRegistry(t, reg)
 	rc := &fakeReachabilityChecker{} // all Unreachable
@@ -90,20 +87,9 @@ func TestFindSaneRelease_NoneReachable(t *testing.T) {
 // the "escalate to publisher" hint.
 func TestEnrichImposterFindings_MarksSearched(t *testing.T) {
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/tags`),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": "v1.0.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/git/matching-refs/tags`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/releases`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
+	registerTagWalk(reg, "acme", "widget", []map[string]any{
+		{"name": "v1.0.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
+	})
 
 	tl := newTagListerWithRegistry(t, reg)
 	rc := &fakeReachabilityChecker{} // none reachable
@@ -134,20 +120,9 @@ func TestEnrichImposterFindings_MarksSearched(t *testing.T) {
 // surface a concrete re-pin target.
 func TestEnrichImposterFindings_PopulatesSuggestion(t *testing.T) {
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/tags`),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": "v1.0.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/git/matching-refs/tags`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/acme/widget/releases`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
+	registerTagWalk(reg, "acme", "widget", []map[string]any{
+		{"name": "v1.0.0", "commit": map[string]any{"sha": "aaaaaaa1111111111111111111111111111111aa"}},
+	})
 
 	tl := newTagListerWithRegistry(t, reg)
 	rc := &fakeReachabilityChecker{results: map[string]resolver.ReachabilityStatus{
