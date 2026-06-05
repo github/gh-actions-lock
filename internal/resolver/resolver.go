@@ -69,37 +69,48 @@ type Resolver struct {
 	restClient        *api.RESTClient
 	hostname          string
 	MaxRecursionDepth int
-	// cache memoizes ResolveAllRecursive entries by path-aware action ref
-	// so repeated traversals of the same composite graph never re-query.
-	cache              map[cachekey.ActionRef]resolvedEntry
-	latestRefCache     map[cachekey.Repo]string
-	reachCache         map[cachekey.Reach]reachCacheEntry
-	branchListCache    map[cachekey.Repo][]branchHead
-	tagListCache       map[cachekey.Repo][]tagEntry
-	repoIDsCache       map[cachekey.Repo][2]int64
-	defaultBranchCache map[cachekey.Repo]string // "" caches a failed lookup
+	// Each cache below is a self-contained syncMap: one mutex paired with
+	// one map. Concurrent access happens during the parallel resolve and
+	// reachability fan-outs (CheckReachabilityAll, resolveWithActionYMLParallel),
+	// but the locks are only held around in-memory map ops, never across
+	// HTTP I/O — they don't serialize the network calls the fan-out is
+	// meant to overlap. There is no cross-cache atomicity requirement: every
+	// callsite touches exactly one cache, so no shared mutex is needed.
+	cache              syncMap[cachekey.ActionRef, resolvedEntry]
+	latestRefCache     syncMap[cachekey.Repo, string]
+	reachCache         syncMap[cachekey.Reach, reachCacheEntry]
+	branchListCache    syncMap[cachekey.Repo, []branchHead]
+	tagListCache       syncMap[cachekey.Repo, []tagEntry]
+	repoIDsCache       syncMap[cachekey.Repo, [2]int64]
+	defaultBranchCache syncMap[cachekey.Repo, string] // "" caches a failed lookup
 	// compareCache memoizes branchContainsCommit verdicts. Compare API
 	// responses are deterministic for an immutable (commit, branch-head)
 	// pair, so within a single CLI invocation we never repeat the call.
-	compareCache map[cachekey.Compare]bool
+	compareCache syncMap[cachekey.Compare, bool]
 	// branchHintBySHA records the branch we believe contains a given
 	// commit. Populated by SeedBranchHints from the existing lockfile so
 	// reruns can short-circuit the full branch scan when the recorded
 	// branch still contains the commit.
-	branchHintBySHA map[cachekey.NWOSha]string
+	branchHintBySHA syncMap[cachekey.NWOSha, string]
 	// namedBranchCache memoizes single-branch HEAD lookups (getBranchHead).
 	// A zero-value branchHead (empty Name) records a known-missing branch
 	// so 404s are not re-fetched. These lookups use the git/ref endpoint
 	// and so bypass the paginated branch-listing page cap.
-	namedBranchCache map[cachekey.NWOName]branchHead
+	namedBranchCache syncMap[cachekey.NWOName, branchHead]
 	// protectedBranchCache memoizes the protected-branch list per repo
 	// (GET /branches?protected=true) — part of the canonical "likely" set
 	// validated before any full branch scan.
-	protectedBranchCache map[cachekey.Repo][]branchHead
+	protectedBranchCache syncMap[cachekey.Repo, []branchHead]
 	// releaseBranchCache memoizes release/v* branches per repo (git
 	// matching-refs for heads/v and heads/release), the canonical
 	// publication branches for actions.
-	releaseBranchCache map[cachekey.Repo][]branchHead
+	releaseBranchCache syncMap[cachekey.Repo, []branchHead]
+	// tagObjectCache memoizes PeelTagObject results. An annotated /
+	// immutable-release tag is stored in Git as a tag *object* whose own
+	// SHA differs from the commit it points at; this cache records whether
+	// a given SHA is such a tag object and, if so, the commit it peels to.
+	tagObjectCache syncMap[cachekey.NWOSha, tagPeel]
+
 	// checkReachFn overrides the default branch-discovery check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
 	// nowFn and sleepFn back CheckAncestry's rate-limit retry loop so
@@ -108,18 +119,7 @@ type Resolver struct {
 	// NewWithOptions.
 	nowFn   func() time.Time
 	sleepFn func(time.Duration)
-	// tagObjectCache memoizes PeelTagObject results. An annotated /
-	// immutable-release tag is stored in Git as a tag *object* whose own
-	// SHA differs from the commit it points at; this cache records whether
-	// a given SHA is such a tag object and, if so, the commit it peels to.
-	tagObjectCache map[cachekey.NWOSha]tagPeel
 
-	// cacheMu guards the cache maps that may be read and written concurrently
-	// during the parallel reachability phase (CheckReachabilityAll): reachCache,
-	// branchListCache, compareCache, defaultBranchCache and branchHintBySHA. The
-	// lock is only ever held around in-memory map access, never across HTTP I/O,
-	// so it does not serialize the network calls the fan-out is meant to overlap.
-	cacheMu sync.Mutex
 	// progressMu serializes ProgressFn invocations so the single-writer spinner
 	// UI never sees concurrent updates from parallel reachability workers.
 	progressMu sync.Mutex
@@ -199,9 +199,7 @@ func (r *Resolver) SeedBranchHints(deps []lockfile.Dependency) {
 		if owner == "" || repo == "" {
 			continue
 		}
-		r.cacheMu.Lock()
-		r.branchHintBySHA[cachekey.ForNWOSha(owner, repo, d.SHA)] = d.Branch
-		r.cacheMu.Unlock()
+		r.branchHintBySHA.put(cachekey.ForNWOSha(owner, repo, d.SHA), d.Branch)
 	}
 }
 

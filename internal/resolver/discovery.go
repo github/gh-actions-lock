@@ -16,10 +16,7 @@ import (
 // LatestRef returns the highest stable tag for an action repository.
 func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 	key := cachekey.ForRepo(owner, repo)
-	r.cacheMu.Lock()
-	ref, ok := r.latestRefCache[key]
-	r.cacheMu.Unlock()
-	if ok {
+	if ref, ok := r.latestRefCache.get(key); ok {
 		return ref, nil
 	}
 
@@ -59,9 +56,7 @@ func (r *Resolver) LatestRef(owner, repo string) (string, error) {
 		return "", fmt.Errorf("%s: no tags available to upgrade", key)
 	}
 
-	r.cacheMu.Lock()
-	r.latestRefCache[key] = best
-	r.cacheMu.Unlock()
+	r.latestRefCache.put(key, best)
 	return best, nil
 }
 
@@ -92,13 +87,11 @@ func (r *Resolver) ResolveAllRecursive(refs []lockfile.ActionRef) ([]lockfile.De
 	if r.OnResolveProgress != nil {
 		// Compute first-wave uncached size up-front for an accurate initial total.
 		firstWave := 0
-		r.cacheMu.Lock()
 		for _, ref := range refs {
-			if _, ok := r.cache[cacheKey(ref)]; !ok {
+			if _, ok := r.cache.get(cacheKey(ref)); !ok {
 				firstWave++
 			}
 		}
-		r.cacheMu.Unlock()
 		resolveTotal.Store(int64(firstWave))
 		r.fireResolveProgress(0, firstWave)
 	}
@@ -228,15 +221,13 @@ func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth
 	results := make([]resolveResult, len(refs))
 
 	var uncachedIdx []int
-	r.cacheMu.Lock()
 	for i, ref := range refs {
-		if entry, ok := r.cache[cacheKey(ref)]; ok {
+		if entry, ok := r.cache.get(cacheKey(ref)); ok {
 			results[i] = resolveResult{dep: entry.dep, yml: entry.actionYML, ok: true}
 		} else {
 			uncachedIdx = append(uncachedIdx, i)
 		}
 	}
-	r.cacheMu.Unlock()
 
 	flatten := func() ([]lockfile.Dependency, []string) {
 		var deps []lockfile.Dependency
@@ -298,11 +289,9 @@ func (r *Resolver) resolveWithActionYMLParallel(refs []lockfile.ActionRef, depth
 				errMu.Unlock()
 			}
 			if len(deps) > 0 {
-				r.cacheMu.Lock()
 				for j, dep := range deps {
-					r.cache[keys[j]] = resolvedEntry{dep: dep, actionYML: ymls[j]}
+					r.cache.put(keys[j], resolvedEntry{dep: dep, actionYML: ymls[j]})
 				}
-				r.cacheMu.Unlock()
 				results[i] = resolveResult{dep: deps[0], yml: ymls[0], ok: true}
 			}
 
@@ -323,15 +312,13 @@ func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.D
 	var uncached []lockfile.ActionRef
 
 	cachedIdx := make(map[int]bool)
-	r.cacheMu.Lock()
 	for i, ref := range refs {
-		if _, ok := r.cache[cacheKey(ref)]; ok {
+		if _, ok := r.cache.get(cacheKey(ref)); ok {
 			cachedIdx[i] = true
 		} else {
 			uncached = append(uncached, ref)
 		}
 	}
-	r.cacheMu.Unlock()
 
 	var freshDeps []lockfile.Dependency
 	var freshYMLs []string
@@ -357,11 +344,9 @@ func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.D
 	// Store fresh resolutions in the cache keyed by cacheKey (FullName@Ref).
 	// This preserves per-sub-action entries (e.g. actions/cache/save vs
 	// actions/cache/restore) since their action.yml paths differ.
-	r.cacheMu.Lock()
 	for i, dep := range freshDeps {
-		r.cache[freshKeys[i]] = resolvedEntry{dep: dep, actionYML: freshYMLs[i]}
+		r.cache.put(freshKeys[i], resolvedEntry{dep: dep, actionYML: freshYMLs[i]})
 	}
-	r.cacheMu.Unlock()
 
 	// Build allDeps from cached refs + freshly-resolved ones. Refs that failed
 	// to resolve are simply absent — callers see them missing rather than
@@ -373,9 +358,7 @@ func (r *Resolver) resolveWithActionYML(refs []lockfile.ActionRef) ([]lockfile.D
 	for i, ref := range refs {
 		key := cacheKey(ref)
 		if cachedIdx[i] {
-			r.cacheMu.Lock()
-			entry := r.cache[key]
-			r.cacheMu.Unlock()
+			entry, _ := r.cache.get(key)
 			allDeps = append(allDeps, entry.dep)
 			allYMLs = append(allYMLs, entry.actionYML)
 			continue

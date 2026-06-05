@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/github/gh-actions-pin/internal/cachekey"
 )
 
 // New creates a resolver using the authenticated gh context.
@@ -37,25 +36,12 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 	}
 
 	return &Resolver{
-		client:               client,
-		restClient:           restClient,
-		hostname:             hostname,
-		MaxRecursionDepth:    DefaultMaxRecursionDepth,
-		cache:                make(map[cachekey.ActionRef]resolvedEntry),
-		latestRefCache:       make(map[cachekey.Repo]string),
-		reachCache:           make(map[cachekey.Reach]reachCacheEntry),
-		branchListCache:      make(map[cachekey.Repo][]branchHead),
-		tagListCache:         make(map[cachekey.Repo][]tagEntry),
-		repoIDsCache:         make(map[cachekey.Repo][2]int64),
-		defaultBranchCache:   make(map[cachekey.Repo]string),
-		compareCache:         make(map[cachekey.Compare]bool),
-		branchHintBySHA:      make(map[cachekey.NWOSha]string),
-		namedBranchCache:     make(map[cachekey.NWOName]branchHead),
-		protectedBranchCache: make(map[cachekey.Repo][]branchHead),
-		releaseBranchCache:   make(map[cachekey.Repo][]branchHead),
-		tagObjectCache:       make(map[cachekey.NWOSha]tagPeel),
-		nowFn:                time.Now,
-		sleepFn:              time.Sleep,
+		client:            client,
+		restClient:        restClient,
+		hostname:          hostname,
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+		nowFn:             time.Now,
+		sleepFn:           time.Sleep,
 	}, nil
 }
 

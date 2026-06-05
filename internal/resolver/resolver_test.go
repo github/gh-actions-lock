@@ -14,6 +14,16 @@ import (
 	"github.com/github/gh-actions-pin/internal/lockfile"
 )
 
+// seedCache populates r.cache with the supplied entries and returns r so it can
+// be used inline with a struct literal. It exists so test setup stays close to
+// pre-refactor readability while honoring the syncMap-backed cache fields.
+func seedCache(r *Resolver, m map[cachekey.ActionRef]resolvedEntry) *Resolver {
+	for k, v := range m {
+		r.cache.put(k, v)
+	}
+	return r
+}
+
 func TestSelectLatestTagPrefersHighestMajorTag(t *testing.T) {
 	got := selectLatestTag([]string{"v3", "v6", "v5", "v4"})
 	if got != "v6" {
@@ -245,32 +255,29 @@ func TestParseResolveWithFileResponse_SAMLSSO(t *testing.T) {
 }
 
 func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("actions", "checkout", "", "v6"): {
-				dep: lockfile.Dependency{
-					NWO: "actions/checkout", Ref: "v6", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				},
-				actionYML: "name: Checkout\nruns:\n  using: node20\n",
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("actions", "checkout", "", "v6"): {
+			dep: lockfile.Dependency{
+				NWO: "actions/checkout", Ref: "v6", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			},
+			actionYML: "name: Checkout\nruns:\n  using: node20\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+	})
 
-	r.cache[cachekey.ForActionRef("owner", "composite", "", "v1")] = resolvedEntry{
+	r.cache.put(cachekey.ForActionRef("owner", "composite", "", "v1"), resolvedEntry{
 		dep: lockfile.Dependency{
 			NWO: "owner/composite", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		},
 		actionYML: "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-go@v6\n",
-	}
-	r.cache[cachekey.ForActionRef("actions", "setup-go", "", "v6")] = resolvedEntry{
+	})
+	r.cache.put(cachekey.ForActionRef("actions", "setup-go", "", "v6"), resolvedEntry{
 		dep: lockfile.Dependency{
 			NWO: "actions/setup-go", Ref: "v6", SHA: "cccccccccccccccccccccccccccccccccccccccc",
 		},
 		actionYML: "name: Setup Go\nruns:\n  using: node20\n",
-	}
+	})
 
 	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},
@@ -293,25 +300,22 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 }
 
 func TestResolveAllRecursiveMultipleParents(t *testing.T) {
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("owner", "compositeA", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/compositeA", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-				actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: shared/dep@v1\n",
-			},
-			cachekey.ForActionRef("owner", "compositeB", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/compositeB", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-				actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: shared/dep@v1\n",
-			},
-			cachekey.ForActionRef("shared", "dep", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "shared/dep", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
-				actionYML: "name: Shared\nruns:\n  using: node20\n",
-			},
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("owner", "compositeA", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/compositeA", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: shared/dep@v1\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+		cachekey.ForActionRef("owner", "compositeB", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/compositeB", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: shared/dep@v1\n",
+		},
+		cachekey.ForActionRef("shared", "dep", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "shared/dep", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			actionYML: "name: Shared\nruns:\n  using: node20\n",
+		},
+	})
 
 	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: "owner", Repo: "compositeA", Ref: "v1"},
@@ -349,21 +353,18 @@ func TestResolveAllRecursiveMultipleParents(t *testing.T) {
 }
 
 func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: 1,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("owner", "composite", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/composite", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-				actionYML: "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: owner/nested@v1\n",
-			},
-			cachekey.ForActionRef("owner", "nested", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/nested", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-				actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: actions/checkout@v6\n",
-			},
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("owner", "composite", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/composite", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: owner/nested@v1\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+		cachekey.ForActionRef("owner", "nested", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/nested", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: actions/checkout@v6\n",
+		},
+	})
 
 	_, _, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "composite", Ref: "v1"}})
 	if err == nil || !strings.Contains(err.Error(), "exceeded max depth 1") {
@@ -375,25 +376,22 @@ func TestResolveAllRecursiveRespectsMaxDepth(t *testing.T) {
 // A → B → C produces a properly threaded parentMap so the lockfile writer
 // can emit `uses:` at every level.
 func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("owner", "a", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-				actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: owner/b@v1\n",
-			},
-			cachekey.ForActionRef("owner", "b", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-				actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: owner/c@v1\n",
-			},
-			cachekey.ForActionRef("owner", "c", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/c", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
-				actionYML: "name: C\nruns:\n  using: node20\n",
-			},
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("owner", "a", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: owner/b@v1\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+		cachekey.ForActionRef("owner", "b", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: owner/c@v1\n",
+		},
+		cachekey.ForActionRef("owner", "c", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/c", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			actionYML: "name: C\nruns:\n  using: node20\n",
+		},
+	})
 
 	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
@@ -420,18 +418,15 @@ func TestResolveAllRecursiveDeepNestedComposites(t *testing.T) {
 // whose `uses:` names its own host repo+ref (a same-tarball routing concern)
 // is not recorded as its own transitive dependency.
 func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("owner", "repo", "", "main"): {
-				dep: lockfile.Dependency{NWO: "owner/repo", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-				// Self-ref: composite's uses points back at its own NWO@Ref.
-				actionYML: "name: Self\nruns:\n  using: composite\n  steps:\n    - uses: owner/repo@main\n",
-			},
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("owner", "repo", "", "main"): {
+			dep: lockfile.Dependency{NWO: "owner/repo", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			// Self-ref: composite's uses points back at its own NWO@Ref.
+			actionYML: "name: Self\nruns:\n  using: composite\n  steps:\n    - uses: owner/repo@main\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+	})
 
 	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "repo", Ref: "main"}})
 	if err != nil {
@@ -458,25 +453,22 @@ func TestResolveAllRecursiveSkipsSelfReference(t *testing.T) {
 // 2-levels-deep org/fixtures-b transitive dep is never discovered.
 func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("org", "fixtures", "nested-composite", "main"): {
-				dep:       lockfile.Dependency{NWO: "org/fixtures", Path: "nested-composite", Ref: "main", SHA: tarballSHA},
-				actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-composite@main\n",
-			},
-			cachekey.ForActionRef("org", "fixtures", "simple-composite", "main"): {
-				dep:       lockfile.Dependency{NWO: "org/fixtures", Path: "simple-composite", Ref: "main", SHA: tarballSHA},
-				actionYML: "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures-b@main\n",
-			},
-			cachekey.ForActionRef("org", "fixtures-b", "", "main"): {
-				dep:       lockfile.Dependency{NWO: "org/fixtures-b", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-				actionYML: "name: B\nruns:\n  using: node20\n",
-			},
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("org", "fixtures", "nested-composite", "main"): {
+			dep:       lockfile.Dependency{NWO: "org/fixtures", Path: "nested-composite", Ref: "main", SHA: tarballSHA},
+			actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-composite@main\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+		cachekey.ForActionRef("org", "fixtures", "simple-composite", "main"): {
+			dep:       lockfile.Dependency{NWO: "org/fixtures", Path: "simple-composite", Ref: "main", SHA: tarballSHA},
+			actionYML: "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures-b@main\n",
+		},
+		cachekey.ForActionRef("org", "fixtures-b", "", "main"): {
+			dep:       lockfile.Dependency{NWO: "org/fixtures-b", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: B\nruns:\n  using: node20\n",
+		},
+	})
 
 	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{
 		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "main"},
@@ -517,21 +509,18 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 // is handled gracefully: the BFS terminates via the seen set, both nodes are
 // resolved, and the parentMap reflects the edges without infinite recursion.
 func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
-	r := &Resolver{
+	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
-		cache: map[cachekey.ActionRef]resolvedEntry{
-			cachekey.ForActionRef("owner", "a", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Branch: "main", HashAlgo: "sha1"},
-				actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: owner/b@v1\n",
-			},
-			cachekey.ForActionRef("owner", "b", "", "v1"): {
-				dep:       lockfile.Dependency{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Branch: "main", HashAlgo: "sha1"},
-				actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: owner/a@v1\n",
-			},
+	}, map[cachekey.ActionRef]resolvedEntry{
+		cachekey.ForActionRef("owner", "a", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Branch: "main", HashAlgo: "sha1"},
+			actionYML: "name: A\nruns:\n  using: composite\n  steps:\n    - uses: owner/b@v1\n",
 		},
-		latestRefCache: map[cachekey.Repo]string{},
-		reachCache:     map[cachekey.Reach]reachCacheEntry{},
-	}
+		cachekey.ForActionRef("owner", "b", "", "v1"): {
+			dep:       lockfile.Dependency{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Branch: "main", HashAlgo: "sha1"},
+			actionYML: "name: B\nruns:\n  using: composite\n  steps:\n    - uses: owner/a@v1\n",
+		},
+	})
 
 	deps, parentMapForTest, err := r.ResolveAllRecursive([]lockfile.ActionRef{{Owner: "owner", Repo: "a", Ref: "v1"}})
 	if err != nil {
@@ -662,7 +651,6 @@ func TestResolveAllRecursiveWithHTTPTransport(t *testing.T) {
 
 func TestCheckReachability_Reachable(t *testing.T) {
 	r := &Resolver{
-		reachCache: map[cachekey.Reach]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return Reachable, "ancestor of " + ref
 		},
@@ -675,7 +663,6 @@ func TestCheckReachability_Reachable(t *testing.T) {
 
 func TestCheckReachability_Unreachable(t *testing.T) {
 	r := &Resolver{
-		reachCache: map[cachekey.Reach]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return Unreachable, "commit is not an ancestor of " + ref
 		},
@@ -688,7 +675,6 @@ func TestCheckReachability_Unreachable(t *testing.T) {
 
 func TestCheckReachability_Unknown(t *testing.T) {
 	r := &Resolver{
-		reachCache: map[cachekey.Reach]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			return ReachabilityUnknown, "clone failed"
 		},
@@ -702,7 +688,6 @@ func TestCheckReachability_Unknown(t *testing.T) {
 func TestCheckReachability_CachesResults(t *testing.T) {
 	calls := 0
 	r := &Resolver{
-		reachCache: map[cachekey.Reach]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			calls++
 			return Reachable, "ancestor of " + ref
@@ -726,7 +711,6 @@ func TestCheckReachability_CachesResults(t *testing.T) {
 func TestCheckReachabilityAll_DeduplicatesRequests(t *testing.T) {
 	calls := 0
 	r := &Resolver{
-		reachCache: map[cachekey.Reach]reachCacheEntry{},
 		checkReachFn: func(owner, repo, sha, ref string) (ReachabilityStatus, string) {
 			calls++
 			return Reachable, "ancestor of " + ref
