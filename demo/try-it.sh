@@ -6,6 +6,10 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# Drop GH_TOKEN so gh uses its keyring auth; user PATs often aren't SSO-authorized
+# for orgs like actions/*. See docs/auth-tokenless-mode.md.
+unset GH_TOKEN
+
 RESET="demo/vhs/reset-fixtures.sh"
 
 # Colors
