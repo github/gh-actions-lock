@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/resolver"
@@ -715,18 +716,26 @@ func (rem *Remediator) shaConvertedForNWO(nwo string) bool {
 	if nwo == "" {
 		return false
 	}
+	owner, repo, ok := splitNWO(nwo)
+	if !ok {
+		return false
+	}
 	rem.mu.Lock()
 	defer rem.mu.Unlock()
-	prefix := nwo + "@"
-	for k, v := range rem.state.choices {
-		if v == "" || v == "skipped" {
-			continue
-		}
-		if strings.HasPrefix(k, prefix) {
-			return true
-		}
+	return rem.state.convertedNWOs[cachekey.ForRepo(owner, repo)]
+}
+
+// splitNWO parses a "owner/repo" string. Returns false if the shape isn't
+// exactly one slash with non-empty segments on both sides.
+func splitNWO(nwo string) (owner, repo string, ok bool) {
+	idx := strings.IndexByte(nwo, '/')
+	if idx <= 0 || idx == len(nwo)-1 {
+		return "", "", false
 	}
-	return false
+	if strings.IndexByte(nwo[idx+1:], '/') >= 0 {
+		return "", "", false
+	}
+	return nwo[:idx], nwo[idx+1:], true
 }
 
 func (rem *Remediator) debugf(format string, args ...any) {

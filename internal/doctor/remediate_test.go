@@ -395,3 +395,61 @@ func TestMergeEnrichmentForAlert_SkipsNonImpostor(t *testing.T) {
 		t.Fatalf("AlertedSearched = %v, want empty (non-impostor category)", rem.AlertedSearched)
 	}
 }
+
+// TestShaConvertedForNWO_FiresAfterRecordChoice is the regression test for
+// the next.js duplicate-alert bug. The strategies loop relies on
+// shaConvertedForNWO to suppress a stale impostor finding after
+// handleSHAAsRef has already rewritten the same NWO to a canonical tag.
+//
+// The earlier implementation prefix-scanned state.choices with "owner/repo@",
+// but recordChoice writes keys via cachekey.NWOSha.String() which uses '|'
+// as the separator — so the scan never matched and suppression was silently
+// a no-op. That let the impostor alert fire at @SHA AND the apply-time
+// reach loop fire a second alert at @v1.0.5, producing two entries for one
+// uses: line in next.js's build_and_deploy.yml.
+func TestShaConvertedForNWO_FiresAfterRecordChoice(t *testing.T) {
+	rem := &Remediator{state: newSessionState()}
+	dep := &lockfile.Dependency{
+		NWO: "mmastrac/mmm-matrix",
+		Ref: "3edd85c30addba11887c770740309c979a446aa9",
+		SHA: "3edd85c30addba11887c770740309c979a446aa9",
+	}
+
+	if rem.shaConvertedForNWO("mmastrac/mmm-matrix") {
+		t.Fatalf("shaConvertedForNWO true before recordChoice, want false")
+	}
+
+	rem.state.recordChoice(dep, "v1.0.5")
+
+	if !rem.shaConvertedForNWO("mmastrac/mmm-matrix") {
+		t.Fatalf("shaConvertedForNWO false after recordChoice, want true (the suppression that hides stale impostor alerts after SHA→tag rewrite)")
+	}
+	// Case-insensitive: the workflow may capitalize the NWO differently
+	// from what the resolver normalized into convertedNWOs.
+	if !rem.shaConvertedForNWO("MMAstrac/MMM-Matrix") {
+		t.Fatalf("shaConvertedForNWO false for case-variant NWO, want true (cachekey.ForRepo lowercases)")
+	}
+	// Different NWO must not match.
+	if rem.shaConvertedForNWO("actions/checkout") {
+		t.Fatalf("shaConvertedForNWO true for unrelated NWO, want false")
+	}
+}
+
+// TestShaConvertedForNWO_SkipMarkersDoNotConvert documents that recording a
+// "skipped" decision does not flip an NWO to converted. skipDep writes
+// directly into state.choices with a "skipped" sentinel and intentionally
+// bypasses recordChoice; the suppression must stay false for it so the
+// impostor finding still surfaces in the alert list.
+func TestShaConvertedForNWO_SkipMarkersDoNotConvert(t *testing.T) {
+	rem := &Remediator{state: newSessionState()}
+	dep := &lockfile.Dependency{
+		NWO: "foo/bar",
+		Ref: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		SHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+	}
+	rem.state.choices[dep.Key()] = "skipped"
+
+	if rem.shaConvertedForNWO("foo/bar") {
+		t.Fatalf("shaConvertedForNWO true after skip marker, want false (skips aren't conversions)")
+	}
+}

@@ -11,18 +11,24 @@ import (
 //
 // The choices map is intentionally string-keyed because it stores entries
 // under two different key shapes:
-//   - "owner/repo@SHA" for tag selections (via choiceKey), where the value
-//     is a chosen tag name; and
-//   - "owner/repo@Ref"  for skip markers (via Dependency.Key), where the
+//   - cachekey.NWOSha.String() ("owner/repo|SHA") for tag selections (via
+//     choiceKey), where the value is a chosen tag name; and
+//   - Dependency.Key() ("owner/repo@Ref") for skip markers, where the
 //     value is "skipped".
 //
-// A typed key would force two separate maps; the prefix-scan in
-// shaConvertedForNWO also relies on the shared "owner/repo@…" prefix.
-// Both string keys are produced by typed helpers (cachekey.NWOSha.String,
-// lockfile.Dependency.Key) so we still get normalized owner/repo casing
-// and a single source of truth for the wire shape.
+// Both string keys are produced by typed helpers so we still get
+// normalized owner/repo casing. shaConvertedForNWO no longer prefix-scans
+// the choices map (the two key shapes have different separators, so the
+// scan was silently broken); it consults the convertedNWOs set instead.
 type sessionState struct {
 	choices map[string]string
+
+	// convertedNWOs records owner/repo pairs whose SHA pin was rewritten
+	// to a canonical tag earlier in this run (typically by handleSHAAsRef's
+	// applySHAToTag path). Stale impostor/misleading/forgery alerts on the
+	// same NWO are suppressed once the ref is rewritten — the alert no
+	// longer describes the file on disk.
+	convertedNWOs map[cachekey.Repo]bool
 
 	// owner/repo → chosen ref (e.g. "main" or "v2") for same-owner repos.
 	internalRefChoices map[cachekey.Repo]string
@@ -35,6 +41,7 @@ type sessionState struct {
 func newSessionState() sessionState {
 	return sessionState{
 		choices:            make(map[string]string),
+		convertedNWOs:      make(map[cachekey.Repo]bool),
 		internalRefChoices: make(map[cachekey.Repo]string),
 		approvedRefs:       make(map[cachekey.ActionRef]bool),
 	}
@@ -49,8 +56,14 @@ func choiceKey(dep *lockfile.Dependency) string {
 }
 
 // recordChoice saves a tag choice for a dep so it can be auto-applied later.
+// Also marks the NWO as converted so shaConvertedForNWO can suppress stale
+// alerts on the same NWO from later findings in this run.
 func (s *sessionState) recordChoice(dep *lockfile.Dependency, tag string) {
 	s.choices[choiceKey(dep)] = tag
+	owner, repo := dep.OwnerRepo()
+	if owner != "" {
+		s.convertedNWOs[cachekey.ForRepo(owner, repo)] = true
+	}
 }
 
 // recallChoice returns (tag, true) if we already made a choice for this dep.
