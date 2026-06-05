@@ -355,14 +355,8 @@ scenario_ref_moved() {
   wf=".github/workflows/5-pinned-before-update.yml"
   comment "Workflow pinned before tag moved forward (normal release)"
   run show_workflow_summary "$scratch/$wf"
-  # Human-readable view suppresses ref-moved (warning severity); the finding
-  # only surfaces via --json. --rescan bypasses the lockfile fast path so the
-  # resolver actually re-checks the upstream ref.
-  comment "Check detects the tag now points to a newer commit"
-  echo -e "${GREEN}\$ gh actions-pin check --rescan --json $wf 2>/dev/null | jq '.findings[] | {category, severity, detail}'${RESET_COLOR}"
-  ( cd "$scratch" && gh actions-pin check --rescan --json "$wf" 2>/dev/null \
-      | python3 -c "import json,sys; d=json.load(sys.stdin); [print(json.dumps({'category': f['category'], 'severity': f['severity'], 'detail': f.get('detail','')}, indent=2)) for f in d['findings']]" )
-  echo
+  comment "Check surfaces the ref-moved warning (and any reachability-unknown blockers)"
+  ( cd "$scratch" && run gh actions-pin check --rescan --no-interactive "$wf" ) || true
 }
 
 scenario_impostor_commit() {
