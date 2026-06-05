@@ -568,6 +568,9 @@ func runCheck(f *pinFactory, opts *checkOptions) error {
 		printed = true
 		f.UI.TermWarn("%d %s auto-pinned to a safer release — review for sanity:",
 			len(autoFixedImpostors), ui.Pluralize(len(autoFixedImpostors), "action", "actions"))
+		f.UI.TermDetail("  The original tag pointed at a commit that doesn't belong to any branch")
+		f.UI.TermDetail("  on the upstream repository, and may belong to a fork outside of it.")
+		f.UI.TermDetail("  Each was re-pinned to the latest release reachable from a branch.")
 		for _, fix := range autoFixedImpostors {
 			short := fix.NewSHA
 			if len(short) > 7 {
