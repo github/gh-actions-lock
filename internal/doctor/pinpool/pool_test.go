@@ -70,6 +70,48 @@ type reporterFunc struct {
 func (f reporterFunc) SetWorkerStatus(slot int, status string) { f.set(slot, status) }
 func (f reporterFunc) UpdateLabel(label string)                { f.label(label) }
 
+// TestRunDoesNotClearSlotBetweenJobs guards the spinner tail UX fix: each
+// worker must keep its slot showing the previous "→ path" until it overwrites
+// it with the next job's "→ path", so the spinner never flickers down to an
+// empty slot in the millisecond between Run returning and the next iteration.
+// A single trailing clear (empty status) is permitted — and required — once
+// the channel drains and the worker exits, because the caller relies on it to
+// wipe stale rows from the screen at the end of the run.
+func TestRunDoesNotClearSlotBetweenJobs(t *testing.T) {
+	ui := &fakeReporter{}
+	// Force a single worker so all status events are on slot 0 and the
+	// "between two jobs" predicate is unambiguous.
+	jobs := []int{1, 2, 3, 4, 5}
+	err := Run(1, ui, "Pinning", jobs,
+		func(j int) string { return fmt.Sprintf("job-%d", j) },
+		func(slot, j int) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	// Filter to slot 0 (the only one used) and scan for the bad pattern:
+	// "" (clear) followed by another "→ ..." on the same slot — that's the
+	// spinner blink we're guarding against.
+	var slot0 []string
+	for _, s := range ui.statuses {
+		if s[0].(int) != 0 {
+			continue
+		}
+		slot0 = append(slot0, s[1].(string))
+	}
+	for i := 0; i < len(slot0)-1; i++ {
+		if slot0[i] == "" && slot0[i+1] != "" {
+			t.Fatalf("slot 0 was cleared between jobs (index %d): %v", i, slot0)
+		}
+	}
+	// The exit-time clear is non-negotiable: the caller (the Remediator)
+	// relies on it to wipe the worker row after the pool finishes.
+	if len(slot0) == 0 || slot0[len(slot0)-1] != "" {
+		t.Fatalf("expected final status on slot 0 to be \"\" (exit-time clear), got %v", slot0)
+	}
+}
+
 
 func TestRunEmptyJobsIsNoOp(t *testing.T) {
 	ui := &fakeReporter{}

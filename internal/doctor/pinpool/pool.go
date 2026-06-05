@@ -38,7 +38,14 @@ type Reporter interface {
 //   - calls run(slot, j)
 //   - increments a shared done counter and calls
 //     r.UpdateLabel(fmt.Sprintf("[%d/%d] %s", done, total, label))
-//   - clears its slot with r.SetWorkerStatus(slot, "")
+//
+// The slot is NOT cleared between jobs — the next iteration's "→ next"
+// status overwrites the previous one. This keeps a current target
+// visible at all times during steady-state operation, so the spinner
+// never flickers down to a bare header during the millisecond gap
+// between completing one job and pulling the next. Slots are cleared
+// once, with r.SetWorkerStatus(slot, ""), only when the worker exits
+// because the job channel has drained.
 //
 // run reports an error per job. The first non-nil error is returned
 // after every worker has finished, so a single failure does not strand
@@ -107,6 +114,13 @@ func Run[T any](
 		wg.Add(1)
 		go func(slot int) {
 			defer wg.Done()
+			// Clear the slot once when the goroutine exits (channel
+			// drained). The inner loop deliberately does NOT clear
+			// between jobs so the slot keeps showing the most recent
+			// "→ path" until the next job overwrites it — eliminating
+			// the empty-window flicker that made the spinner look frozen
+			// during the tail of the run.
+			defer setStatus(slot, "")
 			for j := range ch {
 				setStatus(slot, "→ "+display(j))
 				err := run(slot, j)
@@ -119,7 +133,6 @@ func Run[T any](
 					}
 					errMu.Unlock()
 				}
-				setStatus(slot, "")
 			}
 		}(slot)
 	}
