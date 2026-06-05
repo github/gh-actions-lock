@@ -57,6 +57,12 @@ const (
 	// RunOnly means the workflow has no action refs (only run:
 	// steps), so pinning is not applicable.
 	RunOnly Category = "run-only"
+	// OnboardingRequired means an `upgrade --no-onboard` run targeted
+	// a workflow that has no existing entry in `lockfile.workflows{}`.
+	// The CLI refuses to silently add it during a dependency-update
+	// run; the operator must onboard the workflow explicitly before
+	// re-running upgrade.
+	OnboardingRequired Category = "onboarding-required"
 )
 
 // Severity indicates how serious a finding is if it represents a real

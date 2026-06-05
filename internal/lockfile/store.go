@@ -140,6 +140,17 @@ func (s *Store) File() parserlock.File {
 	return s.file
 }
 
+// HasWorkflow reports whether the lockfile's workflows{} map already
+// contains an entry for workflowKey. Used by `upgrade --no-onboard` to
+// refuse silently onboarding a previously-untracked workflow during a
+// Dependabot run (see G9 in docs/dependabot-cli-contract.md).
+func (s *Store) HasWorkflow(workflowKey string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.file.Workflows[workflowKey]
+	return ok
+}
+
 // Get returns the dependencies recorded for workflowKey (e.g.
 // ".github/workflows/ci.yml"). Returns nil when the workflow has no entry.
 func (s *Store) Get(workflowKey string) ([]Dependency, error) {

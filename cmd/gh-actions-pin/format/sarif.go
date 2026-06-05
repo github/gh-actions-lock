@@ -70,8 +70,8 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool    sarifTool      `json:"tool"`
-	Results []sarifResult  `json:"results"`
+	Tool    sarifTool     `json:"tool"`
+	Results []sarifResult `json:"results"`
 	// ColumnKind tells consumers our column numbers are unicode code
 	// points (not utf-16 code units). We don't currently emit columns,
 	// but stating the convention is harmless and forward-compatible.
@@ -125,9 +125,9 @@ type sarifArtifactLocation struct {
 }
 
 type sarifRegion struct {
-	StartLine   int    `json:"startLine"`
-	StartColumn int    `json:"startColumn,omitempty"`
-	EndColumn   int    `json:"endColumn,omitempty"`
+	StartLine   int           `json:"startLine"`
+	StartColumn int           `json:"startColumn,omitempty"`
+	EndColumn   int           `json:"endColumn,omitempty"`
 	Snippet     *sarifMessage `json:"snippet,omitempty"`
 }
 
@@ -220,6 +220,16 @@ var ruleCatalog = []sarifRule{
 		FullDescription:  sarifMessage{Text: "Expected for mutable tags like `v4`. Re-pin to record the new SHA after verifying the upstream change is intentional."},
 		HelpURI:          docURLOr(findings.RefMoved),
 		Properties:       map[string]interface{}{"category": string(findings.RefMoved)},
+	},
+	{
+		ID:               "onboarding-required",
+		Name:             "OnboardingRequired",
+		ShortDescription: sarifMessage{Text: "Workflow is not tracked in the lockfile; `upgrade --no-onboard` refuses to add it"},
+		FullDescription: sarifMessage{Text: "An `upgrade --no-onboard` run targeted a workflow that has no entry in `lockfile.workflows{}`. " +
+			"Strict mode (used by Dependabot) refuses to silently onboard new workflows during a dependency-update run. " +
+			"Run `gh actions-pin` without `--no-onboard` (or without `--workflow`) on this repository to onboard the workflow first."},
+		HelpURI:    docURLOr(doctor.CategoryOnboardingRequired),
+		Properties: map[string]interface{}{"category": string(doctor.CategoryOnboardingRequired)},
 	},
 }
 

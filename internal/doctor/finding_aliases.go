@@ -45,6 +45,9 @@ const (
 	CategoryRefMoved        = findings.RefMoved
 	CategoryValid           = findings.Valid
 	CategoryRunOnly         = findings.RunOnly
+	// CategoryOnboardingRequired — set by `upgrade --no-onboard` when
+	// the targeted workflow has no existing entry in lockfile.workflows{}.
+	CategoryOnboardingRequired = findings.OnboardingRequired
 )
 
 // Severity constants — aliases for pkg/findings severities.

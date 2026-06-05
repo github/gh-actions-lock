@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/runlog"
@@ -31,6 +32,7 @@ type upgradeOptions struct {
 	Diff          bool
 	Hostname      string
 	JSONFields    string
+	NoOnboard     bool
 }
 
 type upgradeTarget struct {
@@ -48,8 +50,33 @@ type jsonUpgradeChange struct {
 	Files  []string `json:"files"`
 }
 
+// jsonUpgradeFinding mirrors format.Finding for the upgrade command. The
+// upgrade command intentionally carries its own minimal finding shape
+// rather than pulling in the doctor.Report apparatus — upgrade only ever
+// emits structured findings for refusal/blocker cases, not for
+// dependency-state inspection.
+type jsonUpgradeFinding struct {
+	Workflow    string `json:"workflow"`
+	Category    string `json:"category"`
+	Severity    string `json:"severity"`
+	Confidence  string `json:"confidence,omitempty"`
+	Detail      string `json:"detail"`
+	Remediation string `json:"remediation,omitempty"`
+	DocURL      string `json:"doc_url,omitempty"`
+}
+
+// jsonUpgradeWorkflow records that an upgrade ran successfully against a
+// workflow file. Refused workflows do NOT appear here — they appear only
+// in findings[]. Consumers (Dependabot) read workflows[] to know which
+// files to commit.
+type jsonUpgradeWorkflow struct {
+	Path string `json:"path"`
+}
+
 type jsonUpgradeResult struct {
-	Updated []jsonUpgradeChange `json:"updated"`
+	Updated   []jsonUpgradeChange   `json:"updated"`
+	Findings  []jsonUpgradeFinding  `json:"findings,omitempty"`
+	Workflows []jsonUpgradeWorkflow `json:"workflows,omitempty"`
 }
 
 func newUpgradeCmd(f *pinFactory) *cobra.Command {
@@ -109,6 +136,7 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Write, "write", false, "Write the upgraded refs and dependencies back to the workflow file")
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (updated)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "updated"
+	cmd.Flags().BoolVar(&opts.NoOnboard, "no-onboard", false, "Refuse to add new workflow entries to the lockfile. Workflows not already tracked in lockfile.workflows{} are skipped with an onboarding-required finding. Required for dependency-update tools (e.g. Dependabot) that must not silently expand the tracked workflow set.")
 
 	return cmd
 }
@@ -140,6 +168,8 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 
 	var hadError bool
 	var allChanges []jsonUpgradeChange
+	var findings []jsonUpgradeFinding
+	var savedWorkflows []jsonUpgradeWorkflow
 	total := len(opts.WorkflowPaths)
 
 	// Attach a run log so detailed narration goes to a file, leaving the
@@ -200,13 +230,21 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 				if parallel {
 					f.UI.SetWorkerStatus(slot, "→ "+j.path)
 				}
-				changes, err := upgradeOneFile(f, opts, j.path, r, store, targets)
+				result, err := upgradeOneFile(f, opts, j.path, r, store, targets)
 				mu.Lock()
 				if err != nil {
 					f.UI.Error("%s: %s", j.path, err)
 					hadError = true
 				}
-				allChanges = append(allChanges, changes...)
+				if result != nil {
+					allChanges = append(allChanges, result.Changes...)
+					if result.Finding != nil {
+						findings = append(findings, *result.Finding)
+					}
+					if result.Saved {
+						savedWorkflows = append(savedWorkflows, jsonUpgradeWorkflow{Path: j.path})
+					}
+				}
 				mu.Unlock()
 				done.Add(1)
 				updateLabel()
@@ -218,15 +256,36 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	}
 	wg.Wait()
 
-	if opts.Write {
+	// Persist only when at least one workflow upgraded successfully.
+	// store.Save() is atomic (tmp+rename) per the G8 contract, so a
+	// partial-success save still leaves the on-disk lockfile consistent.
+	// When every workflow was refused or errored, skip Save entirely so
+	// the lockfile bytes stay untouched.
+	if opts.Write && len(savedWorkflows) > 0 {
 		if err := store.Save(); err != nil {
 			f.UI.StopProgress()
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
 	}
 
+	// A blocking finding (onboarding-required, severity:error) must drive
+	// the process exit code non-zero even when no other error occurred.
+	hadBlockingFinding := false
+	for _, fnd := range findings {
+		if fnd.Severity == "error" {
+			hadBlockingFinding = true
+			break
+		}
+	}
+
 	if opts.JSONFields != "" {
-		return writeUpgradeJSON(f.Out, allChanges)
+		if err := writeUpgradeJSON(f.Out, allChanges, findings, savedWorkflows); err != nil {
+			return err
+		}
+		if hadBlockingFinding || hadError {
+			return errSilent
+		}
+		return nil
 	}
 
 	// Work is done — stop the spinner before printing the terminal summary.
@@ -240,7 +299,7 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 		return errSilent
 	}
 
-	if len(allChanges) == 0 && len(opts.Actions) > 0 {
+	if len(allChanges) == 0 && len(opts.Actions) > 0 && len(findings) == 0 {
 		f.UI.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
 		f.UI.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
 		return errSilent
@@ -254,20 +313,51 @@ func runUpgrade(f *pinFactory, opts *upgradeOptions) error {
 	for _, c := range allChanges {
 		f.UI.TermDetail("%s: %s -> %s", c.NWO, c.OldRef, c.NewRef)
 	}
+	for _, fnd := range findings {
+		f.UI.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
+		if fnd.Remediation != "" {
+			f.UI.TermDetail("%s", fnd.Remediation)
+		}
+	}
+	if hadBlockingFinding {
+		return errSilent
+	}
 	return nil
 }
 
-func writeUpgradeJSON(w io.Writer, changes []jsonUpgradeChange) error {
-	result := jsonUpgradeResult{Updated: changes}
+func writeUpgradeJSON(w io.Writer, changes []jsonUpgradeChange, findings []jsonUpgradeFinding, workflows []jsonUpgradeWorkflow) error {
+	result := jsonUpgradeResult{
+		Updated:   changes,
+		Findings:  findings,
+		Workflows: workflows,
+	}
 	if result.Updated == nil {
 		result.Updated = []jsonUpgradeChange{}
+	}
+	if result.Findings == nil {
+		result.Findings = []jsonUpgradeFinding{}
+	}
+	if result.Workflows == nil {
+		result.Workflows = []jsonUpgradeWorkflow{}
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
 }
 
-func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) ([]jsonUpgradeChange, error) {
+// upgradeFileResult is the per-workflow return shape from upgradeOneFile.
+// Saved=true means the workflow was upgraded and written through to the
+// in-memory lockfile store (caller decides whether to persist). Finding
+// is populated when the workflow was refused (e.g. --no-onboard on an
+// untracked workflow) or when any other per-workflow blocker fires; the
+// caller propagates it into the run's findings[] payload.
+type upgradeFileResult struct {
+	Changes []jsonUpgradeChange
+	Saved   bool
+	Finding *jsonUpgradeFinding
+}
+
+func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -328,6 +418,25 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 
 	if len(matched) == 0 {
 		return nil, nil
+	}
+
+	// --no-onboard strict mode (G9): refuse to onboard a workflow that is
+	// not already in lockfile.workflows{}. The check fires AFTER plan
+	// construction but BEFORE any resolver work or file writes — saves a
+	// pile of API calls for refused workflows, and crucially guarantees
+	// store.Set is never reached for an untracked workflow.
+	if opts.NoOnboard && !store.HasWorkflow(wfKey) {
+		f.UI.Warning("%s: refusing to onboard (--no-onboard); workflow has no entry in actions.lock", workflowPath)
+		finding := &jsonUpgradeFinding{
+			Workflow:    workflowPath,
+			Category:    string(doctor.CategoryOnboardingRequired),
+			Severity:    string(doctor.SeverityError),
+			Confidence:  string(doctor.ConfidenceHigh),
+			Detail:      fmt.Sprintf("workflow %s is not tracked in the lockfile; --no-onboard refuses to add new workflow entries during this run", workflowPath),
+			Remediation: "Run `gh actions-pin` (without --no-onboard) on this repository to onboard the workflow into the lockfile, then re-run the upgrade.",
+			DocURL:      doctor.DocURLFor(doctor.CategoryOnboardingRequired),
+		}
+		return &upgradeFileResult{Finding: finding}, nil
 	}
 
 	f.UI.Header("%s", workflowPath)
@@ -433,7 +542,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 
 	if !opts.Write {
 		f.UI.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
-		return changes, nil
+		return &upgradeFileResult{Changes: changes}, nil
 	}
 
 	if err := os.WriteFile(workflowPath, updatedContent, 0o644); err != nil {
@@ -448,7 +557,7 @@ func upgradeOneFile(f *pinFactory, opts *upgradeOptions, workflowPath string, r 
 	for _, c := range changes {
 		f.UI.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
 	}
-	return changes, nil
+	return &upgradeFileResult{Changes: changes, Saved: true}, nil
 }
 
 func actionMatchesFilter(nwo, filter string) bool {

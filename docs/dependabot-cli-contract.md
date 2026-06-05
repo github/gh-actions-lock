@@ -16,15 +16,16 @@ This is the gh-actions-pin-side answer to
 | G2  | Actual fields are `valid,findings,workflows,dependencies` (no errors/warnings) | 🔧 fixed in this release (docs) | no |
 | G3  | Dep object is `{nwo,ref,sha,hash_algo,direct,required_by}` — no `file`     | 🔧 fixed in this release (docs) | no |
 | G4  | Dummy `GH_TOKEN` + proxy mode works; no Authorization injected by CLI      | ✅ honored | no |
-| G5  | Re-lock writes `updated` records; UNREACHABLE surfaces as `impostor-commit`/`lockfile-forgery` | ⚠️ partial — see G9 onboarding gate | no |
+| G5  | Re-lock writes `updated` records; UNREACHABLE surfaces as `impostor-commit`/`lockfile-forgery` | ✅ honored (G9 onboarding gate closed) | no |
 | G6  | Per-OS standalone binaries ship per release; no `gh` runtime dep            | ✅ honored | no |
 | G7  | JSON carries `cli_version`+`lockfile_version`; v1 additive promise restated | ✅ honored | no |
 | G8  | Writer is deterministic (sorted keys, no timestamps); double-write test added | 🔧 fixed in this release | no |
-| G9  | `upgrade --write` currently CREATES workflow entries when missing — gap     | ❌ won't do this release; follow-up filed | **YES** until follow-up lands |
+| G9  | `upgrade --no-onboard` strict mode refuses to add new workflows during a Dependabot run | ✅ closed | no |
 
-**Blockers for flipping the Dependabot default engine to `cli`:** G9 only. G4
+**Blockers for flipping the Dependabot default engine to `cli`:** none. G4
 and G8 (the two original blockers in the dependabot-core spec) are confirmed
-honored; G9 is the new one this audit surfaces.
+honored, and G9 — the gap this audit surfaced — is now closed by the
+`--no-onboard` strict mode on `upgrade`.
 
 ---
 
@@ -464,54 +465,46 @@ to the same pins produce byte-identical `actions.lock`.
 
 ## G9 — Lifecycle: create / delete
 
-**Status:** ❌ won't do this release; follow-up card filed.
+**Status:** ✅ closed.
 
-**Today's behavior — the gap:** `upgrade --write` calls
-`store.Set(wfKey, deps, parentMap, directKeys)` (upgrade.go:443)
-unconditionally on any workflow that matched the `--action` filter. There
-is no check for "is this workflow already in `lockfile.workflows{}`?". So
-if Dependabot runs `upgrade --action actions/checkout@v5 --write` against a
-working tree that contains a workflow file using `actions/checkout` but has
-**no lockfile entry for that workflow yet**, the CLI will:
+**Implemented surface:**
 
-1. Resolve the new pin.
-2. Rewrite the workflow YAML.
-3. **Create** a new entry in `lockfile.workflows{}` for that workflow.
-4. Persist via `store.Save()`.
+- `upgrade` accepts a global `--no-onboard` boolean flag. Default is OFF so
+  interactive dev workflows still onboard; Dependabot must pass
+  `--no-onboard` on every run.
+- When the flag is set and a targeted workflow has no entry in
+  `lockfile.workflows{}`, the per-workflow upgrade is skipped, the run emits
+  a structured finding (`category: onboarding-required`, severity `error`,
+  confidence `high`, with a `workflow` field carrying the path) pointing to
+  the remediation: run `gh actions-pin` without `--no-onboard` to onboard
+  the workflow first.
+- Partial success is permitted: workflows that ARE in the lockfile upgrade
+  normally, the persisted lockfile contains the successfully-upgraded
+  subset, and the process exits non-zero because at least one blocking
+  finding is present.
+- `store.Save()` is gated on at least one workflow having upgraded
+  successfully — when every targeted workflow is refused, the on-disk
+  lockfile bytes stay byte-identical.
+- The new rule is registered in the SARIF catalog
+  (`cmd/gh-actions-pin/format/sarif.go`) with `severity: error`, and the
+  finding category is wired through `internal/doctor`'s vocabulary.
+- JSON output: refusals appear in `findings[]` alongside any other
+  diagnostic; `workflows[]` only contains successfully-processed workflows.
 
-That violates G9 ("the CLI must never create a lock or add new workflows
-during a Dependabot run"). It also conflicts with Dependabot's per-workflow
-partition: Dependabot relocks only the onboarded subset and expects the
-non-onboarded subset to stay on the legacy regex path.
+Test coverage lives in `cmd/gh-actions-pin/upgrade_no_onboard_test.go`:
 
-**Commitment:** We will add a `--no-onboard` flag (or equivalent
-strict-mode default) to `upgrade` that:
-
-- Refuses to add a new entry to `lockfile.workflows{}`. If the targeted
-  workflow has no existing entry, the file is skipped with a structured
-  finding (`category: onboarding-required`) and the run continues for other
-  workflows.
-- Refuses to create a brand-new lockfile when none exists. The run exits
-  with a structured finding instead.
-- Multi-workflow partial-write fix (the G5 follow-up) lands as part of the
-  same PR — `store.Save()` only runs when all in-flight workflows resolved
-  cleanly.
-
-This is a non-trivial behavior change and a flag-surface choice; it
-deserves its own PR review pass rather than smuggling into this contract
-audit.
-
-**Action required on this side:** Follow-up card to file:
-> Add `--no-onboard` strict mode to `upgrade`, gate `store.Set` on
-> existing-workflow membership, and guard `store.Save()` against partial
-> writes on multi-workflow failure. Required for Dependabot CLI engine
-> default flip.
-
-Until that lands, the Dependabot side can keep its current behavior:
-partition workflows on its side using its own Ruby `Lockfile::Reader`,
-invoke the CLI only against the onboarded subset, and trust the CLI not to
-need to know about non-onboarded files because they were excluded from the
-working tree it ships into the temp repo.
+- `TestUpgrade_NoOnboard_RefusesMissingWorkflow` — single-workflow refusal
+  is structured, the lockfile bytes are unchanged, and the process exits
+  non-zero.
+- `TestUpgrade_NoOnboard_PartialSuccess` — three-workflow run where one
+  workflow is untracked produces exactly one finding, the other two are
+  persisted, and the exit is non-zero.
+- `TestUpgrade_NoOnboard_AllPresent_Succeeds` — when every targeted
+  workflow is already tracked, `--no-onboard` is a no-op and the run exits
+  zero with no findings.
+- `TestUpgrade_WithoutNoOnboard_StillOnboards` — pre-G9 behavior is
+  preserved by default (interactive `gh actions-pin upgrade` on a dev
+  machine still onboards).
 
 ---
 
