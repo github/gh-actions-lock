@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/doctor"
+	"github.com/github/gh-actions-pin/pkg/findings"
 )
 
 // Finding is the JSON-safe view of a doctor.Finding.
@@ -91,7 +92,7 @@ func WriteJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV, cliVer
 		}
 		for _, wr := range report.Workflows {
 			for _, f := range wr.Findings {
-				if f.Category == doctor.CategoryRunOnly || (f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityOK) {
+				if f.Category == findings.RunOnly || (f.Category == findings.Valid && f.Severity == findings.SeverityOK) {
 					continue
 				}
 				allFindings = append(allFindings, findingFromDoctor(f))
@@ -161,7 +162,7 @@ func WriteJSON(w io.Writer, report *doctor.Report, valid bool, fieldsCSV, cliVer
 				Findings: []Finding{},
 			}
 			for _, f := range wr.Findings {
-				if f.Category == doctor.CategoryRunOnly || (f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityOK) {
+				if f.Category == findings.RunOnly || (f.Category == findings.Valid && f.Severity == findings.SeverityOK) {
 					continue
 				}
 				wf.Findings = append(wf.Findings, findingFromDoctor(f))

@@ -46,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/doctor"
+	"github.com/github/gh-actions-pin/pkg/findings"
 )
 
 // sarifVersion is the SARIF spec version we conform to.
@@ -136,13 +137,13 @@ type sarifRegion struct {
 // CategoryRunOnly never produce SARIF results (they are not findings).
 func categoryRuleID(c doctor.Category) string {
 	switch c {
-	case doctor.CategoryNotPinned:
+	case findings.NotPinned:
 		// Semantic sibling of zizmor's `unpinned-uses`. We flag the
 		// lockfile mismatch rather than the workflow-level unpinned
 		// ref, but the user-visible remediation (pin to SHA) is the
 		// same, so we share the rule ID.
 		return "unpinned-uses"
-	case doctor.CategoryImpostorCommit:
+	case findings.ImpostorCommit:
 		return "impostor-commit"
 	default:
 		return string(c)
@@ -160,32 +161,32 @@ var ruleCatalog = []sarifRule{
 		ShortDescription: sarifMessage{Text: "Action dependency is not pinned to a commit SHA in the lockfile"},
 		FullDescription: sarifMessage{Text: "The workflow references an action but no matching dependency is recorded in actions-pin.lock. " +
 			"Pin every action to a 40-character commit SHA so a tag move cannot silently swap the code that runs in CI."},
-		HelpURI:    docURLOr(doctor.CategoryNotPinned),
-		Properties: map[string]interface{}{"category": string(doctor.CategoryNotPinned)},
+		HelpURI:    docURLOr(findings.NotPinned),
+		Properties: map[string]interface{}{"category": string(findings.NotPinned)},
 	},
 	{
 		ID:               "sha-as-ref",
 		Name:             "ShaAsRef",
 		ShortDescription: sarifMessage{Text: "Dependency is pinned to a bare SHA with no tag ref"},
 		FullDescription:  sarifMessage{Text: "The lockfile entry uses a bare commit SHA as the `uses:` ref. A human-readable tag alongside the SHA helps reviewers verify intent."},
-		HelpURI:          docURLOr(doctor.CategorySHAAsRef),
-		Properties:       map[string]interface{}{"category": string(doctor.CategorySHAAsRef)},
+		HelpURI:          docURLOr(findings.ShaAsRef),
+		Properties:       map[string]interface{}{"category": string(findings.ShaAsRef)},
 	},
 	{
 		ID:               "stale",
 		Name:             "Stale",
 		ShortDescription: sarifMessage{Text: "Lockfile entry references an action no longer present in any workflow"},
 		FullDescription:  sarifMessage{Text: "The lockfile retains a dependency that no workflow `uses:` anymore. Stale entries pollute audits and may mask removed actions."},
-		HelpURI:          docURLOr(doctor.CategoryStale),
-		Properties:       map[string]interface{}{"category": string(doctor.CategoryStale)},
+		HelpURI:          docURLOr(findings.Stale),
+		Properties:       map[string]interface{}{"category": string(findings.Stale)},
 	},
 	{
 		ID:               "ref-changed",
 		Name:             "RefChanged",
 		ShortDescription: sarifMessage{Text: "Workflow `uses:` ref was edited; lockfile no longer matches"},
 		FullDescription:  sarifMessage{Text: "Someone changed the `uses:` ref in the workflow (e.g. v4.1.0 → v4) without updating the lockfile entry. Re-pin so the recorded SHA reflects the requested ref."},
-		HelpURI:          docURLOr(doctor.CategoryRefChanged),
-		Properties:       map[string]interface{}{"category": string(doctor.CategoryRefChanged)},
+		HelpURI:          docURLOr(findings.RefChanged),
+		Properties:       map[string]interface{}{"category": string(findings.RefChanged)},
 	},
 	{
 		ID:               "impostor-commit",
@@ -193,32 +194,32 @@ var ruleCatalog = []sarifRule{
 		ShortDescription: sarifMessage{Text: "Pinned SHA is not reachable from any branch in the action repository"},
 		FullDescription: sarifMessage{Text: "The locked commit cannot be reached from any branch or release tag in the upstream repository. " +
 			"This is the zizmor `impostor-commit` audit signal — most commonly a fork-network commit injected via PR. Re-pin to a sane release."},
-		HelpURI:    docURLOr(doctor.CategoryImpostorCommit),
-		Properties: map[string]interface{}{"category": string(doctor.CategoryImpostorCommit)},
+		HelpURI:    docURLOr(findings.ImpostorCommit),
+		Properties: map[string]interface{}{"category": string(findings.ImpostorCommit)},
 	},
 	{
 		ID:               "misleading-sha",
 		Name:             "MisleadingSha",
 		ShortDescription: sarifMessage{Text: "Ref looks like a SHA but resolves to a different commit"},
 		FullDescription:  sarifMessage{Text: "The `uses:` ref is shaped like a commit SHA but the upstream API resolves it to a different commit. The ref is likely a tag or branch that shadows a SHA prefix."},
-		HelpURI:          docURLOr(doctor.CategoryMisleadingSHA),
-		Properties:       map[string]interface{}{"category": string(doctor.CategoryMisleadingSHA)},
+		HelpURI:          docURLOr(findings.MisleadingSHA),
+		Properties:       map[string]interface{}{"category": string(findings.MisleadingSHA)},
 	},
 	{
 		ID:               "lockfile-forgery",
 		Name:             "LockfileForgery",
 		ShortDescription: sarifMessage{Text: "Lockfile SHA is not an ancestor of the current ref"},
 		FullDescription:  sarifMessage{Text: "The pinned commit is not in the ancestry of the upstream ref the workflow asks for. The lockfile entry was likely injected or tampered with."},
-		HelpURI:          docURLOr(doctor.CategoryLockfileForgery),
-		Properties:       map[string]interface{}{"category": string(doctor.CategoryLockfileForgery)},
+		HelpURI:          docURLOr(findings.LockfileForgery),
+		Properties:       map[string]interface{}{"category": string(findings.LockfileForgery)},
 	},
 	{
 		ID:               "ref-moved",
 		Name:             "RefMoved",
 		ShortDescription: sarifMessage{Text: "Upstream ref now resolves to a different SHA than the lockfile records"},
 		FullDescription:  sarifMessage{Text: "Expected for mutable tags like `v4`. Re-pin to record the new SHA after verifying the upstream change is intentional."},
-		HelpURI:          docURLOr(doctor.CategoryRefMoved),
-		Properties:       map[string]interface{}{"category": string(doctor.CategoryRefMoved)},
+		HelpURI:          docURLOr(findings.RefMoved),
+		Properties:       map[string]interface{}{"category": string(findings.RefMoved)},
 	},
 }
 
@@ -236,11 +237,11 @@ func docURLOr(c doctor.Category) string {
 // lands.
 func severityToLevel(s doctor.Severity) (string, error) {
 	switch s {
-	case doctor.SeverityError:
+	case findings.SeverityError:
 		return "error", nil
-	case doctor.SeverityWarning:
+	case findings.SeverityWarning:
 		return "warning", nil
-	case doctor.SeverityInfo, doctor.SeverityOK:
+	case findings.SeverityInfo, findings.SeverityOK:
 		return "note", nil
 	default:
 		return "", fmt.Errorf("sarif: unmapped severity %q", string(s))
@@ -396,10 +397,10 @@ func WriteSARIF(w io.Writer, report *doctor.Report, cliVersion string) error {
 	emit := func(f doctor.Finding) error {
 		// Drop non-findings — same filter the JSON path uses so the two
 		// formats agree on what counts as actionable.
-		if f.Category == doctor.CategoryRunOnly {
+		if f.Category == findings.RunOnly {
 			return nil
 		}
-		if f.Category == doctor.CategoryValid && f.Severity == doctor.SeverityOK {
+		if f.Category == findings.Valid && f.Severity == findings.SeverityOK {
 			return nil
 		}
 
