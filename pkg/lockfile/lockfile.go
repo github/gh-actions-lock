@@ -1,12 +1,19 @@
 package lockfile
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
+
+// ErrFutureVersion is the sentinel returned (via errors.Is) when Parse refuses
+// a lockfile whose schema version is newer than this binary supports. External
+// consumers (e.g. Dependabot) can detect this specific failure mode without
+// scraping the error string.
+var ErrFutureVersion = errors.New("lockfile version is newer than this binary supports")
 
 // ParseError describes a failure to parse a dependency lockfile.
 //
@@ -260,7 +267,21 @@ func Parse(contents []byte) (File, error) {
 		return File{}, pe
 	}
 	if f.Version != Version {
-		pe := &ParseError{Msg: fmt.Sprintf("unsupported dependency lockfile version %q", f.Version)}
+		msg := fmt.Sprintf("unsupported dependency lockfile version %q", f.Version)
+		var wrapped error
+		if isFutureVersion(f.Version, Version) {
+			msg = fmt.Sprintf(
+				"lockfile version %s is newer than this binary supports (%s).\n"+
+					"This binary cannot safely interpret the newer lockfile format.\n\n"+
+					"To upgrade:\n"+
+					"  gh extension upgrade gh-actions-pin\n\n"+
+					"Or download the latest release:\n"+
+					"  https://github.com/github/gh-actions-pin/releases",
+				f.Version, Version,
+			)
+			wrapped = ErrFutureVersion
+		}
+		pe := &ParseError{Msg: msg, err: wrapped}
 		if l, c, ok := f.Position("version"); ok {
 			pe.Line, pe.Column = l, c
 		}
@@ -435,4 +456,45 @@ func canonicalizeWorkflowDependencies(f *File) {
 		}
 		f.Workflows[path] = canonicalized
 	}
+}
+
+// schemaVersionRE matches "vMAJOR.MINOR.PATCH" with an optional leading "v"
+// and no pre-release suffix. The lockfile schema version is a strict
+// dotted-triple — anything else is unknown rather than future.
+var schemaVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
+
+// isFutureVersion reports whether actual is a well-formed schema version
+// strictly greater than supported. Used to distinguish "newer binary needed"
+// (friendly upgrade path) from "garbage/unknown version" (generic refusal).
+func isFutureVersion(actual, supported string) bool {
+	a, ok := parseSchemaVersion(actual)
+	if !ok {
+		return false
+	}
+	s, ok := parseSchemaVersion(supported)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if a[i] != s[i] {
+			return a[i] > s[i]
+		}
+	}
+	return false
+}
+
+func parseSchemaVersion(v string) ([3]int, bool) {
+	m := schemaVersionRE.FindStringSubmatch(v)
+	if m == nil {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return [3]int{}, false
+		}
+		out[i] = n
+	}
+	return out, true
 }

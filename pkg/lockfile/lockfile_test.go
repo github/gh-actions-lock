@@ -15,9 +15,29 @@ func TestParse_VersionRequired(t *testing.T) {
 }
 
 func TestParse_UnsupportedVersion(t *testing.T) {
-	_, err := Parse([]byte("version: v9\ndependencies: {}\n"))
+	// A version that isn't well-formed semver is rejected with the generic
+	// "unsupported" message — no upgrade-path hint, since we can't tell if
+	// the user is behind or just looking at garbage.
+	_, err := Parse([]byte("version: garbage\ndependencies: {}\n"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported dependency lockfile version")
+	assert.False(t, errors.Is(err, ErrFutureVersion))
+}
+
+func TestParse_FutureVersion_ReturnsFriendlyError(t *testing.T) {
+	_, err := Parse([]byte("version: v0.0.999\ndependencies: {}\n"))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "v0.0.999", "should name the lockfile version")
+	assert.Contains(t, msg, Version, "should name the supported version")
+	assert.Contains(t, msg, "gh extension upgrade gh-actions-pin", "should tell the user how to upgrade")
+	assert.Contains(t, msg, "github.com/github/gh-actions-pin/releases", "should link to releases")
+}
+
+func TestParse_FutureVersion_IsErrFutureVersion(t *testing.T) {
+	_, err := Parse([]byte("version: v9.0.0\ndependencies: {}\n"))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrFutureVersion), "future-version error should match ErrFutureVersion sentinel")
 }
 
 func TestParse_WrongShapeReportsLine(t *testing.T) {

@@ -59,6 +59,14 @@ func OpenStore(repoRoot string, meta MetadataResolver) (*Store, error) {
 	case err == nil:
 		file, err = parserlock.Parse(contents)
 		if err != nil {
+			// A future-version lockfile (written by a newer binary) must
+			// surface to the user — silently overwriting it would destroy
+			// pins this binary cannot interpret. Other parse failures
+			// (corrupt YAML, unknown fields) are treated as empty so a
+			// recoverable lockfile can be rewritten.
+			if errors.Is(err, parserlock.ErrFutureVersion) {
+				return nil, fmt.Errorf("reading %s: %w", Path, err)
+			}
 			// Corrupt or unrecognized lockfile — treat as empty and overwrite.
 			file = parserlock.File{Version: parserlock.Version}
 		}
