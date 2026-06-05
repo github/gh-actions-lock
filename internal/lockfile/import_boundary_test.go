@@ -35,10 +35,17 @@ func TestNoDirectParserlockImports(t *testing.T) {
 	// Files under these repo-relative prefixes are allowed to import the
 	// forbidden packages directly. internal/lockfile/ owns the alias
 	// trampoline; pkg/lockfile/ is the package itself (self-imports and
-	// internal tests).
+	// internal tests). pkg/check/ is a public peer library package that
+	// shares the same staged-for-extraction module boundary as
+	// pkg/lockfile — the schema/grammar are part of its facts shape, so
+	// routing through internal/lockfile would invert the dependency.
+	// Future pkg/* peers (e.g. pkg/provenance) should be added here for
+	// the same reason; CLI and internal/* code still routes through
+	// internal/lockfile aliases.
 	allowedPrefixes := []string{
 		"internal/lockfile/",
 		"pkg/lockfile/",
+		"pkg/check/",
 	}
 
 	repoRoot := findRepoRoot(t)
