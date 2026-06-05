@@ -16,6 +16,7 @@ package resolver
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/cachekey"
@@ -112,6 +113,12 @@ type Resolver struct {
 	releaseBranchCache map[cachekey.Repo][]branchHead
 	// checkReachFn overrides the default branch-discovery check (for tests).
 	checkReachFn func(owner, repo, sha, ref string) (ReachabilityStatus, string)
+	// nowFn and sleepFn back CheckAncestry's rate-limit retry loop so
+	// tests can drive deterministic X-RateLimit-Reset waits without
+	// actually sleeping. Both default to the stdlib equivalents in
+	// NewWithOptions.
+	nowFn   func() time.Time
+	sleepFn func(time.Duration)
 	// tagObjectCache memoizes PeelTagObject results. An annotated /
 	// immutable-release tag is stored in Git as a tag *object* whose own
 	// SHA differs from the commit it points at; this cache records whether

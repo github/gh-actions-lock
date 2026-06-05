@@ -64,7 +64,7 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 		if strings.EqualFold(sha, pin.Hex) {
 			continue
 		}
-		ancestry := r.CheckAncestry(ref.Owner, ref.Repo, pin.Hex, sha)
+		ancestry, ancestryDetail := r.CheckAncestry(ref.Owner, ref.Repo, pin.Hex, sha)
 		f := newRefFinding(pw, ref, "", "", "")
 		f.ObservedSHA = sha
 		f.Dependency = synthDep(ref, pin.Hex)
@@ -79,15 +79,18 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 			f.Remediation = "investigate immediately — verify the lockfile entry against upstream history"
 		default:
 			if ancestry == resolver.AncestryUnknown {
-				// Compare API didn't return an authoritative
-				// answer — rate-limited or transient error (see
-				// resolver.go CheckAncestry fallback). Surface as
-				// its own category so consumers don't conflate
-				// "we couldn't check" with "moved but benign".
+				// Compare API didn't reach a verdict — typically rate
+				// limited even after CheckAncestry's bounded retry (see
+				// resolver.CheckAncestry). Surface as its own category
+				// so consumers don't conflate "we couldn't check" with
+				// "moved but benign", and append the resolver's detail
+				// so the operator sees *why* (e.g. "rate limited (HTTP
+				// 429); resets at 1717552800") instead of a generic
+				// inconclusive string.
 				f.Category = CategoryAncestryUnknown
 				f.Severity = SeverityWarning
 				f.Confidence = ConfidenceMedium
-				f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive)", ref.Ref, shortSha(sha), shortSha(pin.Hex))
+				f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, shortSha(sha), shortSha(pin.Hex), suffixWith(ancestryDetail))
 				f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"
 			} else {
 				f.Category = CategoryRefMoved
@@ -100,6 +103,15 @@ func checkRefMovedAndForgery(pw ParsedWorkflow, depIndex map[string]lockfile.Pin
 		out = append(out, f)
 	}
 	return out
+}
+
+// suffixWith renders an optional detail as ": <detail>" so callers can
+// concatenate it into a parenthetical without checking for empty first.
+func suffixWith(detail string) string {
+	if detail == "" {
+		return ""
+	}
+	return ": " + detail
 }
 
 // checkImpostorCommit emits CategoryImpostorCommit when the locked SHA is

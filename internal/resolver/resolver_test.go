@@ -3,8 +3,10 @@ package resolver
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/cachekey"
@@ -1135,15 +1137,22 @@ func TestCheckAncestry_NotAncestor_409(t *testing.T) {
 
 func TestCheckAncestry_Unknown_RateLimit(t *testing.T) {
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", "repos/actions/checkout/compare/"),
-		httpmock.StatusResponse(429),
-	)
+	// Three 429s in a row exhausts ancestryMaxAttempts (=3). The
+	// resolver should bottom out at AncestryUnknown with the
+	// retry-budget-exhausted detail rather than treating the first
+	// 429 as authoritative.
+	for i := 0; i < 3; i++ {
+		reg.Register(
+			httpmock.REST("GET", "repos/actions/checkout/compare/"),
+			httpmock.StatusResponse(429),
+		)
+	}
 
 	r, err := NewWithTransport("github.com", reg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.sleepFn = func(time.Duration) {}
 
 	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
 	if status != AncestryUnknown {
@@ -1151,6 +1160,151 @@ func TestCheckAncestry_Unknown_RateLimit(t *testing.T) {
 	}
 	if !strings.Contains(detail, "rate limited") {
 		t.Fatalf("expected 'rate limited' detail, got %q", detail)
+	}
+	if !strings.Contains(detail, "retry budget exhausted") {
+		t.Fatalf("expected exhausted-budget detail after three 429s, got %q", detail)
+	}
+	reg.Verify(t)
+}
+
+// TestCheckAncestry_RetrySucceeds documents the happy retry path: two
+// transient 429s followed by a 200 must surface AncestryConfirmed
+// without dragging the test through wall-clock backoff.
+func TestCheckAncestry_RetrySucceeds(t *testing.T) {
+	pinnedSHA := "abc123abc123abc123abc123abc123abc123abc1"
+	liveSHA := "def456def456def456def456def456def456def4"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(429),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(429),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": pinnedSHA},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sleeps []time.Duration
+	r.sleepFn = func(d time.Duration) { sleeps = append(sleeps, d) }
+
+	status, _ := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	if status != AncestryConfirmed {
+		t.Fatalf("expected AncestryConfirmed after two retries, got %d", status)
+	}
+	if len(sleeps) != 2 {
+		t.Fatalf("expected 2 sleeps between 3 attempts, got %d (%v)", len(sleeps), sleeps)
+	}
+	reg.Verify(t)
+}
+
+// TestCheckAncestry_403_RateLimited treats a 403 carrying the
+// documented rate-limit headers (X-RateLimit-Reset, Retry-After) the
+// same as a 429: retry, then succeed.
+func TestCheckAncestry_403_RateLimited(t *testing.T) {
+	pinnedSHA := "abc123abc123abc123abc123abc123abc123abc1"
+	liveSHA := "def456def456def456def456def456def456def4"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponseWithHeaders(403, map[string]string{
+			"X-RateLimit-Remaining": "0",
+			"X-RateLimit-Reset":     "1",
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": pinnedSHA},
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.sleepFn = func(time.Duration) {}
+
+	status, _ := r.CheckAncestry("actions", "checkout", pinnedSHA, liveSHA)
+	if status != AncestryConfirmed {
+		t.Fatalf("expected AncestryConfirmed after 403 retry, got %d", status)
+	}
+	reg.Verify(t)
+}
+
+// TestCheckAncestry_403_NotRateLimited makes sure a plain 403 (no
+// rate-limit headers — the SSO / private-repo / disabled-API shape)
+// does not get retried. We register a single stub; a retry would fail
+// with "no registered HTTP stubs matched" and surface in the error.
+func TestCheckAncestry_403_NotRateLimited(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponse(403),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slept := false
+	r.sleepFn = func(time.Duration) { slept = true }
+
+	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	if status != AncestryUnknown {
+		t.Fatalf("expected AncestryUnknown for plain 403, got %d", status)
+	}
+	if slept {
+		t.Fatalf("plain 403 must not retry; got a sleep call")
+	}
+	if strings.Contains(detail, "rate limited") {
+		t.Fatalf("plain 403 must not be reported as rate limited, got %q", detail)
+	}
+	reg.Verify(t)
+}
+
+// TestCheckAncestry_RateLimitResetBeyondBudget bails immediately when
+// X-RateLimit-Reset is so far in the future that sleeping to honor it
+// would blow the retry budget. Avoids pointlessly stalling a doctor run
+// for the full budget when the call would still fail.
+func TestCheckAncestry_RateLimitResetBeyondBudget(t *testing.T) {
+	reg := &httpmock.Registry{}
+	farFutureReset := strconv.FormatInt(time.Now().Add(2*time.Hour).Unix(), 10)
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/compare/"),
+		httpmock.StatusResponseWithHeaders(429, map[string]string{
+			"X-RateLimit-Reset": farFutureReset,
+		}),
+	)
+
+	r, err := NewWithTransport("github.com", reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slept := false
+	r.sleepFn = func(time.Duration) { slept = true }
+
+	status, detail := r.CheckAncestry("actions", "checkout", "abc123abc123abc123abc123abc123abc123abc1", "def456def456def456def456def456def456def4")
+	if status != AncestryUnknown {
+		t.Fatalf("expected AncestryUnknown when reset is beyond budget, got %d", status)
+	}
+	if slept {
+		t.Fatalf("must not sleep when reset is beyond budget")
+	}
+	if !strings.Contains(detail, "budget") {
+		t.Fatalf("expected budget-exceeded detail, got %q", detail)
 	}
 	reg.Verify(t)
 }

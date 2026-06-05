@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/cachekey"
@@ -53,6 +54,8 @@ func NewWithOptions(opts api.ClientOptions) (*Resolver, error) {
 		protectedBranchCache: make(map[cachekey.Repo][]branchHead),
 		releaseBranchCache:   make(map[cachekey.Repo][]branchHead),
 		tagObjectCache:       make(map[cachekey.NWOSha]tagPeel),
+		nowFn:                time.Now,
+		sleepFn:              time.Sleep,
 	}, nil
 }
 
