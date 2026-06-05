@@ -329,6 +329,48 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	return parentMap, nil
 }
 
+// applyImpostorRewrites is the shared file I/O step used by both impostor
+// auto-fix paths: pre-pin (tryAutoFixImpostors, driven by check-phase
+// findings with SaneSuggestionTag) and post-pin (AutoFixAlertedImpostors,
+// driven by alerts surfaced during pinning). Each path builds its own
+// rewrites map — the matching semantics differ — and calls this helper to
+// load the file, apply the rewrites, write it back, and reload the action
+// refs so the caller can re-pin against the new content.
+//
+// Returns the refreshed ActionRefs together with applied=true when the
+// rewrite actually changed the file. An empty rewrites map or a
+// zero-change rewrite is a no-op and returns (nil, false, nil); on any I/O
+// error the file is left in whatever state the failure produced and the
+// error is returned. Callers own applyPin and recordAutoFixedImpostor so
+// each path can keep its distinct semantics around when to count a fix
+// (pre-pin records on rewrite; post-pin records only after applyPin
+// confirms the suggested tag is pinnable).
+func (rem *Remediator) applyImpostorRewrites(workflowPath string, rewrites map[string]string) ([]lockfile.ActionRef, bool, error) {
+	if len(rewrites) == 0 {
+		return nil, false, nil
+	}
+	wf, err := lockfile.Load(workflowPath)
+	if err != nil {
+		return nil, false, err
+	}
+	content, changed, err := wf.RewriteActionRefs(rewrites)
+	if err != nil {
+		return nil, false, err
+	}
+	if changed == 0 {
+		return nil, false, nil
+	}
+	if err := writeWorkflowFile(workflowPath, content); err != nil {
+		return nil, false, err
+	}
+	wf2, err := lockfile.Load(workflowPath)
+	if err != nil {
+		return nil, false, err
+	}
+	refs, _, _ := wf2.ExtractActionRefs()
+	return refs, true, nil
+}
+
 // writeWorkflowFile overwrites an existing workflow file, preserving its
 // current permission bits. Pinning must not silently widen a restrictive
 // mode (e.g. 0600 → 0644). Falls back to 0o644 when the file's mode can't
@@ -404,21 +446,10 @@ func (rem *Remediator) AutoFixAlertedImpostors() {
 				}
 			}
 		}
-		if len(rewrites) == 0 {
+		newRefs, applied, err := rem.applyImpostorRewrites(wp, rewrites)
+		if err != nil || !applied {
 			continue
 		}
-		content, changed, err := wf.RewriteActionRefs(rewrites)
-		if err != nil || changed == 0 {
-			continue
-		}
-		if err := writeWorkflowFile(wp, content); err != nil {
-			continue
-		}
-		wf2, err := lockfile.Load(wp)
-		if err != nil {
-			continue
-		}
-		newRefs, _, _ := wf2.ExtractActionRefs()
 		if err := rem.applyPin(WorkflowReport{Path: wp, ActionRefs: newRefs}); err != nil {
 			// Re-pin failed (e.g. suggested tag is also unreachable).
 			// Leave the rewritten file in place; the alert remains so the
