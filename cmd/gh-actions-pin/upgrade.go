@@ -113,7 +113,7 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			# Preview without writing
 			$ gh actions-pin upgrade --action actions/checkout --write=false
 		`),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
@@ -124,6 +124,9 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			if !cmd.Flags().Changed("write") {
 				opts.Write = true
 			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpgrade(cmd.Context(), f, opts)
 		},
 	}

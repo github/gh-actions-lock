@@ -98,21 +98,17 @@ $ gh actions-pin --json=valid,findings
 $ gh actions-pin upgrade --action actions/checkout
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
-			return opts.validateOutputFlags()
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
+			return opts.validateOutputFlags()
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCheck(cmd.Context(), f, opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
-	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
-	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
-	cmd.Flags().BoolVar(&opts.Rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
+	bindCheckFlags(cmd, opts)
 	cmd.AddCommand(newCheckCmd(f))
 	cmd.AddCommand(newUpgradeCmd(f))
 

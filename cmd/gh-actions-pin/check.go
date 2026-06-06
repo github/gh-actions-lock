@@ -124,16 +124,24 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			$ gh actions-pin check --json
 		`),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
-			return opts.validateOutputFlags()
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
 			}
+			return opts.validateOutputFlags()
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCheck(cmd.Context(), f, opts)
 		},
 	}
 
+	bindCheckFlags(cmd, opts)
+	return cmd
+}
+
+// bindCheckFlags registers the flags shared by the root command and the
+// explicit `check` subcommand. Root is just the default check invocation, so
+// both bind the identical surface from one place.
+func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.Format, "format", "", "Structured output `format` (currently only `sarif`)")
@@ -141,7 +149,6 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	cmd.Flags().BoolVar(&opts.Rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
-	return cmd
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
