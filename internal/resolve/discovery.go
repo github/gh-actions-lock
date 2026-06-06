@@ -94,7 +94,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []lockfile.Acti
 			}
 		}
 		resolveTotal.Store(int64(firstWave))
-		r.fireResolveProgress(0, firstWave)
+		r.FireResolveProgress(0, firstWave)
 	}
 
 	for len(pending) > 0 {
@@ -254,7 +254,7 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []lock
 	// deeper depths here to avoid double-counting.
 	if depth > 0 {
 		newTotal := resolveTotal.Add(int64(total))
-		r.fireResolveProgress(int(resolveDone.Load()), int(newTotal))
+		r.FireResolveProgress(int(resolveDone.Load()), int(newTotal))
 	}
 
 	limit := reachabilityConcurrency
@@ -298,7 +298,7 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []lock
 
 			done := resolveDone.Add(1)
 			r.WorkerProgressFn(slot, "✓ "+ref.NWO())
-			r.fireResolveProgress(int(done), int(resolveTotal.Load()))
+			r.FireResolveProgress(int(done), int(resolveTotal.Load()))
 		}(idx, refs[idx], slot)
 	}
 	wg.Wait()

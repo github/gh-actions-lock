@@ -10,16 +10,16 @@ import (
 	"github.com/github/gh-actions-pin/internal/cachekey"
 )
 
-// branchHead holds a branch name, the SHA of its HEAD commit, and whether
+// BranchHead holds a branch name, the SHA of its HEAD commit, and whether
 // the branch has branch-protection rules enabled in the upstream repo.
-type branchHead struct {
+type BranchHead struct {
 	Name      string
 	SHA       string
 	Protected bool
 }
 
-// tagEntry holds a tag name and the commit SHA it points at.
-type tagEntry struct {
+// TagEntry holds a tag name and the commit SHA it points at.
+type TagEntry struct {
 	Name string
 	SHA  string
 }

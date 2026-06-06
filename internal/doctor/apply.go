@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/github/gh-actions-pin/internal/audit"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolve"
 )
@@ -96,7 +97,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// still pins the benign siblings. Skipping the whole workflow on the
 	// first bad dep left those siblings out of the lockfile, so a second
 	// run kept "finding" and re-pinning them — the non-convergence bug.
-	reachResults := rem.resolver.CheckReachabilityAll(rem.ctx, deps)
+	reachResults := audit.New(rem.resolver).CheckReachabilityAll(rem.ctx, deps)
 	badKeys := make(map[string]bool)
 	for _, rr := range reachResults {
 		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref

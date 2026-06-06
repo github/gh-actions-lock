@@ -8,8 +8,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-pin/internal/cachekey"
@@ -102,327 +100,16 @@ func (r *Resolver) peelTagObject(ctx context.Context, owner, repo, sha string) (
 	return resp.Repository.Peeled.OID, true
 }
 
-// CheckReachability verifies that the pinned SHA is reachable from at least
-// one branch of owner/repo, using the documented REST APIs (list-branches +
-// compare for ancestry). This catches fork-network injection where a SHA
-// exists in GitHub's shared object store but is not part of the canonical
-// repository's history.
-//
-// See: https://docs.zizmor.sh/audits/#impostor-commit
-func (r *Resolver) CheckReachability(ctx context.Context, owner, repo, sha, ref string) ReachabilityResult {
-	result := ReachabilityResult{
-		Owner: owner,
-		Repo:  repo,
-		Ref:   ref,
-		SHA:   sha,
-	}
-
-	cacheKey := cachekey.ForReach(owner, repo, sha, ref)
-	if entry, ok := r.reachCache.get(cacheKey); ok {
-		result.Status = entry.status
-		result.Detail = entry.detail
-		return result
-	}
-
-	// Allow tests to inject a fake implementation.
-	if r.checkReachFn != nil {
-		result.Status, result.Detail = r.checkReachFn(ctx, owner, repo, sha, ref)
-		r.reachCache.put(cacheKey, reachCacheEntry{status: result.Status, detail: result.Detail})
-		return result
-	}
-
-	defaultBranch := r.getDefaultBranch(ctx, owner, repo)
-
-	// Phase 1: validate the likely/canonical branch set first (literal ref,
-	// recorded hint branch, default branch, protected branches, release/v*
-	// branches). Each is fetched directly, so a relevant branch is checked
-	// even in repos whose branch list exceeds the paginated cap (e.g. a
-	// monorepo whose default branch sorts beyond the first few hundred).
-	likely := r.likelyBranches(ctx, owner, repo, sha, ref, defaultBranch)
-	foundBranch, likelyChecked := r.reachabilityScan(ctx, owner, repo, sha, ref, likely, defaultBranch)
-
-	// Phase 2: full breadth scan only on a phase-1 miss. An inability to
-	// complete the full scan (list-branches failure) yields Unknown rather
-	// than a false impostor verdict, exactly as before.
-	var branches []branchHead
-	var protectedAnyChecked, allAnyChecked bool
-	if foundBranch == "" {
-		result.FullScanUsed = true
-		r.progress("%s/%s: not on a canonical branch — scanning all branches", owner, repo)
-		var err error
-		branches, err = r.listBranches(ctx, owner, repo)
-		if err != nil {
-			result.Status = ReachabilityUnknown
-			result.Detail = fmt.Sprintf("could not list branches for %s/%s: %s", owner, repo, err)
-			r.reachCache.put(cacheKey, reachCacheEntry{status: result.Status, detail: result.Detail})
-			return result
-		}
-		protectedBranches := make([]branchHead, 0, len(branches))
-		for _, b := range branches {
-			if b.Protected {
-				protectedBranches = append(protectedBranches, b)
-			}
-		}
-		// Walk protected first, then fall back to all branches. Track whether
-		// any Compare lookup succeeded so we can distinguish `Unreachable`
-		// (definitively not on any branch) from `Unknown` (every Compare
-		// errored, e.g. under rate-limit) — the latter must NOT be reported
-		// as an impostor verdict.
-		foundBranch, protectedAnyChecked = r.reachabilityScan(ctx, owner, repo, sha, ref, protectedBranches, defaultBranch)
-		if foundBranch == "" {
-			foundBranch, allAnyChecked = r.reachabilityScan(ctx, owner, repo, sha, ref, branches, defaultBranch)
-		}
-	}
-
-	anyChecked := likelyChecked || protectedAnyChecked || allAnyChecked
-	hadBranches := len(likely) > 0 || len(branches) > 0
-
-	if foundBranch != "" {
-		result.Status = Reachable
-		if lockfile.IsFullSha(ref) {
-			result.Detail = fmt.Sprintf("pinned to a bare SHA; commit is on branch %s but origin cannot be verified at job runtime — prefer pinning to a tag", foundBranch)
-		} else {
-			result.Detail = fmt.Sprintf("commit is on branch %s", foundBranch)
-		}
-	} else if !anyChecked && hadBranches {
-		// Every Compare lookup errored — don't claim impostor.
-		result.Status = ReachabilityUnknown
-		result.Detail = fmt.Sprintf("could not verify commit reachability for %s/%s — every Compare lookup failed (rate limit or transient error); try again later", owner, repo)
-	} else {
-		result.Status = Unreachable
-		if lockfile.IsFullSha(ref) {
-			result.Detail = "pinned to a bare SHA; commit is NOT on any branch — possible fork-network commit"
-		} else {
-			result.Detail = fmt.Sprintf("commit %s not found on any branch of %s/%s — possible fork-network injection",
-				shortSha(sha), owner, repo)
-		}
-	}
-
-	r.reachCache.put(cacheKey, reachCacheEntry{status: result.Status, detail: result.Detail})
-	return result
-}
-
-// reachabilityScan walks candidates (in orderedBranches tier order),
-// returning the first branch whose HEAD is sha or whose lineage contains
-// sha as an ancestor via the Compare API. Returns the matched branch name
-// and a boolean indicating whether at least one Compare lookup succeeded
-// (regardless of result). When every Compare call errored (e.g. fully
-// rate-limited / 5xx storm) we cannot conclude `Unreachable`; the caller
-// should surface that as `ReachabilityUnknown` instead of an impostor
-// verdict.
-//
-// The slow path (Compare API per branch) runs with bounded concurrency:
-// a SHA that lives only on a non-canonical branch can require walking
-// many heads, and a strictly sequential walk multiplies the wall-clock
-// cost by branch count. We still honor tier preference for the *reported*
-// branch — the earliest-tier match wins — but all candidates are dispatched
-// concurrently so the longest single Compare bounds the wall time rather
-// than their sum. The retry transport absorbs any 429/secondary-limit.
-func (r *Resolver) reachabilityScan(ctx context.Context, owner, repo, sha, ref string, candidates []branchHead, defaultBranch string) (matched string, anyChecked bool) {
-	if len(candidates) == 0 {
-		return "", false
-	}
-	// Fast path: exact HEAD match.
-	for _, b := range candidates {
-		if strings.EqualFold(b.SHA, sha) {
-			return b.Name, true
-		}
-	}
-	// Slow path: ancestry via Compare API in tier order. The walk runs
-	// concurrently — see function comment.
-	hintBranch, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
-	ordered := orderedBranches(candidates, hintBranch, ref, defaultBranch)
-	if len(ordered) == 0 {
-		return "", false
-	}
-	limit := reachabilityConcurrency
-	if len(ordered) < limit {
-		limit = len(ordered)
-	}
-	type result struct {
-		contains bool
-		checked  bool
-	}
-	results := make([]result, len(ordered))
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for i, b := range ordered {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, b branchHead) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
-			ok, err := r.branchContainsCommit(ctx, owner, repo, sha, b.SHA)
-			if err != nil {
-				return
-			}
-			results[i] = result{contains: ok, checked: true}
-		}(i, b)
-	}
-	wg.Wait()
-	// Tier preference: report the earliest-tier branch that contains the
-	// SHA. orderedBranches already encodes the tier order, so the first
-	// `contains` wins.
-	for i, res := range results {
-		if res.checked {
-			anyChecked = true
-			if res.contains {
-				return ordered[i].Name, true
-			}
-		}
-	}
-	return "", anyChecked
-}
-
-// CheckReachabilityAll runs reachability checks on a batch of dependencies,
-// deduplicating by owner/repo/sha/ref.
-func (r *Resolver) CheckReachabilityAll(ctx context.Context, deps []lockfile.Dependency) []ReachabilityResult {
-	// Reachability dedup keys: lowercased SHAs are fine because the API
-	// returns canonical lowercase, and ref preserves case so the same SHA at
-	// "v6" vs "V6" stays distinct.
-	seenReach := make(map[cachekey.Reach]bool)
-
-	// Pre-filter to the unique deps we'll actually check so progress can be
-	// reported as [i/N] against a stable total.
-	unique := make([]lockfile.Dependency, 0, len(deps))
-	for _, dep := range deps {
-		owner, repo := dep.OwnerRepo()
-		if owner == "" {
-			continue
-		}
-		key := cachekey.ForReach(owner, repo, dep.SHA, dep.Ref)
-		if seenReach[key] {
-			continue
-		}
-		seenReach[key] = true
-		unique = append(unique, dep)
-	}
-
-	total := len(unique)
-	if total == 0 {
-		return nil
-	}
-
-	// Fire the verify-phase counter immediately so the top label transitions
-	// out of "Resolving" the moment we leave that phase — even before warmup
-	// completes. Without this the user sees "[49/49] Resolving" frozen for
-	// the duration of the (sometimes slow) per-repo metadata warmup.
-	r.fireVerifyProgress(0, total)
-	if r.WorkerProgressFn != nil {
-		// Stale "✓ NWO" rows from the resolve phase carry into verify and
-		// confuse the picture; clear them so warmup/verify own a fresh slate.
-		for slot := 0; slot < reachabilityConcurrency; slot++ {
-			r.WorkerProgressFn(slot, "")
-		}
-	}
-
-	// Pre-warm the per-repo caches (branch list + default branch) for each
-	// distinct repo before fanning out the per-dep Compare calls. Warming once
-	// per repo avoids the thundering-herd of identical list-branches calls
-	// when N parallel workers race on the same repo. Parallelized across the
-	// same slot pool used by the verify fan-out so the user sees movement.
-	// uniqueRepos tracks distinct owner/repo pairs we still need to warm. We
-	// keep the original strings alongside the typed key so the warmup loop
-	// can issue API calls without re-parsing.
-	type repoEntry struct {
-		owner, repo string
-	}
-	uniqueRepos := make([]repoEntry, 0)
-	seenRepo := make(map[cachekey.Repo]bool)
-	for _, dep := range unique {
-		owner, repo := dep.OwnerRepo()
-		k := cachekey.ForRepo(owner, repo)
-		if !seenRepo[k] {
-			seenRepo[k] = true
-			uniqueRepos = append(uniqueRepos, repoEntry{owner: owner, repo: repo})
-		}
-	}
-	if r.checkReachFn == nil && len(uniqueRepos) > 0 {
-		warmupLimit := reachabilityConcurrency
-		if warmupLimit > len(uniqueRepos) {
-			warmupLimit = len(uniqueRepos)
-		}
-		warmupSlots := make(chan int, warmupLimit)
-		for i := 0; i < warmupLimit; i++ {
-			warmupSlots <- i
-		}
-		var warmupWG sync.WaitGroup
-		for _, re := range uniqueRepos {
-			warmupWG.Add(1)
-			slot := <-warmupSlots
-			go func(re repoEntry, slot int) {
-				defer warmupWG.Done()
-				defer func() { warmupSlots <- slot }()
-				rk := re.owner + "/" + re.repo
-				if r.WorkerProgressFn != nil {
-					r.WorkerProgressFn(slot, "→ loading "+rk)
-				}
-				_, _ = r.listBranches(ctx, re.owner, re.repo)
-				_ = r.getDefaultBranch(ctx, re.owner, re.repo)
-				if r.WorkerProgressFn != nil {
-					r.WorkerProgressFn(slot, "")
-				}
-			}(re, slot)
-		}
-		warmupWG.Wait()
-	}
-
-	// Fan out the per-dependency checks with a bounded worker pool. Each dep is
-	// independent; per-cache locks serialize map access and progress reporting
-	// is serialized via progressMu, so results[i] is the only unsynchronized
-	// write and each goroutine owns a distinct index. Each goroutine also owns
-	// a stable slot index (0..limit-1) for the per-worker UI display.
-	results := make([]ReachabilityResult, total)
-	limit := reachabilityConcurrency
-	if limit > total {
-		limit = total
-	}
-	slots := make(chan int, limit)
-	for i := 0; i < limit; i++ {
-		slots <- i
-	}
-	var (
-		wg        sync.WaitGroup
-		completed int32
-	)
-	for i, dep := range unique {
-		wg.Add(1)
-		slot := <-slots
-		go func(i int, dep lockfile.Dependency, slot int) {
-			defer wg.Done()
-			defer func() { slots <- slot }()
-			owner, repo := dep.OwnerRepo()
-			if r.WorkerProgressFn != nil {
-				r.WorkerProgressFn(slot, "→ "+dep.NWO+"@"+dep.Ref)
-			}
-			result := r.CheckReachability(ctx, owner, repo, dep.SHA, dep.Ref)
-			result.DepKey = dep.Key()
-			results[i] = result
-			done := atomic.AddInt32(&completed, 1)
-			if r.WorkerProgressFn != nil {
-				// Mark completed rather than clearing so the row stays visible
-				// until the slot is reused or the spinner stops.
-				r.WorkerProgressFn(slot, "✓ "+dep.NWO)
-			}
-			r.fireVerifyProgress(int(done), total)
-		}(i, dep, slot)
-	}
-	wg.Wait()
-
-	return results
-}
-
-// listBranches returns all branches with their HEAD SHAs for a repo, using
+// ListBranches returns all branches with their HEAD SHAs for a repo, using
 // the documented REST API (GET /repos/{owner}/{repo}/branches). Results are
 // cached per owner/repo. Paginates up to 3 pages (300 branches) to bound
 // the number of API calls.
-func (r *Resolver) listBranches(ctx context.Context, owner, repo string) ([]branchHead, error) {
+func (r *Resolver) ListBranches(ctx context.Context, owner, repo string) ([]BranchHead, error) {
 	key := cachekey.ForRepo(owner, repo)
 	if cached, ok := r.branchListCache.get(key); ok {
 		return cached, nil
 	}
-	var all []branchHead
+	var all []BranchHead
 	for page := 1; page <= 3; page++ {
 		path := fmt.Sprintf("repos/%s/%s/branches?per_page=100&page=%d",
 			url.PathEscape(owner), url.PathEscape(repo), page)
@@ -437,7 +124,7 @@ func (r *Resolver) listBranches(ctx context.Context, owner, repo string) ([]bran
 			return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, err)
 		}
 		for _, b := range resp {
-			all = append(all, branchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: b.Protected})
+			all = append(all, BranchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: b.Protected})
 		}
 		if len(resp) < 100 {
 			break // last page
@@ -450,7 +137,7 @@ func (r *Resolver) listBranches(ctx context.Context, owner, repo string) ([]bran
 // listTagsForRepo returns all tags with their commit SHAs for a repo, using
 // the documented REST API (GET /repos/{owner}/{repo}/tags). Results are
 // cached per owner/repo.
-func (r *Resolver) listTagsForRepo(ctx context.Context, owner, repo string) ([]tagEntry, error) {
+func (r *Resolver) ListTagsForRepo(ctx context.Context, owner, repo string) ([]TagEntry, error) {
 	key := cachekey.ForRepo(owner, repo)
 	if cached, ok := r.tagListCache.get(key); ok {
 		return cached, nil
@@ -466,9 +153,9 @@ func (r *Resolver) listTagsForRepo(ctx context.Context, owner, repo string) ([]t
 	if err := r.restClient.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)
 	}
-	tags := make([]tagEntry, 0, len(resp))
+	tags := make([]TagEntry, 0, len(resp))
 	for _, t := range resp {
-		tags = append(tags, tagEntry{Name: t.Name, SHA: t.Commit.SHA})
+		tags = append(tags, TagEntry{Name: t.Name, SHA: t.Commit.SHA})
 	}
 	r.tagListCache.put(key, tags)
 	return tags, nil
@@ -484,9 +171,9 @@ func (r *Resolver) listTagsForRepo(ctx context.Context, owner, repo string) ([]t
 //  5. unprotected branches, lex within tier
 //
 // Tiers 1–3 are skipped when empty or absent from branches.
-func orderedBranches(branches []branchHead, hintBranch, hintRef, defaultBranch string) []branchHead {
+func OrderedBranches(branches []BranchHead, hintBranch, hintRef, defaultBranch string) []BranchHead {
 	priority := make(map[string]bool)
-	var result []branchHead
+	var result []BranchHead
 	for _, name := range []string{hintBranch, hintRef, defaultBranch} {
 		if name == "" || priority[name] {
 			continue
@@ -499,8 +186,8 @@ func orderedBranches(branches []branchHead, hintBranch, hintRef, defaultBranch s
 			}
 		}
 	}
-	protected := make([]branchHead, 0, len(branches))
-	unprotected := make([]branchHead, 0, len(branches))
+	protected := make([]BranchHead, 0, len(branches))
+	unprotected := make([]BranchHead, 0, len(branches))
 	for _, b := range branches {
 		if priority[b.Name] {
 			continue
@@ -522,7 +209,7 @@ func orderedBranches(branches []branchHead, hintBranch, hintRef, defaultBranch s
 // looked up via GET /repos/{owner}/{repo} and cached for the lifetime of
 // the resolver. On lookup failure an empty string is cached so subsequent
 // callers don't retry.
-func (r *Resolver) getDefaultBranch(ctx context.Context, owner, repo string) string {
+func (r *Resolver) GetDefaultBranch(ctx context.Context, owner, repo string) string {
 	key := cachekey.ForRepo(owner, repo)
 	if name, ok := r.defaultBranchCache.get(key); ok {
 		return name
@@ -542,7 +229,7 @@ func (r *Resolver) getDefaultBranch(ctx context.Context, owner, repo string) str
 // escapeBranchPath percent-escapes each slash-delimited segment of a ref name
 // while preserving the slashes themselves, so names like "releases/v4" form a
 // valid git/ref path.
-func escapeBranchPath(name string) string {
+func EscapeBranchPath(name string) string {
 	parts := strings.Split(name, "/")
 	for i, p := range parts {
 		parts[i] = url.PathEscape(p)
@@ -555,16 +242,16 @@ func escapeBranchPath(name string) string {
 // not subject to the paginated 300-branch cap, so a known branch is validated
 // even in repos with thousands of branches. Results (including 404s) are
 // cached per (owner/repo, name). Returns ok=false on any error.
-func (r *Resolver) getBranchHead(ctx context.Context, owner, repo, name string) (branchHead, bool) {
+func (r *Resolver) GetBranchHead(ctx context.Context, owner, repo, name string) (BranchHead, bool) {
 	if name == "" {
-		return branchHead{}, false
+		return BranchHead{}, false
 	}
 	key := cachekey.ForNWOName(owner, repo, name)
 	if bh, ok := r.namedBranchCache.get(key); ok {
 		return bh, bh.Name != ""
 	}
 	path := fmt.Sprintf("repos/%s/%s/git/ref/heads/%s",
-		url.PathEscape(owner), url.PathEscape(repo), escapeBranchPath(name))
+		url.PathEscape(owner), url.PathEscape(repo), EscapeBranchPath(name))
 	var resp struct {
 		Ref    string `json:"ref"`
 		Object struct {
@@ -575,16 +262,16 @@ func (r *Resolver) getBranchHead(ctx context.Context, owner, repo, name string) 
 	if err := r.restClient.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
-			r.namedBranchCache.put(key, branchHead{}) // negative cache
+			r.namedBranchCache.put(key, BranchHead{}) // negative cache
 		}
-		return branchHead{}, false
+		return BranchHead{}, false
 	}
 	// A prefix (non-exact) match returns an array, decoding to an empty
 	// object here; treat that as "not found" rather than guessing.
 	if resp.Object.SHA == "" {
-		return branchHead{}, false
+		return BranchHead{}, false
 	}
-	bh := branchHead{Name: name, SHA: resp.Object.SHA}
+	bh := BranchHead{Name: name, SHA: resp.Object.SHA}
 	r.namedBranchCache.put(key, bh)
 	return bh, true
 }
@@ -592,12 +279,12 @@ func (r *Resolver) getBranchHead(ctx context.Context, owner, repo, name string) 
 // listProtectedBranches returns the repo's protected branches via
 // GET /repos/{owner}/{repo}/branches?protected=true. Best-effort: any error
 // yields whatever was collected so far (possibly empty). Cached per owner/repo.
-func (r *Resolver) listProtectedBranches(ctx context.Context, owner, repo string) []branchHead {
+func (r *Resolver) ListProtectedBranches(ctx context.Context, owner, repo string) []BranchHead {
 	key := cachekey.ForRepo(owner, repo)
 	if cached, ok := r.protectedBranchCache.get(key); ok {
 		return cached
 	}
-	var all []branchHead
+	var all []BranchHead
 	for page := 1; page <= 3; page++ {
 		path := fmt.Sprintf("repos/%s/%s/branches?protected=true&per_page=100&page=%d",
 			url.PathEscape(owner), url.PathEscape(repo), page)
@@ -611,7 +298,7 @@ func (r *Resolver) listProtectedBranches(ctx context.Context, owner, repo string
 			break // best-effort
 		}
 		for _, b := range resp {
-			all = append(all, branchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: true})
+			all = append(all, BranchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: true})
 		}
 		if len(resp) < 100 {
 			break
@@ -624,9 +311,9 @@ func (r *Resolver) listProtectedBranches(ctx context.Context, owner, repo string
 // matchingHeadRefs returns branches whose names start with prefix via
 // GET /repos/{owner}/{repo}/git/matching-refs/heads/{prefix}. Best-effort:
 // any error yields nil.
-func (r *Resolver) matchingHeadRefs(ctx context.Context, owner, repo, prefix string) []branchHead {
+func (r *Resolver) MatchingHeadRefs(ctx context.Context, owner, repo, prefix string) []BranchHead {
 	path := fmt.Sprintf("repos/%s/%s/git/matching-refs/heads/%s",
-		url.PathEscape(owner), url.PathEscape(repo), escapeBranchPath(prefix))
+		url.PathEscape(owner), url.PathEscape(repo), EscapeBranchPath(prefix))
 	var resp []struct {
 		Ref    string `json:"ref"`
 		Object struct {
@@ -637,13 +324,13 @@ func (r *Resolver) matchingHeadRefs(ctx context.Context, owner, repo, prefix str
 	if err := r.restClient.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil // best-effort
 	}
-	var out []branchHead
+	var out []BranchHead
 	for _, ref := range resp {
 		name := strings.TrimPrefix(ref.Ref, "refs/heads/")
 		if name == ref.Ref || name == "" || ref.Object.SHA == "" {
 			continue
 		}
-		out = append(out, branchHead{Name: name, SHA: ref.Object.SHA})
+		out = append(out, BranchHead{Name: name, SHA: ref.Object.SHA})
 	}
 	return out
 }
@@ -651,15 +338,15 @@ func (r *Resolver) matchingHeadRefs(ctx context.Context, owner, repo, prefix str
 // listReleaseBranches returns release/v* branches (the canonical action
 // publication branches) by matching heads/v and heads/release. Best-effort;
 // cached per owner/repo.
-func (r *Resolver) listReleaseBranches(ctx context.Context, owner, repo string) []branchHead {
+func (r *Resolver) ListReleaseBranches(ctx context.Context, owner, repo string) []BranchHead {
 	key := cachekey.ForRepo(owner, repo)
 	if cached, ok := r.releaseBranchCache.get(key); ok {
 		return cached
 	}
 	seen := make(map[string]bool)
-	var all []branchHead
+	var all []BranchHead
 	for _, prefix := range []string{"v", "release"} {
-		for _, bh := range r.matchingHeadRefs(ctx, owner, repo, prefix) {
+		for _, bh := range r.MatchingHeadRefs(ctx, owner, repo, prefix) {
 			if bh.Name == "" || seen[bh.Name] {
 				continue
 			}
@@ -678,14 +365,14 @@ func (r *Resolver) listReleaseBranches(ctx context.Context, owner, repo string) 
 // paginated listing), so a relevant branch is checked even when it would sort
 // beyond the listing page cap. Deduplicated by name; order is most-trusted
 // first.
-func (r *Resolver) likelyBranches(ctx context.Context, owner, repo, sha, ref, defaultBranch string) []branchHead {
+func (r *Resolver) LikelyBranches(ctx context.Context, owner, repo, sha, ref, defaultBranch string) []BranchHead {
 	seen := make(map[string]bool)
-	var out []branchHead
+	var out []BranchHead
 	addNamed := func(name string) {
 		if name == "" || seen[name] {
 			return
 		}
-		if bh, ok := r.getBranchHead(ctx, owner, repo, name); ok {
+		if bh, ok := r.GetBranchHead(ctx, owner, repo, name); ok {
 			seen[name] = true
 			out = append(out, bh)
 		}
@@ -696,14 +383,14 @@ func (r *Resolver) likelyBranches(ctx context.Context, owner, repo, sha, ref, de
 	hint, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
 	addNamed(hint)
 	addNamed(defaultBranch)
-	for _, bh := range r.listProtectedBranches(ctx, owner, repo) {
+	for _, bh := range r.ListProtectedBranches(ctx, owner, repo) {
 		if bh.Name == "" || seen[bh.Name] {
 			continue
 		}
 		seen[bh.Name] = true
 		out = append(out, bh)
 	}
-	for _, bh := range r.listReleaseBranches(ctx, owner, repo) {
+	for _, bh := range r.ListReleaseBranches(ctx, owner, repo) {
 		if bh.Name == "" || seen[bh.Name] {
 			continue
 		}
@@ -729,7 +416,7 @@ func (r *Resolver) likelyBranches(ctx context.Context, owner, repo, sha, ref, de
 // hintRef may be empty (e.g. for bare-SHA pins). The repo's default branch
 // is discovered automatically via GET /repos/{owner}/{repo} (cached).
 func (r *Resolver) DiscoverContaining(ctx context.Context, owner, repo, sha, hintRef string) (tag, branch string, err error) {
-	return r.DiscoverContainingDefault(ctx, owner, repo, sha, hintRef, r.getDefaultBranch(ctx, owner, repo))
+	return r.DiscoverContainingDefault(ctx, owner, repo, sha, hintRef, r.GetDefaultBranch(ctx, owner, repo))
 }
 
 // DiscoverContainingDefault is DiscoverContaining with an explicit hint at
@@ -744,7 +431,7 @@ func (r *Resolver) DiscoverContaining(ctx context.Context, owner, repo, sha, hin
 // error is returned only if both phases fail to place the commit.
 func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, sha, hintRef, defaultBranch string) (tag, branch string, err error) {
 	// Phase 1: canonical "likely" branches, fetched directly.
-	likely := r.likelyBranches(ctx, owner, repo, sha, hintRef, defaultBranch)
+	likely := r.LikelyBranches(ctx, owner, repo, sha, hintRef, defaultBranch)
 	branch, err = r.findContainingBranch(ctx, owner, repo, sha, hintRef, defaultBranch, likely)
 	if err != nil {
 		return "", "", err
@@ -752,11 +439,11 @@ func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, s
 
 	// Phase 2: full paginated scan, only on a phase-1 miss.
 	if branch == "" {
-		branches, lerr := r.listBranches(ctx, owner, repo)
+		branches, lerr := r.ListBranches(ctx, owner, repo)
 		if lerr != nil {
 			return "", "", lerr
 		}
-		protectedBranches := make([]branchHead, 0, len(branches))
+		protectedBranches := make([]BranchHead, 0, len(branches))
 		for _, b := range branches {
 			if b.Protected {
 				protectedBranches = append(protectedBranches, b)
@@ -779,7 +466,7 @@ func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, s
 	}
 
 	// Discover tags pointing at sha.
-	allTags, err := r.listTagsForRepo(ctx, owner, repo)
+	allTags, err := r.ListTagsForRepo(ctx, owner, repo)
 	if err != nil {
 		return "", "", err
 	}
@@ -799,7 +486,7 @@ func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, s
 // contains sha as an ancestor via the Compare API. Returns "" if none
 // match. Returns a non-nil error only for unexpected transport failures
 // from the Compare API (404/422 are treated as "not contained").
-func (r *Resolver) findContainingBranch(ctx context.Context, owner, repo, sha, hintRef, defaultBranch string, candidates []branchHead) (string, error) {
+func (r *Resolver) findContainingBranch(ctx context.Context, owner, repo, sha, hintRef, defaultBranch string, candidates []BranchHead) (string, error) {
 	if len(candidates) == 0 {
 		return "", nil
 	}
@@ -815,9 +502,9 @@ func (r *Resolver) findContainingBranch(ctx context.Context, owner, repo, sha, h
 	}
 	// Slow path: ancestry via Compare API in tier order.
 	hintBranch, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
-	for _, b := range orderedBranches(candidates, hintBranch, hintRef, defaultBranch) {
-		r.progress("scanning %s/%s branch %s", owner, repo, b.Name)
-		ok, err := r.branchContainsCommit(ctx, owner, repo, sha, b.SHA)
+	for _, b := range OrderedBranches(candidates, hintBranch, hintRef, defaultBranch) {
+		r.Progress("scanning %s/%s branch %s", owner, repo, b.Name)
+		ok, err := r.BranchContainsCommit(ctx, owner, repo, sha, b.SHA)
 		if err != nil {
 			return "", fmt.Errorf("comparing %s with %s/%s branch %s: %w",
 				shortSha(sha), owner, repo, b.Name, err)
@@ -928,7 +615,7 @@ func (r *Resolver) NormalizeContaining(ctx context.Context, deps []lockfile.Depe
 		if owner == "" || repo == "" {
 			continue
 		}
-		r.progress("resolving %s@%s", d.NWO, d.Ref)
+		r.Progress("resolving %s@%s", d.NWO, d.Ref)
 		tag, branch, err := r.DiscoverContaining(ctx, owner, repo, d.SHA, d.Ref)
 		if err != nil {
 			var imp *ImpostorError

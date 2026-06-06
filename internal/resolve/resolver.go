@@ -80,8 +80,8 @@ type Resolver struct {
 	cache              syncMap[cachekey.ActionRef, resolvedEntry]
 	latestRefCache     syncMap[cachekey.Repo, string]
 	reachCache         syncMap[cachekey.Reach, reachCacheEntry]
-	branchListCache    syncMap[cachekey.Repo, []branchHead]
-	tagListCache       syncMap[cachekey.Repo, []tagEntry]
+	branchListCache    syncMap[cachekey.Repo, []BranchHead]
+	tagListCache       syncMap[cachekey.Repo, []TagEntry]
 	repoIDsCache       syncMap[cachekey.Repo, [2]int64]
 	defaultBranchCache syncMap[cachekey.Repo, string] // "" caches a failed lookup
 	// compareCache memoizes branchContainsCommit verdicts. Compare API
@@ -94,18 +94,18 @@ type Resolver struct {
 	// branch still contains the commit.
 	branchHintBySHA syncMap[cachekey.NWOSha, string]
 	// namedBranchCache memoizes single-branch HEAD lookups (getBranchHead).
-	// A zero-value branchHead (empty Name) records a known-missing branch
+	// A zero-value BranchHead (empty Name) records a known-missing branch
 	// so 404s are not re-fetched. These lookups use the git/ref endpoint
 	// and so bypass the paginated branch-listing page cap.
-	namedBranchCache syncMap[cachekey.NWOName, branchHead]
+	namedBranchCache syncMap[cachekey.NWOName, BranchHead]
 	// protectedBranchCache memoizes the protected-branch list per repo
 	// (GET /branches?protected=true) — part of the canonical "likely" set
 	// validated before any full branch scan.
-	protectedBranchCache syncMap[cachekey.Repo, []branchHead]
+	protectedBranchCache syncMap[cachekey.Repo, []BranchHead]
 	// releaseBranchCache memoizes release/v* branches per repo (git
 	// matching-refs for heads/v and heads/release), the canonical
 	// publication branches for actions.
-	releaseBranchCache syncMap[cachekey.Repo, []branchHead]
+	releaseBranchCache syncMap[cachekey.Repo, []BranchHead]
 	// tagObjectCache memoizes PeelTagObject results. An annotated /
 	// immutable-release tag is stored in Git as a tag *object* whose own
 	// SHA differs from the commit it points at; this cache records whether
@@ -155,7 +155,7 @@ type Resolver struct {
 // progress fires ProgressFn with a formatted message when set. Safe to call
 // from multiple goroutines: invocations are serialized so the single-writer
 // spinner UI never sees concurrent updates.
-func (r *Resolver) progress(format string, args ...any) {
+func (r *Resolver) Progress(format string, args ...any) {
 	if r.ProgressFn == nil {
 		return
 	}
@@ -167,7 +167,7 @@ func (r *Resolver) progress(format string, args ...any) {
 // fireResolveProgress fires OnResolveProgress with the given counts. Safe to
 // call from multiple goroutines: invocations are serialized so the spinner UI
 // never sees concurrent updates.
-func (r *Resolver) fireResolveProgress(done, total int) {
+func (r *Resolver) FireResolveProgress(done, total int) {
 	if r.OnResolveProgress == nil {
 		return
 	}
@@ -177,7 +177,7 @@ func (r *Resolver) fireResolveProgress(done, total int) {
 }
 
 // fireVerifyProgress fires OnVerifyProgress with the given counts.
-func (r *Resolver) fireVerifyProgress(done, total int) {
+func (r *Resolver) FireVerifyProgress(done, total int) {
 	if r.OnVerifyProgress == nil {
 		return
 	}
@@ -266,4 +266,56 @@ func shortSha(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+// RestClient returns the REST API client for direct API calls.
+func (r *Resolver) RestClient() *api.RESTClient {
+	return r.restClient
+}
+
+// NowFn returns the time function used for retry timing.
+func (r *Resolver) NowFn() func() time.Time {
+	return r.nowFn
+}
+
+// SetNowFn overrides the time function (for testing).
+func (r *Resolver) SetNowFn(fn func() time.Time) {
+	r.nowFn = fn
+}
+
+// SleepFn returns the context-aware sleep function used for retry waits.
+func (r *Resolver) SleepFn() func(context.Context, time.Duration) {
+	return r.sleepFn
+}
+
+// SetSleepFn overrides the sleep function (for testing).
+func (r *Resolver) SetSleepFn(fn func(context.Context, time.Duration)) {
+	r.sleepFn = fn
+}
+
+// CheckReachFn returns the injected test reachability function, or nil.
+func (r *Resolver) CheckReachFn() func(ctx context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string) {
+	return r.checkReachFn
+}
+
+// BranchHint returns the branch previously recorded as containing sha in
+// owner/repo, or "" if no hint exists.
+func (r *Resolver) BranchHint(owner, repo, sha string) string {
+	hint, _ := r.branchHintBySHA.get(cachekey.ForNWOSha(owner, repo, sha))
+	return hint
+}
+
+// PutReachCache stores a reachability result in the resolver's reach cache.
+func (r *Resolver) PutReachCache(owner, repo, sha, ref string, status ReachabilityStatus, detail string) {
+	r.reachCache.put(cachekey.ForReach(owner, repo, sha, ref), reachCacheEntry{status: status, detail: detail})
+}
+
+// GetReachCache retrieves a cached reachability result. Returns ok=false on
+// cache miss.
+func (r *Resolver) GetReachCache(owner, repo, sha, ref string) (status ReachabilityStatus, detail string, ok bool) {
+	entry, hit := r.reachCache.get(cachekey.ForReach(owner, repo, sha, ref))
+	if !hit {
+		return "", "", false
+	}
+	return entry.status, entry.detail, true
 }

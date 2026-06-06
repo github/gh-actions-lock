@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 
+	"github.com/github/gh-actions-pin/internal/audit"
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolve"
@@ -31,9 +32,10 @@ type checkResolver interface {
 // resolutions and reachability are pre-computed; ancestry and tag-object
 // peels stay on-demand and delegate to the resolver's own cache.
 type prewarmedResolver struct {
-	inner *resolve.Resolver
-	refs  map[cachekey.NWORef]string                     // (owner/repo, ref) -> sha
-	reach map[cachekey.Reach]resolve.ReachabilityStatus // (owner/repo, sha, ref) -> status
+	inner   *resolve.Resolver
+	auditor *audit.Auditor
+	refs    map[cachekey.NWORef]string                     // (owner/repo, ref) -> sha
+	reach   map[cachekey.Reach]resolve.ReachabilityStatus // (owner/repo, sha, ref) -> status
 }
 
 // newPrewarmedResolver primes the adapter with the live resolution of
@@ -47,9 +49,10 @@ func newPrewarmedResolver(r *resolve.Resolver, live []lockfile.Dependency, reach
 		extras += len(e)
 	}
 	a := &prewarmedResolver{
-		inner: r,
-		refs:  make(map[cachekey.NWORef]string, len(live)),
-		reach: make(map[cachekey.Reach]resolve.ReachabilityStatus, len(reach)+extras),
+		inner:   r,
+		auditor: audit.New(r),
+		refs:    make(map[cachekey.NWORef]string, len(live)),
+		reach:   make(map[cachekey.Reach]resolve.ReachabilityStatus, len(reach)+extras),
 	}
 	for _, d := range live {
 		owner, repo := d.OwnerRepo()
@@ -79,10 +82,10 @@ func (a *prewarmedResolver) PeelTagObject(ctx context.Context, owner, repo, sha 
 }
 
 func (a *prewarmedResolver) CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolve.AncestryStatus, string) {
-	if a.inner == nil {
+	if a.auditor == nil {
 		return resolve.AncestryUnknown, ""
 	}
-	return a.inner.CheckAncestry(ctx, owner, repo, candidate, head)
+	return a.auditor.CheckAncestry(ctx, owner, repo, candidate, head)
 }
 
 func (a *prewarmedResolver) CheckReachability(owner, repo, sha, ref string) resolve.ReachabilityStatus {

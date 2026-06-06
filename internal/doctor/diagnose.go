@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/github/gh-actions-pin/internal/audit"
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/resolve"
@@ -27,7 +28,7 @@ func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *l
 			_, _, _ = r.ResolveAllRecursive(ctx, refs)
 		}
 		if len(deps) > 0 {
-			_ = r.CheckReachabilityAll(ctx, deps)
+			_ = audit.New(r).CheckReachabilityAll(ctx, deps)
 		}
 	}
 	return DiagnoseParsed(ctx, parsed, r, store)
@@ -231,11 +232,15 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolve.Resolv
 	}
 
 	var reach []resolve.ReachabilityResult
+	var a *audit.Auditor
+	if r != nil {
+		a = audit.New(r)
+	}
 	if r != nil && len(pw.ExistingDeps) > 0 {
 		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
 		reach = trusted
 		if len(toCheck) > 0 {
-			reach = append(reach, r.CheckReachabilityAll(ctx, toCheck)...)
+			reach = append(reach, a.CheckReachabilityAll(ctx, toCheck)...)
 		}
 	}
 	// Independent sweep for LIVE SHAs whose tag has moved: the
@@ -248,7 +253,7 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolve.Resolv
 	var liveMovedReach []resolve.ReachabilityResult
 	if r != nil && len(liveDeps) > 0 && len(pw.ExistingDeps) > 0 {
 		if moved := liveMovedDeps(pw.ExistingDeps, liveDeps); len(moved) > 0 {
-			liveMovedReach = r.CheckReachabilityAll(ctx, moved)
+			liveMovedReach = a.CheckReachabilityAll(ctx, moved)
 		}
 	}
 	// Pin-time parity sweep: any (NWO, Ref, LIVE SHA) that neither the
@@ -260,7 +265,7 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolve.Resolv
 	var liveDirectReach []resolve.ReachabilityResult
 	if r != nil && len(liveDeps) > 0 {
 		if extra := liveDirectReachDeps(pw, liveDeps); len(extra) > 0 {
-			liveDirectReach = r.CheckReachabilityAll(ctx, extra)
+			liveDirectReach = a.CheckReachabilityAll(ctx, extra)
 		}
 	}
 	var checkR checkResolver

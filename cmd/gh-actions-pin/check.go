@@ -13,6 +13,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
+	"github.com/github/gh-actions-pin/internal/audit"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/runlog"
@@ -325,14 +326,15 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if showHeadlessProgress {
 			console.UpdateLabel("Verifying reachability")
 		}
+		a := audit.New(r)
 		if len(reachDeps) > 0 {
-			_ = r.CheckReachabilityAll(ctx, reachDeps)
+			_ = a.CheckReachabilityAll(ctx, reachDeps)
 		}
 		if len(liveMoved) > 0 {
-			_ = r.CheckReachabilityAll(ctx, liveMoved)
+			_ = a.CheckReachabilityAll(ctx, liveMoved)
 		}
 		if len(liveDirect) > 0 {
-			_ = r.CheckReachabilityAll(ctx, liveDirect)
+			_ = a.CheckReachabilityAll(ctx, liveDirect)
 		}
 	}
 
@@ -373,11 +375,12 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// branch in the action repo. Bounded network walk per affected action;
 	// skipped entirely when no impostor findings exist.
 	if hasImpostorFindings(report) {
+		a := audit.New(r)
 		if tagger != nil {
-			doctor.EnrichImpostorFindings(ctx, report, tagger, r)
+			doctor.EnrichImpostorFindings(ctx, report, tagger, a)
 		} else if rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
 			tl := doctor.NewTagLister(rc)
-			doctor.EnrichImpostorFindings(ctx, report, tl, r)
+			doctor.EnrichImpostorFindings(ctx, report, tl, a)
 		}
 	}
 
