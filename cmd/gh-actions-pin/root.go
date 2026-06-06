@@ -17,7 +17,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var errSilent = errors.New("silent error")
@@ -37,16 +36,18 @@ type pinFactory struct {
 	IsTerminal func() bool
 }
 
-// NewDefaultFactory creates a factory wired to real stdio.
+// NewDefaultFactory creates a factory wired to real stdio. UI is built from
+// ErrOut so its sink and TTY decision track the factory's own writer, and
+// IsTerminal delegates to the UI — one writer, one TTY source of truth.
 func NewDefaultFactory() *pinFactory {
+	errOut := os.Stderr
+	u := ui.NewWithWriter(errOut)
 	return &pinFactory{
 		Out:         os.Stdout,
-		ErrOut:      os.Stderr,
-		UI:          ui.New(),
+		ErrOut:      errOut,
+		UI:          u,
 		NewResolver: resolver.New,
-		IsTerminal: func() bool {
-			return term.IsTerminal(int(os.Stderr.Fd()))
-		},
+		IsTerminal:  u.IsTTY,
 	}
 }
 
