@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,42 +18,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var errSilent = errors.New("silent error")
-
-// pinFactory provides dependency injection for all commands. When integrating
-// into cli/cli, swap this for cmdutil.Factory — the interface is analogous.
-type pinFactory struct {
-	// Out is the writer for structured output (JSON). Typically os.Stdout.
-	Out io.Writer
-	// ErrOut is the writer for human-readable output (progress, errors). Typically os.Stderr.
-	ErrOut io.Writer
-	// UI provides formatted terminal output via ErrOut.
-	UI *ui.UI
-	// NewResolver creates a resolver for the given hostname.
-	NewResolver func(hostname string) (*resolver.Resolver, error)
-	// IsTerminal reports whether ErrOut is a TTY.
-	IsTerminal func() bool
-}
-
-// NewDefaultFactory creates a factory wired to real stdio. UI is built from
-// ErrOut so its sink and TTY decision track the factory's own writer, and
-// IsTerminal delegates to the UI — one writer, one TTY source of truth.
-func NewDefaultFactory() *pinFactory {
-	errOut := os.Stderr
-	u := ui.NewWithWriter(errOut)
-	return &pinFactory{
-		Out:         os.Stdout,
-		ErrOut:      errOut,
-		UI:          u,
-		NewResolver: resolver.New,
-		IsTerminal:  u.IsTTY,
+// execute runs the root command and returns an exit code.
+//
+//   - 0: clean run, no blocking findings.
+//   - 1: blocking findings present (errSilent sentinel); stdout JSON is
+//     well-formed when --json was requested.
+//   - 2: tool failure (bad flag, IO error, network failure, malformed
+//     lockfile, future-version refusal, panic, etc.). stdout may be empty
+//     or partial; consumers should rely on stderr for diagnosis.
+func execute() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := newRootCmd(nil).ExecuteContext(ctx)
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, errSilent):
+		// Blocking findings were already reported via well-formed output; exit
+		// 1 quietly so a second error line doesn't clobber the JSON/summary.
+		return 1
+	default:
+		// Every other non-nil error — including pkg/lockfile.ErrFutureVersion —
+		// is a tool failure and maps to 2. Print it on a fresh UI bound to
+		// stderr so it's visible regardless of how the run configured its own.
+		ui.New().Error("%s", err)
+		return 2
 	}
 }
 
-// NewRootCmd returns the cobra command for the root `actions-pin` invocation.
-// f supplies the runtime factory (HTTP transport, terminal detection, TTY hints)
-// so tests can swap in fakes.
-func NewRootCmd(f *pinFactory) *cobra.Command {
+type resolverFunc func(hostname string) (*resolver.Resolver, error)
+
+// newRootCmd returns the cobra command for the root `actions-pin` invocation.
+// newResolver supplies the resolver builder; pass nil for production wiring.
+func newRootCmd(newResolver resolverFunc) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
@@ -100,62 +96,48 @@ $ gh actions-pin upgrade --action actions/checkout
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				opts.WorkflowPaths = args
+				opts.workflowPaths = args
 			}
 			return opts.validateOutputFlags()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCheck(cmd.Context(), f, opts)
+			return runCheck(cmd, opts, newResolver)
 		},
 	}
 
 	bindCheckFlags(cmd, opts)
-	cmd.AddCommand(newCheckCmd(f))
-	cmd.AddCommand(newUpgradeCmd(f))
+	cmd.AddCommand(newCheckCmd(newResolver))
+	cmd.AddCommand(newUpgradeCmd(newResolver))
 
 	return cmd
 }
 
-// Execute runs the root command and returns an exit code.
-//
-// Exit code contract (see docs/dependabot-cli-contract.md and INTEGRATION.md):
-//
-//   - 0: clean run, no blocking findings.
-//   - 1: blocking findings present (errSilent sentinel); stdout JSON is
-//     well-formed when --json was requested.
-//   - 2: tool failure (bad flag, IO error, network failure, malformed
-//     lockfile, future-version refusal, panic, etc.). stdout may be empty
-//     or partial; consumers should rely on stderr for diagnosis.
-func Execute() int {
-	f := NewDefaultFactory()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	err := NewRootCmd(f).ExecuteContext(ctx)
-	if err != nil && !errors.Is(err, errSilent) {
-		// Detach any narration log sink first: it may have been pointed at
-		// io.Discard during the run (the JSON-less "the terminal owns the
-		// spinners" mode), in which case routing the error through
-		// f.UI.Error would silently swallow it. We want the error visible.
-		f.UI.SetLog(nil)
-		f.UI.Error("%s", err)
+// newRun performs the per-invocation wiring shared by every command: expand the
+// requested workflow paths (or discover them), build a resolver for the
+// resolved hostname, open the lockfile store against it, and seed branch hints
+// from the existing lockfile so repeat scans short-circuit the per-branch
+// Compare walk. newResolver is the DI seam; pass nil for production wiring.
+func newRun(workflowPaths []string, hostname string, newResolver resolverFunc) ([]string, *resolver.Resolver, *lockfile.Store, error) {
+	paths, err := discoverWorkflowPaths(workflowPaths)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return exitCodeFor(err)
-}
 
-// exitCodeFor maps an error returned by the root command to a process exit
-// code. The classification rule is intentionally narrow: only the errSilent
-// sentinel (returned when blocking findings are reported via well-formed
-// JSON on stdout) maps to 1. Every other non-nil error — including
-// pkg/lockfile.ErrFutureVersion — is a tool failure and maps to 2.
-func exitCodeFor(err error) int {
-	switch {
-	case err == nil:
-		return 0
-	case errors.Is(err, errSilent):
-		return 1
-	default:
-		return 2
+	if newResolver == nil {
+		newResolver = resolver.New
 	}
+	r, err := newResolver(resolveHostname(hostname))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	store, err := lockfile.OpenStore(".", r)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
+	}
+	r.SeedBranchHints(store.AllDeps())
+
+	return paths, r, store, nil
 }
 
 func discoverWorkflowPaths(existing []string) ([]string, error) {

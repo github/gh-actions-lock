@@ -223,7 +223,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 		}
 	}
 
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
+	if err := rem.store.Set(rem.ctx, lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
@@ -342,7 +342,7 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 		return err
 	}
 
-	if err := rem.store.Set(lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
+	if err := rem.store.Set(rem.ctx, lockfile.WorkflowKeyFromPath(wr.Path), deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 

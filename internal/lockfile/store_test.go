@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 
 type fakeMetadataResolver struct{}
 
-func (fakeMetadataResolver) RepoIDs(owner, repo string) (int64, int64, error) {
+func (fakeMetadataResolver) RepoIDs(_ context.Context, owner, repo string) (int64, int64, error) {
 	return 1, 2, nil
 }
 
@@ -46,7 +47,7 @@ func TestStore_PersistsTagAndBranch(t *testing.T) {
 		},
 	}
 
-	if err := store.Set(WorkflowKeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps, nil, nil); err != nil {
+	if err := store.Set(context.Background(), WorkflowKeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps, nil, nil); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -137,7 +138,7 @@ func TestStore_SetRejectsEmptyBranch(t *testing.T) {
 		},
 	}
 
-	err = store.Set(".github/workflows/ci.yml", deps, nil, nil)
+	err = store.Set(context.Background(), ".github/workflows/ci.yml", deps, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for dep with empty Branch, got nil")
 	}
@@ -174,7 +175,7 @@ func TestStore_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 		"owner/b@v1": true,
 	}
 
-	if err := store.Set(".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -257,7 +258,7 @@ func TestStore_SaveGCHandlesCyclicUses(t *testing.T) {
 		"owner/a@v1": true,
 	}
 
-	if err := store.Set(".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -319,10 +320,10 @@ func TestStore_SaveIsByteDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("opening store: %v", err)
 		}
-		if err := store.Set(".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
+		if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
 			t.Fatalf("Set ci.yml: %v", err)
 		}
-		if err := store.Set(".github/workflows/release.yml", deps, parentMap, directKeys); err != nil {
+		if err := store.Set(context.Background(), ".github/workflows/release.yml", deps, parentMap, directKeys); err != nil {
 			t.Fatalf("Set release.yml: %v", err)
 		}
 		if err := store.Save(); err != nil {

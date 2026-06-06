@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -254,7 +255,7 @@ func TestCheckSHARefMismatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mismatches := CheckSHARefMismatches(tt.deps, nil)
+			mismatches := CheckSHARefMismatches(context.Background(), tt.deps, nil)
 			assert.Len(t, mismatches, tt.wantCount)
 			if tt.wantMismatch != "" && len(mismatches) > 0 {
 				assert.Equal(t, tt.wantMismatch, mismatches[0].Dep.NWO)
@@ -267,7 +268,7 @@ func TestCheckSHARefMismatches(t *testing.T) {
 // (owner/repo|sha), the commit that sha peels to. Absent keys peel to ("", false).
 type stubPeeler map[string]string
 
-func (s stubPeeler) PeelTagObject(owner, repo, sha string) (string, bool) {
+func (s stubPeeler) PeelTagObject(_ context.Context, owner, repo, sha string) (string, bool) {
 	commit, ok := s[owner+"/"+repo+"|"+sha]
 	return commit, ok
 }
@@ -287,12 +288,12 @@ func TestCheckSHARefMismatches_HonorsTagObjectPeeler(t *testing.T) {
 		"actions/github-script|" + tagObjSHA: peeledCommit,
 	}
 
-	mismatches := CheckSHARefMismatches(deps, peeler)
+	mismatches := CheckSHARefMismatches(context.Background(), deps, peeler)
 	if assert.Len(t, mismatches, 1) {
 		assert.Equal(t, "evil/repo", mismatches[0].Dep.NWO)
 	}
 
 	// Without the peeler the legitimate tag-object pin false-positives.
-	mismatches = CheckSHARefMismatches(deps, nil)
+	mismatches = CheckSHARefMismatches(context.Background(), deps, nil)
 	assert.Len(t, mismatches, 2)
 }

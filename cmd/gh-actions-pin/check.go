@@ -15,60 +15,31 @@ import (
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
 	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
 
-// ctxMetadataResolver adapts a *resolver.Resolver to lockfile.MetadataResolver
-// by binding a context. lockfile.Store predates the ctx retrofit and accepts
-// a ctx-less MetadataResolver; rather than churn the lockfile API for the
-// single RepoIDs callsite, this adapter binds ctx for the lifetime of the
-// command. Each command invocation creates a fresh Store with a freshly
-// bound ctx (see runCheck / runUpgrade), so the binding does not leak
-// across invocations in tests.
-type ctxMetadataResolver struct {
-	r   *resolver.Resolver
-	ctx context.Context
-}
-
-func (a ctxMetadataResolver) RepoIDs(owner, repo string) (int64, int64, error) {
-	return a.r.RepoIDs(a.ctx, owner, repo)
-}
-
-// ctxTagPeeler adapts a *resolver.Resolver to lockfile.TagObjectPeeler so the
-// lockfile's CheckSHARefMismatches helper can call PeelTagObject without
-// gaining a ctx parameter. Same scoping contract as ctxMetadataResolver.
-type ctxTagPeeler struct {
-	r   *resolver.Resolver
-	ctx context.Context
-}
-
-func (a ctxTagPeeler) PeelTagObject(owner, repo, sha string) (string, bool) {
-	return a.r.PeelTagObject(a.ctx, owner, repo, sha)
-}
-
 type checkOptions struct {
-	WorkflowPaths []string
-	JSONFields    string
-	// Format selects a structured output format. Currently only "sarif"
+	workflowPaths []string
+	jsonFields    string
+	// format selects a structured output format. Currently only "sarif"
 	// is supported; "" leaves the existing terminal/--json behavior
-	// untouched. SARIF output is written to OutputPath (or stdout when
-	// OutputPath is "-").
-	Format string
-	// OutputPath is where structured output (currently SARIF) is
+	// untouched. SARIF output is written to outputPath (or stdout when
+	// outputPath is "-").
+	format string
+	// outputPath is where structured output (currently SARIF) is
 	// written. "-" means stdout.
-	OutputPath    string
-	Hostname      string
-	NoInteractive bool
-	// Rescan forces a full reachability re-verification of every recorded
+	outputPath    string
+	hostname      string
+	noInteractive bool
+	// rescan forces a full reachability re-verification of every recorded
 	// pin, bypassing the fast path that trusts the lockfile. Useful for
 	// audits or when a CI policy requires re-attestation on every run.
-	Rescan bool
+	rescan bool
 }
 
-func newCheckCmd(f *pinFactory) *cobra.Command {
+func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
@@ -125,12 +96,12 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 		`),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				opts.WorkflowPaths = args
+				opts.workflowPaths = args
 			}
 			return opts.validateOutputFlags()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCheck(cmd.Context(), f, opts)
+			return runCheck(cmd, opts, newResolver)
 		},
 	}
 
@@ -142,13 +113,13 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 // explicit `check` subcommand. Root is just the default check invocation, so
 // both bind the identical surface from one place.
 func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
-	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
+	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
-	cmd.Flags().StringVar(&opts.Format, "format", "", "Structured output `format` (currently only `sarif`)")
-	cmd.Flags().StringVar(&opts.OutputPath, "output", "", "Write structured output to `path` (use `-` for stdout). Required with --format=sarif.")
-	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
-	cmd.Flags().BoolVar(&opts.Rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
+	cmd.Flags().StringVar(&opts.format, "format", "", "Structured output `format` (currently only `sarif`)")
+	cmd.Flags().StringVar(&opts.outputPath, "output", "", "Write structured output to `path` (use `-` for stdout). Required with --format=sarif.")
+	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
+	cmd.Flags().BoolVar(&opts.noInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
+	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
@@ -156,42 +127,47 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 // stdout streams competing for the same writer. Wired as PreRunE so the error
 // surfaces at the command layer before any work runs.
 func (opts *checkOptions) validateOutputFlags() error {
-	switch opts.Format {
+	switch opts.format {
 	case "", "sarif":
 	default:
-		return fmt.Errorf("unknown --format %q (supported: sarif)", opts.Format)
+		return fmt.Errorf("unknown --format %q (supported: sarif)", opts.format)
 	}
-	if opts.Format == "sarif" {
-		if opts.OutputPath == "" {
+	if opts.format == "sarif" {
+		if opts.outputPath == "" {
 			return fmt.Errorf("--output is required when --format=sarif (use `-` for stdout)")
 		}
-		if opts.JSONFields != "" {
+		if opts.jsonFields != "" {
 			return fmt.Errorf("--format=sarif cannot be combined with --json")
 		}
-	} else if opts.OutputPath != "" {
+	} else if opts.outputPath != "" {
 		return fmt.Errorf("--output requires --format")
 	}
 	return nil
 }
 
-func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
+func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) error {
+	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	out := cmd.OutOrStdout()
+	errOut := cmd.ErrOrStderr()
+	u := ui.NewWithWriter(errOut)
+	defer u.StopProgress()
 
-	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
+	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, newResolver)
 	if err != nil {
 		return err
 	}
-	opts.WorkflowPaths = paths
+	opts.workflowPaths = paths
 
 	// --no-interactive is an explicit headless signal: skip the spinner,
 	// icons, and per-tick churn even on a real TTY. This complements the
 	// auto-detection in ui.New (which fires for non-TTY writers and CI=true)
 	// so users running headlessly on a workstation without CI set still get
 	// log-oriented output.
-	if opts.NoInteractive {
-		f.UI.MarkHeadless()
+	if opts.noInteractive {
+		u.MarkHeadless()
 	}
 
 	// Detailed narration is suppressed from the terminal during the run so the
@@ -199,21 +175,10 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// A structured, action-centric provenance record (what was resolved and
 	// how) is written at the end instead. JSON mode keeps the narration log
 	// attached so machine-readable events can flow on stderr.
-	if opts.JSONFields == "" && opts.Format == "" {
-		f.UI.SetLog(io.Discard)
+	if opts.jsonFields == "" && opts.format == "" {
+		u.SetLog(io.Discard)
 	}
 
-	r, err := f.NewResolver(resolveHostname(opts.Hostname))
-	if err != nil {
-		return err
-	}
-	store, err := lockfile.OpenStore(".", ctxMetadataResolver{r: r, ctx: ctx})
-	if err != nil {
-		return fmt.Errorf("opening lockfile: %w", err)
-	}
-	// Seed branch hints from the existing lockfile so repeat scans short-circuit
-	// the per-branch Compare walk when the recorded branch still contains the SHA.
-	r.SeedBranchHints(store.AllDeps())
 	// Two-phase scan/resolve.
 	//
 	// Phase 1 (Scan): parse every workflow with a clean `Scanning [i/n] path`
@@ -225,7 +190,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	//
 	// Phase 3 (Diagnose): per-workflow engine diagnostics that hit the warmed
 	// caches and stay silent.
-	total := len(opts.WorkflowPaths)
+	total := len(opts.workflowPaths)
 	// showSpinner gates the interactive spinner + per-action worker rows +
 	// resolver progress callbacks. We restrict it to non-JSON TTY runs:
 	//
@@ -237,25 +202,25 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	//     call to per-ref parallel calls — a UX choice that should not leak
 	//     into headless output (and that would, e.g., quadruple the request
 	//     count for test stubs registered against the batched query shape).
-	showSpinner := opts.JSONFields == "" && opts.Format == "" && !f.UI.Headless()
-	showHeadlessProgress := f.UI.Headless()
+	showSpinner := opts.jsonFields == "" && opts.format == "" && !u.Headless()
+	showHeadlessProgress := u.Headless()
 
 	var onScan func(done, total int, path string)
 	if showSpinner {
 		label := fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
-		f.UI.StartProgress(label)
+		u.StartProgress(label)
 		onScan = func(done, total int, path string) {
-			f.UI.UpdateLabel(fmt.Sprintf("Scanning [%d/%d] %s", done, total, path))
-			f.UI.UpdateProgress("")
+			u.UpdateLabel(fmt.Sprintf("Scanning [%d/%d] %s", done, total, path))
+			u.UpdateProgress("")
 		}
 	} else if showHeadlessProgress {
 		// Headless: emit one line per phase directly, no callbacks. The UI
 		// layer dedupes label stems so subsequent UpdateLabel calls with the
 		// same phase name are no-ops.
-		f.UI.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
+		u.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
-	parsed := doctor.ParseAll(opts.WorkflowPaths, store, onScan)
+	parsed := doctor.ParseAll(opts.workflowPaths, store, onScan)
 
 	// Fast path: unless the user asked for a full --rescan, validate
 	// fully-recorded workflows purely from disk. Their refs all match
@@ -274,7 +239,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// triggers ~20 list-branches + ~N compare calls per pin — most of which
 	// re-prove what the lockfile already records.
 	skippedRescan := 0
-	if !opts.Rescan {
+	if !opts.rescan {
 		for i := range parsed {
 			if isFullyRecorded(parsed[i]) {
 				parsed[i].TrustLockfile = true
@@ -296,25 +261,25 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	}
 	refs, deps := doctor.CollectResolvable(networked)
 	if showSpinner {
-		f.UI.UpdateProgress("")
-		f.UI.ClearWorkerStatuses()
+		u.UpdateProgress("")
+		u.ClearWorkerStatuses()
 		// Wire structured counter callbacks so the top label expresses one
 		// rolling total per phase. The resolver no longer rewrites the label
 		// itself; we own the phrasing so the bar never jumps between
 		// "resolving" and "transitive resolving" — transitive is just deeper
 		// edges in the same Resolve phase.
 		r.OnResolveProgress = func(done, total int) {
-			f.UI.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
+			u.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
 		}
 		r.OnVerifyProgress = func(done, total int) {
-			f.UI.UpdateLabel(fmt.Sprintf("Verifying reachability [%d/%d]", done, total))
+			u.UpdateLabel(fmt.Sprintf("Verifying reachability [%d/%d]", done, total))
 		}
-		r.WorkerProgressFn = func(slot int, status string) { f.UI.SetWorkerStatus(slot, status) }
-	} else if showHeadlessProgress && (len(refs) > 0 || (opts.Rescan && len(deps) > 0)) {
+		r.WorkerProgressFn = func(slot int, status string) { u.SetWorkerStatus(slot, status) }
+	} else if showHeadlessProgress && (len(refs) > 0 || (opts.rescan && len(deps) > 0)) {
 		// Headless: announce the phase once, without per-ref worker callbacks.
 		// Leave r.WorkerProgressFn unset so the resolver stays in
 		// batched-GraphQL mode.
-		f.UI.UpdateLabel("Resolving actions")
+		u.UpdateLabel("Resolving actions")
 	}
 	if len(refs) > 0 {
 		_, _, _ = r.ResolveAllRecursive(ctx, refs)
@@ -336,7 +301,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	var reachDeps []lockfile.Dependency
 	var liveMoved []lockfile.Dependency
 	var liveDirect []lockfile.Dependency
-	if opts.Rescan {
+	if opts.rescan {
 		reachDeps = deps
 		// Even on --rescan, the live-SHA reach sweep only matters
 		// when the union has lockfile entries to compare against;
@@ -358,7 +323,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	}
 	if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
 		if showHeadlessProgress {
-			f.UI.UpdateLabel("Verifying reachability")
+			u.UpdateLabel("Verifying reachability")
 		}
 		if len(reachDeps) > 0 {
 			_ = r.CheckReachabilityAll(ctx, reachDeps)
@@ -377,11 +342,11 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		r.OnResolveProgress = nil
 		r.OnVerifyProgress = nil
 		r.WorkerProgressFn = nil
-		f.UI.ClearWorkerStatuses()
-		f.UI.UpdateLabel("Analyzing")
-		f.UI.UpdateProgress("")
+		u.ClearWorkerStatuses()
+		u.UpdateLabel("Analyzing")
+		u.UpdateProgress("")
 	} else if showHeadlessProgress {
-		f.UI.UpdateLabel("Analyzing")
+		u.UpdateLabel("Analyzing")
 	}
 
 	// Build a shared REST client + TagLister up-front. The diagnostics
@@ -390,7 +355,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// The TagLister is still reused by EnrichImpostorFindings and the
 	// Remediator (best-patch-for-SHA lookups, release tag hints) so we
 	// don't refetch tags downstream.
-	hostname := resolveHostname(opts.Hostname)
+	hostname := resolveHostname(opts.hostname)
 	var tagger *doctor.TagLister
 	var sharedRestClient *api.RESTClient
 	if rc, err := api.NewRESTClient(api.ClientOptions{Host: hostname}); err == nil {
@@ -417,9 +382,9 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	}
 
 	// JSON output — always before any human-readable output.
-	if opts.JSONFields != "" {
-		f.UI.StopProgress()
-		if err := format.WriteJSON(f.Out, report, valid, opts.JSONFields, cliVersion(), store.File().Version); err != nil {
+	if opts.jsonFields != "" {
+		u.StopProgress()
+		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 			return err
 		}
 		if !valid {
@@ -432,19 +397,19 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// nothing else prints; SARIF consumers want exactly one document on
 	// the configured sink. Exit code mirrors JSON mode so CI gates on
 	// the same signal regardless of format.
-	if opts.Format == "sarif" {
-		f.UI.StopProgress()
-		out := f.Out
+	if opts.format == "sarif" {
+		u.StopProgress()
+		sink := out
 		var closeFn func() error
-		if opts.OutputPath != "-" {
-			fh, err := os.Create(opts.OutputPath)
+		if opts.outputPath != "-" {
+			fh, err := os.Create(opts.outputPath)
 			if err != nil {
 				return fmt.Errorf("opening --output: %w", err)
 			}
-			out = fh
+			sink = fh
 			closeFn = fh.Close
 		}
-		if err := format.WriteSARIF(out, report, cliVersion()); err != nil {
+		if err := format.WriteSARIF(sink, report, cliVersion()); err != nil {
 			if closeFn != nil {
 				_ = closeFn()
 			}
@@ -462,7 +427,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	}
 
 	// Determine if interactive remediation will follow.
-	interactive := !opts.NoInteractive && os.Getenv("CI") != "true" && f.IsTerminal()
+	interactive := !opts.noInteractive && os.Getenv("CI") != "true" && u.IsTTY()
 
 	// In interactive mode the summary and prompts render on the terminal, so
 	// stop the checking spinner now. In non-interactive mode keep it running
@@ -471,14 +436,14 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// pinning begins. The remediator adopts the running spinner; check.go stops
 	// it after remediation, just before the terminal summary.
 	if interactive {
-		f.UI.StopProgress()
+		u.StopProgress()
 	}
 
 	// Always remediate — non-interactive mode auto-fixes what it can.
 	willRemediate := true
 
 	// Human-readable output.
-	format.PresentResults(f.UI, report, valid, willRemediate)
+	format.PresentResults(u, report, valid, willRemediate)
 
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
@@ -511,23 +476,23 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		if !interactive {
 			prompter = &doctor.NoopPrompter{}
 		} else {
-			hp := doctor.NewHuhPrompterWithWriter(f.ErrOut, f.IsTerminal)
+			hp := doctor.NewHuhPrompterWithWriter(errOut, u.IsTTY)
 			// Let prompts pause the continuous pinning spinner while they own
 			// the terminal, then resume it — no blank gaps between workflows.
-			hp.SetProgress(f.UI)
+			hp.SetProgress(u)
 			prompter = hp
 		}
 
-		rem := doctor.NewRemediator(prompter, r, restClient, store, f.UI, doctor.RemediateOptions{
+		rem := doctor.NewRemediator(prompter, r, restClient, store, u, doctor.RemediateOptions{
 			Interactive: interactive,
 			RepoOwner:   repoOwner,
 			RepoName:    repoName,
 		})
 
 		if err := rem.Remediate(ctx, report); err != nil {
-			f.UI.StopProgress()
+			u.StopProgress()
 			if errors.Is(err, doctor.ErrAborted) {
-				f.UI.TermWarn("Interrupted — no further changes applied")
+				u.TermWarn("Interrupted — no further changes applied")
 				return nil
 			}
 			return err
@@ -556,7 +521,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// Stop any spinner still running (non-interactive path keeps it alive
 	// through remediation, or no workflows were actionable) before Term* output
 	// writes directly to the terminal.
-	f.UI.StopProgress()
+	u.StopProgress()
 
 	// Build the provenance report once — it's the authoritative record of
 	// what happened during this run. Render the "Fixed: pinned" summary from
@@ -564,14 +529,14 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// remediator side state has been a source of drift and double-counting).
 	// Skipped in --json mode, which already emitted machine-readable output.
 	var prov *runlog.Report
-	if opts.JSONFields == "" {
-		repoInfo := &runlog.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.Hostname)}
+	if opts.jsonFields == "" {
+		repoInfo := &runlog.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.hostname)}
 		outcomes := newProvenanceOutcomes(alertedDeps, skippedDeps, unresolvedDeps, fullScanDeps, alertedReasons, alertedSuggestions, alertedWorkflows)
 		prov = buildProvenanceReport(report, store, valid, repoInfo, outcomes, autoFixedImpostors)
 		if path, werr := runlog.WriteReport(prov); werr == nil {
 			defer func() {
-				f.UI.TermBlank()
-				f.UI.TermNeutral("Resolution record: %s", path)
+				u.TermBlank()
+				u.TermNeutral("Resolution record: %s", path)
 			}()
 		}
 	}
@@ -630,13 +595,13 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 					workflowSet[wf] = true
 				}
 			}
-			f.UI.TermSuccess("Pinned %d %s across %d %s",
+			u.TermSuccess("Pinned %d %s across %d %s",
 				count, ui.Pluralize(count, "action", "actions"),
 				len(workflowSet), ui.Pluralize(len(workflowSet), "workflow", "workflows"))
 			for _, row := range rows {
-				f.UI.TermDetail("  %s", f.UI.TermYellow(row.label))
+				u.TermDetail("  %s", u.TermYellow(row.label))
 				for _, wf := range row.workflows {
-					f.UI.TermDetail("    └─ %s", f.UI.TermDim(wf))
+					u.TermDetail("    └─ %s", u.TermDim(wf))
 				}
 			}
 			printed = true
@@ -663,13 +628,13 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	}
 	if len(fullScanActions) > 0 {
 		if printed {
-			f.UI.TermBlank()
+			u.TermBlank()
 		}
 		printed = true
-		f.UI.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan",
+		u.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan",
 			len(fullScanActions), ui.Pluralize(len(fullScanActions), "action", "actions"))
 		for _, a := range fullScanActions {
-			f.UI.TermDetail("  %s", f.UI.TermYellow(a.NWO+"@"+a.Ref))
+			u.TermDetail("  %s", u.TermYellow(a.NWO+"@"+a.Ref))
 		}
 	}
 
@@ -683,7 +648,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 	// points at, and a diff between old and new.
 	if prov != nil && len(prov.AutoFixed) > 0 {
 		if printed {
-			f.UI.TermBlank()
+			u.TermBlank()
 		}
 		printed = true
 		// Group by (NWO, FromSHA, ToRef, ToSHA) — provenance keeps one entry
@@ -706,34 +671,34 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			}
 			g.workflows = append(g.workflows, fix.Workflow)
 		}
-		f.UI.TermWarn("Fixed: rewrote %d %s from impostor pin → reachable release (review for sanity)",
+		u.TermWarn("Fixed: rewrote %d %s from impostor pin → reachable release (review for sanity)",
 			len(groups), ui.Pluralize(len(groups), "action", "actions"))
-		f.UI.TermDetail("  %s", f.UI.TermBold("The original tag pointed at a commit that doesn't belong to any branch on the upstream repository, and may belong to a fork outside of it; each was re-pinned to the latest release reachable from a branch"))
+		u.TermDetail("  %s", u.TermBold("The original tag pointed at a commit that doesn't belong to any branch on the upstream repository, and may belong to a fork outside of it; each was re-pinned to the latest release reachable from a branch"))
 		for i, g := range groups {
 			if i > 0 {
-				f.UI.TermBlank()
+				u.TermBlank()
 			}
 			short := g.newSHA
 			if len(short) > 7 {
 				short = short[:7]
 			}
-			f.UI.TermDetail("  %s: %s → %s (%s)", g.nwo, g.oldRef, g.newTag, short)
+			u.TermDetail("  %s: %s → %s (%s)", g.nwo, g.oldRef, g.newTag, short)
 			for _, path := range g.workflows {
-				f.UI.TermDetail("    └─ %s", f.UI.TermDim(path))
+				u.TermDetail("    └─ %s", u.TermDim(path))
 			}
 			if g.oldSHA != "" {
-				f.UI.TermDetail("    Impostor commit: https://github.com/%s/commit/%s", g.nwo, g.oldSHA)
+				u.TermDetail("    Impostor commit: https://github.com/%s/commit/%s", g.nwo, g.oldSHA)
 			}
-			f.UI.TermDetail("    New release:     https://github.com/%s/releases/tag/%s", g.nwo, g.newTag)
+			u.TermDetail("    New release:     https://github.com/%s/releases/tag/%s", g.nwo, g.newTag)
 		}
-		f.UI.TermDetail("  %s", doctor.PublisherEscalationCopy)
-		f.UI.TermDetail("  see: %s", f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
+		u.TermDetail("  %s", doctor.PublisherEscalationCopy)
+		u.TermDetail("  see: %s", u.TermDim(doctor.PublisherTagReleasesDocURL))
 	}
 
 	if valid && fixedCount == 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
-		f.UI.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
+		u.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
-			f.UI.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
+			u.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
 				skippedRescan, ui.Pluralize(skippedRescan, "workflow", "workflows"))
 		}
 		return nil
@@ -746,10 +711,10 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		}
 		if alertedCount > 0 {
 			if printed {
-				f.UI.TermBlank()
+				u.TermBlank()
 			}
 			printed = true
-			f.UI.TermError("%d %s %s investigation — do not auto-fix",
+			u.TermError("%d %s %s investigation — do not auto-fix",
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
 
 			// Group investigate actions by reason, preserving first-seen order.
@@ -773,7 +738,7 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 			}
 			for _, reason := range reasonOrder {
 				if reason != "" {
-					f.UI.TermDetail("  %s", f.UI.TermBold(reason))
+					u.TermDetail("  %s", u.TermBold(reason))
 				}
 				indent := "  "
 				if reason != "" {
@@ -781,9 +746,9 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 				}
 				for _, a := range byReason[reason] {
 					dep := a.NWO + "@" + a.Ref
-					f.UI.TermDetail("%s%s", indent, f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+					u.TermDetail("%s%s", indent, u.TermLink(u.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 					for _, path := range a.Workflows {
-						f.UI.TermDetail("%s  └─ %s", indent, f.UI.TermDim(path))
+						u.TermDetail("%s  └─ %s", indent, u.TermDim(path))
 					}
 					if sug := a.Suggestion; sug != "" {
 						// sug is "tag short-sha"; split for clean display.
@@ -796,8 +761,8 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 						if sha != "" {
 							display += " (" + sha + ")"
 						}
-						f.UI.TermDetail("%s  %s Suggested re-pin: %s — latest release reachable from a branch",
-							indent, f.UI.TermBold("→"), f.UI.TermYellow(display))
+						u.TermDetail("%s  %s Suggested re-pin: %s — latest release reachable from a branch",
+							indent, u.TermBold("→"), u.TermYellow(display))
 					}
 					// Publisher-escalation footer: relevant whenever the SHA
 					// fell off-branch on the publisher side (impostor reason),
@@ -805,41 +770,41 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 					// for consumer-side tampering reasons (forgery / misleading
 					// SHA) where the publisher copy would mislead.
 					if a.Escalate {
-						f.UI.TermDetail("%s     %s", indent, doctor.PublisherEscalationCopy)
-						f.UI.TermDetail("%s     see: %s", indent, f.UI.TermDim(doctor.PublisherTagReleasesDocURL))
+						u.TermDetail("%s     %s", indent, doctor.PublisherEscalationCopy)
+						u.TermDetail("%s     see: %s", indent, u.TermDim(doctor.PublisherTagReleasesDocURL))
 					}
 				}
 			}
 		}
 		if skippedCount > 0 {
 			if printed {
-				f.UI.TermBlank()
+				u.TermBlank()
 			}
 			printed = true
-			f.UI.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally",
+			u.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, a := range prov.Actions {
 				if a.Resolution != runlog.ResolutionSkipped {
 					continue
 				}
 				dep := a.NWO + "@" + a.Ref
-				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+				u.TermDetail("  %s", u.TermLink(u.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 			}
 		}
 		if unresolvedCount > 0 {
 			if printed {
-				f.UI.TermBlank()
+				u.TermBlank()
 			}
-			f.UI.TermError("%d %s could not be resolved — verify the ref exists",
+			u.TermError("%d %s could not be resolved — verify the ref exists",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, a := range prov.Actions {
 				if !a.ResolveFailed {
 					continue
 				}
 				dep := a.NWO + "@" + a.Ref
-				f.UI.TermDetail("  %s", f.UI.TermLink(f.UI.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+				u.TermDetail("  %s", u.TermLink(u.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 				for _, path := range a.Workflows {
-					f.UI.TermDetail("    └─ %s", f.UI.TermDim(path))
+					u.TermDetail("    └─ %s", u.TermDim(path))
 				}
 			}
 		}

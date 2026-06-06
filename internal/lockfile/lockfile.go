@@ -4,6 +4,7 @@
 package lockfile
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,7 +132,7 @@ type SHARefMismatch struct {
 // satisfies this; tests pass a stub. A nil peeler disables tag-object
 // recognition and reverts to the strict EqualFold(ref, sha) check.
 type TagObjectPeeler interface {
-	PeelTagObject(owner, repo, sha string) (commit string, ok bool)
+	PeelTagObject(ctx context.Context, owner, repo, sha string) (commit string, ok bool)
 }
 
 // CheckSHARefMismatches inspects resolved dependencies for refs that look
@@ -140,7 +141,7 @@ type TagObjectPeeler interface {
 // honored as legitimate even when ref != sha. A nil peeler reverts to the
 // strict comparison; pass a non-nil peeler in network-connected paths so
 // tag-object pins (the immutable-release pattern) don't false-positive.
-func CheckSHARefMismatches(deps []Dependency, peeler TagObjectPeeler) []SHARefMismatch {
+func CheckSHARefMismatches(ctx context.Context, deps []Dependency, peeler TagObjectPeeler) []SHARefMismatch {
 	var mismatches []SHARefMismatch
 	for _, dep := range deps {
 		if !parserlock.IsFullSha(dep.Ref) || strings.EqualFold(dep.Ref, dep.SHA) {
@@ -148,7 +149,7 @@ func CheckSHARefMismatches(deps []Dependency, peeler TagObjectPeeler) []SHARefMi
 		}
 		if peeler != nil {
 			owner, repo := dep.OwnerRepo()
-			if commit, ok := peeler.PeelTagObject(owner, repo, dep.Ref); ok && strings.EqualFold(commit, dep.SHA) {
+			if commit, ok := peeler.PeelTagObject(ctx, owner, repo, dep.Ref); ok && strings.EqualFold(commit, dep.SHA) {
 				continue
 			}
 		}

@@ -79,7 +79,7 @@ type jsonUpgradeResult struct {
 	Workflows []jsonUpgradeWorkflow `json:"workflows,omitempty"`
 }
 
-func newUpgradeCmd(f *pinFactory) *cobra.Command {
+func newUpgradeCmd(newResolver resolverFunc) *cobra.Command {
 	opts := &upgradeOptions{}
 
 	cmd := &cobra.Command{
@@ -127,7 +127,7 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpgrade(cmd.Context(), f, opts)
+			return runUpgrade(cmd, opts, newResolver)
 		},
 	}
 
@@ -147,11 +147,15 @@ func newUpgradeCmd(f *pinFactory) *cobra.Command {
 	return cmd
 }
 
-func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error {
+func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFunc) error {
+	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)
+	u := ui.NewWithWriter(cmd.ErrOrStderr())
+	defer u.StopProgress()
+
+	paths, r, store, err := newRun(opts.WorkflowPaths, opts.Hostname, newResolver)
 	if err != nil {
 		return err
 	}
@@ -161,19 +165,6 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	if err != nil {
 		return err
 	}
-
-	r, err := f.NewResolver(resolveHostname(opts.Hostname))
-	if err != nil {
-		return err
-	}
-
-	store, err := lockfile.OpenStore(".", ctxMetadataResolver{r: r, ctx: ctx})
-	if err != nil {
-		return fmt.Errorf("opening lockfile: %w", err)
-	}
-	// Seed branch hints from the existing lockfile so repeat scans short-circuit
-	// the per-branch Compare walk when the recorded branch still contains the SHA.
-	r.SeedBranchHints(store.AllDeps())
 
 	var hadError bool
 	var allChanges []jsonUpgradeChange
@@ -197,16 +188,16 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	if parallel {
 		if lg, lerr := runlog.Open(); lerr == nil {
 			logger = lg
-			f.UI.SetLog(logger)
+			u.SetLog(logger)
 			defer logger.Close()
 		}
 		label := fmt.Sprintf("Upgrading across %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
-		f.UI.StartProgress(label)
+		u.StartProgress(label)
 		// Workers own the detail area via SetWorkerStatus per slot; the
 		// resolver's per-step progress would race with that, so silence it.
 		r.ProgressFn = nil
-		f.UI.ClearWorkerStatuses()
-		defer f.UI.ClearWorkerStatuses()
+		u.ClearWorkerStatuses()
+		defer u.ClearWorkerStatuses()
 	}
 
 	workers := upgradeWorkers
@@ -236,7 +227,7 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 		if !parallel {
 			return
 		}
-		f.UI.UpdateLabel(fmt.Sprintf("[%d/%d] Upgrading workflows", done.Load(), total))
+		u.UpdateLabel(fmt.Sprintf("[%d/%d] Upgrading workflows", done.Load(), total))
 	}
 	updateLabel()
 
@@ -246,12 +237,12 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 			defer wg.Done()
 			for j := range jobs {
 				if parallel {
-					f.UI.SetWorkerStatus(slot, "→ "+j.path)
+					u.SetWorkerStatus(slot, "→ "+j.path)
 				}
-				result, err := upgradeOneFile(ctx, f, opts, j.path, r, store, targets)
+				result, err := upgradeOneFile(ctx, u, opts, j.path, r, store, targets)
 				mu.Lock()
 				if err != nil {
-					f.UI.Error("%s: %s", j.path, err)
+					u.Error("%s: %s", j.path, err)
 					hadError = true
 				}
 				if result != nil {
@@ -270,7 +261,7 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 				done.Add(1)
 				updateLabel()
 				if parallel {
-					f.UI.SetWorkerStatus(slot, "")
+					u.SetWorkerStatus(slot, "")
 				}
 			}
 		}(slot)
@@ -282,7 +273,7 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	// refused or errored, skip Save entirely so the bytes stay untouched.
 	if opts.Write && len(savedWorkflows) > 0 {
 		if err := store.Save(); err != nil {
-			f.UI.StopProgress()
+			u.StopProgress()
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
 	}
@@ -298,7 +289,7 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	}
 
 	if opts.JSONFields != "" {
-		if err := writeUpgradeJSON(f.Out, allChanges, findings, savedWorkflows); err != nil {
+		if err := writeUpgradeJSON(cmd.OutOrStdout(), allChanges, findings, savedWorkflows); err != nil {
 			return err
 		}
 		if hadBlockingFinding || hadError {
@@ -308,19 +299,19 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	}
 
 	// Work is done — stop the spinner before printing the terminal summary.
-	f.UI.StopProgress()
+	u.StopProgress()
 	if logger != nil {
-		defer func() { f.UI.TermDetail("Full log: %s", logger.Path()) }()
+		defer func() { u.TermDetail("Full log: %s", logger.Path()) }()
 	}
 
 	if hadError {
-		f.UI.TermError("Upgrade failed — see the log for details")
+		u.TermError("Upgrade failed — see the log for details")
 		return errSilent
 	}
 
 	if len(allChanges) == 0 && len(opts.Actions) > 0 && len(findings) == 0 && !anyMatched {
-		f.UI.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
-		f.UI.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
+		u.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
+		u.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
 		return errSilent
 	}
 
@@ -329,14 +320,14 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	// updated[] JSON shape), say so explicitly rather than printing the
 	// misleading "Upgraded 0 action(s)".
 	if len(allChanges) == 0 && anyMatched && len(savedWorkflows) > 0 {
-		f.UI.TermSuccess("Onboarded %d workflow(s); no action refs needed upgrading", len(savedWorkflows))
+		u.TermSuccess("Onboarded %d workflow(s); no action refs needed upgrading", len(savedWorkflows))
 		for _, w := range savedWorkflows {
-			f.UI.TermDetail("%s", w.Path)
+			u.TermDetail("%s", w.Path)
 		}
 		for _, fnd := range findings {
-			f.UI.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
+			u.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
 			if fnd.Remediation != "" {
-				f.UI.TermDetail("%s", fnd.Remediation)
+				u.TermDetail("%s", fnd.Remediation)
 			}
 		}
 		if hadBlockingFinding {
@@ -349,14 +340,14 @@ func runUpgrade(ctx context.Context, f *pinFactory, opts *upgradeOptions) error 
 	if !opts.Write {
 		verb = "Previewed"
 	}
-	f.UI.TermSuccess("%s %d action(s)", verb, len(allChanges))
+	u.TermSuccess("%s %d action(s)", verb, len(allChanges))
 	for _, c := range allChanges {
-		f.UI.TermDetail("%s: %s -> %s", c.NWO, c.OldRef, c.NewRef)
+		u.TermDetail("%s: %s -> %s", c.NWO, c.OldRef, c.NewRef)
 	}
 	for _, fnd := range findings {
-		f.UI.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
+		u.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
 		if fnd.Remediation != "" {
-			f.UI.TermDetail("%s", fnd.Remediation)
+			u.TermDetail("%s", fnd.Remediation)
 		}
 	}
 	if hadBlockingFinding {
@@ -404,7 +395,7 @@ type upgradeFileResult struct {
 	Finding *jsonUpgradeFinding
 }
 
-func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
+func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -418,7 +409,7 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 
 	refs, _, warnings := wf.ExtractActionRefs()
 	for _, warning := range warnings {
-		f.UI.Warning("%s", warning)
+		u.Warning("%s", warning)
 	}
 
 	if len(refs) == 0 {
@@ -472,7 +463,7 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 	// before resolver work or file writes, so store.Set is never reached
 	// for an untracked workflow.
 	if opts.NoOnboard && !store.HasWorkflow(wfKey) {
-		f.UI.Warning("%s: refusing to onboard (--no-onboard); workflow has no entry in actions.lock", workflowPath)
+		u.Warning("%s: refusing to onboard (--no-onboard); workflow has no entry in actions.lock", workflowPath)
 		finding := &jsonUpgradeFinding{
 			Workflow:    workflowPath,
 			Category:    string(doctor.CategoryOnboardingRequired),
@@ -485,9 +476,9 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 		return &upgradeFileResult{Matched: true, Finding: finding}, nil
 	}
 
-	f.UI.Header("%s", workflowPath)
+	u.Header("%s", workflowPath)
 	for _, line := range planLines {
-		f.UI.Detail("%s", line)
+		u.Detail("%s", line)
 	}
 
 	updatedContent, _, err := wf.RewriteActionRefs(replacements)
@@ -501,12 +492,12 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 
 	upgradedRefs, _, upgradedWarnings := upgradedWF.ExtractActionRefs()
 	for _, warning := range upgradedWarnings {
-		f.UI.Warning("%s", warning)
+		u.Warning("%s", warning)
 	}
 
-	f.UI.Info("Resolving %d action reference(s)...", len(upgradedRefs))
+	u.Info("Resolving %d action reference(s)...", len(upgradedRefs))
 	for _, ref := range upgradedRefs {
-		f.UI.Detail("%s@%s", ref.FullName(), ref.Ref)
+		u.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
 	deps, parentMap, err := r.ResolveAllRecursive(ctx, upgradedRefs)
@@ -515,11 +506,11 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 	}
 	directTracker := lockfile.NewDirectTracker(upgradedRefs, deps)
 
-	if mismatches := lockfile.CheckSHARefMismatches(deps, ctxTagPeeler{r: r, ctx: ctx}); len(mismatches) > 0 {
-		f.UI.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
+	if mismatches := lockfile.CheckSHARefMismatches(ctx, deps, r); len(mismatches) > 0 {
+		u.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
-			f.UI.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
-			f.UI.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
+			u.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
+			u.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 		}
 		return nil, fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
@@ -583,11 +574,11 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 	}
 
 	if opts.Diff {
-		showDiff(f.UI, r.Hostname(), existingDeps, deps)
+		showDiff(u, r.Hostname(), existingDeps, deps)
 	}
 
 	if !opts.Write {
-		f.UI.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
+		u.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
 		return &upgradeFileResult{Changes: changes, Matched: true}, nil
 	}
 
@@ -595,13 +586,13 @@ func upgradeOneFile(ctx context.Context, f *pinFactory, opts *upgradeOptions, wo
 		return nil, fmt.Errorf("writing file: %w", err)
 	}
 
-	if err := store.Set(wfKey, deps, parentMap, directTracker.Keys(deps)); err != nil {
+	if err := store.Set(ctx, wfKey, deps, parentMap, directTracker.Keys(deps)); err != nil {
 		return nil, fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
-	f.UI.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
+	u.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
 	for _, c := range changes {
-		f.UI.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
+		u.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
 	}
 	return &upgradeFileResult{Changes: changes, Saved: true, Matched: true}, nil
 }

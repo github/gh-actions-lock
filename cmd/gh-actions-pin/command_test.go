@@ -13,7 +13,6 @@ import (
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/resolver"
-	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -266,24 +265,20 @@ func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func
 	stderrR, stderrW, err := os.Pipe()
 	require.NoError(t, err)
 
-	f := &pinFactory{
-		Out:    stdoutW,
-		ErrOut: stderrW,
-		UI:     ui.NewPlain(stderrW),
-		NewResolver: func(hostname string) (*resolver.Resolver, error) {
-			r, err := resolver.NewWithTransport(hostname, rt)
-			if err != nil {
-				return nil, err
-			}
-			if reachFn != nil {
-				r.SetCheckReachabilityFunc(reachFn)
-			}
-			return r, nil
-		},
-		IsTerminal: func() bool { return false },
+	newResolver := func(hostname string) (*resolver.Resolver, error) {
+		r, err := resolver.NewWithTransport(hostname, rt)
+		if err != nil {
+			return nil, err
+		}
+		if reachFn != nil {
+			r.SetCheckReachabilityFunc(reachFn)
+		}
+		return r, nil
 	}
 
-	cmd := NewRootCmd(f)
+	cmd := newRootCmd(newResolver)
+	cmd.SetOut(stdoutW)
+	cmd.SetErr(stderrW)
 	cmd.SetArgs(args)
 	runErr := cmd.Execute()
 
