@@ -24,16 +24,7 @@ import (
 type checkOptions struct {
 	workflowPaths []string
 	jsonFields    string
-	// format selects a structured output format. Currently only "sarif"
-	// is supported; "" leaves the existing terminal/--json behavior
-	// untouched. SARIF output is written to outputPath (or stdout when
-	// outputPath is "-").
-	format string
-	// outputPath is where structured output (currently SARIF) is
-	// written. "-" means stdout.
-	outputPath    string
-	hostname      string
-	noInteractive bool
+	hostname string
 	// rescan forces a full reachability re-verification of every recorded
 	// pin, bypassing the fast path that trusts the lockfile. Useful for
 	// audits or when a CI policy requires re-attestation on every run.
@@ -56,10 +47,6 @@ func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 			(composite actions that reference other actions).
 
 			When run interactively (TTY), offers to fix issues inline.
-			Non-interactive mode (--no-interactive or CI) auto-fixes
-			deterministic issues and exits non-zero if anything remains
-			that requires human judgment.
-
 			With --json, structured results go to stdout and progress to stderr:
 
 			  gh actions-pin check --json 2>/dev/null | jq .valid
@@ -85,9 +72,6 @@ func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 
 			# Verify a specific workflow
 			$ gh actions-pin check .github/workflows/ci.yml
-
-			# Report-only mode (no prompts, no changes)
-			$ gh actions-pin check --no-interactive
 
 			# JSON output for CI
 			$ gh actions-pin check --json=valid,findings
@@ -116,33 +100,13 @@ func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
-	cmd.Flags().StringVar(&opts.format, "format", "", "Structured output `format` (currently only `sarif`)")
-	cmd.Flags().StringVar(&opts.outputPath, "output", "", "Write structured output to `path` (use `-` for stdout). Required with --format=sarif.")
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.noInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
 	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
-// --format is orthogonal to --json: emitting both at once would produce two
-// stdout streams competing for the same writer. Wired as PreRunE so the error
-// surfaces at the command layer before any work runs.
+// Wired as PreRunE so the error surfaces at the command layer before any work runs.
 func (opts *checkOptions) validateOutputFlags() error {
-	switch opts.format {
-	case "", "sarif":
-	default:
-		return fmt.Errorf("unknown --format %q (supported: sarif)", opts.format)
-	}
-	if opts.format == "sarif" {
-		if opts.outputPath == "" {
-			return fmt.Errorf("--output is required when --format=sarif (use `-` for stdout)")
-		}
-		if opts.jsonFields != "" {
-			return fmt.Errorf("--format=sarif cannot be combined with --json")
-		}
-	} else if opts.outputPath != "" {
-		return fmt.Errorf("--output requires --format")
-	}
 	return nil
 }
 
@@ -162,21 +126,12 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	opts.workflowPaths = paths
 
-	// --no-interactive is an explicit headless signal: skip the spinner,
-	// icons, and per-tick churn even on a real TTY. This complements the
-	// auto-detection in ui.New (which fires for non-TTY writers and CI=true)
-	// so users running headlessly on a workstation without CI set still get
-	// log-oriented output.
-	if opts.noInteractive {
-		console.MarkHeadless()
-	}
-
 	// Detailed narration is suppressed from the terminal during the run so the
 	// output stays limited to phase labels, prompts, and the final summary.
 	// A structured, action-centric provenance record (what was resolved and
 	// how) is written at the end instead. JSON mode keeps the narration log
 	// attached so machine-readable events can flow on stderr.
-	if opts.jsonFields == "" && opts.format == "" {
+	if opts.jsonFields == "" {
 		console.SetLog(io.Discard)
 	}
 
@@ -203,7 +158,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	//     call to per-ref parallel calls — a UX choice that should not leak
 	//     into headless output (and that would, e.g., quadruple the request
 	//     count for test stubs registered against the batched query shape).
-	showSpinner := opts.jsonFields == "" && opts.format == "" && !console.Headless()
+	showSpinner := opts.jsonFields == "" && !console.Headless()
 	showHeadlessProgress := console.Headless()
 
 	var onScan func(done, total int, path string)
@@ -396,41 +351,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return nil
 	}
 
-	// SARIF output — write to file (or stdout when `-`). Like JSON mode,
-	// nothing else prints; SARIF consumers want exactly one document on
-	// the configured sink. Exit code mirrors JSON mode so CI gates on
-	// the same signal regardless of format.
-	if opts.format == "sarif" {
-		console.StopProgress()
-		sink := out
-		var closeFn func() error
-		if opts.outputPath != "-" {
-			fh, err := os.Create(opts.outputPath)
-			if err != nil {
-				return fmt.Errorf("opening --output: %w", err)
-			}
-			sink = fh
-			closeFn = fh.Close
-		}
-		if err := format.WriteSARIF(sink, report, cliVersion()); err != nil {
-			if closeFn != nil {
-				_ = closeFn()
-			}
-			return err
-		}
-		if closeFn != nil {
-			if err := closeFn(); err != nil {
-				return fmt.Errorf("closing --output: %w", err)
-			}
-		}
-		if !valid {
-			return errSilent
-		}
-		return nil
-	}
-
 	// Determine if interactive remediation will follow.
-	interactive := !opts.noInteractive && os.Getenv("CI") != "true" && console.IsTTY()
+	interactive := os.Getenv("CI") != "true" && console.IsTTY()
 
 	// In interactive mode the summary and prompts render on the terminal, so
 	// stop the checking spinner now. In non-interactive mode keep it running
