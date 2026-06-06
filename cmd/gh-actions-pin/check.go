@@ -123,6 +123,9 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 			# All fields as JSON
 			$ gh actions-pin check --json
 		`),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			return opts.validateOutputFlags()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
@@ -141,15 +144,11 @@ func newCheckCmd(f *pinFactory) *cobra.Command {
 	return cmd
 }
 
-func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	// Validate structured-output flags before any work runs. --format is
-	// orthogonal to --json: emitting both at once would produce two
-	// stdout streams competing for the same writer, so we reject the
-	// combination up front instead of letting the second one clobber
-	// the first.
+// validateOutputFlags rejects incoherent structured-output flag combinations.
+// --format is orthogonal to --json: emitting both at once would produce two
+// stdout streams competing for the same writer. Wired as PreRunE so the error
+// surfaces at the command layer before any work runs.
+func (opts *checkOptions) validateOutputFlags() error {
 	switch opts.Format {
 	case "", "sarif":
 	default:
@@ -164,6 +163,13 @@ func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
 		}
 	} else if opts.OutputPath != "" {
 		return fmt.Errorf("--output requires --format")
+	}
+	return nil
+}
+
+func runCheck(ctx context.Context, f *pinFactory, opts *checkOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	paths, err := discoverWorkflowPaths(opts.WorkflowPaths)

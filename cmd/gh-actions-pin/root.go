@@ -97,6 +97,9 @@ $ gh actions-pin --json=valid,findings
 # Upgrade a specific action
 $ gh actions-pin upgrade --action actions/checkout
 `),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			return opts.validateOutputFlags()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.WorkflowPaths = args
