@@ -43,14 +43,14 @@ type ParsedWorkflow struct {
 	ParseWarnings []string
 	LoadErr       error
 	DepsErr       error
-	// TrustLockfile, when true, instructs DiagnoseParsed to run this
+	// Resolved, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
 	// (ref-moved, impostor-commit) are skipped and the engine relies on
 	// purely structural validation against the on-disk lockfile. Caller
-	// is asserting "this is already pinned and I trust the prior
-	// verification" — typically set on the fast path when every direct
-	// ref in the workflow is already recorded in the lockfile.
-	TrustLockfile bool
+	// is asserting "this workflow is already fully resolved" — typically
+	// set on the fast path when every direct ref in the workflow is
+	// already recorded in the lockfile.
+	Resolved bool
 	// SkipReachWhenUnchanged, when true, instructs DiagnoseParsed to skip
 	// the per-dep reachability network call for any ExistingDep whose
 	// (NWO, Ref, SHA) matches an entry in the freshly-resolved live deps
@@ -135,10 +135,10 @@ func DiagnoseParsed(ctx context.Context, parsed []ParsedWorkflow, r *resolver.Re
 	report := &Report{}
 	for _, pw := range parsed {
 		effR := r
-		if pw.TrustLockfile {
-			// Disk-only validation: caller has asserted the lockfile is
-			// trusted for this workflow, so no network round-trips. Engine
-			// falls back to structural-only checks for this entry.
+		if pw.Resolved {
+			// Disk-only validation: this workflow is already fully resolved,
+			// so no network round-trips. Engine falls back to structural-only
+			// checks for this entry.
 			effR = nil
 		}
 		report.Workflows = append(report.Workflows, diagnoseOneParsed(ctx, pw, effR, store))
@@ -351,7 +351,7 @@ func isTransitivePin(f Finding, depByKey map[string]lockfile.Dependency, parentM
 // given parsed workflows that will need a fresh reachability network check
 // once diagnostics runs. It mirrors the per-workflow partition diagnose
 // performs internally (see partitionReachByLive) but operates over the union,
-// so callers can pre-warm CheckReachabilityAll once across every networked
+// so callers can pre-warm CheckReachabilityAll once across every unresolved
 // workflow instead of paying the per-workflow repo-warmup + per-dep
 // concurrency cost serially. Pass live as the result of a single
 // ResolveAllRecursive over the union of refs (the resolver cache makes the

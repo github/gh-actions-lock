@@ -242,7 +242,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if !opts.rescan {
 		for i := range parsed {
 			if isFullyRecorded(parsed[i]) {
-				parsed[i].TrustLockfile = true
+				parsed[i].Resolved = true
 				skippedRescan++
 			} else {
 				parsed[i].SkipReachWhenUnchanged = true
@@ -253,13 +253,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Network-bound resolve+reach only sees the non-trusted workflows. When
 	// every workflow is trusted (the steady-state happy path), refs/deps
 	// are both empty and we make zero network calls.
-	var networked []doctor.ParsedWorkflow
+	var unresolved []doctor.ParsedWorkflow
 	for _, pw := range parsed {
-		if !pw.TrustLockfile {
-			networked = append(networked, pw)
+		if !pw.Resolved {
+			unresolved = append(unresolved, pw)
 		}
 	}
-	refs, deps := doctor.CollectResolvable(networked)
+	refs, deps := doctor.CollectResolvable(unresolved)
 	if showSpinner {
 		console.UpdateProgress("")
 		console.ClearWorkerStatuses()
@@ -284,7 +284,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if len(refs) > 0 {
 		_, _, _ = r.ResolveAllRecursive(ctx, refs)
 	}
-	// Pre-warm reachability across all networked workflows in one shot. The
+	// Pre-warm reachability across all unresolved workflows in one shot. The
 	// per-workflow diagnose pass also calls CheckReachabilityAll, but doing
 	// it once here lets the resolver pool per-repo branch/default-branch
 	// warmup and per-dep Compare concurrency across every workflow that
@@ -306,10 +306,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		// Even on --rescan, the live-SHA reach sweep only matters
 		// when the union has lockfile entries to compare against;
 		// new-only scans have nothing to "move".
-		if len(networked) > 0 {
+		if len(unresolved) > 0 {
 			live, _, _ := r.ResolveAllRecursive(ctx, refs)
-			liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
-			liveDirect = doctor.CollectLiveDirectReachDeps(networked, live)
+			liveMoved = doctor.CollectLiveMovedReachDeps(unresolved, live)
+			liveDirect = doctor.CollectLiveDirectReachDeps(unresolved, live)
 		}
 	} else {
 		// One resolve, three uses: drive the locked-SHA partition AND
@@ -317,9 +317,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		// + transitive-not-in-lockfile cases). Cache makes the call
 		// O(1) per ref; hoisting it avoids three resolver round-trips.
 		live, _, _ := r.ResolveAllRecursive(ctx, refs)
-		reachDeps = doctor.CollectReachDeps(networked, live)
-		liveMoved = doctor.CollectLiveMovedReachDeps(networked, live)
-		liveDirect = doctor.CollectLiveDirectReachDeps(networked, live)
+		reachDeps = doctor.CollectReachDeps(unresolved, live)
+		liveMoved = doctor.CollectLiveMovedReachDeps(unresolved, live)
+		liveDirect = doctor.CollectLiveDirectReachDeps(unresolved, live)
 	}
 	if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
 		if showHeadlessProgress {
