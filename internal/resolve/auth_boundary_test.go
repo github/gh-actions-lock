@@ -20,7 +20,7 @@
 //     `Authorization` header from CLI code, gate it behind an opt-in
 //     flag, document the proxy-mode incompatibility, and add the file
 //     to allowedFiles below with a comment explaining why.
-package resolver_test
+package resolve_test
 
 import (
 	"go/ast"

@@ -12,7 +12,7 @@ import (
 
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/httpmock"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -159,23 +159,23 @@ jobs:
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
 
 // reachableFunc returns a checkReachFn that reports all commits as reachable.
-func reachableFunc() func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string) {
-	return func(_ context.Context, owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
-		return resolver.Reachable, "ancestor of " + ref
+func reachableFunc() func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string) {
+	return func(_ context.Context, owner, repo, sha, ref string) (resolve.ReachabilityStatus, string) {
+		return resolve.Reachable, "ancestor of " + ref
 	}
 }
 
 // unreachableFunc returns a checkReachFn that reports all commits as unreachable.
-func unreachableFunc() func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string) {
-	return func(_ context.Context, owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
-		return resolver.Unreachable, "commit is not an ancestor of " + ref
+func unreachableFunc() func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string) {
+	return func(_ context.Context, owner, repo, sha, ref string) (resolve.ReachabilityStatus, string) {
+		return resolve.Unreachable, "commit is not an ancestor of " + ref
 	}
 }
 
 // unknownReachFunc returns a checkReachFn that reports unknown (clone failure).
-func unknownReachFunc() func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string) {
-	return func(_ context.Context, owner, repo, sha, ref string) (resolver.ReachabilityStatus, string) {
-		return resolver.ReachabilityUnknown, "clone failed"
+func unknownReachFunc() func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string) {
+	return func(_ context.Context, owner, repo, sha, ref string) (resolve.ReachabilityStatus, string) {
+		return resolve.ReachabilityUnknown, "clone failed"
 	}
 }
 
@@ -257,7 +257,7 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 	return runCommandWithHTTPAndReach(t, rt, nil, args...)
 }
 
-func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(context.Context, string, string, string, string) (resolver.ReachabilityStatus, string), args ...string) (string, string, error) {
+func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string), args ...string) (string, string, error) {
 	t.Helper()
 
 	stdoutR, stdoutW, err := os.Pipe()
@@ -265,8 +265,8 @@ func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func
 	stderrR, stderrW, err := os.Pipe()
 	require.NoError(t, err)
 
-	newResolver := func(hostname string) (*resolver.Resolver, error) {
-		r, err := resolver.NewWithTransport(hostname, rt)
+	newResolver := func(hostname string) (*resolve.Resolver, error) {
+		r, err := resolve.NewWithTransport(hostname, rt)
 		if err != nil {
 			return nil, err
 		}

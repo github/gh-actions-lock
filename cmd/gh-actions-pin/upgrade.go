@@ -13,7 +13,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/github/gh-actions-pin/internal/doctor"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/runlog"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
@@ -395,7 +395,7 @@ type upgradeFileResult struct {
 	Finding *jsonUpgradeFinding
 }
 
-func upgradeOneFile(ctx context.Context, console *ui.UI, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
+func upgradeOneFile(ctx context.Context, console *ui.UI, opts *upgradeOptions, workflowPath string, r *resolve.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -530,7 +530,7 @@ func upgradeOneFile(ctx context.Context, console *ui.UI, opts *upgradeOptions, w
 			parentRewrites[preKeys[i]] = newKey
 		}
 	}
-	parentMap = resolver.RekeyParentMap(parentMap, parentRewrites)
+	parentMap = resolve.RekeyParentMap(parentMap, parentRewrites)
 
 	// Discover containing tag/branch for every resolved commit and merge
 	// any further rewrites (typically @sha → @tag) into updatedContent.
@@ -556,7 +556,7 @@ func upgradeOneFile(ctx context.Context, console *ui.UI, opts *upgradeOptions, w
 			normParentRewrites[preNormKeys[i]] = newKey
 		}
 	}
-	parentMap = resolver.RekeyParentMap(parentMap, normParentRewrites)
+	parentMap = resolve.RekeyParentMap(parentMap, normParentRewrites)
 
 	diff := lockfile.DiffDeps(existingDeps, deps)
 	var changes []jsonUpgradeChange

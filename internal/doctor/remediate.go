@@ -12,7 +12,7 @@ import (
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/pinpool"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/ui"
 )
 
@@ -26,7 +26,7 @@ type RemediateOptions struct {
 // Remediator walks through findings and applies fixes interactively.
 type Remediator struct {
 	prompter  Prompter
-	resolver  *resolver.Resolver
+	resolver  *resolve.Resolver
 	tagLister *TagLister
 	client    *api.RESTClient
 	store     *lockfile.Store
@@ -315,7 +315,7 @@ func (rem *Remediator) incSkipped() {
 }
 
 // NewRemediator creates a new Remediator.
-func NewRemediator(p Prompter, r *resolver.Resolver, client *api.RESTClient, store *lockfile.Store, out *ui.UI, opts RemediateOptions) *Remediator {
+func NewRemediator(p Prompter, r *resolve.Resolver, client *api.RESTClient, store *lockfile.Store, out *ui.UI, opts RemediateOptions) *Remediator {
 	return &Remediator{
 		prompter:   p,
 		resolver:   r,

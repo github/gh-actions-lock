@@ -5,7 +5,7 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // TestLiveReachImpostorFindings_Parity proves the pre-pin live-direct sweep
@@ -25,7 +25,7 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		reach         []resolver.ReachabilityResult
+		reach         []resolve.ReachabilityResult
 		live          []lockfile.Dependency
 		directNWOs    map[cachekey.Repo]bool
 		parentMap     map[string][]string
@@ -37,10 +37,10 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 	}{
 		{
 			name: "unpinned direct ref resolves to unreachable SHA",
-			reach: []resolver.ReachabilityResult{{
+			reach: []resolve.ReachabilityResult{{
 				Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaImpostor,
 				DepKey: "actions/checkout@v4",
-				Status: resolver.Unreachable,
+				Status: resolve.Unreachable,
 				Detail: "no branch contains commit",
 			}},
 			live: []lockfile.Dependency{
@@ -53,10 +53,10 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 		},
 		{
 			name: "unpinned transitive dep (different NWO) resolves to unreachable SHA",
-			reach: []resolver.ReachabilityResult{{
+			reach: []resolve.ReachabilityResult{{
 				Owner: "someorg", Repo: "helper", Ref: "v1", SHA: shaImpostor,
 				DepKey: "someorg/helper@v1",
-				Status: resolver.Unreachable,
+				Status: resolve.Unreachable,
 			}},
 			live: []lockfile.Dependency{
 				{NWO: "someorg/helper", Ref: "v1", SHA: shaImpostor},
@@ -72,10 +72,10 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 		},
 		{
 			name: "reachable live SHA emits nothing",
-			reach: []resolver.ReachabilityResult{{
+			reach: []resolve.ReachabilityResult{{
 				Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaCheckoutV4,
 				DepKey: "actions/checkout@v4",
-				Status: resolver.Reachable,
+				Status: resolve.Reachable,
 			}},
 			live: []lockfile.Dependency{
 				{NWO: "actions/checkout", Ref: "v4", SHA: shaCheckoutV4},
@@ -85,10 +85,10 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 		},
 		{
 			name: "suppressed when prior CategoryImpostorCommit already covers dep",
-			reach: []resolver.ReachabilityResult{{
+			reach: []resolve.ReachabilityResult{{
 				Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaImpostor,
 				DepKey: "actions/checkout@v4",
-				Status: resolver.Unreachable,
+				Status: resolve.Unreachable,
 			}},
 			live: []lockfile.Dependency{
 				{NWO: "actions/checkout", Ref: "v4", SHA: shaImpostor},
@@ -103,10 +103,10 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 		},
 		{
 			name: "suppressed when prior CategoryLockfileForgery covers dep",
-			reach: []resolver.ReachabilityResult{{
+			reach: []resolve.ReachabilityResult{{
 				Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaImpostor,
 				DepKey: "actions/checkout@v4",
-				Status: resolver.Unreachable,
+				Status: resolve.Unreachable,
 			}},
 			live: []lockfile.Dependency{
 				{NWO: "actions/checkout", Ref: "v4", SHA: shaImpostor},
@@ -121,10 +121,10 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 		},
 		{
 			name: "unknown status emits nothing (only Unreachable fires)",
-			reach: []resolver.ReachabilityResult{{
+			reach: []resolve.ReachabilityResult{{
 				Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaImpostor,
 				DepKey: "actions/checkout@v4",
-				Status: resolver.ReachabilityUnknown,
+				Status: resolve.ReachabilityUnknown,
 			}},
 			live: []lockfile.Dependency{
 				{NWO: "actions/checkout", Ref: "v4", SHA: shaImpostor},
@@ -134,16 +134,16 @@ func TestLiveReachImpostorFindings_Parity(t *testing.T) {
 		},
 		{
 			name: "deduplicates second reach result for same dep",
-			reach: []resolver.ReachabilityResult{
+			reach: []resolve.ReachabilityResult{
 				{
 					Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaImpostor,
 					DepKey: "actions/checkout@v4",
-					Status: resolver.Unreachable,
+					Status: resolve.Unreachable,
 				},
 				{
 					Owner: "actions", Repo: "checkout", Ref: "v4", SHA: shaImpostor,
 					DepKey: "actions/checkout@v4",
-					Status: resolver.Unreachable,
+					Status: resolve.Unreachable,
 				},
 			},
 			live: []lockfile.Dependency{

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // TestWriteWorkflowFile_PreservesMode confirms that rewriting a workflow file
@@ -70,7 +70,7 @@ func TestDropDeps_ContainsBadKeepsSiblings(t *testing.T) {
 		{NWO: "mmastrac/mmm-matrix", Ref: "v1.0.5"}, // impostor
 		{NWO: "actions/checkout", Ref: "v6.0.2"},
 	}
-	parentMap := resolver.ParentMap{
+	parentMap := resolve.ParentMap{
 		"actions/cache@v5.0.5":       {"mmastrac/mmm-matrix@v1.0.5"},
 		"mmastrac/mmm-matrix@v1.0.5": {},
 		"actions/checkout@v6.0.2":    {},
@@ -103,7 +103,7 @@ func TestDropDeps_DoesNotMutateInputs(t *testing.T) {
 		{NWO: "actions/cache", Ref: "v5.0.5"},
 		{NWO: "bad/actor", Ref: "v9"},
 	}
-	parentMap := resolver.ParentMap{
+	parentMap := resolve.ParentMap{
 		"actions/cache@v5.0.5": {"bad/actor@v9"},
 		"bad/actor@v9":         {},
 	}

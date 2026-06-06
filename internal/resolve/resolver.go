@@ -1,6 +1,6 @@
 // Package resolver resolves action refs to commit SHAs and recursively
 // discovers transitive dependencies from composite actions.
-package resolver
+package resolve
 
 import (
 	"context"

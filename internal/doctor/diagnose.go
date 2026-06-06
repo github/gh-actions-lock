@@ -7,7 +7,7 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // Diagnose scans workflows and produces findings for each.
@@ -15,7 +15,7 @@ import (
 // It is a backward-compatible wrapper around ParseAll, resolver pre-warming,
 // and DiagnoseParsed. Newer callers can drive those phases directly to control
 // UI progress.
-func Diagnose(ctx context.Context, paths []string, r *resolver.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
+func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.Store, onWorkflow ...func(done, total int, path string)) *Report {
 	var onScan func(done, total int, path string)
 	if len(onWorkflow) > 0 {
 		onScan = onWorkflow[0]
@@ -131,7 +131,7 @@ func CollectResolvable(parsed []ParsedWorkflow) ([]lockfile.ActionRef, []lockfil
 // Assumes the resolver caches have already been warmed (calls into the
 // resolver will hit cache and stay silent). Returns a Report aggregating per-
 // workflow findings in input order.
-func DiagnoseParsed(ctx context.Context, parsed []ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) *Report {
+func DiagnoseParsed(ctx context.Context, parsed []ParsedWorkflow, r *resolve.Resolver, store *lockfile.Store) *Report {
 	report := &Report{}
 	for _, pw := range parsed {
 		effR := r
@@ -146,7 +146,7 @@ func DiagnoseParsed(ctx context.Context, parsed []ParsedWorkflow, r *resolver.Re
 	return report
 }
 
-func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolver.Resolver, store *lockfile.Store) WorkflowReport {
+func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolve.Resolver, store *lockfile.Store) WorkflowReport {
 	wr := WorkflowReport{Path: pw.Path}
 
 	if pw.LoadErr != nil {
@@ -199,7 +199,7 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolver.Resol
 	// resolver. Failure degrades to structural-only checks for any refs that
 	// couldn't be resolved — partial results are kept.
 	var liveDeps []lockfile.Dependency
-	var resolvedParents resolver.ParentMap
+	var resolvedParents resolve.ParentMap
 	if r != nil {
 		var resolveErr error
 		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
@@ -230,7 +230,7 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolver.Resol
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 
-	var reach []resolver.ReachabilityResult
+	var reach []resolve.ReachabilityResult
 	if r != nil && len(pw.ExistingDeps) > 0 {
 		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
 		reach = trusted
@@ -245,7 +245,7 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolver.Resol
 	// (NWO, Ref, SHA) keys don't shadow the lockfile sweep — they
 	// share NWO@Ref dep keys, which would confuse
 	// reachabilityComplementFindings if mixed into `reach`.
-	var liveMovedReach []resolver.ReachabilityResult
+	var liveMovedReach []resolve.ReachabilityResult
 	if r != nil && len(liveDeps) > 0 && len(pw.ExistingDeps) > 0 {
 		if moved := liveMovedDeps(pw.ExistingDeps, liveDeps); len(moved) > 0 {
 			liveMovedReach = r.CheckReachabilityAll(ctx, moved)
@@ -257,7 +257,7 @@ func diagnoseOneParsed(ctx context.Context, pw ParsedWorkflow, r *resolver.Resol
 	// transitive composite live dep that isn't in the lockfile yet. With
 	// this in place, applyPin's reach-loop Unreachable branch becomes a
 	// fail-loud invariant rather than a primary detection path.
-	var liveDirectReach []resolver.ReachabilityResult
+	var liveDirectReach []resolve.ReachabilityResult
 	if r != nil && len(liveDeps) > 0 {
 		if extra := liveDirectReachDeps(pw, liveDeps); len(extra) > 0 {
 			liveDirectReach = r.CheckReachabilityAll(ctx, extra)
@@ -573,7 +573,7 @@ func liveMovedDeps(existing, live []lockfile.Dependency) []lockfile.Dependency {
 // When skipUnchanged is false, every existing dep goes to toCheck. This
 // is the --rescan path: re-verify every recorded pin against current
 // upstream branches.
-func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bool) (toCheck []lockfile.Dependency, trusted []resolver.ReachabilityResult) {
+func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bool) (toCheck []lockfile.Dependency, trusted []resolve.ReachabilityResult) {
 	if !skipUnchanged || len(live) == 0 {
 		return existing, nil
 	}
@@ -588,13 +588,13 @@ func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bo
 			continue
 		}
 		owner, repo := d.OwnerRepo()
-		trusted = append(trusted, resolver.ReachabilityResult{
+		trusted = append(trusted, resolve.ReachabilityResult{
 			Owner:  owner,
 			Repo:   repo,
 			Ref:    d.Ref,
 			SHA:    d.SHA,
 			DepKey: d.Key(),
-			Status: resolver.Reachable,
+			Status: resolve.Reachable,
 			Detail: "lockfile entry unchanged and live resolve confirms SHA — prior reachability verification retained",
 		})
 	}
@@ -609,7 +609,7 @@ func partitionReachByLive(existing, live []lockfile.Dependency, skipUnchanged bo
 //     the check was inconclusive.
 func reachabilityComplementFindings(
 	path string,
-	reach []resolver.ReachabilityResult,
+	reach []resolve.ReachabilityResult,
 	deps []lockfile.Dependency,
 	directNWOs map[cachekey.Repo]bool,
 	parentMap map[string][]string,
@@ -645,7 +645,7 @@ func reachabilityComplementFindings(
 			parent = parents[0]
 		}
 		switch rr.Status {
-		case resolver.Unreachable:
+		case resolve.Unreachable:
 			if direct {
 				continue // engine emits impostor for direct uses
 			}
@@ -665,7 +665,7 @@ func reachabilityComplementFindings(
 				Remediation:  "investigate immediately — the lockfile entry may have been injected",
 				DocURL:       DocURLFor(CategoryImpostorCommit),
 			})
-		case resolver.ReachabilityUnknown:
+		case resolve.ReachabilityUnknown:
 			remediation := "transitive dependency pinned to a bare SHA — reachability cannot be verified"
 			if direct {
 				remediation = "reachability check inconclusive — retry when network/API is available"
@@ -697,7 +697,7 @@ func reachabilityComplementFindings(
 // for a direct ref via the live-ref-vs-locked compare in check_misleading.
 func liveReachImpostorFindings(
 	path string,
-	reach []resolver.ReachabilityResult,
+	reach []resolve.ReachabilityResult,
 	live []lockfile.Dependency,
 	directNWOs map[cachekey.Repo]bool,
 	parentMap map[string][]string,
@@ -723,7 +723,7 @@ func liveReachImpostorFindings(
 	}
 	var out []Finding
 	for _, rr := range reach {
-		if rr.Status != resolver.Unreachable {
+		if rr.Status != resolve.Unreachable {
 			continue
 		}
 		dep, ok := liveByReachKey[cachekey.ForReach(rr.Owner, rr.Repo, rr.SHA, rr.Ref)]

@@ -128,7 +128,7 @@ type SHARefMismatch struct {
 }
 
 // TagObjectPeeler can dereference a 40-hex SHA into the commit it points at
-// when the SHA is itself an annotated tag object. *resolver.Resolver
+// when the SHA is itself an annotated tag object. *resolve.Resolver
 // satisfies this; tests pass a stub. A nil peeler disables tag-object
 // recognition and reverts to the strict EqualFold(ref, sha) check.
 type TagObjectPeeler interface {

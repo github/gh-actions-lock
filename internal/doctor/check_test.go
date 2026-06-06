@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // Typed map keys for the test stub: a small struct per lookup tuple so
@@ -23,9 +23,9 @@ type (
 // Missing entries return *Unknown values (fail-open).
 type stubCheckResolver struct {
 	refs            map[stubRefKey]string                        // resolved ref → sha; absence = unknown
-	ancestry        map[stubAncestryKey]resolver.AncestryStatus  // (cand, head) ancestry decision
+	ancestry        map[stubAncestryKey]resolve.AncestryStatus  // (cand, head) ancestry decision
 	ancestryDetails map[stubAncestryKey]string                   // optional per-key detail string; absence = ""
-	reach           map[stubReachKey]resolver.ReachabilityStatus // sha-reachable-from-ref decision
+	reach           map[stubReachKey]resolve.ReachabilityStatus // sha-reachable-from-ref decision
 	tagObjects      map[stubTagObjectKey]string                  // sha → peeled commit
 }
 
@@ -37,25 +37,25 @@ func (s *stubCheckResolver) ResolveRef(owner, repo, ref string) (string, bool) {
 	return sha, ok
 }
 
-func (s *stubCheckResolver) CheckAncestry(_ context.Context, owner, repo, cand, head string) (resolver.AncestryStatus, string) {
+func (s *stubCheckResolver) CheckAncestry(_ context.Context, owner, repo, cand, head string) (resolve.AncestryStatus, string) {
 	if s == nil {
-		return resolver.AncestryUnknown, ""
+		return resolve.AncestryUnknown, ""
 	}
 	key := stubAncestryKey{owner, repo, cand, head}
 	v, ok := s.ancestry[key]
 	if !ok {
-		return resolver.AncestryUnknown, s.ancestryDetails[key]
+		return resolve.AncestryUnknown, s.ancestryDetails[key]
 	}
 	return v, s.ancestryDetails[key]
 }
 
-func (s *stubCheckResolver) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus {
+func (s *stubCheckResolver) CheckReachability(owner, repo, sha, ref string) resolve.ReachabilityStatus {
 	if s == nil {
-		return resolver.ReachabilityUnknown
+		return resolve.ReachabilityUnknown
 	}
 	v, ok := s.reach[stubReachKey{owner, repo, sha, ref}]
 	if !ok {
-		return resolver.ReachabilityUnknown
+		return resolve.ReachabilityUnknown
 	}
 	return v
 }
@@ -181,8 +181,8 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV4, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV4, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: nil,
@@ -197,11 +197,11 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolver.AncestryConfirmed,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: []Category{CategoryRefMoved},
@@ -221,8 +221,8 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaImpostor, shaCheckoutV4}: resolver.AncestryNotAncestor,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaImpostor, shaCheckoutV4}: resolve.AncestryNotAncestor,
 				},
 			},
 			extra: func(t *testing.T, got []Finding) {
@@ -254,8 +254,8 @@ func TestRunChecks(t *testing.T) {
 			workflowRefs: []lockfile.ActionRef{checkRef("actions", "checkout", "v4")},
 			resolver: &stubCheckResolver{
 				// Resolver doesn't know the ref → no ref-moved / forgery path.
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaImpostor, "v4"}: resolver.Unreachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaImpostor, "v4"}: resolve.Unreachable,
 				},
 			},
 			wantCategories: []Category{CategoryImpostorCommit},
@@ -336,8 +336,8 @@ func TestRunChecks(t *testing.T) {
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
 				// No ancestry entry → stub returns AncestryUnknown.
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: []Category{CategoryAncestryUnknown},
@@ -367,11 +367,11 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolver.AncestryConfirmed,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: []Category{CategoryRefMoved},
@@ -399,8 +399,8 @@ func TestRunChecks(t *testing.T) {
 				ancestryDetails: map[stubAncestryKey]string{
 					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: "rate limited (HTTP 429); resets at 1717552800; retry budget exhausted after 3 attempts",
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: []Category{CategoryAncestryUnknown},
@@ -433,12 +433,12 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaImpostor,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaImpostor}: resolver.AncestryConfirmed,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaCheckoutV3, shaImpostor}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
-					{"actions", "checkout", shaImpostor, "v4"}:   resolver.Unreachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
+					{"actions", "checkout", shaImpostor, "v4"}:   resolve.Unreachable,
 				},
 			},
 			wantCategories: []Category{CategoryImpostorCommit, CategoryRefMoved},
@@ -485,12 +485,12 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolver.AncestryConfirmed,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
-					{"actions", "checkout", shaCheckoutV4, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
+					{"actions", "checkout", shaCheckoutV4, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: []Category{CategoryRefMoved},
@@ -508,11 +508,11 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolver.AncestryConfirmed,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 					// no live-SHA entry → ReachabilityUnknown
 				},
 			},
@@ -533,11 +533,11 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-					{"actions", "checkout", shaImpostor, shaCheckoutV4}: resolver.AncestryNotAncestor,
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "checkout", shaImpostor, shaCheckoutV4}: resolve.AncestryNotAncestor,
 				},
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV4, "v4"}: resolver.Unreachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV4, "v4"}: resolve.Unreachable,
 				},
 			},
 			extra: func(t *testing.T, got []Finding) {
@@ -574,9 +574,9 @@ func TestRunChecks(t *testing.T) {
 					{"actions", "checkout", "v4"}: shaImpostor,
 				},
 				// No ancestry entry → AncestryUnknown.
-				reach: map[stubReachKey]resolver.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
-					{"actions", "checkout", shaImpostor, "v4"}:   resolver.Unreachable,
+				reach: map[stubReachKey]resolve.ReachabilityStatus{
+					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
+					{"actions", "checkout", shaImpostor, "v4"}:   resolve.Unreachable,
 				},
 			},
 			wantCategories: []Category{CategoryAncestryUnknown, CategoryImpostorCommit},
@@ -640,11 +640,11 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 			{"actions", "checkout", "v4"}:        shaCheckoutV4,
 			{"actions", "bare-sha", shaImpostor}: shaSetupGoV5,
 		},
-		ancestry: map[stubAncestryKey]resolver.AncestryStatus{
-			{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolver.AncestryConfirmed,
+		ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+			{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 		},
-		reach: map[stubReachKey]resolver.ReachabilityStatus{
-			{"actions", "checkout", shaCheckoutV3, "v4"}: resolver.Reachable,
+		reach: map[stubReachKey]resolve.ReachabilityStatus{
+			{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 		},
 	}
 	got := runChecks(context.Background(), pw, lf, r)

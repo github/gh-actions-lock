@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // directUsesFor returns the original `uses:` text (ActionRef.Raw) for the
@@ -101,7 +101,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	for _, rr := range reachResults {
 		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
 		switch rr.Status {
-		case resolver.Unreachable:
+		case resolve.Unreachable:
 			// Defense-in-depth invariant: diagnose's live-direct sweep
 			// (liveReachImpostorFindings) is the primary detector for
 			// this shape and would have produced a CategoryImpostorCommit
@@ -118,12 +118,12 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 			// reachable — escalate" / "→ suggested: re-pin" line.
 			rem.mergeEnrichmentForAlert(wr.Findings, rr.Owner+"/"+rr.Repo, rr.Ref)
 			badKeys[depKey] = true
-		case resolver.ReachabilityUnknown:
+		case resolve.ReachabilityUnknown:
 			rem.alertWorkflow(wr.Path, depKey,
 				"couldn't verify the SHA is reachable (API or network issue) — retry before pinning",
 				fmt.Sprintf("refusing to pin: cannot verify reachability for %s/%s@%s (try again later) — %s", rr.Owner, rr.Repo, rr.Ref, rr.Detail))
 			badKeys[depKey] = true
-		case resolver.Reachable:
+		case resolve.Reachable:
 			// Reachable, but only after falling back to a full branch
 			// scan: the commit is not on a canonical branch. Pin it, but
 			// flag it so the summary can surface it in red.
@@ -191,7 +191,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	}
 	normRewrites, err := rem.resolver.NormalizeContaining(rem.ctx, deps)
 	if err != nil {
-		var imp *resolver.ImpostorError
+		var imp *resolve.ImpostorError
 		if errors.As(err, &imp) {
 			depKey := imp.NWO + "@" + imp.Ref
 			rem.alertWorkflow(wr.Path, depKey, reasonForCategory(CategoryImpostorCommit), imp.Error())
@@ -210,7 +210,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	}
 
 	// Update parent map keys to reflect narrowed refs.
-	parentMap = resolver.RekeyParentMap(parentMap, parentRewrites)
+	parentMap = resolve.RekeyParentMap(parentMap, parentRewrites)
 
 	// If we have rewrites, update the uses: lines in the workflow first.
 	if len(rewrites) > 0 {
@@ -237,7 +237,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 // parent's child list). It keys on Dependency.Key(), the same NWO@Ref form
 // the parent map uses, so a reachability-failed dep can be contained without
 // discarding the workflow's benign siblings. Neither input is mutated.
-func dropDeps(deps []lockfile.Dependency, parentMap resolver.ParentMap, drop map[string]bool) ([]lockfile.Dependency, resolver.ParentMap) {
+func dropDeps(deps []lockfile.Dependency, parentMap resolve.ParentMap, drop map[string]bool) ([]lockfile.Dependency, resolve.ParentMap) {
 	kept := make([]lockfile.Dependency, 0, len(deps))
 	for _, d := range deps {
 		if drop[d.Key()] {
@@ -248,7 +248,7 @@ func dropDeps(deps []lockfile.Dependency, parentMap resolver.ParentMap, drop map
 	if len(parentMap) == 0 {
 		return kept, parentMap
 	}
-	pruned := make(resolver.ParentMap, len(parentMap))
+	pruned := make(resolve.ParentMap, len(parentMap))
 	for child, parents := range parentMap {
 		if drop[child] {
 			continue
@@ -362,14 +362,14 @@ func (rem *Remediator) applyReResolve(wr WorkflowReport, dep *lockfile.Dependenc
 // wr.Findings); it's used to preserve enrichment on any impostor alert
 // emitted from this path. Pass nil if no findings are available — the
 // enrichment merge becomes a no-op.
-func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency, parentMap resolver.ParentMap, findings []Finding) (resolver.ParentMap, error) {
+func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.Dependency, parentMap resolve.ParentMap, findings []Finding) (resolve.ParentMap, error) {
 	preNormKeys := make([]string, len(deps))
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
 	}
 	normRewrites, err := rem.resolver.NormalizeContaining(rem.ctx, deps)
 	if err != nil {
-		var imp *resolver.ImpostorError
+		var imp *resolve.ImpostorError
 		if errors.As(err, &imp) {
 			depKey := imp.NWO + "@" + imp.Ref
 			rem.alertWorkflow(workflowPath, depKey, reasonForCategory(CategoryImpostorCommit), imp.Error())
@@ -384,7 +384,7 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 			parentRewrites[preNormKeys[i]] = newKey
 		}
 	}
-	parentMap = resolver.RekeyParentMap(parentMap, parentRewrites)
+	parentMap = resolve.RekeyParentMap(parentMap, parentRewrites)
 	if len(normRewrites) == 0 {
 		return parentMap, nil
 	}

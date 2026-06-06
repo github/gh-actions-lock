@@ -13,7 +13,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -46,7 +46,7 @@ func execute() int {
 	}
 }
 
-type resolverFunc func(hostname string) (*resolver.Resolver, error)
+type resolverFunc func(hostname string) (*resolve.Resolver, error)
 
 // newRootCmd returns the cobra command for the root `actions-pin` invocation.
 // newResolver supplies the resolver builder; pass nil for production wiring.
@@ -117,14 +117,14 @@ $ gh actions-pin upgrade --action actions/checkout
 // resolved hostname, open the lockfile store against it, and seed branch hints
 // from the existing lockfile so repeat scans short-circuit the per-branch
 // Compare walk. newResolver is the DI seam; pass nil for production wiring.
-func newRun(workflowPaths []string, hostname string, newResolver resolverFunc) ([]string, *resolver.Resolver, *lockfile.Store, error) {
+func newRun(workflowPaths []string, hostname string, newResolver resolverFunc) ([]string, *resolve.Resolver, *lockfile.Store, error) {
 	paths, err := discoverWorkflowPaths(workflowPaths)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	if newResolver == nil {
-		newResolver = resolver.New
+		newResolver = resolve.New
 	}
 	r, err := newResolver(resolveHostname(hostname))
 	if err != nil {

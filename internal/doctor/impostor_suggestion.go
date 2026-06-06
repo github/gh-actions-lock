@@ -5,14 +5,14 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
-// reachabilityChecker is the subset of resolver.Resolver we need to verify
+// reachabilityChecker is the subset of resolve.Resolver we need to verify
 // that a tag's commit is reachable from a branch in the action repo. It's
 // defined here so tests can stub it without spinning up a real resolver.
 type reachabilityChecker interface {
-	CheckReachability(ctx context.Context, owner, repo, sha, ref string) resolver.ReachabilityResult
+	CheckReachability(ctx context.Context, owner, repo, sha, ref string) resolve.ReachabilityResult
 }
 
 // maxSaneReleaseTagsChecked bounds the per-finding tag walk so a repo with a
@@ -49,7 +49,7 @@ func FindSaneRelease(ctx context.Context, tl *TagLister, r reachabilityChecker, 
 			continue
 		}
 		rr := r.CheckReachability(ctx, owner, repo, t.SHA, t.Name)
-		if rr.Status == resolver.Reachable {
+		if rr.Status == resolve.Reachable {
 			return t.Name, t.SHA
 		}
 		checked++

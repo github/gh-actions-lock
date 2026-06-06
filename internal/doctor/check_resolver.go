@@ -5,7 +5,7 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/cachekey"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // checkResolver is the surface the resolver-bound checks need. The
@@ -22,18 +22,18 @@ type checkResolver interface {
 	// CheckAncestry asks whether candidate is an ancestor of head and
 	// returns a short human-readable detail alongside the status — the
 	// rate-limit or compare-base detail callers surface to operators.
-	CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolver.AncestryStatus, string)
+	CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolve.AncestryStatus, string)
 	// CheckReachability asks whether sha is reachable from ref's history.
-	CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus
+	CheckReachability(owner, repo, sha, ref string) resolve.ReachabilityStatus
 }
 
-// prewarmedResolver adapts *resolver.Resolver to checkResolver. Ref
+// prewarmedResolver adapts *resolve.Resolver to checkResolver. Ref
 // resolutions and reachability are pre-computed; ancestry and tag-object
 // peels stay on-demand and delegate to the resolver's own cache.
 type prewarmedResolver struct {
-	inner *resolver.Resolver
+	inner *resolve.Resolver
 	refs  map[cachekey.NWORef]string                     // (owner/repo, ref) -> sha
-	reach map[cachekey.Reach]resolver.ReachabilityStatus // (owner/repo, sha, ref) -> status
+	reach map[cachekey.Reach]resolve.ReachabilityStatus // (owner/repo, sha, ref) -> status
 }
 
 // newPrewarmedResolver primes the adapter with the live resolution of
@@ -41,7 +41,7 @@ type prewarmedResolver struct {
 // ResolveAllRecursive failed; checks that need a ref will fail open.
 // extraReach carries reach results for SHAs outside the canonical
 // lockfile sweep — typically the observed SHA of a moved ref.
-func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reach []resolver.ReachabilityResult, extraReach ...[]resolver.ReachabilityResult) *prewarmedResolver {
+func newPrewarmedResolver(r *resolve.Resolver, live []lockfile.Dependency, reach []resolve.ReachabilityResult, extraReach ...[]resolve.ReachabilityResult) *prewarmedResolver {
 	extras := 0
 	for _, e := range extraReach {
 		extras += len(e)
@@ -49,7 +49,7 @@ func newPrewarmedResolver(r *resolver.Resolver, live []lockfile.Dependency, reac
 	a := &prewarmedResolver{
 		inner: r,
 		refs:  make(map[cachekey.NWORef]string, len(live)),
-		reach: make(map[cachekey.Reach]resolver.ReachabilityStatus, len(reach)+extras),
+		reach: make(map[cachekey.Reach]resolve.ReachabilityStatus, len(reach)+extras),
 	}
 	for _, d := range live {
 		owner, repo := d.OwnerRepo()
@@ -78,16 +78,16 @@ func (a *prewarmedResolver) PeelTagObject(ctx context.Context, owner, repo, sha 
 	return a.inner.PeelTagObject(ctx, owner, repo, sha)
 }
 
-func (a *prewarmedResolver) CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolver.AncestryStatus, string) {
+func (a *prewarmedResolver) CheckAncestry(ctx context.Context, owner, repo, candidate, head string) (resolve.AncestryStatus, string) {
 	if a.inner == nil {
-		return resolver.AncestryUnknown, ""
+		return resolve.AncestryUnknown, ""
 	}
 	return a.inner.CheckAncestry(ctx, owner, repo, candidate, head)
 }
 
-func (a *prewarmedResolver) CheckReachability(owner, repo, sha, ref string) resolver.ReachabilityStatus {
+func (a *prewarmedResolver) CheckReachability(owner, repo, sha, ref string) resolve.ReachabilityStatus {
 	if s, ok := a.reach[cachekey.ForReach(owner, repo, sha, ref)]; ok {
 		return s
 	}
-	return resolver.ReachabilityUnknown
+	return resolve.ReachabilityUnknown
 }

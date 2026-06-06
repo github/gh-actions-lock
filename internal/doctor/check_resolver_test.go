@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // TestPrewarmedResolver_LockedAndLiveCoexist verifies that locked-SHA
@@ -18,17 +18,17 @@ func TestPrewarmedResolver_LockedAndLiveCoexist(t *testing.T) {
 		locked = "ea53476fdc172d8552df5af9658a45a367e4f41d"
 		live   = "7b403c9ec14b00000000000000000000deadbeef"
 	)
-	locks := []resolver.ReachabilityResult{
-		{Owner: owner, Repo: repo, Ref: ref, SHA: locked, Status: resolver.Reachable},
+	locks := []resolve.ReachabilityResult{
+		{Owner: owner, Repo: repo, Ref: ref, SHA: locked, Status: resolve.Reachable},
 	}
-	lives := []resolver.ReachabilityResult{
-		{Owner: owner, Repo: repo, Ref: ref, SHA: live, Status: resolver.Unreachable},
+	lives := []resolve.ReachabilityResult{
+		{Owner: owner, Repo: repo, Ref: ref, SHA: live, Status: resolve.Unreachable},
 	}
 	pw := newPrewarmedResolver(nil, nil, locks, lives)
-	if got := pw.CheckReachability(owner, repo, locked, ref); got != resolver.Reachable {
+	if got := pw.CheckReachability(owner, repo, locked, ref); got != resolve.Reachable {
 		t.Errorf("locked SHA: got %v, want Reachable", got)
 	}
-	if got := pw.CheckReachability(owner, repo, live, ref); got != resolver.Unreachable {
+	if got := pw.CheckReachability(owner, repo, live, ref); got != resolve.Unreachable {
 		t.Errorf("observed SHA: got %v, want Unreachable", got)
 	}
 }

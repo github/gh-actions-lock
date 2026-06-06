@@ -7,7 +7,7 @@ import (
 // TagObjectCheck reports whether the given SHA is a known annotated-tag
 // object in owner/repo. Used by DepReleaseURL so it can pick /tree/<sha>
 // over /commit/<sha> for tag objects (which 404 under /commit/). Pass nil
-// to skip the check and always use /commit/<sha>. *resolver.Resolver's
+// to skip the check and always use /commit/<sha>. *resolve.Resolver's
 // IsKnownTagObject method satisfies the signature directly.
 type TagObjectCheck func(owner, repo, sha string) bool
 

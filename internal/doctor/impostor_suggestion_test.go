@@ -6,19 +6,19 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/httpmock"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 type fakeReachabilityChecker struct {
-	results map[string]resolver.ReachabilityStatus
+	results map[string]resolve.ReachabilityStatus
 }
 
-func (f *fakeReachabilityChecker) CheckReachability(_ context.Context, owner, repo, sha, ref string) resolver.ReachabilityResult {
+func (f *fakeReachabilityChecker) CheckReachability(_ context.Context, owner, repo, sha, ref string) resolve.ReachabilityResult {
 	status := f.results[ref]
 	if status == "" {
-		status = resolver.Unreachable
+		status = resolve.Unreachable
 	}
-	return resolver.ReachabilityResult{Owner: owner, Repo: repo, SHA: sha, Ref: ref, Status: status}
+	return resolve.ReachabilityResult{Owner: owner, Repo: repo, SHA: sha, Ref: ref, Status: status}
 }
 
 // registerTagWalk wires the three endpoints TagLister hits during a
@@ -51,9 +51,9 @@ func TestFindSaneRelease_PicksFirstReachable(t *testing.T) {
 	})
 
 	tl := newTagListerWithRegistry(t, reg)
-	rc := &fakeReachabilityChecker{results: map[string]resolver.ReachabilityStatus{
-		"v1.5.0": resolver.Unreachable,
-		"v1.4.0": resolver.Reachable,
+	rc := &fakeReachabilityChecker{results: map[string]resolve.ReachabilityStatus{
+		"v1.5.0": resolve.Unreachable,
+		"v1.4.0": resolve.Reachable,
 	}}
 
 	tag, sha := FindSaneRelease(context.Background(), tl, rc, "acme", "widget")
@@ -127,8 +127,8 @@ func TestEnrichImpostorFindings_PopulatesSuggestion(t *testing.T) {
 	})
 
 	tl := newTagListerWithRegistry(t, reg)
-	rc := &fakeReachabilityChecker{results: map[string]resolver.ReachabilityStatus{
-		"v1.0.0": resolver.Reachable,
+	rc := &fakeReachabilityChecker{results: map[string]resolve.ReachabilityStatus{
+		"v1.0.0": resolve.Reachable,
 	}}
 
 	report := &Report{

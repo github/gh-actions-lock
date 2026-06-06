@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // checkMisleadingSha emits CategoryMisleadingSHA when a uses: ref looks
@@ -74,7 +74,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 		f.ObservedSHA = sha
 		f.Dependency = synthDep(ref, pin.Hex)
 		switch ancestry {
-		case resolver.AncestryNotAncestor:
+		case resolve.AncestryNotAncestor:
 			// Compare API gave an authoritative not-an-ancestor verdict.
 			// Forgery wins: don't double-flag with an observed-SHA
 			// impostor finding.
@@ -84,7 +84,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — lockfile may have been tampered with", shortSha(pin.Hex), shortSha(sha))
 			f.Remediation = "investigate immediately — verify the lockfile entry against upstream history"
 			out = append(out, f)
-		case resolver.AncestryUnknown:
+		case resolve.AncestryUnknown:
 			// Compare API didn't reach a verdict — typically rate-limited
 			// even after CheckAncestry's bounded retry. Surface as its
 			// own category so consumers don't conflate inconclusive with
@@ -123,7 +123,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 // open. Caller must suppress this in the forgery branch.
 func liveRefImpostorFinding(pw ParsedWorkflow, ref lockfile.ActionRef, observedSHA string, r checkResolver) (Finding, bool) {
 	status := r.CheckReachability(ref.Owner, ref.Repo, observedSHA, ref.Ref)
-	if status != resolver.Unreachable {
+	if status != resolve.Unreachable {
 		return Finding{}, false
 	}
 	f := newRefFinding(pw, ref, CategoryImpostorCommit, SeverityError, ConfidenceHigh)
@@ -163,7 +163,7 @@ func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]lockfile.Pin, r 
 			continue
 		}
 		status := r.CheckReachability(ref.Owner, ref.Repo, pin.Hex, ref.Ref)
-		if status != resolver.Unreachable {
+		if status != resolve.Unreachable {
 			continue
 		}
 		// branch_commits gave an authoritative answer: the locked SHA is

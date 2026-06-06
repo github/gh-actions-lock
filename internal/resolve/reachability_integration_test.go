@@ -9,7 +9,7 @@
 //
 // Run: go test -tags integration -run TestIntegration ./internal/resolver/
 
-package resolver
+package resolve
 
 import (
 	"context"
