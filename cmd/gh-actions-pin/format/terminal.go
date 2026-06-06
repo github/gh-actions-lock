@@ -235,7 +235,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 		if willRemediate {
 			out.TermDetail("↳ resolving below")
 		} else {
-			out.TermDetail("↳ run `gh actions-pin upgrade` to pin to tagged releases")
+			out.TermDetail("↳ run `gh actions-pin` to pin to tagged releases")
 		}
 	}
 	if len(refMovedWarnings) > 0 {
@@ -244,7 +244,7 @@ func PresentResults(out *ui.UI, report *doctor.Report, valid bool, willRemediate
 			ui.Pluralize(len(refMovedWarnings), "ref has", "refs have"))
 		// RefMoved is skipped by the remediator (see remediate_strategies.go),
 		// so the manual hint applies regardless of willRemediate.
-		out.TermDetail("↳ run `gh actions-pin upgrade` to update")
+		out.TermDetail("↳ run `gh actions-pin` to update")
 		for _, key := range refMovedWarnings {
 			wg := warnMap[key]
 			f := wg.finding

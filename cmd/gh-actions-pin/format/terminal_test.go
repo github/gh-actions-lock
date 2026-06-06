@@ -186,7 +186,7 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 				},
 			}},
 			wantOutput: []string{"bare SHA", "↳ resolving below"},
-			notWanted:  []string{"run `gh actions-pin upgrade`"},
+			notWanted:  []string{"run `gh actions-pin`"},
 		},
 		{
 			name:          "ref-moved always shows upgrade hint as ↳ follow-up",
@@ -206,7 +206,7 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 			}},
 			wantOutput: []string{
 				"moved upstream",
-				"↳ run `gh actions-pin upgrade` to update",
+				"↳ run `gh actions-pin` to update",
 			},
 		},
 		{

@@ -79,7 +79,6 @@ With --json, structured results go to stdout and progress to stderr:
 Commands:
 
   gh actions-pin             Verify and fix the dependency lock
-  gh actions-pin upgrade     Bump action versions and re-lock
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows
@@ -90,9 +89,6 @@ $ gh actions-pin .github/workflows/ci.yml
 
 # Output JSON for CI integration
 $ gh actions-pin --json=valid,findings
-
-# Upgrade a specific action
-$ gh actions-pin upgrade --action actions/checkout
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -107,7 +103,6 @@ $ gh actions-pin upgrade --action actions/checkout
 
 	bindCheckFlags(cmd, opts)
 	cmd.AddCommand(newCheckCmd(newResolver))
-	cmd.AddCommand(newUpgradeCmd(newResolver))
 
 	return cmd
 }
