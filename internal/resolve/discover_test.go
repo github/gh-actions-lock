@@ -260,7 +260,7 @@ func TestDiscoverContaining_CommitOnlyOnUnprotectedBranchFallsBack(t *testing.T)
 	reg.Verify(t)
 }
 
-func TestNormalizeContaining_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) {
+func TestReverseLookup_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) {
 	// SHA pin: dep.SHA="abc123", dep.Ref=full-sha. main HEAD=="abc123" → exact match.
 	reg := &httpmock.Registry{}
 	reg.Register(
@@ -281,7 +281,7 @@ func TestNormalizeContaining_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) 
 		{NWO: "actions/checkout", Ref: "abc123abc123abc123abc123abc123abc123abc1", SHA: "abc123", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.NormalizeContaining(context.Background(), deps)
+	rewrites, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestNormalizeContaining_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) 
 	reg.Verify(t)
 }
 
-func TestNormalizeContaining_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
+func TestReverseLookup_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 	// dep.Ref="v4", dep.SHA="abc". main HEAD=="abc" → exact match.
 	reg := &httpmock.Registry{}
 	reg.Register(
@@ -322,7 +322,7 @@ func TestNormalizeContaining_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v4", SHA: "abc", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.NormalizeContaining(context.Background(), deps)
+	rewrites, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestNormalizeContaining_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 	reg.Verify(t)
 }
 
-func TestNormalizeContaining_FailsClosedOnImpostor(t *testing.T) {
+func TestReverseLookup_FailsClosedOnImpostor(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
@@ -352,14 +352,14 @@ func TestNormalizeContaining_FailsClosedOnImpostor(t *testing.T) {
 	deps := []lockfile.Dependency{
 		{NWO: "actions/checkout", Ref: "poisoned", SHA: "dead"},
 	}
-	_, err = r.NormalizeContaining(context.Background(), deps)
+	_, err = r.ReverseLookup(context.Background(), deps)
 	if err == nil {
 		t.Fatalf("expected fail-closed error, got nil")
 	}
 	reg.Verify(t)
 }
 
-func TestNormalizeContaining_PreservesBranchRefOverTag(t *testing.T) {
+func TestReverseLookup_PreservesBranchRefOverTag(t *testing.T) {
 	// User wrote @main — main HEAD=="abc" → exact match.
 	// Tag discovery finds v4 and v4.3.1 but branch ref is preserved.
 	reg := &httpmock.Registry{}
@@ -381,7 +381,7 @@ func TestNormalizeContaining_PreservesBranchRefOverTag(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "main", SHA: "abc", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.NormalizeContaining(context.Background(), deps)
+	rewrites, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

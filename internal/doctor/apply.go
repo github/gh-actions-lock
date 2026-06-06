@@ -151,8 +151,8 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	// within your own org's private actions. Public repos always narrow.
 	//
 	// Narrowing happens BEFORE containing-discovery so that the canonical
-	// ref recorded by NormalizeContaining reflects the post-narrow tag, and
-	// so any rewrite NormalizeContaining adds (for SHA pins) doesn't collide
+	// ref recorded by ReverseLookup reflects the post-narrow tag, and
+	// so any rewrite ReverseLookup adds (for SHA pins) doesn't collide
 	// with the narrowing rewrite chain.
 	rewrites := make(map[string]string)
 	parentRewrites := make(map[string]string)
@@ -190,7 +190,7 @@ func (rem *Remediator) applyPin(wr WorkflowReport) error {
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
 	}
-	normRewrites, err := rem.resolver.NormalizeContaining(rem.ctx, deps)
+	normRewrites, err := rem.resolver.ReverseLookup(rem.ctx, deps)
 	if err != nil {
 		var imp *resolve.ImpostorError
 		if errors.As(err, &imp) {
@@ -368,7 +368,7 @@ func (rem *Remediator) normalizeAndRewrite(workflowPath string, deps []lockfile.
 	for i, d := range deps {
 		preNormKeys[i] = d.Key()
 	}
-	normRewrites, err := rem.resolver.NormalizeContaining(rem.ctx, deps)
+	normRewrites, err := rem.resolver.ReverseLookup(rem.ctx, deps)
 	if err != nil {
 		var imp *resolve.ImpostorError
 		if errors.As(err, &imp) {

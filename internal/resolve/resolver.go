@@ -213,7 +213,7 @@ type ParentMap map[string][]string
 
 // RekeyParentMap returns a new ParentMap with both child keys and parent
 // values rewritten according to `rewrites` (e.g. tag narrowing v4 → v4.3.1,
-// or NormalizeContaining replacing a SHA with a discovered tag). The input
+// or ReverseLookup replacing a SHA with a discovered tag). The input
 // is not mutated.
 func RekeyParentMap(pm ParentMap, rewrites map[string]string) ParentMap {
 	if len(pm) == 0 {

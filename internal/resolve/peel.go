@@ -591,13 +591,14 @@ func pickPreferredTag(candidates []string, hintRef string) string {
 	return pickPreferred(candidates, hintRef, "")
 }
 
-// NormalizeContaining runs DiscoverContaining for every entry in deps,
-// populates dep.Tag and dep.Branch, and computes the canonical @ref.
-// When the canonical ref differs from dep.Ref the change is recorded in
-// the returned rewrites map (keyed by "owner/repo[/path]@old-ref" →
-// "owner/repo[/path]@new-ref") and dep.Ref is updated in place. Callers
-// should pass the resulting map to lockfile.WorkflowFile.RewriteActionRefs to
-// mutate the workflow uses: lines.
+// ReverseLookup performs a reverse lookup (SHA → containing tag/branch)
+// for every entry in deps via DiscoverContaining, populates dep.Tag and
+// dep.Branch, and computes the canonical @ref. When the canonical ref
+// differs from dep.Ref the change is recorded in the returned rewrites
+// map (keyed by "owner/repo[/path]@old-ref" → "owner/repo[/path]@new-ref")
+// and dep.Ref is updated in place. Callers should pass the resulting map
+// to lockfile.WorkflowFile.RewriteActionRefs to mutate the workflow
+// uses: lines.
 //
 // Ref selection: if the original ref was itself a discovered branch (user
 // wrote e.g. @main), that branch is preserved as the key ref. Otherwise
@@ -607,7 +608,7 @@ func pickPreferredTag(candidates []string, hintRef string) string {
 // not on any branch — fail closed). On error rewrites is nil and earlier
 // in-place mutations may have already happened; the caller should treat
 // the deps slice as tainted.
-func (r *Resolver) NormalizeContaining(ctx context.Context, deps []lockfile.Dependency) (map[string]string, error) {
+func (r *Resolver) ReverseLookup(ctx context.Context, deps []lockfile.Dependency) (map[string]string, error) {
 	rewrites := map[string]string{}
 	for i := range deps {
 		d := &deps[i]

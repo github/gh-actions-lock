@@ -653,7 +653,7 @@ func (rem *Remediator) recordAlertSuggestion(depKey string, f Finding) {
 // Why this exists: alertWorkflow is the bare alert path — it inserts the
 // dep into AlertedDeps but doesn't carry SaneSuggestionSearched /
 // SaneSuggestionTag flags, because its callers (apply.go reach loop,
-// NormalizeContaining ImpostorError) don't have a Finding handle. The
+// ReverseLookup ImpostorError) don't have a Finding handle. The
 // renderer's "→ no recent release was reachable — escalate" and
 // "→ suggested: re-pin to <tag>" lines depend on AlertedSearched /
 // AlertedSuggestions being populated, which only happens through
