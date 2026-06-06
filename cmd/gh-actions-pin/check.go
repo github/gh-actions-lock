@@ -152,8 +152,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	out := cmd.OutOrStdout()
 	errOut := cmd.ErrOrStderr()
-	u := ui.NewWithWriter(errOut)
-	defer u.StopProgress()
+	console := ui.NewWithWriter(errOut)
+	defer console.StopProgress()
 
 	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, newResolver)
 	if err != nil {
@@ -167,7 +167,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// so users running headlessly on a workstation without CI set still get
 	// log-oriented output.
 	if opts.noInteractive {
-		u.MarkHeadless()
+		console.MarkHeadless()
 	}
 
 	// Detailed narration is suppressed from the terminal during the run so the
@@ -176,7 +176,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// how) is written at the end instead. JSON mode keeps the narration log
 	// attached so machine-readable events can flow on stderr.
 	if opts.jsonFields == "" && opts.format == "" {
-		u.SetLog(io.Discard)
+		console.SetLog(io.Discard)
 	}
 
 	// Two-phase scan/resolve.
@@ -202,22 +202,22 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	//     call to per-ref parallel calls — a UX choice that should not leak
 	//     into headless output (and that would, e.g., quadruple the request
 	//     count for test stubs registered against the batched query shape).
-	showSpinner := opts.jsonFields == "" && opts.format == "" && !u.Headless()
-	showHeadlessProgress := u.Headless()
+	showSpinner := opts.jsonFields == "" && opts.format == "" && !console.Headless()
+	showHeadlessProgress := console.Headless()
 
 	var onScan func(done, total int, path string)
 	if showSpinner {
 		label := fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
-		u.StartProgress(label)
+		console.StartProgress(label)
 		onScan = func(done, total int, path string) {
-			u.UpdateLabel(fmt.Sprintf("Scanning [%d/%d] %s", done, total, path))
-			u.UpdateProgress("")
+			console.UpdateLabel(fmt.Sprintf("Scanning [%d/%d] %s", done, total, path))
+			console.UpdateProgress("")
 		}
 	} else if showHeadlessProgress {
 		// Headless: emit one line per phase directly, no callbacks. The UI
 		// layer dedupes label stems so subsequent UpdateLabel calls with the
 		// same phase name are no-ops.
-		u.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
+		console.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
 	parsed := doctor.ParseAll(opts.workflowPaths, store, onScan)
@@ -261,25 +261,25 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	refs, deps := doctor.CollectResolvable(networked)
 	if showSpinner {
-		u.UpdateProgress("")
-		u.ClearWorkerStatuses()
+		console.UpdateProgress("")
+		console.ClearWorkerStatuses()
 		// Wire structured counter callbacks so the top label expresses one
 		// rolling total per phase. The resolver no longer rewrites the label
 		// itself; we own the phrasing so the bar never jumps between
 		// "resolving" and "transitive resolving" — transitive is just deeper
 		// edges in the same Resolve phase.
 		r.OnResolveProgress = func(done, total int) {
-			u.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
+			console.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
 		}
 		r.OnVerifyProgress = func(done, total int) {
-			u.UpdateLabel(fmt.Sprintf("Verifying reachability [%d/%d]", done, total))
+			console.UpdateLabel(fmt.Sprintf("Verifying reachability [%d/%d]", done, total))
 		}
-		r.WorkerProgressFn = func(slot int, status string) { u.SetWorkerStatus(slot, status) }
+		r.WorkerProgressFn = func(slot int, status string) { console.SetWorkerStatus(slot, status) }
 	} else if showHeadlessProgress && (len(refs) > 0 || (opts.rescan && len(deps) > 0)) {
 		// Headless: announce the phase once, without per-ref worker callbacks.
 		// Leave r.WorkerProgressFn unset so the resolver stays in
 		// batched-GraphQL mode.
-		u.UpdateLabel("Resolving actions")
+		console.UpdateLabel("Resolving actions")
 	}
 	if len(refs) > 0 {
 		_, _, _ = r.ResolveAllRecursive(ctx, refs)
@@ -323,7 +323,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
 		if showHeadlessProgress {
-			u.UpdateLabel("Verifying reachability")
+			console.UpdateLabel("Verifying reachability")
 		}
 		if len(reachDeps) > 0 {
 			_ = r.CheckReachabilityAll(ctx, reachDeps)
@@ -342,11 +342,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		r.OnResolveProgress = nil
 		r.OnVerifyProgress = nil
 		r.WorkerProgressFn = nil
-		u.ClearWorkerStatuses()
-		u.UpdateLabel("Analyzing")
-		u.UpdateProgress("")
+		console.ClearWorkerStatuses()
+		console.UpdateLabel("Analyzing")
+		console.UpdateProgress("")
 	} else if showHeadlessProgress {
-		u.UpdateLabel("Analyzing")
+		console.UpdateLabel("Analyzing")
 	}
 
 	// Build a shared REST client + TagLister up-front. The diagnostics
@@ -383,7 +383,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// JSON output — always before any human-readable output.
 	if opts.jsonFields != "" {
-		u.StopProgress()
+		console.StopProgress()
 		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 			return err
 		}
@@ -398,7 +398,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// the configured sink. Exit code mirrors JSON mode so CI gates on
 	// the same signal regardless of format.
 	if opts.format == "sarif" {
-		u.StopProgress()
+		console.StopProgress()
 		sink := out
 		var closeFn func() error
 		if opts.outputPath != "-" {
@@ -427,7 +427,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	// Determine if interactive remediation will follow.
-	interactive := !opts.noInteractive && os.Getenv("CI") != "true" && u.IsTTY()
+	interactive := !opts.noInteractive && os.Getenv("CI") != "true" && console.IsTTY()
 
 	// In interactive mode the summary and prompts render on the terminal, so
 	// stop the checking spinner now. In non-interactive mode keep it running
@@ -436,14 +436,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// pinning begins. The remediator adopts the running spinner; check.go stops
 	// it after remediation, just before the terminal summary.
 	if interactive {
-		u.StopProgress()
+		console.StopProgress()
 	}
 
 	// Always remediate — non-interactive mode auto-fixes what it can.
 	willRemediate := true
 
 	// Human-readable output.
-	format.PresentResults(u, report, valid, willRemediate)
+	format.PresentResults(console, report, valid, willRemediate)
 
 	// Remediation.
 	actionable := report.WorkflowsNeedingAttention()
@@ -476,23 +476,23 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if !interactive {
 			prompter = &doctor.NoopPrompter{}
 		} else {
-			hp := doctor.NewHuhPrompterWithWriter(errOut, u.IsTTY)
+			hp := doctor.NewHuhPrompterWithWriter(errOut, console.IsTTY)
 			// Let prompts pause the continuous pinning spinner while they own
 			// the terminal, then resume it — no blank gaps between workflows.
-			hp.SetProgress(u)
+			hp.SetProgress(console)
 			prompter = hp
 		}
 
-		rem := doctor.NewRemediator(prompter, r, restClient, store, u, doctor.RemediateOptions{
+		rem := doctor.NewRemediator(prompter, r, restClient, store, console, doctor.RemediateOptions{
 			Interactive: interactive,
 			RepoOwner:   repoOwner,
 			RepoName:    repoName,
 		})
 
 		if err := rem.Remediate(ctx, report); err != nil {
-			u.StopProgress()
+			console.StopProgress()
 			if errors.Is(err, doctor.ErrAborted) {
-				u.TermWarn("Interrupted — no further changes applied")
+				console.TermWarn("Interrupted — no further changes applied")
 				return nil
 			}
 			return err
@@ -521,7 +521,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Stop any spinner still running (non-interactive path keeps it alive
 	// through remediation, or no workflows were actionable) before Term* output
 	// writes directly to the terminal.
-	u.StopProgress()
+	console.StopProgress()
 
 	// Build the provenance report once — it's the authoritative record of
 	// what happened during this run. Render the "Fixed: pinned" summary from
@@ -535,8 +535,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		prov = buildProvenanceReport(report, store, valid, repoInfo, outcomes, autoFixedImpostors)
 		if path, werr := runlog.WriteReport(prov); werr == nil {
 			defer func() {
-				u.TermBlank()
-				u.TermNeutral("Resolution record: %s", path)
+				console.TermBlank()
+				console.TermNeutral("Resolution record: %s", path)
 			}()
 		}
 	}
@@ -595,13 +595,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 					workflowSet[wf] = true
 				}
 			}
-			u.TermSuccess("Pinned %d %s across %d %s",
+			console.TermSuccess("Pinned %d %s across %d %s",
 				count, ui.Pluralize(count, "action", "actions"),
 				len(workflowSet), ui.Pluralize(len(workflowSet), "workflow", "workflows"))
 			for _, row := range rows {
-				u.TermDetail("  %s", u.TermYellow(row.label))
+				console.TermDetail("  %s", console.TermYellow(row.label))
 				for _, wf := range row.workflows {
-					u.TermDetail("    └─ %s", u.TermDim(wf))
+					console.TermDetail("    └─ %s", console.TermDim(wf))
 				}
 			}
 			printed = true
@@ -628,13 +628,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	if len(fullScanActions) > 0 {
 		if printed {
-			u.TermBlank()
+			console.TermBlank()
 		}
 		printed = true
-		u.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan",
+		console.TermCaution("%d %s pinned but not on a canonical branch — verified via full branch scan",
 			len(fullScanActions), ui.Pluralize(len(fullScanActions), "action", "actions"))
 		for _, a := range fullScanActions {
-			u.TermDetail("  %s", u.TermYellow(a.NWO+"@"+a.Ref))
+			console.TermDetail("  %s", console.TermYellow(a.NWO+"@"+a.Ref))
 		}
 	}
 
@@ -648,7 +648,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// points at, and a diff between old and new.
 	if prov != nil && len(prov.AutoFixed) > 0 {
 		if printed {
-			u.TermBlank()
+			console.TermBlank()
 		}
 		printed = true
 		// Group by (NWO, FromSHA, ToRef, ToSHA) — provenance keeps one entry
@@ -671,34 +671,34 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 			}
 			g.workflows = append(g.workflows, fix.Workflow)
 		}
-		u.TermWarn("Fixed: rewrote %d %s from impostor pin → reachable release (review for sanity)",
+		console.TermWarn("Fixed: rewrote %d %s from impostor pin → reachable release (review for sanity)",
 			len(groups), ui.Pluralize(len(groups), "action", "actions"))
-		u.TermDetail("  %s", u.TermBold("The original tag pointed at a commit that doesn't belong to any branch on the upstream repository, and may belong to a fork outside of it; each was re-pinned to the latest release reachable from a branch"))
+		console.TermDetail("  %s", console.TermBold("The original tag pointed at a commit that doesn't belong to any branch on the upstream repository, and may belong to a fork outside of it; each was re-pinned to the latest release reachable from a branch"))
 		for i, g := range groups {
 			if i > 0 {
-				u.TermBlank()
+				console.TermBlank()
 			}
 			short := g.newSHA
 			if len(short) > 7 {
 				short = short[:7]
 			}
-			u.TermDetail("  %s: %s → %s (%s)", g.nwo, g.oldRef, g.newTag, short)
+			console.TermDetail("  %s: %s → %s (%s)", g.nwo, g.oldRef, g.newTag, short)
 			for _, path := range g.workflows {
-				u.TermDetail("    └─ %s", u.TermDim(path))
+				console.TermDetail("    └─ %s", console.TermDim(path))
 			}
 			if g.oldSHA != "" {
-				u.TermDetail("    Impostor commit: https://github.com/%s/commit/%s", g.nwo, g.oldSHA)
+				console.TermDetail("    Impostor commit: https://github.com/%s/commit/%s", g.nwo, g.oldSHA)
 			}
-			u.TermDetail("    New release:     https://github.com/%s/releases/tag/%s", g.nwo, g.newTag)
+			console.TermDetail("    New release:     https://github.com/%s/releases/tag/%s", g.nwo, g.newTag)
 		}
-		u.TermDetail("  %s", doctor.PublisherEscalationCopy)
-		u.TermDetail("  see: %s", u.TermDim(doctor.PublisherTagReleasesDocURL))
+		console.TermDetail("  %s", doctor.PublisherEscalationCopy)
+		console.TermDetail("  see: %s", console.TermDim(doctor.PublisherTagReleasesDocURL))
 	}
 
 	if valid && fixedCount == 0 && skippedCount == 0 && alertedCount == 0 && unresolvedCount == 0 {
-		u.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
+		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
-			u.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
+			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
 				skippedRescan, ui.Pluralize(skippedRescan, "workflow", "workflows"))
 		}
 		return nil
@@ -711,10 +711,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		}
 		if alertedCount > 0 {
 			if printed {
-				u.TermBlank()
+				console.TermBlank()
 			}
 			printed = true
-			u.TermError("%d %s %s investigation — do not auto-fix",
+			console.TermError("%d %s %s investigation — do not auto-fix",
 				alertedCount, ui.Pluralize(alertedCount, "action", "actions"), ui.Pluralize(alertedCount, "requires", "require"))
 
 			// Group investigate actions by reason, preserving first-seen order.
@@ -738,7 +738,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 			}
 			for _, reason := range reasonOrder {
 				if reason != "" {
-					u.TermDetail("  %s", u.TermBold(reason))
+					console.TermDetail("  %s", console.TermBold(reason))
 				}
 				indent := "  "
 				if reason != "" {
@@ -746,9 +746,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 				}
 				for _, a := range byReason[reason] {
 					dep := a.NWO + "@" + a.Ref
-					u.TermDetail("%s%s", indent, u.TermLink(u.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+					console.TermDetail("%s%s", indent, console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 					for _, path := range a.Workflows {
-						u.TermDetail("%s  └─ %s", indent, u.TermDim(path))
+						console.TermDetail("%s  └─ %s", indent, console.TermDim(path))
 					}
 					if sug := a.Suggestion; sug != "" {
 						// sug is "tag short-sha"; split for clean display.
@@ -761,8 +761,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 						if sha != "" {
 							display += " (" + sha + ")"
 						}
-						u.TermDetail("%s  %s Suggested re-pin: %s — latest release reachable from a branch",
-							indent, u.TermBold("→"), u.TermYellow(display))
+						console.TermDetail("%s  %s Suggested re-pin: %s — latest release reachable from a branch",
+							indent, console.TermBold("→"), console.TermYellow(display))
 					}
 					// Publisher-escalation footer: relevant whenever the SHA
 					// fell off-branch on the publisher side (impostor reason),
@@ -770,41 +770,41 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 					// for consumer-side tampering reasons (forgery / misleading
 					// SHA) where the publisher copy would mislead.
 					if a.Escalate {
-						u.TermDetail("%s     %s", indent, doctor.PublisherEscalationCopy)
-						u.TermDetail("%s     see: %s", indent, u.TermDim(doctor.PublisherTagReleasesDocURL))
+						console.TermDetail("%s     %s", indent, doctor.PublisherEscalationCopy)
+						console.TermDetail("%s     see: %s", indent, console.TermDim(doctor.PublisherTagReleasesDocURL))
 					}
 				}
 			}
 		}
 		if skippedCount > 0 {
 			if printed {
-				u.TermBlank()
+				console.TermBlank()
 			}
 			printed = true
-			u.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally",
+			console.TermError("%d %s %s interactive resolution — run `gh actions-pin` locally",
 				skippedCount, ui.Pluralize(skippedCount, "action", "actions"), ui.Pluralize(skippedCount, "requires", "require"))
 			for _, a := range prov.Actions {
 				if a.Resolution != runlog.ResolutionSkipped {
 					continue
 				}
 				dep := a.NWO + "@" + a.Ref
-				u.TermDetail("  %s", u.TermLink(u.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+				console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 			}
 		}
 		if unresolvedCount > 0 {
 			if printed {
-				u.TermBlank()
+				console.TermBlank()
 			}
-			u.TermError("%d %s could not be resolved — verify the ref exists",
+			console.TermError("%d %s could not be resolved — verify the ref exists",
 				unresolvedCount, ui.Pluralize(unresolvedCount, "action", "actions"))
 			for _, a := range prov.Actions {
 				if !a.ResolveFailed {
 					continue
 				}
 				dep := a.NWO + "@" + a.Ref
-				u.TermDetail("  %s", u.TermLink(u.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+				console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
 				for _, path := range a.Workflows {
-					u.TermDetail("    └─ %s", u.TermDim(path))
+					console.TermDetail("    └─ %s", console.TermDim(path))
 				}
 			}
 		}

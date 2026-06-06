@@ -152,8 +152,8 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	u := ui.NewWithWriter(cmd.ErrOrStderr())
-	defer u.StopProgress()
+	console := ui.NewWithWriter(cmd.ErrOrStderr())
+	defer console.StopProgress()
 
 	paths, r, store, err := newRun(opts.WorkflowPaths, opts.Hostname, newResolver)
 	if err != nil {
@@ -188,16 +188,16 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 	if parallel {
 		if lg, lerr := runlog.Open(); lerr == nil {
 			logger = lg
-			u.SetLog(logger)
+			console.SetLog(logger)
 			defer logger.Close()
 		}
 		label := fmt.Sprintf("Upgrading across %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
-		u.StartProgress(label)
+		console.StartProgress(label)
 		// Workers own the detail area via SetWorkerStatus per slot; the
 		// resolver's per-step progress would race with that, so silence it.
 		r.ProgressFn = nil
-		u.ClearWorkerStatuses()
-		defer u.ClearWorkerStatuses()
+		console.ClearWorkerStatuses()
+		defer console.ClearWorkerStatuses()
 	}
 
 	workers := upgradeWorkers
@@ -227,7 +227,7 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 		if !parallel {
 			return
 		}
-		u.UpdateLabel(fmt.Sprintf("[%d/%d] Upgrading workflows", done.Load(), total))
+		console.UpdateLabel(fmt.Sprintf("[%d/%d] Upgrading workflows", done.Load(), total))
 	}
 	updateLabel()
 
@@ -237,12 +237,12 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 			defer wg.Done()
 			for j := range jobs {
 				if parallel {
-					u.SetWorkerStatus(slot, "→ "+j.path)
+					console.SetWorkerStatus(slot, "→ "+j.path)
 				}
-				result, err := upgradeOneFile(ctx, u, opts, j.path, r, store, targets)
+				result, err := upgradeOneFile(ctx, console, opts, j.path, r, store, targets)
 				mu.Lock()
 				if err != nil {
-					u.Error("%s: %s", j.path, err)
+					console.Error("%s: %s", j.path, err)
 					hadError = true
 				}
 				if result != nil {
@@ -261,7 +261,7 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 				done.Add(1)
 				updateLabel()
 				if parallel {
-					u.SetWorkerStatus(slot, "")
+					console.SetWorkerStatus(slot, "")
 				}
 			}
 		}(slot)
@@ -273,7 +273,7 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 	// refused or errored, skip Save entirely so the bytes stay untouched.
 	if opts.Write && len(savedWorkflows) > 0 {
 		if err := store.Save(); err != nil {
-			u.StopProgress()
+			console.StopProgress()
 			return fmt.Errorf("saving lockfile: %w", err)
 		}
 	}
@@ -299,19 +299,19 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 	}
 
 	// Work is done — stop the spinner before printing the terminal summary.
-	u.StopProgress()
+	console.StopProgress()
 	if logger != nil {
-		defer func() { u.TermDetail("Full log: %s", logger.Path()) }()
+		defer func() { console.TermDetail("Full log: %s", logger.Path()) }()
 	}
 
 	if hadError {
-		u.TermError("Upgrade failed — see the log for details")
+		console.TermError("Upgrade failed — see the log for details")
 		return errSilent
 	}
 
 	if len(allChanges) == 0 && len(opts.Actions) > 0 && len(findings) == 0 && !anyMatched {
-		u.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
-		u.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
+		console.TermWarn("No matching actions found for: %s", strings.Join(opts.Actions, ", "))
+		console.TermDetail("Check the action name — use owner/repo format (e.g. docker/login-action, not docker/docker-login)")
 		return errSilent
 	}
 
@@ -320,14 +320,14 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 	// updated[] JSON shape), say so explicitly rather than printing the
 	// misleading "Upgraded 0 action(s)".
 	if len(allChanges) == 0 && anyMatched && len(savedWorkflows) > 0 {
-		u.TermSuccess("Onboarded %d workflow(s); no action refs needed upgrading", len(savedWorkflows))
+		console.TermSuccess("Onboarded %d workflow(s); no action refs needed upgrading", len(savedWorkflows))
 		for _, w := range savedWorkflows {
-			u.TermDetail("%s", w.Path)
+			console.TermDetail("%s", w.Path)
 		}
 		for _, fnd := range findings {
-			u.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
+			console.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
 			if fnd.Remediation != "" {
-				u.TermDetail("%s", fnd.Remediation)
+				console.TermDetail("%s", fnd.Remediation)
 			}
 		}
 		if hadBlockingFinding {
@@ -340,14 +340,14 @@ func runUpgrade(cmd *cobra.Command, opts *upgradeOptions, newResolver resolverFu
 	if !opts.Write {
 		verb = "Previewed"
 	}
-	u.TermSuccess("%s %d action(s)", verb, len(allChanges))
+	console.TermSuccess("%s %d action(s)", verb, len(allChanges))
 	for _, c := range allChanges {
-		u.TermDetail("%s: %s -> %s", c.NWO, c.OldRef, c.NewRef)
+		console.TermDetail("%s: %s -> %s", c.NWO, c.OldRef, c.NewRef)
 	}
 	for _, fnd := range findings {
-		u.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
+		console.TermWarn("%s: %s", fnd.Workflow, fnd.Detail)
 		if fnd.Remediation != "" {
-			u.TermDetail("%s", fnd.Remediation)
+			console.TermDetail("%s", fnd.Remediation)
 		}
 	}
 	if hadBlockingFinding {
@@ -395,7 +395,7 @@ type upgradeFileResult struct {
 	Finding *jsonUpgradeFinding
 }
 
-func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
+func upgradeOneFile(ctx context.Context, console *ui.UI, opts *upgradeOptions, workflowPath string, r *resolver.Resolver, store *lockfile.Store, targets []upgradeTarget) (*upgradeFileResult, error) {
 	wf, err := lockfile.Load(workflowPath)
 	if err != nil {
 		return nil, err
@@ -409,7 +409,7 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 
 	refs, _, warnings := wf.ExtractActionRefs()
 	for _, warning := range warnings {
-		u.Warning("%s", warning)
+		console.Warning("%s", warning)
 	}
 
 	if len(refs) == 0 {
@@ -463,7 +463,7 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 	// before resolver work or file writes, so store.Set is never reached
 	// for an untracked workflow.
 	if opts.NoOnboard && !store.HasWorkflow(wfKey) {
-		u.Warning("%s: refusing to onboard (--no-onboard); workflow has no entry in actions.lock", workflowPath)
+		console.Warning("%s: refusing to onboard (--no-onboard); workflow has no entry in actions.lock", workflowPath)
 		finding := &jsonUpgradeFinding{
 			Workflow:    workflowPath,
 			Category:    string(doctor.CategoryOnboardingRequired),
@@ -476,9 +476,9 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 		return &upgradeFileResult{Matched: true, Finding: finding}, nil
 	}
 
-	u.Header("%s", workflowPath)
+	console.Header("%s", workflowPath)
 	for _, line := range planLines {
-		u.Detail("%s", line)
+		console.Detail("%s", line)
 	}
 
 	updatedContent, _, err := wf.RewriteActionRefs(replacements)
@@ -492,12 +492,12 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 
 	upgradedRefs, _, upgradedWarnings := upgradedWF.ExtractActionRefs()
 	for _, warning := range upgradedWarnings {
-		u.Warning("%s", warning)
+		console.Warning("%s", warning)
 	}
 
-	u.Info("Resolving %d action reference(s)...", len(upgradedRefs))
+	console.Info("Resolving %d action reference(s)...", len(upgradedRefs))
 	for _, ref := range upgradedRefs {
-		u.Detail("%s@%s", ref.FullName(), ref.Ref)
+		console.Detail("%s@%s", ref.FullName(), ref.Ref)
 	}
 
 	deps, parentMap, err := r.ResolveAllRecursive(ctx, upgradedRefs)
@@ -507,10 +507,10 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 	directTracker := lockfile.NewDirectTracker(upgradedRefs, deps)
 
 	if mismatches := lockfile.CheckSHARefMismatches(ctx, deps, r); len(mismatches) > 0 {
-		u.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
+		console.Error("action ref(s) look like commit SHAs but resolved to different OIDs:")
 		for _, mismatch := range mismatches {
-			u.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
-			u.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
+			console.Detail("%s: ref %s resolved to %s", mismatch.Dep.NWO, mismatch.Dep.Ref, mismatch.ResolvedAs)
+			console.Hint("This ref may be a deceptive branch or tag name masquerading as a commit hash.")
 		}
 		return nil, fmt.Errorf("%d action ref(s) have SHA-like names that point to different commits", len(mismatches))
 	}
@@ -574,11 +574,11 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 	}
 
 	if opts.Diff {
-		showDiff(u, r.Hostname(), existingDeps, deps)
+		showDiff(console, r.Hostname(), existingDeps, deps)
 	}
 
 	if !opts.Write {
-		u.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
+		console.Info("Preview: %d change(s) for %s (pass --write to apply)", len(changes), workflowPath)
 		return &upgradeFileResult{Changes: changes, Matched: true}, nil
 	}
 
@@ -590,9 +590,9 @@ func upgradeOneFile(ctx context.Context, u *ui.UI, opts *upgradeOptions, workflo
 		return nil, fmt.Errorf("recording dependencies in lockfile: %w", err)
 	}
 
-	u.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
+	console.Success("Upgraded %d action(s) in %s", len(changes), workflowPath)
 	for _, c := range changes {
-		u.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
+		console.Detail("%s: %s → %s", c.NWO, c.OldRef, c.NewRef)
 	}
 	return &upgradeFileResult{Changes: changes, Saved: true, Matched: true}, nil
 }
