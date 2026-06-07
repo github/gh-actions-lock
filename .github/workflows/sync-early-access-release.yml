@@ -24,7 +24,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
       - name: Publish early access release
         env:
           SOURCE_TOKEN: ${{ github.token }}
@@ -33,7 +33,3 @@ jobs:
           TARGET_REPOSITORY: github-early-access/actions-locked-dependencies
           RELEASE_TAG: ${{ inputs.tag }}
         run: script/sync-early-access-release "$RELEASE_TAG"
-
-# Automatically generated and managed by: `gh actions-pin --write <workflow-path>`
-dependencies:
-  - github.com/actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd
