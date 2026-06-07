@@ -1,42 +1,8 @@
-package doctor
+package checks
 
-import "github.com/github/gh-actions-pin/internal/lockfile"
-
-// Category classifies the state of a workflow or individual action dependency.
-type Category string
-
-const (
-	// CategoryNotPinned means the workflow has action refs but no dependencies: section.
-	CategoryNotPinned Category = "not_pinned"
-	// CategorySHAAsRef means a dependency is pinned to a bare SHA with no tag ref.
-	CategorySHAAsRef Category = "sha_as_ref"
-	// CategoryStale means the pinned SHA no longer matches what the ref resolves to.
-	CategoryStale Category = "stale"
-	// CategoryRefChanged means the uses: ref was manually changed (e.g. v6.2.0 → v6).
-	CategoryRefChanged Category = "ref_changed"
-	// CategoryImposterCommit means the pinned SHA is not in the ref's git history (possible fork-network commit).
-	CategoryImposterCommit Category = "imposter_commit"
-	// CategoryMisleadingSHA means a ref looks like a SHA but resolves to a different commit.
-	CategoryMisleadingSHA Category = "misleading_sha"
-	// CategoryLockfileForgery means the pinned SHA is not an ancestor of the
-	// current ref — the lockfile entry was likely injected or tampered with.
-	CategoryLockfileForgery Category = "lockfile_forgery"
-	// CategoryRefMoved means the upstream tag now resolves to a different SHA than what's locked.
-	CategoryRefMoved Category = "ref_moved"
-	// CategoryValid means the dependency is pinned and verified.
-	CategoryValid Category = "valid"
-	// CategoryRunOnly means the workflow has no action refs (only run: steps).
-	CategoryRunOnly Category = "run_only"
-)
-
-// Severity indicates how serious a finding is.
-type Severity string
-
-const (
-	SeverityOK      Severity = "ok"
-	SeverityInfo    Severity = "info"
-	SeverityWarning Severity = "warning"
-	SeverityError   Severity = "error"
+import (
+	"github.com/github/gh-actions-pin/internal/dep"
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // Finding represents a single diagnosed issue (or clean bill) for a workflow.
@@ -47,25 +13,48 @@ type Finding struct {
 	Category Category
 	// Severity of the finding.
 	Severity Severity
+	// Confidence of the finding — see the Confidence type docs. Always
+	// populated at construction; an empty value is a bug and the
+	// no-empty-confidence test will catch it.
+	Confidence Confidence
 	// ActionRef is the action reference this finding relates to (nil for workflow-level findings).
-	ActionRef *lockfile.ActionRef
+	ActionRef *parserlock.ActionRef
 	// Dependency is the existing pinned dep if any.
-	Dependency *lockfile.Dependency
+	Dependency *dep.Dependency
 	// ParentNWO is the dep key of the direct action that pulls in this transitive dep (empty if direct).
 	ParentNWO string
 	// Detail is a human-readable explanation.
 	Detail string
-	// Remediation describes what doctor can do about it.
+	// Remediation describes what the check command can do about it.
 	Remediation string
-	// LiveSHA is the current upstream SHA when it differs from the pinned SHA (e.g. REF_MOVED).
-	LiveSHA string
+	// ObservedSHA is the SHA the resolver got at scan time, recorded when
+	// it differs from the pinned SHA (e.g. ref-moved, misleading-sha,
+	// lockfile-forgery).
+	ObservedSHA string
+	// DocURL points to docs explaining the finding. Populated by the
+	// engine adapter so it's parity-aligned with the editor's
+	// codeDescription link; "" when no URL is mapped.
+	DocURL string
+	// RecommendedTag is the most recent stable tag whose commit is
+	// reachable from a branch, populated for unreachable-SHA findings
+	// (ImpostorCommit) when one can be found. Empty otherwise.
+	RecommendedTag string
+	// RecommendedSHA is the commit SHA the recommended tag points to.
+	RecommendedSHA string
+	// RecommendedSearched is true when the release walk ran for this
+	// finding (regardless of outcome). Lets renderers distinguish
+	// "we didn't look" from "we looked and found nothing."
+	RecommendedSearched bool
 }
 
 // InventoryEntry describes a single dependency with context.
 type InventoryEntry struct {
-	Dep    lockfile.Dependency
+	Dep    dep.Dependency
 	File   string
 	Direct bool
+	// Parents lists the dep keys of parent composite actions that pull in this
+	// transitive dependency. Empty for direct dependencies.
+	Parents []string
 }
 
 // WorkflowReport aggregates all findings for a single workflow file.
@@ -73,9 +62,9 @@ type WorkflowReport struct {
 	Path     string
 	Findings []Finding
 	// ActionRefs are all action references found in the workflow.
-	ActionRefs []lockfile.ActionRef
+	ActionRefs []parserlock.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
-	Deps []lockfile.Dependency
+	Deps []dep.Dependency
 	// Inventory lists all dependencies with direct/transitive classification.
 	Inventory []InventoryEntry
 	// ParseWarnings from ExtractActionRefs (e.g. malformed uses: lines).
@@ -85,8 +74,11 @@ type WorkflowReport struct {
 // NeedsAttention returns true if this workflow has any non-OK findings.
 func (r *WorkflowReport) NeedsAttention() bool {
 	for _, f := range r.Findings {
+		if f.Category.IsInconclusive() {
+			continue
+		}
 		switch f.Category {
-		case CategoryValid, CategoryRunOnly, CategoryMisleadingSHA, CategoryRefMoved:
+		case Valid, RunOnly, MisleadingSHA, RefMoved:
 			continue
 		default:
 			return true
@@ -108,10 +100,16 @@ func (r *WorkflowReport) CountByCategory(c Category) int {
 
 // IsValid returns true for findings that don't represent integrity violations.
 func (f *Finding) IsValid() bool {
-	switch f.Category {
-	case CategoryValid, CategoryRunOnly, CategorySHAAsRef, CategoryRefMoved:
+	if f.Severity == SeverityError {
+		return false
+	}
+	if f.Category.IsInconclusive() {
 		return true
-	case CategoryNotPinned:
+	}
+	switch f.Category {
+	case Valid, RunOnly, ShaAsRef, RefMoved:
+		return true
+	case NotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
 	default:
 		return false
@@ -121,13 +119,13 @@ func (f *Finding) IsValid() bool {
 // IsWarning returns true for findings that should render as warnings (not errors).
 func (f *Finding) IsWarning() bool {
 	switch {
-	case f.Category == CategorySHAAsRef:
+	case f.Category == ShaAsRef:
 		return true
-	case f.Category == CategoryRefMoved:
+	case f.Category == RefMoved:
 		return true
-	case f.Category == CategoryValid && f.Severity == SeverityWarning:
+	case f.Category.IsInconclusive():
 		return true
-	case f.Category == CategoryNotPinned && f.ActionRef == nil:
+	case f.Category == NotPinned && f.ActionRef == nil:
 		return true
 	default:
 		return false
@@ -145,15 +143,23 @@ func (f *Finding) DepKey() string {
 	return ""
 }
 
-// Report aggregates all workflow reports for a doctor run.
+// Report aggregates all workflow reports for a check run.
 type Report struct {
 	Workflows []WorkflowReport
+	// RepoFindings are findings that apply to the repository as a whole
+	// (not to any individual workflow).
+	RepoFindings []Finding
 }
 
 // IsValid returns true if all workflows in the report pass validation.
 func (r *Report) IsValid() bool {
 	for _, wr := range r.Workflows {
 		if !wr.IsValid() {
+			return false
+		}
+	}
+	for _, f := range r.RepoFindings {
+		if !f.IsValid() {
 			return false
 		}
 	}
