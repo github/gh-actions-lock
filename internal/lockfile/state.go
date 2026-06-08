@@ -95,22 +95,22 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 	}
 	// Normalize on-disk entries to the canonical (lowercased) pin form so any
 	// legacy mixed-case keys are rewritten on the next Save.
-	normalizedActions := make(map[string]parserlock.Action, len(file.Dependencies))
+	normalizedDependencies := make(map[string]parserlock.Action, len(file.Dependencies))
 	for pinKey, action := range file.Dependencies {
 		pin, ok := parserlock.ParsePin(pinKey)
 		if !ok {
-			normalizedActions[pinKey] = action
+			normalizedDependencies[pinKey] = action
 			continue
 		}
 		canon := pin.String()
-		normalizedActions[canon] = action
+		normalizedDependencies[canon] = action
 		if action.OwnerID != 0 && action.RepoID != 0 {
 			// idCache is keyed by lowercase owner/repo to match lookupIDs and the
 			// canonical pin reader; mixed-case keys here would silently miss.
 			s.idCache[strings.ToLower(pin.Owner+"/"+pin.Repo)] = [2]int64{action.OwnerID, action.RepoID}
 		}
 	}
-	s.file.Dependencies = normalizedActions
+	s.file.Dependencies = normalizedDependencies
 	for wfKey, deps := range s.file.Workflows {
 		changed := false
 		normalized := make([]string, len(deps))

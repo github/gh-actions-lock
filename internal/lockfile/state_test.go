@@ -152,7 +152,7 @@ func TestState_SetRejectsEmptyBranch(t *testing.T) {
 // TestState_DiamondTransitiveDepEmittedCorrectly verifies that when two direct
 // actions share a transitive dependency (diamond pattern: A→C, B→C), the
 // lockfile correctly records `uses: [C]` on both A and B, and the shared dep
-// C appears in the actions section exactly once.
+// C appears in the dependencies section exactly once.
 func TestState_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
@@ -218,7 +218,7 @@ func TestState_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 	}
 	// Shared dep exists exactly once.
 	if _, ok := store2.file.Dependencies[sharedPin]; !ok {
-		t.Errorf("expected shared dep %s in actions, keys=%v", sharedPin, actionKeys(store2.file.Dependencies))
+		t.Errorf("expected shared dep %s in dependencies, keys=%v", sharedPin, actionKeys(store2.file.Dependencies))
 	}
 	// Workflows section only lists direct refs.
 	wfDeps := store2.file.Workflows[".github/workflows/ci.yml"]
