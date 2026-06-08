@@ -12,6 +12,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: OIDC Setup for goproxy
+        uses: github/setup-goproxy@5e60e1074d42316dfe2949ebf9a92bf77b24645b # v1.1.0
       - uses: actions/checkout@v6.0.2
       - uses: cli/gh-extension-precompile@v2.1.0
         with:
