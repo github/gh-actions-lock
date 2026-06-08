@@ -2,12 +2,11 @@ package resolve
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/ghapi"
 )
 
 // ReachabilityStatus represents the result of a commit reachability check.
@@ -64,17 +63,17 @@ func (r *Resolver) CheckAncestry(ctx context.Context, owner, repo, pinnedSHA, li
 
 	status, mergeBaseSHA, err := r.gh.CompareRefs(ctx, owner, repo, pinnedSHA, liveSHA)
 	if err != nil {
-		var httpErr *api.HTTPError
-		if !errors.As(err, &httpErr) {
+		code, ok := ghapi.StatusCode(err)
+		if !ok {
 			return AncestryUnknown, err.Error()
 		}
-		switch httpErr.StatusCode {
+		switch code {
 		case http.StatusNotFound:
 			return AncestryNotAncestor, "commit not found in repository"
 		case http.StatusConflict:
 			return AncestryNotAncestor, "no common ancestor between pinned and live SHA"
 		default:
-			return AncestryUnknown, fmt.Sprintf("API error (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+			return AncestryUnknown, fmt.Sprintf("API error (HTTP %d): %s", code, err.Error())
 		}
 	}
 
