@@ -77,3 +77,46 @@ func TestSuggestTagsForSHA_ImmutableTagObject(t *testing.T) {
 		t.Fatalf("expected v9.0.0, got %q", suggestions[0].Tag.Name)
 	}
 }
+
+// TestListTags_SemverOrdering verifies tags are ordered by semantic version,
+// not lexically. A string compare would place "v9.0.0" ahead of "v10.0.0";
+// semver ordering must put v10 first.
+func TestListTags_SemverOrdering(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse([]map[string]any{
+			{"name": "v9.0.0", "commit": map[string]any{"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+			{"name": "v10.0.0", "commit": map[string]any{"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},
+			{"name": "v8.1.0", "commit": map[string]any{"sha": "cccccccccccccccccccccccccccccccccccccccc"}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/git/matching-refs/tags`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	tl := NewListerForTest(t, reg)
+	tags, err := tl.ListTags(context.Background(), "actions", "checkout")
+	if err != nil {
+		t.Fatalf("ListTags: %v", err)
+	}
+
+	var got []string
+	for _, tg := range tags {
+		got = append(got, tg.Name)
+	}
+	want := []string{"v10.0.0", "v9.0.0", "v8.1.0"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("semver ordering wrong: expected %v, got %v", want, got)
+		}
+	}
+}

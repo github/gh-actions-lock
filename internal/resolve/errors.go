@@ -16,5 +16,5 @@ type ImpostorError struct {
 }
 
 func (e *ImpostorError) Error() string {
-	return fmt.Sprintf("%s@%s is not on any branch — fork-network / impostor signal; refusing to pin", e.NWO, parserlock.ShortSHA(e.SHA))
+	return fmt.Sprintf("%s@%s (%s) is not on any branch — fork-network / impostor signal; refusing to pin", e.NWO, e.Ref, parserlock.ShortSHA(e.SHA))
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"strings"
 	"time"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -233,7 +232,7 @@ func (tl *Lister) CuratePickerTags(ctx context.Context, owner, repo, pinnedSHA s
 			continue
 		}
 		// Skip tags younger than the cooldown period.
-		if tl.isTagTooNew(owner, repo, t.Name) && !strings.EqualFold(t.SHA, pinnedSHA) {
+		if tl.isTagTooNew(owner, repo, t.Name) && !t.MatchesSHA(pinnedSHA) {
 			continue
 		}
 		if !seen[sv.Major] {
@@ -248,7 +247,7 @@ func (tl *Lister) CuratePickerTags(ctx context.Context, owner, repo, pinnedSHA s
 	// Build picker entries.
 	var result []PickerTag
 	for _, b := range buckets {
-		installed := strings.EqualFold(b.tag.SHA, pinnedSHA)
+		installed := b.tag.MatchesSHA(pinnedSHA)
 		result = append(result, PickerTag{
 			Tag:       b.tag,
 			Label:     b.tag.Name,
@@ -266,7 +265,7 @@ func (tl *Lister) CuratePickerTags(ctx context.Context, owner, repo, pinnedSHA s
 	}
 	if !pinnedFound {
 		for _, t := range all {
-			if strings.EqualFold(t.SHA, pinnedSHA) && !t.IsMajor {
+			if t.MatchesSHA(pinnedSHA) && !t.IsMajor {
 				label := t.Name + "  📦 installed"
 				result = append([]PickerTag{{
 					Tag:       t,

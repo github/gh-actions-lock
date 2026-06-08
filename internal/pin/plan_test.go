@@ -6,11 +6,11 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/resolve"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -183,6 +183,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	}
 	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
 		resolve.WithCheckReachabilityFunc(reachFn))
+	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
 		Path: ".github/workflows/test.yml",

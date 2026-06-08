@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ghapi"
 	"github.com/github/gh-actions-pin/internal/pinpool"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // CheckReachability verifies that the pinned SHA is reachable from at least
@@ -166,13 +166,16 @@ func (r *Resolver) reachabilityScan(ctx context.Context, owner, repo, sha, ref s
 	}
 
 	matched, checked, err := r.gh.BatchBranchContains(ctx, owner, repo, sha, ordered)
-	if err != nil && !checked {
-		// Total failure — fall back to serial REST Compare for the first
-		// few candidates so we can distinguish unknown from unreachable.
-		return r.reachabilityScanREST(ctx, owner, repo, sha, ordered)
-	}
 	if matched != "" {
 		return matched, true
+	}
+	if err != nil {
+		// Partial or total GraphQL failure with no positive match: re-check
+		// via serial REST Compare. Otherwise a batch that errored after
+		// checking only some branches (anyChecked=true, matched="") would be
+		// reported as "checked everything, found nothing" — a false
+		// Unreachable.
+		return r.reachabilityScanREST(ctx, owner, repo, sha, ordered)
 	}
 	return "", checked
 }
@@ -327,8 +330,9 @@ func (r *Resolver) checkReachabilityAllPooled(ctx context.Context, unique []dep.
 	}
 
 	// Submit first-claimers to the pool (visible in spinner).
+	var poolErr error
 	if len(pooled) > 0 {
-		_ = pinpool.RunTyped(r.Pool, ctx, "Verifying reachability",
+		poolErr = pinpool.RunTyped(r.Pool, ctx, "Verifying reachability",
 			pooled,
 			func(id indexedDep) string { return id.dep.NWO + "@" + id.dep.Ref },
 			func(ctx context.Context, _ int, id indexedDep) error {
@@ -349,6 +353,24 @@ func (r *Resolver) checkReachabilityAllPooled(ctx context.Context, unique []dep.
 		result := r.CheckReachability(ctx, owner, repo, id.dep.SHA, id.dep.Ref)
 		result.DepKey = id.dep.Key()
 		results[id.idx] = result
+	}
+
+	// Fail closed: if the pool cancelled or errored before a job ran, its
+	// result stays zero-value (empty Status). plan.go only acts on
+	// Unreachable/ReachabilityUnknown, so an empty status would let a dep be
+	// pinned unverified. Backfill any unset result as ReachabilityUnknown.
+	for i := range results {
+		if results[i].Status == "" {
+			owner, repo := unique[i].OwnerRepo()
+			detail := "reachability check did not complete"
+			if poolErr != nil {
+				detail = fmt.Sprintf("reachability check did not complete: %v", poolErr)
+			}
+			results[i] = ReachabilityResult{
+				Owner: owner, Repo: repo, Ref: unique[i].Ref, SHA: unique[i].SHA,
+				Status: ReachabilityUnknown, Detail: detail, DepKey: unique[i].Key(),
+			}
+		}
 	}
 
 	return results

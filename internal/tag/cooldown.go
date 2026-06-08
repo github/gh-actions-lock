@@ -2,7 +2,10 @@
 // cooldown.
 package tag
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // CooldownConfig controls the minimum age threshold for tag upgrade suggestions.
 type CooldownConfig struct {
@@ -14,6 +17,14 @@ type CooldownConfig struct {
 func (c CooldownConfig) CooldownDays(owner, repo string) int {
 	if days, ok := c.RepoOverrides[owner+"/"+repo]; ok {
 		return days
+	}
+	// Override keys may be written with different owner/repo casing than the
+	// canonicalized lookup; fall back to a case-insensitive match.
+	want := strings.ToLower(owner + "/" + repo)
+	for k, days := range c.RepoOverrides {
+		if strings.ToLower(k) == want {
+			return days
+		}
 	}
 	return c.DefaultDays
 }

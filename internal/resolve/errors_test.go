@@ -22,4 +22,8 @@ func TestImpostorError(t *testing.T) {
 	if strings.Contains(msg, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef") {
 		t.Fatalf("error should use short SHA, got %q", msg)
 	}
+	// Ref must be surfaced so the message names which pin is affected.
+	if !strings.Contains(msg, "v1") {
+		t.Fatalf("error should mention the ref, got %q", msg)
+	}
 }

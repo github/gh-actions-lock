@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/ghapi"
 	"github.com/github/gh-actions-pin/internal/syncmap"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -127,6 +127,23 @@ func (tl *Lister) ListTags(ctx context.Context, owner, repo string) ([]Info, err
 		sort.Slice(tags, func(i, j int) bool {
 			if tags[i].IsMajor != tags[j].IsMajor {
 				return !tags[i].IsMajor
+			}
+			// Semver-aware ordering so v10 sorts ahead of v9 (string
+			// compare would invert them). Non-semver tags fall back to
+			// lexical and sort after semver tags.
+			svi, oki := parserlock.ParseSemVer(tags[i].Name)
+			svj, okj := parserlock.ParseSemVer(tags[j].Name)
+			if oki && okj {
+				if svi.Greater(svj) {
+					return true
+				}
+				if svj.Greater(svi) {
+					return false
+				}
+				return tags[i].Name > tags[j].Name
+			}
+			if oki != okj {
+				return oki
 			}
 			return tags[i].Name > tags[j].Name
 		})
