@@ -34,7 +34,7 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 	if cached, ok := c.branchListCache.Get(key); ok {
 		return cached, nil
 	}
-	sfKey := owner + "/" + repo
+	sfKey := key.String()
 	v, err, _ := c.branchListSF.Do(sfKey, func() (any, error) {
 		if cached, ok := c.branchListCache.Get(key); ok {
 			return cached, nil
@@ -76,7 +76,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 	if cached, ok := c.tagListCache.Get(key); ok {
 		return cached, nil
 	}
-	sfKey := owner + "/" + repo
+	sfKey := key.String()
 	type result struct {
 		tags []TagEntry
 		err  error
@@ -115,7 +115,7 @@ func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) strin
 	if name, ok := c.defaultBranchCache.Get(key); ok {
 		return name
 	}
-	sfKey := owner + "/" + repo
+	sfKey := key.String()
 	v, _, _ := c.defaultBranchSF.Do(sfKey, func() (any, error) {
 		if name, ok := c.defaultBranchCache.Get(key); ok {
 			return name, nil
@@ -180,7 +180,7 @@ func (c *Client) ListProtectedBranches(ctx context.Context, owner, repo string) 
 	if cached, ok := c.protectedBranchCache.Get(key); ok {
 		return cached
 	}
-	sfKey := owner + "/" + repo
+	sfKey := key.String()
 	v, _, _ := c.protectedBranchSF.Do(sfKey, func() (any, error) {
 		if cached, ok := c.protectedBranchCache.Get(key); ok {
 			return cached, nil

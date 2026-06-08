@@ -57,6 +57,9 @@ type repoResponse struct {
 // Results are returned in the same order as inputs; per-ref failures are
 // recorded in each result's Err field rather than aborting the batch.
 func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileRequest) []ActionFileResult {
+	if len(refs) == 0 {
+		return nil
+	}
 	query, vars, aliasMap := buildActionFileQuery(refs)
 
 	var data map[string]json.RawMessage

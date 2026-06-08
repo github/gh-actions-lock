@@ -24,7 +24,8 @@ func ForRepo(owner, repo string) Repo {
 	return Repo{owner: strings.ToLower(owner), repo: strings.ToLower(repo)}
 }
 
-// String is diagnostics-only.
+// String returns the normalized "owner/repo" key, used for cache-key
+// diagnostics and for singleflight coalescing.
 func (r Repo) String() string {
 	return r.owner + "/" + r.repo
 }

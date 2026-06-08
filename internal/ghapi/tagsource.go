@@ -94,7 +94,7 @@ func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoReleas
 		Immutable   bool   `json:"immutable"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &releases); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching releases for %s/%s: %w", owner, repo, err)
 	}
 
 	out := make([]RepoRelease, 0, len(releases))
@@ -123,7 +123,7 @@ func (c *Client) RepoMetadata(ctx context.Context, owner, repo string) (RepoMeta
 		PushedAt      string `json:"pushed_at"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
-		return RepoMetadata{}, err
+		return RepoMetadata{}, fmt.Errorf("fetching metadata for %s/%s: %w", owner, repo, err)
 	}
 	return RepoMetadata(result), nil
 }
@@ -138,7 +138,7 @@ func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string
 		SHA string `json:"sha"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
-		return "", err
+		return "", fmt.Errorf("resolving %s/%s@%s: %w", owner, repo, ref, err)
 	}
 	return result.SHA, nil
 }

@@ -2,7 +2,6 @@ package ghapi
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -292,6 +291,3 @@ func TestMatchingHeadRefs(t *testing.T) {
 		t.Fatalf("unexpected first branch: %+v", branches[0])
 	}
 }
-
-// Suppress unused import warning.
-var _ = fmt.Sprintf
