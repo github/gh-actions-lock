@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/github/gh-actions-pin/internal/resolve"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-pin/internal/resolve"
 )
 
 // checkMisleadingSha emits MisleadingSHA when a uses: ref looks

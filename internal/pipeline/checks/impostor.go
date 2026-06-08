@@ -3,11 +3,11 @@ package checks
 import (
 	"context"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/ghapi"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/tag"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // ReachabilityChecker is the subset of resolve.Resolver needed to verify

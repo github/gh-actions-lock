@@ -1,8 +1,8 @@
 package checks
 
 import (
-	"github.com/github/gh-actions-pin/internal/dep"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-pin/internal/dep"
 )
 
 // ParsedWorkflow holds the per-workflow parse result that both phases need.

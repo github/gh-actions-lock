@@ -63,14 +63,6 @@ func CollectReachDeps(parsed []checks.ParsedWorkflow, live []dep.Dependency) []d
 // that lets the engine emit checks.ImpostorCommit for the
 // tag-hijacked-to-fork-network shape. Pass live as the result of a
 // single ResolveAllRecursive over the union of refs.
-
-// CollectLiveMovedReachDeps returns the deduplicated set of synthetic
-// dependencies (NWO, Ref + LIVE SHA) for which a reachability check
-// should be pre-warmed. Each entry pairs an existing lockfile dep with
-// the LIVE SHA it currently resolves to, when they differ — the input
-// that lets the engine emit checks.ImpostorCommit for the
-// tag-hijacked-to-fork-network shape. Pass live as the result of a
-// single ResolveAllRecursive over the union of refs.
 func CollectLiveMovedReachDeps(parsed []checks.ParsedWorkflow, live []dep.Dependency) []dep.Dependency {
 	if len(parsed) == 0 || len(live) == 0 {
 		return nil
@@ -107,23 +99,6 @@ func CollectLiveMovedReachDeps(parsed []checks.ParsedWorkflow, live []dep.Depend
 	}
 	return out
 }
-
-// liveDirectReachDeps returns live-resolved deps whose (NWO, Ref, SHA)
-// isn't already covered by the locked-SHA sweep (partitionReachByLive) or
-// the tag-moved sweep (liveMovedDeps), so the engine can give them a
-// fresh reachability check before pinning. Covers two pin-time impostor
-// shapes that the existing diagnose paths miss:
-//
-//   - NotPinned workflow: no ExistingDep at all, so the locked-SHA sweep
-//     never runs. Without this, applyPin's reach loop is the only thing
-//     catching these — diagnose now fires the checks.ImpostorCommit
-//     finding pre-pin so the auto-fix runs via tryAutoFixImpostors.
-//   - Transitive composite dep that ResolveAllRecursive discovered but
-//     isn't yet in the lockfile. The locked-SHA sweep can't see it; the
-//     live-moved sweep only fires when an ExistingDep exists for the same
-//     dep key with a different SHA.
-//
-// Dedup by ghapi.Reach across direct + transitive entries.
 
 // liveDirectReachDeps returns live-resolved deps whose (NWO, Ref, SHA)
 // isn't already covered by the locked-SHA sweep (partitionReachByLive) or
@@ -180,13 +155,6 @@ func liveDirectReachDeps(pw checks.ParsedWorkflow, live []dep.Dependency) []dep.
 // because they're outside both the locked-SHA and live-moved sweeps. On
 // a fully steady-state lockfile this is empty; on a brand-new repo (no
 // lockfile yet) it's the full live set.
-
-// CollectLiveDirectReachDeps is the cmd-level pre-warm analogue of
-// liveDirectReachDeps. Returns the deduplicated set of synthetic live
-// deps across all parsed workflows that need a fresh reachability check
-// because they're outside both the locked-SHA and live-moved sweeps. On
-// a fully steady-state lockfile this is empty; on a brand-new repo (no
-// lockfile yet) it's the full live set.
 func CollectLiveDirectReachDeps(parsed []checks.ParsedWorkflow, live []dep.Dependency) []dep.Dependency {
 	if len(parsed) == 0 || len(live) == 0 {
 		return nil
@@ -225,10 +193,6 @@ func CollectLiveDirectReachDeps(parsed []checks.ParsedWorkflow, live []dep.Depen
 // liveMovedDeps is the per-workflow analogue of CollectLiveMovedReachDeps.
 // Returns synthetic (NWO, Ref, LIVE SHA) deps for any existing dep whose
 // live resolve differs from the recorded SHA.
-
-// liveMovedDeps is the per-workflow analogue of CollectLiveMovedReachDeps.
-// Returns synthetic (NWO, Ref, LIVE SHA) deps for any existing dep whose
-// live resolve differs from the recorded SHA.
 func liveMovedDeps(existing, live []dep.Dependency) []dep.Dependency {
 	if len(existing) == 0 || len(live) == 0 {
 		return nil
@@ -261,15 +225,6 @@ func liveMovedDeps(existing, live []dep.Dependency) []dep.Dependency {
 	}
 	return out
 }
-
-// partitionReachByLive splits existing deps into the set that needs a fresh
-// reachability network check and the set that can be synthesized as
-// Reachable because the freshly-resolved live deps confirm the recorded
-// (NWO, Ref, SHA) is still what the ref resolves to right now.
-//
-// When skipUnchanged is false, every existing dep goes to toCheck. This
-// is the --rescan path: re-verify every recorded pin against current
-// upstream branches.
 
 // partitionReachByLive splits existing deps into the set that needs a fresh
 // reachability network check and the set that can be synthesized as

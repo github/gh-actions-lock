@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/github/gh-actions-pin/internal/dep"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-pin/internal/dep"
 )
 
 // checkNotPinned emits NotPinned for any uses: ref that has no

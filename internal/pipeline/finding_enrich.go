@@ -36,9 +36,6 @@ func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directN
 
 // isTransitivePin reports whether the finding refers to a dep reached via
 // composite expansion (i.e. has parents in the parent map).
-
-// isTransitivePin reports whether the finding refers to a dep reached via
-// composite expansion (i.e. has parents in the parent map).
 func isTransitivePin(f checks.Finding, depByKey map[string]dep.Dependency, parentMap map[string][]string) bool {
 	if f.Dependency == nil {
 		return false
@@ -49,16 +46,9 @@ func isTransitivePin(f checks.Finding, depByKey map[string]dep.Dependency, paren
 	return len(parentMap[f.Dependency.Key()]) > 0
 }
 
-// CollectReachDeps returns the deduplicated union of existing deps across the
-// given parsed workflows that will need a fresh reachability network check
-// once diagnostics runs. It mirrors the per-workflow partition diagnose
-// performs internally (see partitionReachByLive) but operates over the union,
-// so callers can pre-warm CheckReachabilityAll once across every unresolved
-// workflow instead of paying the per-workflow repo-warmup + per-dep
-// concurrency cost serially. Pass live as the result of a single
-// ResolveAllRecursive over the union of refs (the resolver cache makes the
-// per-workflow re-lookups inside diagnose free).
-
+// populateInventoryParents fills in the Parents field for transitive inventory
+// entries (those not marked Direct and without parents yet) by looking up each
+// entry's dep key in parentMap.
 func populateInventoryParents(inventory []checks.InventoryEntry, parentMap map[string][]string) {
 	for i := range inventory {
 		if inventory[i].Direct || len(inventory[i].Parents) > 0 {

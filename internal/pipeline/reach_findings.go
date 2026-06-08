@@ -102,16 +102,6 @@ func reachabilityComplementFindings(
 // Suppresses duplicates against any prior impostor/forgery finding for the
 // same dep key — the engine's checkImpostorCommit may have already emitted
 // for a direct ref via the live-ref-vs-locked compare in check_misleading.
-
-// liveReachImpostorFindings emits checks.ImpostorCommit for live-resolved
-// SHAs that come back Unreachable from the live-direct sweep. Operates on
-// synthetic live deps (not pw.ExistingDeps), so it fires for unpinned and
-// transitive-not-in-lockfile cases that reachabilityComplementFindings
-// (keyed on existing deps) can't see.
-//
-// Suppresses duplicates against any prior impostor/forgery finding for the
-// same dep key — the engine's checkImpostorCommit may have already emitted
-// for a direct ref via the live-ref-vs-locked compare in check_misleading.
 func liveReachImpostorFindings(
 	path string,
 	reach []resolve.ReachabilityResult,

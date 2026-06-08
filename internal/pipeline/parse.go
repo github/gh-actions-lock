@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ghapi"
 	"github.com/github/gh-actions-pin/internal/lockfile"
@@ -10,7 +11,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/workflowfile"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // Diagnose scans workflows and produces findings for each.
@@ -35,10 +35,6 @@ func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *l
 	}
 	return DiagnoseParsed(ctx, parsed, r, store, pool)
 }
-
-// ParseAll loads and parses every workflow path, returning a slice in input
-// order. onScan, if non-nil, fires with 1-based progress before each workflow
-// is parsed so the UI can render [i/N] without leaking resolver detail.
 
 // ParseAll loads and parses every workflow path, returning a slice in input
 // order. onScan, if non-nil, fires with 1-based progress before each workflow
@@ -71,10 +67,6 @@ func ParseAll(paths []string, store *lockfile.State, onScan func(done, total int
 	}
 	return out
 }
-
-// CollectResolvable returns the deduplicated union of refs and existing deps
-// across all parsed workflows. Use the returned slices to pre-warm the
-// resolver caches once before per-workflow diagnostics.
 
 // CollectResolvable returns the deduplicated union of refs and existing deps
 // across all parsed workflows. Use the returned slices to pre-warm the

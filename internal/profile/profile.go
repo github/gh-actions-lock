@@ -278,7 +278,6 @@ func classifyPath(method, path string) string {
 	// repos/{owner}/{repo}/... → repos/*/compare, repos/*/branches, etc.
 	if parts[0] == "repos" && len(parts) >= 4 {
 		nwo := parts[1] + "/" + parts[2]
-		endpoint := strings.Join(parts[3:], "/")
 		// Collapse SHA-like segments.
 		normalized := make([]string, 0, len(parts)-3)
 		for _, p := range parts[3:] {
@@ -288,7 +287,6 @@ func classifyPath(method, path string) string {
 				normalized = append(normalized, p)
 			}
 		}
-		_ = endpoint
 		return fmt.Sprintf("%s repos/%s/%s", method, nwo, strings.Join(normalized, "/"))
 	}
 	return method + " " + path
