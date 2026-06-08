@@ -144,7 +144,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			} `json:"owner"`
 		}
 		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
-		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
+		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 			return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
 		}
 		m := repoMeta{
@@ -198,7 +198,7 @@ func (c *Client) GetBranchHead(ctx context.Context, owner, repo, name string) (B
 				Type string `json:"type"`
 			} `json:"object"`
 		}
-		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
+		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 			var httpErr *api.HTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
 				c.namedBranchCache.Put(key, BranchHead{}) // negative cache
@@ -329,7 +329,7 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 			url.PathEscape(owner), url.PathEscape(repo),
 			url.PathEscape(sha), url.PathEscape(branchHeadSHA))
 		var resp compareResponse
-		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
+		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 			var httpErr *api.HTTPError
 			if errors.As(err, &httpErr) &&
 				(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {
