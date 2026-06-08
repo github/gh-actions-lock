@@ -5,13 +5,18 @@ on:
   push:
     branches:
       - main
-  permissions:
-    id-token: write # for setup-goproxy
-    contents: read
 
 jobs:
   go-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GOPROXY: https://goproxy.githubapp.com/mod,https://proxy.golang.org,direct
+      GOPRIVATE: ''
+      GONOPROXY: ''
+      GONOSUMDB: github.com/github/*
     steps:
       - name: OIDC Setup for goproxy
         uses: github/setup-goproxy@5e60e1074d42316dfe2949ebf9a92bf77b24645b # v1.1.0

@@ -92,9 +92,9 @@ func TestState_PersistsTagAndBranch(t *testing.T) {
 		t.Fatalf("reopening store: %v", err)
 	}
 	checkoutKey := "actions/checkout@v4.2.1:sha1-abc123abc123abc123abc123abc123abc123abc1"
-	a, ok := store2.file.Actions[checkoutKey]
+	a, ok := store2.file.Dependencies[checkoutKey]
 	if !ok {
-		t.Fatalf("expected %s in reloaded lockfile, keys=%v", checkoutKey, actionKeys(store2.file.Actions))
+		t.Fatalf("expected %s in reloaded lockfile, keys=%v", checkoutKey, actionKeys(store2.file.Dependencies))
 	}
 	if a.Tag != "v4.2.1" {
 		t.Errorf("expected Tag=v4.2.1, got %q", a.Tag)
@@ -103,9 +103,9 @@ func TestState_PersistsTagAndBranch(t *testing.T) {
 		t.Errorf("expected Branch=main, got %q", a.Branch)
 	}
 	branchOnlyKey := "internal/branch-only@main:sha1-def456def456def456def456def456def456def4"
-	b, ok := store2.file.Actions[branchOnlyKey]
+	b, ok := store2.file.Dependencies[branchOnlyKey]
 	if !ok {
-		t.Fatalf("expected %s, keys=%v", branchOnlyKey, actionKeys(store2.file.Actions))
+		t.Fatalf("expected %s, keys=%v", branchOnlyKey, actionKeys(store2.file.Dependencies))
 	}
 	if b.Tag != "" {
 		t.Errorf("expected empty Tag, got %q", b.Tag)
@@ -152,7 +152,7 @@ func TestState_SetRejectsEmptyBranch(t *testing.T) {
 // TestState_DiamondTransitiveDepEmittedCorrectly verifies that when two direct
 // actions share a transitive dependency (diamond pattern: A→C, B→C), the
 // lockfile correctly records `uses: [C]` on both A and B, and the shared dep
-// C appears in the actions section exactly once.
+// C appears in the dependencies section exactly once.
 func TestState_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
@@ -202,23 +202,23 @@ func TestState_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopening store: %v", err)
 	}
-	aAction, ok := store2.file.Actions[aPin]
+	aAction, ok := store2.file.Dependencies[aPin]
 	if !ok {
-		t.Fatalf("expected %s in lockfile, keys=%v", aPin, actionKeys(store2.file.Actions))
+		t.Fatalf("expected %s in lockfile, keys=%v", aPin, actionKeys(store2.file.Dependencies))
 	}
 	if len(aAction.Uses) != 1 || aAction.Uses[0] != sharedPin {
 		t.Errorf("expected A.Uses = [%s], got %v", sharedPin, aAction.Uses)
 	}
-	bAction, ok := store2.file.Actions[bPin]
+	bAction, ok := store2.file.Dependencies[bPin]
 	if !ok {
-		t.Fatalf("expected %s in lockfile, keys=%v", bPin, actionKeys(store2.file.Actions))
+		t.Fatalf("expected %s in lockfile, keys=%v", bPin, actionKeys(store2.file.Dependencies))
 	}
 	if len(bAction.Uses) != 1 || bAction.Uses[0] != sharedPin {
 		t.Errorf("expected B.Uses = [%s], got %v", sharedPin, bAction.Uses)
 	}
 	// Shared dep exists exactly once.
-	if _, ok := store2.file.Actions[sharedPin]; !ok {
-		t.Errorf("expected shared dep %s in actions, keys=%v", sharedPin, actionKeys(store2.file.Actions))
+	if _, ok := store2.file.Dependencies[sharedPin]; !ok {
+		t.Errorf("expected shared dep %s in dependencies, keys=%v", sharedPin, actionKeys(store2.file.Dependencies))
 	}
 	// Workflows section only lists direct refs.
 	wfDeps := store2.file.Workflows[".github/workflows/ci.yml"]
@@ -277,11 +277,11 @@ func TestState_SaveGCHandlesCyclicUses(t *testing.T) {
 	aPin := "owner/a@v1:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	bPin := "owner/b@v1:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-	if _, ok := store2.file.Actions[aPin]; !ok {
-		t.Errorf("expected %s to survive GC, keys=%v", aPin, actionKeys(store2.file.Actions))
+	if _, ok := store2.file.Dependencies[aPin]; !ok {
+		t.Errorf("expected %s to survive GC, keys=%v", aPin, actionKeys(store2.file.Dependencies))
 	}
-	if _, ok := store2.file.Actions[bPin]; !ok {
-		t.Errorf("expected %s to survive GC (reachable via cyclic uses:), keys=%v", bPin, actionKeys(store2.file.Actions))
+	if _, ok := store2.file.Dependencies[bPin]; !ok {
+		t.Errorf("expected %s to survive GC (reachable via cyclic uses:), keys=%v", bPin, actionKeys(store2.file.Dependencies))
 	}
 }
 

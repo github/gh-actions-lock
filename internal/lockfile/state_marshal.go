@@ -16,7 +16,7 @@ import (
 // the file round-trips identically regardless of YAML scalar-resolution
 // quirks: pin keys carry colons, tags can look like floats ("1.0"), refs
 // can collide with YAML 1.1 booleans ("y", "no", "on", "off"). Schema
-// field names (version, actions, workflows, tag, branch, …) stay
+// field names (version, dependencies, workflows, tag, branch, …) stay
 // unquoted because they're hardcoded and trivially safe.
 func marshalDeterministic(file parserlock.File) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
@@ -47,15 +47,15 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		)
 	}
 
-	if len(file.Actions) > 0 {
-		keys := make([]string, 0, len(file.Actions))
-		for k := range file.Actions {
+	if len(file.Dependencies) > 0 {
+		keys := make([]string, 0, len(file.Dependencies))
+		for k := range file.Dependencies {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		depsNode := &yaml.Node{Kind: yaml.MappingNode}
 		for _, k := range keys {
-			a := file.Actions[k]
+			a := file.Dependencies[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
 			if a.Tag != "" {
 				addQuotedField(entry, "tag", a.Tag)
@@ -95,7 +95,7 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 	return yaml.Marshal(doc)
 }
 
-// plainScalar is for hardcoded schema field names (version, actions, …).
+// plainScalar is for hardcoded schema field names (version, dependencies, …).
 func plainScalar(name string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Value: name}
 }
