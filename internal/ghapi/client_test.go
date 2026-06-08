@@ -2,6 +2,7 @@ package ghapi
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -157,7 +158,7 @@ func TestRetryTransport_ResendsBodyOnRetry(t *testing.T) {
 		}, nil
 	})
 
-	rt := &retryTransport{inner: inner, maxRetries: 3, sleepFn: func(time.Duration) {}}
+	rt := &retryTransport{inner: inner, maxRetries: 3, sleepFn: func(context.Context, time.Duration) {}}
 	req, _ := http.NewRequest("POST", "https://api.github.com/graphql",
 		io.NopCloser(bytes.NewReader([]byte(wantBody))))
 	req.ContentLength = int64(len(wantBody))
