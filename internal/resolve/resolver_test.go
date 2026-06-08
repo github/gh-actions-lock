@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ghapi"
 	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-pin/internal/pinpool"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // seedCache populates r.cache with the supplied entries and returns r so it can

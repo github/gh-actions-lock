@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/pinpool"
@@ -14,7 +15,6 @@ import (
 	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/tag"
 	"github.com/github/gh-actions-pin/internal/workflowfile"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // PlanOptions configures the Plan pass.

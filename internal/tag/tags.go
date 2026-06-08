@@ -14,11 +14,11 @@ import (
 
 // Info represents a tag with optional release metadata.
 type Info struct {
-	Name         string // e.g. "v4.2.2"
-	SHA          string // commit SHA the tag points to (dereferenced for annotated tags)
-	IsRelease    bool   // true if a GitHub Release exists for this tag
-	IsImmutable  bool   // true if the release is marked immutable (tag can't be moved/deleted)
-	IsMajor      bool   // true if this looks like a major-only tag (e.g. "v4")
+	Name        string // e.g. "v4.2.2"
+	SHA         string // commit SHA the tag points to (dereferenced for annotated tags)
+	IsRelease   bool   // true if a GitHub Release exists for this tag
+	IsImmutable bool   // true if the release is marked immutable (tag can't be moved/deleted)
+	IsMajor     bool   // true if this looks like a major-only tag (e.g. "v4")
 }
 
 // MatchesSHA reports whether sha names this tag's commit. Resolution peels

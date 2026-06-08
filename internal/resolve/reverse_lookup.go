@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ghapi"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // DiscoverContaining returns (tag, branch) for sha in owner/repo, using
