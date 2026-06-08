@@ -277,19 +277,11 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 			}
 			return label
 		},
-		func(ctx context.Context, slot int, b actionBatch) error {
+		func(ctx context.Context, _ int, b actionBatch) error {
 			res := r.gh.ResolveActionFiles(ctx, b.reqs)
 			var errs []error
 			for j, idx := range b.idxs {
 				ref := refs[idx]
-				// Update slot with the current ref being processed.
-				remaining := len(b.idxs) - j - 1
-				slotLabel := "resolving " + ref.NWO() + "@" + ref.Ref
-				if remaining > 0 {
-					slotLabel = fmt.Sprintf("%s (+%d more)", slotLabel, remaining)
-				}
-				r.Pool.Reporter.SetWorkerStatus(slot, "→ "+slotLabel)
-
 				if j < len(res) && res[j].Err == nil {
 					d := dep.Dependency{
 						NWO:  res[j].Owner + "/" + res[j].Repo,
