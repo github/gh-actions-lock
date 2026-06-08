@@ -1004,15 +1004,14 @@ func TestCheck_DefaultJSON_AutofixWrites(t *testing.T) {
 			{"name": "v6.0.0", "commit": map[string]any{"sha": setupGoSHA}},
 		}),
 	)
-	// Two hits on the bare repo endpoint: GetDefaultBranch (reverse lookup)
-	// and RepoIDs (lockfile write). Each stub fires once; both carry the
-	// fields either caller reads.
+	// GetDefaultBranch (reverse lookup) and RepoIDs (lockfile write) now share
+	// a single repos/{owner}/{repo} fetch, so one stub serves both. It carries
+	// the fields either caller reads.
 	repoMeta := httpmock.JSONResponse(map[string]any{
 		"default_branch": "main",
 		"id":             2,
 		"owner":          map[string]any{"id": 1},
 	})
-	reg.Register(httpmock.REST("GET", `repos/actions/setup-go$`), repoMeta)
 	reg.Register(httpmock.REST("GET", `repos/actions/setup-go$`), repoMeta)
 
 	dir := t.TempDir()
