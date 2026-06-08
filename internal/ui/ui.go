@@ -583,12 +583,24 @@ func (sw *spinnerWriter) setWorkerHint(slot int, hint string) {
 // viewport, so the followup ESC[NA could overshoot into already-rendered
 // rows above and clobber them on the next spinner tick.
 func (u *UI) clearSpinnerLines() {
+	var lines int
 	if u.spinWriter != nil {
 		u.spinWriter.mu.Lock()
+		lines = u.spinWriter.nRendered
 		u.spinWriter.nRendered = 0
 		u.spinWriter.mu.Unlock()
 	}
-	fmt.Fprint(u.w, "\r\033[J")
+	// Erase the spinner's own line plus exactly the known worker lines
+	// below it, then move the cursor back up. Using targeted \033[2K
+	// per line instead of \033[J (erase-to-end-of-screen) avoids
+	// clobbering the shell prompt if it starts drawing before we exit.
+	fmt.Fprint(u.w, "\r\033[2K")
+	for i := 0; i < lines; i++ {
+		fmt.Fprint(u.w, "\n\033[2K")
+	}
+	if lines > 0 {
+		fmt.Fprintf(u.w, "\033[%dA\r", lines)
+	}
 	u.progHasDetail = false
 }
 
