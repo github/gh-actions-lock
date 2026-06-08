@@ -54,6 +54,10 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	parsed := ParseAll(opts.WorkflowPaths, opts.Store, opts.OnScan)
 	endParse()
 
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Fast path: trust fully-recorded workflows.
 	skippedRescan := 0
 	if !opts.Rescan {
@@ -101,6 +105,10 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			endResolve()
 		}
 
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		// Phase 3: Pre-warm reachability across all unresolved workflows.
 		var reachDeps, liveMoved, liveDirect []dep.Dependency
 		if opts.Rescan {
@@ -116,16 +124,21 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			liveMoved = CollectLiveMovedReachDeps(unresolved, live)
 			liveDirect = CollectLiveDirectReachDeps(unresolved, live)
 		}
+
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
 			progress("Verifying reachability")
 			endReach := prof.Phase("  reachability pre-warm")
 			if len(reachDeps) > 0 {
 				_ = r.CheckReachabilityAll(ctx, reachDeps)
 			}
-			if len(liveMoved) > 0 {
+			if ctx.Err() == nil && len(liveMoved) > 0 {
 				_ = r.CheckReachabilityAll(ctx, liveMoved)
 			}
-			if len(liveDirect) > 0 {
+			if ctx.Err() == nil && len(liveDirect) > 0 {
 				_ = r.CheckReachabilityAll(ctx, liveDirect)
 			}
 			endReach()
@@ -136,12 +149,20 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		r.OnVerifyProgress = nil
 	}
 
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Phase 4: Diagnose.
 	progress("Analyzing")
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
 	endDiag()
 	valid := report.IsValid()
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 
 	// Phase 5: Enrich impostor findings with recommended release suggestions.
 	if opts.Tagger != nil && hasImpostorFindings(report) {
