@@ -61,8 +61,12 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 			// pins this binary cannot interpret. Other parse failures
 			// (corrupt YAML, unknown fields) are treated as empty so a
 			// recoverable lockfile can be rewritten.
+			//
+			// The standalone parser emits a tool-agnostic hint ("upgrade the
+			// tool that reads this lockfile"), so name the concrete command
+			// for this binary here.
 			if errors.Is(err, parserlock.ErrFutureVersion) {
-				return nil, fmt.Errorf("reading %s: %w", parserlock.Path, err)
+				return nil, fmt.Errorf("reading %s: %w; run `gh extension upgrade gh-actions-pin` to update", parserlock.Path, err)
 			}
 			// Corrupt or unrecognized lockfile — treat as empty and overwrite.
 			file = parserlock.File{Version: parserlock.Version}
@@ -76,8 +80,8 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 	if file.Version == "" {
 		file.Version = parserlock.Version
 	}
-	if file.Actions == nil {
-		file.Actions = map[string]parserlock.Action{}
+	if file.Dependencies == nil {
+		file.Dependencies = map[string]parserlock.Action{}
 	}
 	if file.Workflows == nil {
 		file.Workflows = map[string][]string{}
@@ -91,8 +95,8 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 	}
 	// Normalize on-disk entries to the canonical (lowercased) pin form so any
 	// legacy mixed-case keys are rewritten on the next Save.
-	normalizedActions := make(map[string]parserlock.Action, len(file.Actions))
-	for pinKey, action := range file.Actions {
+	normalizedActions := make(map[string]parserlock.Action, len(file.Dependencies))
+	for pinKey, action := range file.Dependencies {
 		pin, ok := parserlock.ParsePin(pinKey)
 		if !ok {
 			normalizedActions[pinKey] = action
@@ -106,7 +110,7 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 			s.idCache[strings.ToLower(pin.Owner+"/"+pin.Repo)] = [2]int64{action.OwnerID, action.RepoID}
 		}
 	}
-	s.file.Actions = normalizedActions
+	s.file.Dependencies = normalizedActions
 	for wfKey, deps := range s.file.Workflows {
 		changed := false
 		normalized := make([]string, len(deps))
@@ -175,8 +179,8 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 func (s *State) AllDeps() []dep.Dependency {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]dep.Dependency, 0, len(s.file.Actions))
-	for raw, action := range s.file.Actions {
+	out := make([]dep.Dependency, 0, len(s.file.Dependencies))
+	for raw, action := range s.file.Dependencies {
 		pin, ok := parserlock.ParsePin(raw)
 		if !ok {
 			continue
@@ -309,7 +313,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			}
 			sort.Strings(uses)
 		}
-		s.file.Actions[pinKey] = parserlock.Action{
+		s.file.Dependencies[pinKey] = parserlock.Action{
 			Tag:     d.Tag,
 			Branch:  d.Branch,
 			Commit:  pin.Algo + "-" + pin.Hex,
@@ -339,7 +343,7 @@ func (s *State) Save() error {
 			return
 		}
 		used[key] = true
-		if a, ok := s.file.Actions[key]; ok {
+		if a, ok := s.file.Dependencies[key]; ok {
 			for _, child := range a.Uses {
 				walk(child)
 			}
@@ -350,15 +354,15 @@ func (s *State) Save() error {
 			walk(dep)
 		}
 	}
-	for key := range s.file.Actions {
+	for key := range s.file.Dependencies {
 		if !used[key] {
-			delete(s.file.Actions, key)
+			delete(s.file.Dependencies, key)
 		}
 	}
 
 	full := filepath.Join(s.repoRoot, parserlock.Path)
 
-	if len(s.file.Actions) == 0 && len(s.file.Workflows) == 0 {
+	if len(s.file.Dependencies) == 0 && len(s.file.Workflows) == 0 {
 		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

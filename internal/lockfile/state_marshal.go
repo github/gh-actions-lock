@@ -47,15 +47,15 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		)
 	}
 
-	if len(file.Actions) > 0 {
-		keys := make([]string, 0, len(file.Actions))
-		for k := range file.Actions {
+	if len(file.Dependencies) > 0 {
+		keys := make([]string, 0, len(file.Dependencies))
+		for k := range file.Dependencies {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		depsNode := &yaml.Node{Kind: yaml.MappingNode}
 		for _, k := range keys {
-			a := file.Actions[k]
+			a := file.Dependencies[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
 			if a.Tag != "" {
 				addQuotedField(entry, "tag", a.Tag)
