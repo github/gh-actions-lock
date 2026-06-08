@@ -14,25 +14,17 @@ type RepoTag struct {
 	SHA  string
 }
 
-// RepoTags lists a repository's tags (up to 100), dereferencing annotated
-// tags to their target commit SHA.
+// RepoTags lists a repository's tags (up to 100) with the commit SHA each
+// resolves to. Delegates to ListTags so it shares the cached, singleflight-
+// coalesced tag fetch rather than issuing a second identical request.
 func (c *Client) RepoTags(ctx context.Context, owner, repo string) ([]RepoTag, error) {
-	path := fmt.Sprintf("repos/%s/%s/tags?per_page=100",
-		url.PathEscape(owner), url.PathEscape(repo))
-
-	var apiTags []struct {
-		Name   string `json:"name"`
-		Commit struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &apiTags); err != nil {
+	entries, err := c.ListTags(ctx, owner, repo)
+	if err != nil {
 		return nil, fmt.Errorf("fetching tags for %s/%s: %w", owner, repo, err)
 	}
-
-	out := make([]RepoTag, 0, len(apiTags))
-	for _, t := range apiTags {
-		out = append(out, RepoTag{Name: t.Name, SHA: t.Commit.SHA})
+	out := make([]RepoTag, 0, len(entries))
+	for _, t := range entries {
+		out = append(out, RepoTag{Name: t.Name, SHA: t.SHA})
 	}
 	return out, nil
 }
@@ -73,20 +65,19 @@ type RepoMetadata struct {
 }
 
 // RepoMetadata fetches a repository's default branch, visibility, and last
-// push time.
+// push time. Delegates to the shared repoMetadata fetch so it shares the
+// cached, singleflight-coalesced repos/{owner}/{repo} round-trip with
+// GetDefaultBranch and RepoIDs.
 func (c *Client) RepoMetadata(ctx context.Context, owner, repo string) (RepoMetadata, error) {
-	path := fmt.Sprintf("repos/%s/%s",
-		url.PathEscape(owner), url.PathEscape(repo))
-
-	var result struct {
-		DefaultBranch string `json:"default_branch"`
-		Visibility    string `json:"visibility"`
-		PushedAt      string `json:"pushed_at"`
-	}
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
+	m, err := c.repoMetadata(ctx, owner, repo)
+	if err != nil {
 		return RepoMetadata{}, fmt.Errorf("fetching metadata for %s/%s: %w", owner, repo, err)
 	}
-	return RepoMetadata(result), nil
+	return RepoMetadata{
+		DefaultBranch: m.DefaultBranch,
+		Visibility:    m.Visibility,
+		PushedAt:      m.PushedAt,
+	}, nil
 }
 
 // CommitSHA resolves a ref (branch, tag, or SHA) to its commit SHA via the

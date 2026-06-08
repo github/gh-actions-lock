@@ -107,17 +107,20 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 	return res.tags, res.err
 }
 
-// repoMeta is the slice of repos/{owner}/{repo} the resolver needs: the
-// default branch plus the numeric owner and repo IDs.
+// repoMeta is the subset of repos/{owner}/{repo} the tool needs: the default
+// branch, the numeric owner and repo IDs (lockfile write), and the visibility
+// and last-push time (tag freshness/immutability checks).
 type repoMeta struct {
 	DefaultBranch string
 	OwnerID       int64
 	RepoID        int64
+	Visibility    string
+	PushedAt      string
 }
 
 // repoMetadata fetches repos/{owner}/{repo} at most once per run, coalescing
-// concurrent callers via singleflight and caching the result. Both
-// GetDefaultBranch and RepoIDs derive from it, so a repo costs one round-trip
+// concurrent callers via singleflight and caching the result. GetDefaultBranch,
+// RepoIDs, and RepoMetadata all derive from it, so a repo costs one round-trip
 // instead of one per consumer. The request runs under a cancel-free context:
 // callers fan out under scan/errgroup contexts that cancel on first
 // match/error, and a coalesced caller's cancellation must not abort the shared
@@ -133,6 +136,8 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 		}
 		var resp struct {
 			DefaultBranch string `json:"default_branch"`
+			Visibility    string `json:"visibility"`
+			PushedAt      string `json:"pushed_at"`
 			ID            int64  `json:"id"`
 			Owner         struct {
 				ID int64 `json:"id"`
@@ -142,7 +147,13 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
 			return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
 		}
-		m := repoMeta{DefaultBranch: resp.DefaultBranch, OwnerID: resp.Owner.ID, RepoID: resp.ID}
+		m := repoMeta{
+			DefaultBranch: resp.DefaultBranch,
+			OwnerID:       resp.Owner.ID,
+			RepoID:        resp.ID,
+			Visibility:    resp.Visibility,
+			PushedAt:      resp.PushedAt,
+		}
 		c.repoMetaCache.Put(key, m)
 		return m, nil
 	})
