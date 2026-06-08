@@ -102,6 +102,10 @@ func New(workers int, r Reporter) *Pool {
 //
 // Workers are clamped to len(jobs). Returns nil when len(jobs) == 0 without
 // touching the reporter. display and run must be non-nil when len(jobs) > 0.
+//
+// An empty label suppresses the pool's own "[done/total] label" writes,
+// leaving the spinner label to the caller; per-worker status rows and stall
+// hints are unaffected.
 func (p *Pool) Run(
 	ctx context.Context,
 	label string,
@@ -151,6 +155,14 @@ func (p *Pool) Run(
 		rMu.Unlock()
 	}
 	updateLabel := func() {
+		// An empty label hands label ownership to the caller: the pool drives
+		// per-worker status rows and stall hints but writes no "[done/total]"
+		// prefix. Used when an outer per-item progress counter (e.g. resolve's
+		// ref-denominated bar) owns the spinner label and a chunk-denominated
+		// pool counter would fight it.
+		if label == "" {
+			return
+		}
 		rMu.Lock()
 		r.UpdateLabel(fmt.Sprintf("[%d/%d] %s", done.Load(), total, label))
 		rMu.Unlock()

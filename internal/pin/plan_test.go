@@ -134,7 +134,8 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 
 	goodSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	// good/action resolves successfully.
+	// Both refs fold into one batched query: a0=good/action resolves,
+	// a1=bad/private is null (repo not found).
 	reg.Register(
 		httpmock.GraphQLForRepo("good", "action"),
 		httpmock.JSONResponse(map[string]any{
@@ -146,16 +147,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 						"file": map[string]any{"object": map[string]any{"text": "name: Good\nruns:\n  using: node20\n"}},
 					},
 				},
-			},
-		}),
-	)
-
-	// bad/private returns null — repo not found.
-	reg.Register(
-		httpmock.GraphQLForRepo("bad", "private"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": nil,
+				"a1": nil,
 			},
 		}),
 	)
@@ -245,14 +237,11 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	// Both repos return null.
+	// Both refs fold into one batched query; a0=bad/one and a1=bad/two are
+	// both null (repos not found).
 	reg.Register(
 		httpmock.GraphQLForRepo("bad", "one"),
-		httpmock.JSONResponse(map[string]any{"data": map[string]any{"a0": nil}}),
-	)
-	reg.Register(
-		httpmock.GraphQLForRepo("bad", "two"),
-		httpmock.JSONResponse(map[string]any{"data": map[string]any{"a0": nil}}),
+		httpmock.JSONResponse(map[string]any{"data": map[string]any{"a0": nil, "a1": nil}}),
 	)
 
 	pool := pinpool.New(2, nil)

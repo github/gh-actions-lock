@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -42,6 +43,14 @@ func cacheKey(ref parserlock.ActionRef) ghapi.ActionRef {
 	return ghapi.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 }
 
+// batchActionFileSize caps how many action refs are folded into a single
+// batched ResolveActionFiles GraphQL round-trip. The action-file query is
+// heavy per alias (repository + object + two blob fetches), so this stays well
+// under reachability's branch batch size. ResolveActionFiles splits adaptively
+// if a chunk is still rejected for cost, so this is an upper bound, not a
+// fixed request shape.
+const batchActionFileSize = 20
+
 // ResolveAllRecursive resolves action refs and recursively discovers transitive
 // dependencies from composite actions by reading their action.yml via GraphQL.
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
@@ -63,10 +72,19 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 	// Fire an initial 0/N callback so the UI shows the bar immediately at the
 	// known size of the first wave (refs the caller passed in).
 	if r.OnResolveProgress != nil {
-		// Compute first-wave uncached size up-front for an accurate initial total.
+		// Compute first-wave uncached size up-front for an accurate initial
+		// total. Dedup by cacheKey to mirror the seen{} dedup the BFS loop
+		// applies before resolving, so duplicate input refs don't inflate the
+		// total and leave the bar stranded short of [N/N].
 		firstWave := 0
+		seenFirst := make(map[ghapi.ActionRef]bool, len(refs))
 		for _, ref := range refs {
-			if _, ok := r.cache.Get(cacheKey(ref)); !ok {
+			key := cacheKey(ref)
+			if seenFirst[key] {
+				continue
+			}
+			seenFirst[key] = true
+			if _, ok := r.cache.Get(key); !ok {
 				firstWave++
 			}
 		}
@@ -218,42 +236,68 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 		r.FireResolveProgress(int(resolveDone.Load()), int(newTotal))
 	}
 
-	type indexedRef struct {
-		idx int
-		ref parserlock.ActionRef
+	// Group the wave's uncached refs into batches, each resolved in one
+	// ResolveActionFiles GraphQL round-trip instead of one request per ref.
+	// One pool job == one batch; the per-ref progress counter still ticks once
+	// per ref so the bar stays ref-denominated. The pool runs with an empty
+	// label so its batch-denominated counter doesn't fight FireResolveProgress.
+	type actionBatch struct {
+		idxs []int                     // global indices into refs/results
+		reqs []ghapi.ActionFileRequest // aligned 1:1 with idxs
 	}
-	items := make([]indexedRef, len(uncachedIdx))
-	for i, idx := range uncachedIdx {
-		items[i] = indexedRef{idx: idx, ref: refs[idx]}
-	}
-
-	poolErr := pinpool.RunTyped(r.Pool, ctx, "Resolving actions",
-		items,
-		func(ir indexedRef) string { return ir.ref.NWO() + "@" + ir.ref.Ref },
-		func(ctx context.Context, _ int, ir indexedRef) error {
-			ref := ir.ref
-			input := ghapi.ActionFileRequest{
+	var batches []actionBatch
+	for start := 0; start < len(uncachedIdx); start += batchActionFileSize {
+		end := start + batchActionFileSize
+		if end > len(uncachedIdx) {
+			end = len(uncachedIdx)
+		}
+		span := uncachedIdx[start:end]
+		b := actionBatch{
+			idxs: make([]int, len(span)),
+			reqs: make([]ghapi.ActionFileRequest, len(span)),
+		}
+		for j, idx := range span {
+			ref := refs[idx]
+			b.idxs[j] = idx
+			b.reqs[j] = ghapi.ActionFileRequest{
 				Owner: ref.Owner, Repo: ref.Repo,
 				Path: ref.Path, Ref: ref.Ref,
 			}
-			res := r.gh.ResolveActionFiles(ctx, []ghapi.ActionFileRequest{input})
-			if len(res) > 0 && res[0].Err == nil {
-				d := dep.Dependency{
-					NWO:  res[0].Owner + "/" + res[0].Repo,
-					Path: res[0].Path,
-					Ref:  res[0].Ref,
-					SHA:  res[0].CommitOID,
+		}
+		batches = append(batches, b)
+	}
+
+	poolErr := pinpool.RunTyped(r.Pool, ctx, "",
+		batches,
+		func(b actionBatch) string {
+			head := refs[b.idxs[0]]
+			label := head.NWO() + "@" + head.Ref
+			if len(b.idxs) > 1 {
+				label = fmt.Sprintf("%s (+%d more)", label, len(b.idxs)-1)
+			}
+			return label
+		},
+		func(ctx context.Context, _ int, b actionBatch) error {
+			res := r.gh.ResolveActionFiles(ctx, b.reqs)
+			var errs []error
+			for j, idx := range b.idxs {
+				ref := refs[idx]
+				if j < len(res) && res[j].Err == nil {
+					d := dep.Dependency{
+						NWO:  res[j].Owner + "/" + res[j].Repo,
+						Path: res[j].Path,
+						Ref:  res[j].Ref,
+						SHA:  res[j].CommitOID,
+					}
+					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})
+					results[idx] = resolveResult{dep: d, yml: res[j].ActionYML, ok: true}
+				} else if j < len(res) && res[j].Err != nil {
+					errs = append(errs, fmt.Errorf("%s@%s: %w", ref.NWO(), ref.Ref, res[j].Err))
 				}
-				key := cacheKey(ref)
-				r.cache.Put(key, resolvedEntry{dep: d, actionYML: res[0].ActionYML})
-				results[ir.idx] = resolveResult{dep: d, yml: res[0].ActionYML, ok: true}
+				done := resolveDone.Add(1)
+				r.FireResolveProgress(int(done), int(resolveTotal.Load()))
 			}
-			done := resolveDone.Add(1)
-			r.FireResolveProgress(int(done), int(resolveTotal.Load()))
-			if len(res) > 0 && res[0].Err != nil {
-				return fmt.Errorf("%s@%s: %w", input.NWO(), ref.Ref, res[0].Err)
-			}
-			return nil
+			return errors.Join(errs...)
 		},
 	)
 

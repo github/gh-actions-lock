@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -406,5 +407,58 @@ func TestRunStallWatcherStopsBeforeReturn(t *testing.T) {
 	if len(ui.hints) != hintsAtReturn {
 		t.Fatalf("watcher fired after Run returned: hints grew from %d to %d (%v)",
 			hintsAtReturn, len(ui.hints), ui.hints)
+	}
+}
+
+// TestRunEmptyLabelSuppressesLabelWrites verifies the empty-label convention:
+// when Run is given "", the pool writes no "[done/total]" spinner label
+// (leaving it to an outer ref-denominated counter) but still drives per-worker
+// status rows so the spinner tail keeps moving.
+func TestRunEmptyLabelSuppressesLabelWrites(t *testing.T) {
+	f := &fakeReporter{}
+	p := New(4, f)
+	jobs := make([]int, 12)
+	err := RunTyped(p, context.Background(), "", jobs,
+		func(j int) string { return "job" },
+		func(_ context.Context, slot, j int) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.labels) != 0 {
+		t.Fatalf("empty label must suppress all UpdateLabel writes, got %v", f.labels)
+	}
+	if len(f.statuses) == 0 {
+		t.Fatal("expected per-worker status rows to still be driven with an empty label")
+	}
+}
+
+// TestRunNonEmptyLabelStillWritesLabel is the contrapositive: a non-empty
+// label must produce "[done/total] label" writes so existing callers keep
+// their pool-driven progress.
+func TestRunNonEmptyLabelStillWritesLabel(t *testing.T) {
+	f := &fakeReporter{}
+	p := New(4, f)
+	jobs := make([]int, 6)
+	err := RunTyped(p, context.Background(), "Pinning", jobs,
+		func(j int) string { return "job" },
+		func(_ context.Context, slot, j int) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.labels) == 0 {
+		t.Fatal("non-empty label must produce UpdateLabel writes")
+	}
+	for _, l := range f.labels {
+		if !strings.Contains(l, "Pinning") {
+			t.Fatalf("label write missing caller label text: %q", l)
+		}
 	}
 }

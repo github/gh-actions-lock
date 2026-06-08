@@ -440,7 +440,9 @@ func TestResolveAllRecursivePartialFailure(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	// good/action resolves successfully.
+	// Both refs fold into one batched query: a0=good/action resolves,
+	// a1=bad/private comes back null (repo not found). The single stub
+	// matches the batch (its vars contain good/action).
 	reg.Register(
 		httpmock.GraphQLForRepo("good", "action"),
 		httpmock.JSONResponse(map[string]any{
@@ -452,16 +454,7 @@ func TestResolveAllRecursivePartialFailure(t *testing.T) {
 						"file": map[string]any{"object": map[string]any{"text": "name: Good\nruns:\n  using: node20\n"}},
 					},
 				},
-			},
-		}),
-	)
-
-	// bad/private returns null — repo not found.
-	reg.Register(
-		httpmock.GraphQLForRepo("bad", "private"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": nil,
+				"a1": nil,
 			},
 		}),
 	)
