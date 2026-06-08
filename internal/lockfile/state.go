@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/github/gh-actions-pin/internal/dep"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-pin/internal/dep"
 	"golang.org/x/sync/singleflight"
 )
 

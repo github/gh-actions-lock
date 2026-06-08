@@ -5,8 +5,8 @@ package lockfile
 import (
 	"fmt"
 
-	"github.com/github/gh-actions-pin/internal/dep"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-pin/internal/dep"
 )
 
 // depToPin converts a dep.Dependency into a parserlock.Pin without any

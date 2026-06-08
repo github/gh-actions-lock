@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/workflowfile"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 type fakeMetadataResolver struct{}

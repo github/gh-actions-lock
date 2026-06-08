@@ -1,8 +1,8 @@
 package lockfile
 
 import (
-	"github.com/github/gh-actions-pin/internal/dep"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-pin/internal/dep"
 )
 
 // DirectTracker captures, by dep index, which resolved deps correspond to a
