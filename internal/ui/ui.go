@@ -83,6 +83,13 @@ type UI struct {
 	// in the spinner Suffix — keeping the suffix short so the library's
 	// byte-count wrap detection never triggers on the second line's content.
 	spinWriter *spinnerWriter
+
+	// progGrace delays spinner visibility so fast runs never flicker. When
+	// non-nil, the spinner object exists but hasn't been Start()ed yet;
+	// a background goroutine will start it after the grace period unless
+	// StopProgress cancels first.
+	progGrace     *time.Timer
+	progGraceDone chan struct{} // closed when the grace goroutine exits
 }
 
 // SetLog attaches a narration sink. Once set, narration methods write plain
@@ -977,9 +984,17 @@ func (u *UI) ProgressActive() bool {
 	return u.spinner != nil
 }
 
+// progressGrace is how long StartProgress waits before showing the spinner.
+// Runs that complete within this window never flicker a spinner at all.
+const progressGrace = 150 * time.Millisecond
+
 // StartProgress starts an animated spinner with the given label on stderr.
 // On non-TTY outputs, prints a static label instead. Matches gh CLI's Primer
 // progress indicator: braille dots, 120ms, cyan.
+//
+// The spinner is not rendered immediately: a short grace period suppresses
+// flicker for fast runs. If StopProgress is called before the grace period
+// expires, no spinner is ever shown.
 func (u *UI) StartProgress(label string) {
 	if u.headless {
 		if label != "" {
@@ -1005,8 +1020,15 @@ func (u *UI) StartProgress(label string) {
 	u.progLast = ""
 	u.progPaused = false
 	u.renderProgress()
-	sp.Start()
-	sw.startAnimator()
+
+	// Defer the visible start so fast runs never flicker.
+	done := make(chan struct{})
+	u.progGraceDone = done
+	u.progGrace = time.AfterFunc(progressGrace, func() {
+		defer close(done)
+		sp.Start()
+		sw.startAnimator()
+	})
 }
 
 // PauseProgress temporarily halts the spinner and clears its line so other
@@ -1016,6 +1038,14 @@ func (u *UI) StartProgress(label string) {
 func (u *UI) PauseProgress() {
 	if u.spinner == nil || u.progPaused {
 		return
+	}
+	// Cancel grace timer — if the spinner hasn't appeared yet, keep it hidden.
+	if u.progGrace != nil {
+		if !u.progGrace.Stop() {
+			<-u.progGraceDone
+		}
+		u.progGrace = nil
+		u.progGraceDone = nil
 	}
 	if u.spinWriter != nil {
 		u.spinWriter.stopAnimator()
@@ -1049,6 +1079,17 @@ func (u *UI) ResumeProgress() {
 // StopProgress stops the spinner. Safe to call if no spinner is active.
 func (u *UI) StopProgress() {
 	if u.spinner != nil {
+		// Cancel the grace timer. If the timer already fired (Stop returns
+		// false) the spinner is running — wait for the goroutine to finish
+		// before tearing down so we don't race with Start().
+		if u.progGrace != nil {
+			if !u.progGrace.Stop() {
+				// Timer already fired — spinner is starting or started.
+				<-u.progGraceDone
+			}
+			u.progGrace = nil
+			u.progGraceDone = nil
+		}
 		if u.spinWriter != nil {
 			u.spinWriter.stopAnimator()
 			u.spinWriter.mu.Lock()
