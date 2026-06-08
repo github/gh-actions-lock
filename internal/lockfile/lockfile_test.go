@@ -428,7 +428,7 @@ func TestWriteDependenciesGroupedByParent(t *testing.T) {
 
 	parentMap := map[string][]string{
 		"actions/cache/save@v4": {"actions/setup-go@v5"},
-		"other/dep@v1":         {"actions/checkout@v4"},
+		"other/dep@v1":          {"actions/checkout@v4"},
 	}
 
 	output, err := f.WriteDependencies(deps, parentMap)
