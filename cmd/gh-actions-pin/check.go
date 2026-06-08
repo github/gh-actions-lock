@@ -202,11 +202,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	showSpinner := opts.jsonFields == "" && !console.Headless()
 	showHeadlessProgress := console.Headless()
 
-	// Start spinner — the label stays empty until the first per-ref resolve
-	// callback fires. The grace period suppresses flicker on fast runs.
-	if showSpinner {
-		console.StartProgress("")
-	} else if showHeadlessProgress {
+	if showHeadlessProgress {
 		console.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
@@ -226,12 +222,15 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Rescan:        opts.rescan,
 		Profile:       prof,
 	}
-	// Interactive spinner mode: set label once when resolve starts.
-	// Worker-slot status rows show per-ref detail.
+	// Defer spinner start until actual network work begins. The fast path
+	// (everything trusted from the lockfile) returns before resolve fires,
+	// so the spinner never appears and there's no flicker.
 	if showSpinner {
 		var once sync.Once
 		runOpts.OnResolveProgress = func(done, total int) {
-			once.Do(func() { console.UpdateLabel("Resolving actions") })
+			once.Do(func() {
+				console.StartProgress("Resolving actions")
+			})
 		}
 	}
 
