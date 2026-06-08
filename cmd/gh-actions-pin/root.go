@@ -1,51 +1,60 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"syscall"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolver"
+	"github.com/github/gh-actions-pin/internal/pinpool"
+	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-pin/internal/workflowfile"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
-var errSilent = errors.New("silent error")
-
-// pinFactory provides dependency injection for all commands. When integrating
-// into cli/cli, swap this for cmdutil.Factory — the interface is analogous.
-type pinFactory struct {
-	// Out is the writer for structured output (JSON). Typically os.Stdout.
-	Out io.Writer
-	// ErrOut is the writer for human-readable output (progress, errors). Typically os.Stderr.
-	ErrOut io.Writer
-	// UI provides formatted terminal output via ErrOut.
-	UI *ui.UI
-	// NewResolver creates a resolver for the given hostname.
-	NewResolver func(hostname string) (*resolver.Resolver, error)
-	// IsTerminal reports whether ErrOut is a TTY.
-	IsTerminal func() bool
-}
-
-// NewDefaultFactory creates a factory wired to real stdio.
-func NewDefaultFactory() *pinFactory {
-	return &pinFactory{
-		Out:         os.Stdout,
-		ErrOut:      os.Stderr,
-		UI:          ui.New(),
-		NewResolver: resolver.New,
-		IsTerminal: func() bool {
-			return term.IsTerminal(int(os.Stderr.Fd()))
-		},
+// execute runs the root command and returns an exit code.
+//
+//   - 0: nothing to fix, or every finding was auto-fixed.
+//   - 1: blocking findings remain (errSilent sentinel) — any invalid finding
+//     under --no-fix, otherwise findings needing manual review; stdout JSON
+//     is well-formed when --json was requested.
+//   - 2: tool failure (bad flag, IO error, network failure, malformed
+//     lockfile, future-version refusal, panic, etc.). stdout may be empty
+//     or partial; consumers should rely on stderr for diagnosis.
+func execute() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	defer ui.CloseProgressTrace()
+	err := newRootCmd(nil).ExecuteContext(ctx)
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, errSilent):
+		// Blocking findings were already reported via well-formed output; exit
+		// 1 quietly so a second error line doesn't clobber the JSON/summary.
+		return 1
+	default:
+		// Every other non-nil error — including lockfile.ErrFutureVersion —
+		// is a tool failure and maps to 2. Print it on a fresh UI bound to
+		// stderr so it's visible regardless of how the run configured its own.
+		ui.New().Error("%s", err)
+		return 2
 	}
 }
 
-func NewRootCmd(f *pinFactory) *cobra.Command {
+type resolverFunc func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error)
+
+// newRootCmd returns the cobra command for the root `actions-pin` invocation.
+// newResolver supplies the resolver builder; pass nil for production wiring.
+func newRootCmd(newResolver resolverFunc) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
@@ -60,71 +69,86 @@ from supply chain attacks.
 
 Actions are resolved by mutable tags and branches at runtime. This
 extension pins every direct and transitive dependency to an immutable
-commit SHA in an inline dependencies: section, so changes are visible
-in pull request diffs and tampered or hijacked actions are caught
-before they run.
+commit SHA in a per-repo lockfile at .github/workflows/actions.lock,
+so changes are visible in pull request diffs and tampered or hijacked
+actions are caught before they run.
 
-Scans all workflows under .github/workflows/ by default. When run
-interactively it offers to fix any issues it finds.
+Scans all workflows under .github/workflows/ by default and fixes
+what it can — pinning every resolvable action and updating the
+lockfile. Pass --no-fix for a read-only check that writes nothing.
 
-With --json, structured results go to stdout and progress to stderr:
+--json selects the output format only (independent of --no-fix);
+structured results go to stdout and progress to stderr:
 
-  gh actions-pin --json 2>/dev/null | jq .valid
+  gh actions-pin --no-fix --json 2>/dev/null | jq .valid
 
 Commands:
 
   gh actions-pin             Verify and fix the dependency lock
-  gh actions-pin upgrade     Bump action versions and re-lock
 `),
 		Example: heredoc.Doc(`
-# Verify all workflows
+# Verify all workflows and fix what's fixable
 $ gh actions-pin
 
 # Verify a specific workflow
 $ gh actions-pin .github/workflows/ci.yml
 
-# Output JSON for CI integration
-$ gh actions-pin --json=valid,errors
-
-# Upgrade a specific action
-$ gh actions-pin upgrade --action actions/checkout
+# Read-only check for CI integration (writes nothing)
+$ gh actions-pin --no-fix --json=valid,findings
 `),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				opts.WorkflowPaths = args
+				opts.workflowPaths = args
 			}
-			return runCheck(f, opts)
+			return opts.validateOutputFlags()
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCheck(cmd, opts, newResolver)
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.JSONFields, "json", "", "Output JSON with the specified `fields` (valid,errors,warnings,dependencies,workflows,findings)")
-	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows,dependencies"
-	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.NoInteractive, "no-interactive", false, "Auto-fix deterministic issues; fail on issues requiring human input")
-	cmd.AddCommand(newCheckCmd(f))
-	cmd.AddCommand(newUpgradeCmd(f))
+	bindCheckFlags(cmd, opts)
+	cmd.AddCommand(newCheckCmd(newResolver))
 
 	return cmd
 }
 
-// Execute runs the root command and returns an exit code.
-func Execute() int {
-	f := NewDefaultFactory()
-	if err := NewRootCmd(f).Execute(); err != nil {
-		if !errors.Is(err, errSilent) {
-			f.UI.Error("%s", err)
-		}
-		return 1
+// newRun performs the per-invocation wiring shared by every command: expand the
+// requested workflow paths (or discover them), build a resolver for the
+// resolved hostname, open the lockfile store against it, and seed branch hints
+// from the existing lockfile so repeat scans short-circuit the per-branch
+// Compare walk. newResolver is the DI seam; pass nil for production wiring.
+func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc) ([]string, *resolve.Resolver, *lockfile.State, error) {
+	paths, err := discoverWorkflowPaths(workflowPaths)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return 0
+
+	if newResolver == nil {
+		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
+			return resolve.New(hostname, pool)
+		}
+	}
+	r, err := newResolver(resolveHostname(hostname), pool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	store, err := lockfile.LoadState(".", r)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
+	}
+	r.SeedBranchHints(store.AllDeps())
+
+	return paths, r, store, nil
 }
 
 func discoverWorkflowPaths(existing []string) ([]string, error) {
 	if len(existing) > 0 {
-		return existing, nil
+		return expandWorkflowPaths(existing)
 	}
 
-	paths, err := lockfile.DiscoverWorkflows()
+	paths, err := workflowfile.DiscoverWorkflows()
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +156,37 @@ func discoverWorkflowPaths(existing []string) ([]string, error) {
 		return nil, fmt.Errorf("no workflow files found in .github/workflows/")
 	}
 	return paths, nil
+}
+
+func expandWorkflowPaths(paths []string) ([]string, error) {
+	var expanded []string
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			expanded = append(expanded, path)
+			continue
+		}
+		if !info.IsDir() {
+			expanded = append(expanded, path)
+			continue
+		}
+
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			ext := filepath.Ext(entry.Name())
+			if ext == ".yml" || ext == ".yaml" {
+				expanded = append(expanded, filepath.Join(path, entry.Name()))
+			}
+		}
+	}
+	sort.Strings(expanded)
+	return expanded, nil
 }
 
 func resolveHostname(override string) string {
