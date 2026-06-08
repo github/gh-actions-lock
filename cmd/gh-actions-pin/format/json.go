@@ -10,6 +10,34 @@ import (
 	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 )
 
+// validJSONField reports whether name is a recognized --json output field.
+func validJSONField(name string) bool {
+	switch name {
+	case "valid", "findings", "workflows", "dependencies":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateJSONFields checks that every comma-separated entry in fieldsCSV is a
+// recognized --json output field. An empty selection is valid (no JSON output
+// requested). Wire this into a command's PreRunE so a bad --json list is
+// rejected before any workflow or lockfile mutation runs, instead of failing
+// late in WriteJSON after side effects.
+func ValidateJSONFields(fieldsCSV string) error {
+	if fieldsCSV == "" {
+		return nil
+	}
+	for _, field := range strings.Split(fieldsCSV, ",") {
+		field = strings.TrimSpace(field)
+		if !validJSONField(field) {
+			return fmt.Errorf("unknown JSON field %q (expected valid, findings, workflows, dependencies)", field)
+		}
+	}
+	return nil
+}
+
 // Finding is the JSON-safe view of a checks.Finding.
 type Finding struct {
 	Workflow    string `json:"workflow"`

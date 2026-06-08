@@ -63,25 +63,27 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 	}
 	seen := map[string]int{} // NWO@Ref → index
 	var grouped []groupedEntry
+	var groupWFs []map[string]bool // per-group workflow dedup
 	directCount := 0
-	workflowSet := map[string]bool{}
+	workflowSet := map[string]bool{} // distinct workflows, for the header count
 	for _, e := range pinned {
 		if !e.Direct {
 			continue
 		}
 		key := e.NWO + "@" + e.Ref
-		if idx, ok := seen[key]; ok {
-			for _, wf := range e.Workflows {
-				if !workflowSet[wf] {
-					grouped[idx].workflows = append(grouped[idx].workflows, wf)
-				}
-			}
-		} else {
-			seen[key] = len(grouped)
-			grouped = append(grouped, groupedEntry{Entry: e, workflows: append([]string{}, e.Workflows...)})
+		idx, ok := seen[key]
+		if !ok {
+			idx = len(grouped)
+			seen[key] = idx
+			grouped = append(grouped, groupedEntry{Entry: e})
+			groupWFs = append(groupWFs, map[string]bool{})
 			directCount++
 		}
 		for _, wf := range e.Workflows {
+			if !groupWFs[idx][wf] {
+				groupWFs[idx][wf] = true
+				grouped[idx].workflows = append(grouped[idx].workflows, wf)
+			}
 			workflowSet[wf] = true
 		}
 	}
@@ -169,20 +171,22 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	}
 	seenU := map[string]int{}
 	var groups []unresolvedGroup
-	affectedWFs := map[string]bool{}
+	var groupWFs []map[string]bool   // per-group workflow dedup
+	affectedWFs := map[string]bool{} // distinct workflows, for the header count
 	for _, e := range unresolvedEntries {
 		key := e.NWO + "@" + e.Ref
-		if idx, ok := seenU[key]; ok {
-			for _, wf := range e.Workflows {
-				if !affectedWFs[wf] {
-					groups[idx].wfs = append(groups[idx].wfs, wf)
-				}
-			}
-		} else {
-			seenU[key] = len(groups)
-			groups = append(groups, unresolvedGroup{nwo: e.NWO, ref: e.Ref, reason: e.Reason, wfs: append([]string{}, e.Workflows...)})
+		idx, ok := seenU[key]
+		if !ok {
+			idx = len(groups)
+			seenU[key] = idx
+			groups = append(groups, unresolvedGroup{nwo: e.NWO, ref: e.Ref, reason: e.Reason})
+			groupWFs = append(groupWFs, map[string]bool{})
 		}
 		for _, wf := range e.Workflows {
+			if !groupWFs[idx][wf] {
+				groupWFs[idx][wf] = true
+				groups[idx].wfs = append(groups[idx].wfs, wf)
+			}
 			affectedWFs[wf] = true
 		}
 	}

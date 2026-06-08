@@ -129,7 +129,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 // validateOutputFlags rejects incoherent structured-output flag combinations.
 // Wired as PreRunE so the error surfaces at the command layer before any work runs.
 func (opts *checkOptions) validateOutputFlags() error {
-	return nil
+	return format.ValidateJSONFields(opts.jsonFields)
 }
 
 func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) error {
