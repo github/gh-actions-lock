@@ -54,7 +54,7 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	var planErr error
 	poolErr := pinpool.RunTyped(opts.Pool, ctx, "Planning pins",
 		items,
-		func(iwr indexedWR) string { return iwr.wr.Path },
+		func(iwr indexedWR) string { return "plan " + iwr.wr.Path },
 		func(ctx context.Context, _ int, iwr indexedWR) error {
 			pr, err := planWorkflow(ctx, iwr.wr, opts)
 			if err != nil {

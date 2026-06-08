@@ -77,7 +77,7 @@ func FindRecommendedRelease(ctx context.Context, tl *tag.Lister, r ReachabilityC
 	results := make([]resolve.ReachabilityResult, len(candidates))
 	_ = pinpool.RunTyped(pool, ctx, "",
 		indexed,
-		func(ic indexedCandidate) string { return owner + "/" + repo + "@" + ic.tag },
+		func(ic indexedCandidate) string { return "check release " + owner + "/" + repo + "@" + ic.tag },
 		func(ctx context.Context, _ int, ic indexedCandidate) error {
 			results[ic.idx] = r.CheckReachability(ctx, owner, repo, ic.sha, ic.tag)
 			return nil
