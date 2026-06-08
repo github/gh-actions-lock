@@ -164,7 +164,7 @@ func (p *Pool) Run(
 			return
 		}
 		rMu.Lock()
-		r.UpdateLabel(fmt.Sprintf("[%d/%d] %s", done.Load(), total, label))
+		r.UpdateLabel(fmt.Sprintf("%s [%d/%d]", label, done.Load(), total))
 		rMu.Unlock()
 	}
 	updateLabel()

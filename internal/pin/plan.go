@@ -85,11 +85,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	var entries []Entry
 	var wplans []WorkflowPlan
 
-	progress := opts.OnProgress
-	if progress == nil {
-		progress = func(string) {}
-	}
-
 	if !wr.NeedsAttention() {
 		// Already pinned and valid — record as verified.
 		for _, inv := range wr.Inventory {
@@ -107,7 +102,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Resolve live state for this workflow's refs.
-	progress(fmt.Sprintf("Resolving %s", wr.Path))
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, wr.ActionRefs)
 	if resolveErr != nil {
 		// Partial failure: some refs resolved (in deps), others didn't.
@@ -141,7 +135,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Reachability gate — drop impostors, auto-fix when a sane release exists.
-	progress("Verifying reachability")
 	reachResults := opts.Resolver.CheckReachabilityAll(ctx, deps)
 	badKeys := make(map[string]bool)
 	autoFixed := make(map[string]string)       // new dep key → original ref
@@ -228,7 +221,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
 	// to a symbolic tag when one exists.
-	progress("Narrowing tags")
 	rewrites := make(map[string]string)
 	for k, v := range autoFixRewrites {
 		rewrites[k] = v
@@ -283,7 +275,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// ReverseLookup: SHA → containing tag/branch. Rewrites refs to canonical form.
-	progress("Reverse lookup")
 	normRewrites, err := opts.Resolver.ReverseLookup(ctx, deps)
 	if err != nil {
 		var imp *resolve.ImpostorError

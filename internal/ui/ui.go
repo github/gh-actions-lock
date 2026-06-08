@@ -1147,11 +1147,10 @@ func (u *UI) UpdateLabel(label string) {
 // dedup. It strips both a trailing " [N/M]" and a leading "[N/M] " progress
 // counter, then takes the leading "verb" portion (everything before the first
 // digit) so labels like "Scanning 78 workflows", "Scanning [1/78] foo.yml",
-// "[1/78] Pinning dependencies", and "Scanning" all collapse to the same
+// "Pinning dependencies [1/78]", and "Scanning" all collapse to the same
 // stem. A label without recognizable structure is trimmed and returned as-is.
-// Stripping the leading bracket form matters: without it, headlessEmit prints
-// a stray "[" line for parallel-worker labels like "[1/78] Pinning workflows"
-// because the first-digit scan returns the bare "[" prefix.
+// The leading "[N/M] " form is kept as a fallback for any future callers,
+// though the canonical format is now "Verb [N/M]" (counter on the right).
 func labelStem(label string) string {
 	label = strings.TrimSpace(label)
 	if strings.HasPrefix(label, "[") {

@@ -174,7 +174,7 @@ func TestRunCallsRunForEveryJob(t *testing.T) {
 	if len(ui.labels) == 0 {
 		t.Fatalf("no labels emitted")
 	}
-	want := fmt.Sprintf("[0/%d] Pinning", len(jobs))
+	want := fmt.Sprintf("Pinning [0/%d]", len(jobs))
 	if ui.labels[0] != want {
 		t.Fatalf("first label = %q, want %q", ui.labels[0], want)
 	}
@@ -182,7 +182,7 @@ func TestRunCallsRunForEveryJob(t *testing.T) {
 	// goroutines is not guaranteed (each worker reads `done` after its
 	// own Add and labels are appended under a separate mutex), so we
 	// can't rely on the last slice entry being the highest count.
-	wantTerminal := fmt.Sprintf("[%d/%d] Pinning", len(jobs), len(jobs))
+	wantTerminal := fmt.Sprintf("Pinning [%d/%d]", len(jobs), len(jobs))
 	found := false
 	for _, l := range ui.labels {
 		if l == wantTerminal {
