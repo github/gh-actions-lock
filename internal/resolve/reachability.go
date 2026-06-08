@@ -286,7 +286,7 @@ func (r *Resolver) checkReachabilityAllPooled(ctx context.Context, unique []dep.
 		if len(repos) > 0 {
 			_ = pinpool.RunTyped(r.Pool, ctx, "",
 				repos,
-				func(re repoEntry) string { return "fetch metadata " + re.owner + "/" + re.repo },
+				func(re repoEntry) string { return "fetching metadata " + re.owner + "/" + re.repo },
 				func(ctx context.Context, _ int, re repoEntry) error {
 					// Only pre-warm default branch (cheap, single REST call).
 					// Branch listing is deferred to Phase 2 on reachability
@@ -334,7 +334,7 @@ func (r *Resolver) checkReachabilityAllPooled(ctx context.Context, unique []dep.
 	if len(pooled) > 0 {
 		poolErr = pinpool.RunTyped(r.Pool, ctx, "",
 			pooled,
-			func(id indexedDep) string { return "verify " + id.dep.NWO + "@" + id.dep.Ref },
+			func(id indexedDep) string { return "verifying " + id.dep.NWO + "@" + id.dep.Ref },
 			func(ctx context.Context, _ int, id indexedDep) error {
 				owner, repo := id.dep.OwnerRepo()
 				result := r.CheckReachability(ctx, owner, repo, id.dep.SHA, id.dep.Ref)

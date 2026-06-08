@@ -54,9 +54,12 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	var planErr error
 	poolErr := pinpool.RunTyped(opts.Pool, ctx, "Planning pins",
 		items,
-		func(iwr indexedWR) string { return "plan " + iwr.wr.Path },
-		func(ctx context.Context, _ int, iwr indexedWR) error {
-			pr, err := planWorkflow(ctx, iwr.wr, opts)
+		func(iwr indexedWR) string { return "planning " + iwr.wr.Path },
+		func(ctx context.Context, slot int, iwr indexedWR) error {
+			status := func(s string) {
+				opts.Pool.Reporter.SetWorkerStatus(slot, "→ "+s)
+			}
+			pr, err := planWorkflow(ctx, iwr.wr, opts, status)
 			if err != nil {
 				return fmt.Errorf("planning %s: %w", iwr.wr.Path, err)
 			}
@@ -81,7 +84,7 @@ type planResult struct {
 	wplans  []WorkflowPlan
 }
 
-func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions) (planResult, error) {
+func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, status func(string)) (planResult, error) {
 	var entries []Entry
 	var wplans []WorkflowPlan
 
@@ -102,6 +105,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Resolve live state for this workflow's refs.
+	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, wr.ActionRefs)
 	if resolveErr != nil {
 		// Partial failure: some refs resolved (in deps), others didn't.
@@ -135,6 +139,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Reachability gate — drop impostors, auto-fix when a sane release exists.
+	status("verifying " + wr.Path)
 	reachResults := opts.Resolver.CheckReachabilityAll(ctx, deps)
 	badKeys := make(map[string]bool)
 	autoFixed := make(map[string]string)       // new dep key → original ref
@@ -221,6 +226,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
 	// to a symbolic tag when one exists.
+	status("pinning " + wr.Path)
 	rewrites := make(map[string]string)
 	for k, v := range autoFixRewrites {
 		rewrites[k] = v

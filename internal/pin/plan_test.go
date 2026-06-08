@@ -204,7 +204,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 		Pool:     pool,
 	}
 
-	result, err := planWorkflow(context.Background(), wr, opts)
+	result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
 	require.NoError(t, err)
 
 	// Classify entries.
@@ -278,7 +278,7 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	result, err := planWorkflow(context.Background(), wr, PlanOptions{
 		Resolver: resolver,
 		Pool:     pool,
-	})
+	}, func(string) {})
 	require.NoError(t, err)
 
 	require.Len(t, result.entries, 2)

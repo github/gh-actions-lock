@@ -271,7 +271,7 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 		batches,
 		func(b actionBatch) string {
 			head := refs[b.idxs[0]]
-			label := "resolve " + head.NWO() + "@" + head.Ref
+			label := "resolving " + head.NWO() + "@" + head.Ref
 			if len(b.idxs) > 1 {
 				label = fmt.Sprintf("%s (+%d more)", label, len(b.idxs)-1)
 			}
