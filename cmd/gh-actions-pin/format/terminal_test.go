@@ -8,9 +8,9 @@ import (
 
 	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ui"
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 )
 
 // newTestUI returns a UI whose narration log sinks to io.Discard, mirroring
