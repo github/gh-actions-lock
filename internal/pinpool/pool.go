@@ -5,7 +5,6 @@ package pinpool
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strconv"
 	"sync"
@@ -122,7 +121,6 @@ func (p *Pool) Run(
 	}
 	r := p.Reporter
 
-	total := int64(len(jobs))
 	var done atomic.Int64
 
 	// rMu serializes Reporter calls from worker goroutines.
@@ -155,16 +153,11 @@ func (p *Pool) Run(
 		rMu.Unlock()
 	}
 	updateLabel := func() {
-		// An empty label hands label ownership to the caller: the pool drives
-		// per-worker status rows and stall hints but writes no "[done/total]"
-		// prefix. Used when an outer per-item progress counter (e.g. resolve's
-		// ref-denominated bar) owns the spinner label and a chunk-denominated
-		// pool counter would fight it.
 		if label == "" {
 			return
 		}
 		rMu.Lock()
-		r.UpdateLabel(fmt.Sprintf("%s [%d/%d]", label, done.Load(), total))
+		r.UpdateLabel(label)
 		rMu.Unlock()
 	}
 	updateLabel()
@@ -210,7 +203,6 @@ func (p *Pool) Run(
 				setStatus(slot, "→ "+lastDisplay)
 				err := run(ctx, slot, j)
 				done.Add(1)
-				updateLabel()
 				if err != nil {
 					errMu.Lock()
 					if firstErr == nil {

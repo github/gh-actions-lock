@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -170,28 +169,12 @@ func TestRunCallsRunForEveryJob(t *testing.T) {
 			t.Fatalf("job %d never ran", j)
 		}
 	}
-	// First label must be the [0/N] initial update.
-	if len(ui.labels) == 0 {
-		t.Fatalf("no labels emitted")
+	// Label is set once at pool start — no per-completion counter.
+	if len(ui.labels) != 1 {
+		t.Fatalf("expected exactly 1 label write, got %d: %v", len(ui.labels), ui.labels)
 	}
-	want := fmt.Sprintf("Pinning [0/%d]", len(jobs))
-	if ui.labels[0] != want {
-		t.Fatalf("first label = %q, want %q", ui.labels[0], want)
-	}
-	// Some label must report the terminal [N/N] state. Ordering across
-	// goroutines is not guaranteed (each worker reads `done` after its
-	// own Add and labels are appended under a separate mutex), so we
-	// can't rely on the last slice entry being the highest count.
-	wantTerminal := fmt.Sprintf("Pinning [%d/%d]", len(jobs), len(jobs))
-	found := false
-	for _, l := range ui.labels {
-		if l == wantTerminal {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("no label matched terminal %q; got %v", wantTerminal, ui.labels)
+	if ui.labels[0] != "Pinning" {
+		t.Fatalf("label = %q, want %q", ui.labels[0], "Pinning")
 	}
 }
 
@@ -437,8 +420,8 @@ func TestRunEmptyLabelSuppressesLabelWrites(t *testing.T) {
 }
 
 // TestRunNonEmptyLabelStillWritesLabel is the contrapositive: a non-empty
-// label must produce "[done/total] label" writes so existing callers keep
-// their pool-driven progress.
+// label must produce a single UpdateLabel write so callers keep their
+// pool-driven label.
 func TestRunNonEmptyLabelStillWritesLabel(t *testing.T) {
 	f := &fakeReporter{}
 	p := New(4, f)
@@ -453,12 +436,7 @@ func TestRunNonEmptyLabelStillWritesLabel(t *testing.T) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.labels) == 0 {
-		t.Fatal("non-empty label must produce UpdateLabel writes")
-	}
-	for _, l := range f.labels {
-		if !strings.Contains(l, "Pinning") {
-			t.Fatalf("label write missing caller label text: %q", l)
-		}
+	if len(f.labels) != 1 || f.labels[0] != "Pinning" {
+		t.Fatalf("expected single label write %q, got %v", "Pinning", f.labels)
 	}
 }

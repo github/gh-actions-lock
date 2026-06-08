@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -225,11 +226,12 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Rescan:        opts.rescan,
 		Profile:       prof,
 	}
-	// Interactive spinner mode: wire per-ref resolver progress counter.
-	// Reachability runs under the same label — no separate phase.
+	// Interactive spinner mode: set label once when resolve starts.
+	// Worker-slot status rows show per-ref detail.
 	if showSpinner {
+		var once sync.Once
 		runOpts.OnResolveProgress = func(done, total int) {
-			console.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
+			once.Do(func() { console.UpdateLabel("Resolving actions") })
 		}
 	}
 
