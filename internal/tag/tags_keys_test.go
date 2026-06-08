@@ -34,10 +34,6 @@ func TestTagLister_CaseInsensitiveCacheKeys(t *testing.T) {
 		}),
 	)
 	reg.Register(
-		httpmock.REST("GET", `(?i)repos/octocat/hello-world/git/matching-refs/tags`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
-	reg.Register(
 		httpmock.REST("GET", `(?i)repos/octocat/hello-world/releases`),
 		httpmock.JSONResponse([]map[string]any{
 			{"tag_name": "v1.0.0", "published_at": "2024-01-01T00:00:00Z", "immutable": false},

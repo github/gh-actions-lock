@@ -16,24 +16,16 @@ import (
 type Info struct {
 	Name         string // e.g. "v4.2.2"
 	SHA          string // commit SHA the tag points to (dereferenced for annotated tags)
-	TagObjectSHA string // annotated tag object SHA; immutable release pins resolve to this, not the commit
 	IsRelease    bool   // true if a GitHub Release exists for this tag
 	IsImmutable  bool   // true if the release is marked immutable (tag can't be moved/deleted)
 	IsMajor      bool   // true if this looks like a major-only tag (e.g. "v4")
 }
 
-// MatchesSHA reports whether the given pinned SHA identifies this tag. It
-// matches both the dereferenced commit SHA and, for annotated tags, the tag
-// object SHA. Immutable releases are pinned to the tag object SHA, so callers
-// must compare against both to recognize such pins.
+// MatchesSHA reports whether sha names this tag's commit. Resolution peels
+// annotated tags to the commit (^{commit}) before a SHA is ever written, so a
+// tag is identified by its commit SHA alone.
 func (t Info) MatchesSHA(sha string) bool {
-	if sha == "" {
-		return false
-	}
-	if strings.EqualFold(t.SHA, sha) {
-		return true
-	}
-	return t.TagObjectSHA != "" && strings.EqualFold(t.TagObjectSHA, sha)
+	return sha != "" && strings.EqualFold(t.SHA, sha)
 }
 
 // RepoInfo holds repository metadata relevant for pinning decisions.
@@ -95,16 +87,6 @@ func (tl *Lister) ListTags(ctx context.Context, owner, repo string) ([]Info, err
 		tags, err := tl.fetchTags(ctx, owner, repo)
 		if err != nil {
 			return nil, err
-		}
-
-		// Enrich with tag-object SHAs so we can recognize immutable-release pins,
-		// which target the annotated tag object rather than the peeled commit.
-		if objSHAs, err := tl.fetchTagObjectSHAs(ctx, owner, repo); err == nil {
-			for i := range tags {
-				if obj, ok := objSHAs[tags[i].Name]; ok && !strings.EqualFold(obj, tags[i].SHA) {
-					tags[i].TagObjectSHA = obj
-				}
-			}
 		}
 
 		releaseTagSet, err := tl.fetchReleaseTags(ctx, owner, repo)
@@ -206,26 +188,6 @@ func (tl *Lister) fetchTags(ctx context.Context, owner, repo string) ([]Info, er
 		tags = append(tags, Info{Name: t.Name, SHA: t.SHA})
 	}
 	return tags, nil
-}
-
-// fetchTagObjectSHAs returns a map of tag name → the SHA of the underlying git
-// object the ref points at (the tag object SHA for annotated tags, the commit
-// SHA for lightweight tags). Immutable releases are pinned to the annotated
-// tag object SHA, which the repos/tags endpoint dereferences away, so we read
-// the raw refs here to recover it.
-func (tl *Lister) fetchTagObjectSHAs(ctx context.Context, owner, repo string) (map[string]string, error) {
-	refs, err := tl.client.MatchingTagRefs(ctx, owner, repo)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(refs))
-	for _, r := range refs {
-		if r.Name == "" || r.ObjectSHA == "" {
-			continue
-		}
-		out[r.Name] = r.ObjectSHA
-	}
-	return out, nil
 }
 
 // ReleaseInfo holds release metadata for a tag.
