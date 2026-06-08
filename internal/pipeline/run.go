@@ -21,8 +21,6 @@ type RunOptions struct {
 	Pool          *pinpool.Pool
 	Rescan        bool // re-verify all pins end-to-end
 
-	// OnScan fires with 1-based progress before each workflow is parsed.
-	OnScan func(done, total int, path string)
 	// Resolver UX hooks — set these for interactive spinner mode.
 	OnResolveProgress func(done, total int)
 	// Profile receives phase timing when profiling is enabled.
@@ -44,7 +42,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 	// Phase 1: Parse.
 	endParse := prof.Phase("  parse workflows")
-	parsed := ParseAll(opts.WorkflowPaths, opts.Store, opts.OnScan)
+	parsed := ParseAll(opts.WorkflowPaths, opts.Store)
 	endParse()
 
 	if ctx.Err() != nil {
