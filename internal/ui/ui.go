@@ -997,7 +997,7 @@ func (u *UI) ProgressActive() bool {
 
 // progressGrace is how long StartProgress waits before showing the spinner.
 // Runs that complete within this window never flicker a spinner at all.
-const progressGrace = 150 * time.Millisecond
+const progressGrace = 500 * time.Millisecond
 
 // StartProgress starts an animated spinner with the given label on stderr.
 // On non-TTY outputs, prints a static label instead. Matches gh CLI's Primer
