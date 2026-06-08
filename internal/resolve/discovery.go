@@ -89,7 +89,9 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			}
 		}
 		resolveTotal.Store(int64(firstWave))
-		r.FireResolveProgress(0, firstWave)
+		if firstWave > 0 {
+			r.FireResolveProgress(0, firstWave)
+		}
 	}
 
 	for len(pending) > 0 {
