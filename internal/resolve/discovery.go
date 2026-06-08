@@ -89,7 +89,9 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			}
 		}
 		resolveTotal.Store(int64(firstWave))
-		r.FireResolveProgress(0, firstWave)
+		if firstWave > 0 {
+			r.FireResolveProgress(0, firstWave)
+		}
 	}
 
 	for len(pending) > 0 {
@@ -271,7 +273,7 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 		batches,
 		func(b actionBatch) string {
 			head := refs[b.idxs[0]]
-			label := head.NWO() + "@" + head.Ref
+			label := "resolving " + head.NWO() + "@" + head.Ref
 			if len(b.idxs) > 1 {
 				label = fmt.Sprintf("%s (+%d more)", label, len(b.idxs)-1)
 			}

@@ -90,9 +90,7 @@ type Resolver struct {
 
 	// OnResolveProgress is called when a resolution batch makes progress.
 	OnResolveProgress func(done, total int)
-	// OnVerifyProgress is called when reachability verification makes progress.
-	OnVerifyProgress func(done, total int)
-	progressMu       sync.Mutex
+	progressMu        sync.Mutex
 
 	// Pool is the shared worker pool for parallel resolution and reachability.
 	Pool *pinpool.Pool
@@ -218,14 +216,4 @@ func (r *Resolver) FireResolveProgress(done, total int) {
 	r.progressMu.Lock()
 	defer r.progressMu.Unlock()
 	r.OnResolveProgress(done, total)
-}
-
-// FireVerifyProgress fires OnVerifyProgress. Safe from multiple goroutines.
-func (r *Resolver) FireVerifyProgress(done, total int) {
-	if r.OnVerifyProgress == nil {
-		return
-	}
-	r.progressMu.Lock()
-	defer r.progressMu.Unlock()
-	r.OnVerifyProgress(done, total)
 }

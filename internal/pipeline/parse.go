@@ -18,12 +18,8 @@ import (
 // It is a backward-compatible wrapper around ParseAll, resolver pre-warming,
 // and DiagnoseParsed. Newer callers can drive those phases directly to control
 // UI progress.
-func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool, onWorkflow ...func(done, total int, path string)) *checks.Report {
-	var onScan func(done, total int, path string)
-	if len(onWorkflow) > 0 {
-		onScan = onWorkflow[0]
-	}
-	parsed := ParseAll(paths, store, onScan)
+func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
+	parsed := ParseAll(paths, store)
 	if r != nil {
 		refs, deps := CollectResolvable(parsed)
 		if len(refs) > 0 {
@@ -39,13 +35,10 @@ func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *l
 // ParseAll loads and parses every workflow path, returning a slice in input
 // order. onScan, if non-nil, fires with 1-based progress before each workflow
 // is parsed so the UI can render [i/N] without leaking resolver detail.
-func ParseAll(paths []string, store *lockfile.State, onScan func(done, total int, path string)) []checks.ParsedWorkflow {
+func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 	total := len(paths)
 	out := make([]checks.ParsedWorkflow, 0, total)
-	for i, path := range paths {
-		if onScan != nil {
-			onScan(i+1, total, path)
-		}
+	for _, path := range paths {
 		pw := checks.ParsedWorkflow{Path: path}
 		wf, err := workflowfile.Load(path)
 		if err != nil {

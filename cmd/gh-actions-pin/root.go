@@ -41,6 +41,11 @@ func execute() int {
 		// Blocking findings were already reported via well-formed output; exit
 		// 1 quietly so a second error line doesn't clobber the JSON/summary.
 		return 1
+	case errors.Is(err, context.Canceled):
+		// CTRL+C / SIGTERM: exit silently. The signal is intentional, not a
+		// tool failure. Print a newline so the shell prompt starts clean.
+		fmt.Fprintln(os.Stderr)
+		return 2
 	default:
 		// Every other non-nil error — including lockfile.ErrFutureVersion —
 		// is a tool failure and maps to 2. Print it on a fresh UI bound to

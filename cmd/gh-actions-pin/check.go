@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -201,22 +202,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	showSpinner := opts.jsonFields == "" && !console.Headless()
 	showHeadlessProgress := console.Headless()
 
-	// Build progress callbacks for the pipeline.
-	var onScan func(done, total int, path string)
-	if showSpinner {
-		label := fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows"))
-		console.StartProgress(label)
-		onScan = func(done, total int, path string) {
-			console.UpdateLabel(fmt.Sprintf("Scanning [%d/%d] %s", done, total, path))
-			console.UpdateProgress("")
-		}
-	} else if showHeadlessProgress {
+	if showHeadlessProgress {
 		console.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
-	}
-	phaseFn := func(phase string) {
-		if showSpinner || showHeadlessProgress {
-			console.UpdateLabel(phase)
-		}
 	}
 
 	// Build a Lister for impostor enrichment + pin narrowing,
@@ -233,17 +220,17 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Store:         store,
 		Pool:          pool,
 		Rescan:        opts.rescan,
-		OnScan:        onScan,
-		OnProgress:    phaseFn,
 		Profile:       prof,
 	}
-	// Interactive spinner mode: wire per-ref resolver progress counters.
+	// Defer spinner start until actual network work begins. The fast path
+	// (everything trusted from the lockfile) returns before resolve fires,
+	// so the spinner never appears and there's no flicker.
 	if showSpinner {
+		var once sync.Once
 		runOpts.OnResolveProgress = func(done, total int) {
-			console.UpdateLabel(fmt.Sprintf("Resolving actions [%d/%d]", done, total))
-		}
-		runOpts.OnVerifyProgress = func(done, total int) {
-			console.UpdateLabel(fmt.Sprintf("Verifying reachability [%d/%d]", done, total))
+			once.Do(func() {
+				console.StartProgress("Resolving actions")
+			})
 		}
 	}
 
@@ -268,14 +255,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// (the human narrative). JSON is emitted later, after any fixes land, so
 	// stdout never carries a diagnosis for a run that then failed to commit.
 	if opts.jsonFields == "" {
-		// Pause the spinner so PresentResults lines don't collide with the
-		// spinner label (causes phantom text).
+		// Pause the spinner so PresentResults lines don't collide with it.
 		if showSpinner {
-			console.StopProgress()
+			console.PauseProgress()
 		}
 		format.PresentResults(console, report, valid, true)
 		if showSpinner {
-			console.StartProgress("")
+			console.ResumeProgress()
 		}
 	}
 
@@ -305,22 +291,18 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		repoName = currentRepo.Name
 	}
 
-	progressFn := func(phase string) {
-		if showSpinner || showHeadlessProgress {
-			console.UpdateLabel(phase)
-		}
-	}
-
 	endPlan := prof.Phase("pin.Plan (narrowing+reverse)")
+	if showSpinner {
+		console.ClearWorkerStatuses()
+	}
 	record, planErr := pin.Plan(ctx, report, pin.PlanOptions{
-		Resolver:   r,
-		Tagger:     tagger,
-		Store:      store,
-		Pool:       pool,
-		RepoOwner:  repoOwner,
-		RepoName:   repoName,
-		Version:    cliVersion(),
-		OnProgress: progressFn,
+		Resolver:  r,
+		Tagger:    tagger,
+		Store:     store,
+		Pool:      pool,
+		RepoOwner: repoOwner,
+		RepoName:  repoName,
+		Version:   cliVersion(),
 	})
 	endPlan()
 	if planErr != nil {
@@ -328,9 +310,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return fmt.Errorf("planning pins: %w", planErr)
 	}
 
-	// Commit: write all changes to disk atomically.
+	// Commit: write all changes to disk atomically (fast local I/O, no
+	// spinner label — it finishes before the user could read one).
 	endCommit := prof.Phase("pin.Commit (disk writes)")
-	if err := pin.Commit(ctx, record, store, &pin.CommitOptions{OnProgress: progressFn}); err != nil {
+	if err := pin.Commit(ctx, record, store, nil); err != nil {
 		console.StopProgress()
 		return fmt.Errorf("committing pins: %w", err)
 	}

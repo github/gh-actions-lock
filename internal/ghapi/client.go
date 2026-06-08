@@ -117,7 +117,7 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 type retryTransport struct {
 	inner      http.RoundTripper
 	maxRetries int
-	sleepFn    func(time.Duration) // for testing; defaults to time.Sleep
+	sleepFn func(context.Context, time.Duration) // for testing; defaults to DefaultSleep
 }
 
 func newRetryTransport(t http.RoundTripper, maxRetries int) http.RoundTripper {
@@ -151,8 +151,14 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		resp, err = rt.inner.RoundTrip(req)
 		if err != nil {
+			if req.Context().Err() != nil {
+				return nil, err
+			}
 			if attempt < rt.maxRetries {
-				rt.backoff(attempt)
+				rt.backoff(req.Context(), attempt)
+				if req.Context().Err() != nil {
+					return nil, req.Context().Err()
+				}
 				continue
 			}
 			return nil, err
@@ -161,7 +167,10 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if attempt < rt.maxRetries {
 				wait := rt.retryWait(resp, attempt)
 				resp.Body.Close()
-				rt.sleep(wait)
+				rt.sleep(req.Context(), wait)
+				if req.Context().Err() != nil {
+					return nil, req.Context().Err()
+				}
 				continue
 			}
 		}
@@ -210,20 +219,20 @@ func (rt *retryTransport) retryWait(resp *http.Response, attempt int) time.Durat
 	return delay
 }
 
-func (rt *retryTransport) sleep(d time.Duration) {
+func (rt *retryTransport) sleep(ctx context.Context, d time.Duration) {
 	if rt.sleepFn != nil {
-		rt.sleepFn(d)
+		rt.sleepFn(ctx, d)
 		return
 	}
-	time.Sleep(d)
+	DefaultSleep(ctx, d)
 }
 
-func (rt *retryTransport) backoff(attempt int) {
+func (rt *retryTransport) backoff(ctx context.Context, attempt int) {
 	delay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 	if delay > 10*time.Second {
 		delay = 10 * time.Second
 	}
-	rt.sleep(delay)
+	rt.sleep(ctx, delay)
 }
 
 // DefaultSleep waits d but returns early when ctx is canceled. Useful for

@@ -48,9 +48,8 @@ type UI struct {
 	headless bool
 	spinner  *spinner.Spinner
 
-	// headlessLabelStem is the last printed phase label stem (everything
-	// before the first '[' in an UpdateLabel call). Used in headless mode to
-	// deduplicate `Resolving actions [1/42]` … `[42/42]` into one line.
+	// headlessLabelStem deduplicates repeated UpdateLabel calls in headless
+	// mode so the same phase label isn't printed more than once.
 	headlessLabelStem string
 
 	// progLabel and progDetail hold the two halves of the active spinner line
@@ -83,6 +82,13 @@ type UI struct {
 	// in the spinner Suffix — keeping the suffix short so the library's
 	// byte-count wrap detection never triggers on the second line's content.
 	spinWriter *spinnerWriter
+
+	// progGrace delays spinner visibility so fast runs never flicker. When
+	// non-nil, the spinner object exists but hasn't been Start()ed yet;
+	// a background goroutine will start it after the grace period unless
+	// StopProgress cancels first.
+	progGrace     *time.Timer
+	progGraceDone chan struct{} // closed when the grace goroutine exits
 }
 
 // SetLog attaches a narration sink. Once set, narration methods write plain
@@ -576,12 +582,24 @@ func (sw *spinnerWriter) setWorkerHint(slot int, hint string) {
 // viewport, so the followup ESC[NA could overshoot into already-rendered
 // rows above and clobber them on the next spinner tick.
 func (u *UI) clearSpinnerLines() {
+	var lines int
 	if u.spinWriter != nil {
 		u.spinWriter.mu.Lock()
+		lines = u.spinWriter.nRendered
 		u.spinWriter.nRendered = 0
 		u.spinWriter.mu.Unlock()
 	}
-	fmt.Fprint(u.w, "\r\033[J")
+	// Erase the spinner's own line plus exactly the known worker lines
+	// below it, then move the cursor back up. Using targeted \033[2K
+	// per line instead of \033[J (erase-to-end-of-screen) avoids
+	// clobbering the shell prompt if it starts drawing before we exit.
+	fmt.Fprint(u.w, "\r\033[2K")
+	for i := 0; i < lines; i++ {
+		fmt.Fprint(u.w, "\n\033[2K")
+	}
+	if lines > 0 {
+		fmt.Fprintf(u.w, "\033[%dA\r", lines)
+	}
 	u.progHasDetail = false
 }
 
@@ -977,9 +995,17 @@ func (u *UI) ProgressActive() bool {
 	return u.spinner != nil
 }
 
+// progressGrace is how long StartProgress waits before showing the spinner.
+// Runs that complete within this window never flicker a spinner at all.
+const progressGrace = 500 * time.Millisecond
+
 // StartProgress starts an animated spinner with the given label on stderr.
 // On non-TTY outputs, prints a static label instead. Matches gh CLI's Primer
 // progress indicator: braille dots, 120ms, cyan.
+//
+// The spinner is not rendered immediately: a short grace period suppresses
+// flicker for fast runs. If StopProgress is called before the grace period
+// expires, no spinner is ever shown.
 func (u *UI) StartProgress(label string) {
 	if u.headless {
 		if label != "" {
@@ -1005,8 +1031,15 @@ func (u *UI) StartProgress(label string) {
 	u.progLast = ""
 	u.progPaused = false
 	u.renderProgress()
-	sp.Start()
-	sw.startAnimator()
+
+	// Defer the visible start so fast runs never flicker.
+	done := make(chan struct{})
+	u.progGraceDone = done
+	u.progGrace = time.AfterFunc(progressGrace, func() {
+		defer close(done)
+		sp.Start()
+		sw.startAnimator()
+	})
 }
 
 // PauseProgress temporarily halts the spinner and clears its line so other
@@ -1017,8 +1050,22 @@ func (u *UI) PauseProgress() {
 	if u.spinner == nil || u.progPaused {
 		return
 	}
+	// Cancel grace timer — if the spinner hasn't appeared yet, keep it hidden.
+	if u.progGrace != nil {
+		if !u.progGrace.Stop() {
+			<-u.progGraceDone
+		}
+		u.progGrace = nil
+		u.progGraceDone = nil
+	}
 	if u.spinWriter != nil {
 		u.spinWriter.stopAnimator()
+	}
+	// Clear worker lines before stopping the spinner (see StopProgress).
+	if u.isTTY {
+		u.clearSpinnerLines()
+	}
+	if u.spinWriter != nil {
 		u.spinWriter.mu.Lock()
 		u.spinWriter.workers = nil
 		u.spinWriter.hints = nil
@@ -1026,9 +1073,6 @@ func (u *UI) PauseProgress() {
 	}
 	u.spinner.Stop()
 	u.progPaused = true
-	if u.isTTY {
-		u.clearSpinnerLines()
-	}
 }
 
 // ResumeProgress restarts a spinner previously paused by PauseProgress,
@@ -1049,15 +1093,32 @@ func (u *UI) ResumeProgress() {
 // StopProgress stops the spinner. Safe to call if no spinner is active.
 func (u *UI) StopProgress() {
 	if u.spinner != nil {
+		// Cancel the grace timer. If the timer already fired (Stop returns
+		// false) the spinner is running — wait for the goroutine to finish
+		// before tearing down so we don't race with Start().
+		if u.progGrace != nil {
+			if !u.progGrace.Stop() {
+				// Timer already fired — spinner is starting or started.
+				<-u.progGraceDone
+			}
+			u.progGrace = nil
+			u.progGraceDone = nil
+		}
 		if u.spinWriter != nil {
 			u.spinWriter.stopAnimator()
+		}
+		// Erase worker lines BEFORE stopping the spinner — at this point
+		// the cursor is on the spinner line, so the down/up dance to
+		// clear worker rows below is safe. Doing this after Stop() races
+		// with the shell prompt redraw and clobbers it.
+		u.clearSpinnerLines()
+		if u.spinWriter != nil {
 			u.spinWriter.mu.Lock()
 			u.spinWriter.workers = nil
 			u.spinWriter.hints = nil
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Stop()
-		u.clearSpinnerLines()
 		u.spinner = nil
 		u.spinWriter = nil
 		u.progLabel = ""
@@ -1143,32 +1204,11 @@ func (u *UI) UpdateLabel(label string) {
 	u.renderProgress()
 }
 
-// labelStem reduces a progress label to a phase identifier used for headless
-// dedup. It strips both a trailing " [N/M]" and a leading "[N/M] " progress
-// counter, then takes the leading "verb" portion (everything before the first
-// digit) so labels like "Scanning 78 workflows", "Scanning [1/78] foo.yml",
-// "[1/78] Pinning dependencies", and "Scanning" all collapse to the same
-// stem. A label without recognizable structure is trimmed and returned as-is.
-// Stripping the leading bracket form matters: without it, headlessEmit prints
-// a stray "[" line for parallel-worker labels like "[1/78] Pinning workflows"
-// because the first-digit scan returns the bare "[" prefix.
+// labelStem returns the label trimmed of whitespace, used as a phase
+// identifier for headless dedup so repeated UpdateLabel calls with the
+// same text don't spam the log.
 func labelStem(label string) string {
-	label = strings.TrimSpace(label)
-	if strings.HasPrefix(label, "[") {
-		if end := strings.Index(label, "]"); end > 0 {
-			label = strings.TrimSpace(label[end+1:])
-		}
-	}
-	if i := strings.LastIndex(label, " ["); i >= 0 {
-		label = label[:i]
-	}
-	label = strings.TrimSpace(label)
-	for i, r := range label {
-		if r >= '0' && r <= '9' {
-			return strings.TrimSpace(label[:i])
-		}
-	}
-	return label
+	return strings.TrimSpace(label)
 }
 
 // renderProgress recombines the label and detail into a single line that is
