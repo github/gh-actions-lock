@@ -56,10 +56,44 @@ type repoResponse struct {
 // their action.yml/yaml content in a single batched GraphQL round-trip.
 // Results are returned in the same order as inputs; per-ref failures are
 // recorded in each result's Err field rather than aborting the batch.
+//
+// If the whole query is rejected — transport failure, query cost/complexity,
+// or a secondary rate limit — the batch is split in half and each half
+// retried, recursively down to a single ref, so a few oversized or bad refs
+// can't fail their batch-mates. Splitting is skipped once ctx is canceled so a
+// canceled scan doesn't fan out into a flurry of doomed retries.
 func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileRequest) []ActionFileResult {
 	if len(refs) == 0 {
 		return nil
 	}
+	results, batchErr := c.resolveActionFilesOnce(ctx, refs)
+	if batchErr == nil || len(refs) == 1 || ctx.Err() != nil {
+		return results
+	}
+	mid := len(refs) / 2
+	left := c.ResolveActionFiles(ctx, refs[:mid])
+	// A cancellation during the left half must not fan out the right half into
+	// doomed retries. Synthesize the right results so length and order are
+	// preserved without another round-trip.
+	if ctx.Err() != nil {
+		right := make([]ActionFileResult, len(refs)-mid)
+		for i, r := range refs[mid:] {
+			right[i] = ActionFileResult{
+				Owner: r.Owner, Repo: r.Repo, Path: r.Path, Ref: r.Ref,
+				Err: ctx.Err(),
+			}
+		}
+		return append(left, right...)
+	}
+	right := c.ResolveActionFiles(ctx, refs[mid:])
+	return append(left, right...)
+}
+
+// resolveActionFilesOnce performs one batched round-trip. The returned error is
+// non-nil only for batch-level failures — the whole query was rejected — that
+// splitting may recover from; ordinary per-ref failures are recorded in each
+// result's Err field and do not trigger a split.
+func (c *Client) resolveActionFilesOnce(ctx context.Context, refs []ActionFileRequest) ([]ActionFileResult, error) {
 	query, vars, aliasMap := buildActionFileQuery(refs)
 
 	var data map[string]json.RawMessage
@@ -67,7 +101,8 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 	var gqlErr *api.GraphQLError
 	if err != nil {
 		if !errors.As(err, &gqlErr) {
-			// Total transport failure — every result gets the error.
+			// Total transport failure — every result gets the error, and the
+			// batch-level signal tells the caller to split and retry.
 			results := make([]ActionFileResult, len(refs))
 			for i, r := range refs {
 				results[i] = ActionFileResult{
@@ -75,11 +110,33 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 					Err: err,
 				}
 			}
-			return results
+			return results, err
 		}
 	}
 
-	return parseActionFileResponse(data, refs, aliasMap, gqlErr, c.Hostname)
+	results := parseActionFileResponse(data, refs, aliasMap, gqlErr, c.Hostname)
+	return results, batchLevelGraphQLErr(gqlErr)
+}
+
+// batchLevelGraphQLErr returns a non-nil error when gqlErr carries a
+// query-level failure: any error item with no alias path (e.g. cost limit,
+// query too complex, secondary rate limit, or a SAML block that GitHub did not
+// pin to a specific alias). Such a failure rejects the whole query, so
+// splitting the batch can recover the refs that would have succeeded on their
+// own — and, for a no-path SAML block, drives the batch down to single refs so
+// the SSO message can be attributed to the one remaining owner. Per-alias
+// errors (which carry a path) return nil — they belong to one ref and splitting
+// wouldn't help.
+func batchLevelGraphQLErr(gqlErr *api.GraphQLError) error {
+	if gqlErr == nil {
+		return nil
+	}
+	for _, e := range gqlErr.Errors {
+		if len(e.Path) == 0 {
+			return gqlErr
+		}
+	}
+	return nil
 }
 
 func buildActionFileQuery(refs []ActionFileRequest) (string, map[string]any, map[string]int) {
@@ -144,14 +201,22 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 	}
 
 	samlOwners := samlBlockedOwners(gqlErr, refs, aliasMap)
+	batchErr := batchLevelGraphQLErr(gqlErr)
 
 	for alias, idx := range aliasMap {
 		ref := refs[idx]
 		raw, ok := data[alias]
 		if !ok {
-			if samlOwners[ref.Owner] {
+			switch {
+			case samlOwners[ref.Owner]:
 				results[idx].Err = fmt.Errorf("%s", ssoRequiredMessage(hostname, ref.Owner))
-			} else {
+			case batchErr != nil:
+				// The whole query was rejected (cost/complexity/rate limit), so
+				// the alias is missing for a batch-level reason, not because the
+				// ref doesn't exist. Surface the real error; the caller splits
+				// and retries rather than mislabeling 20 good refs "not found".
+				results[idx].Err = batchErr
+			default:
 				results[idx].Err = fmt.Errorf("not found in response")
 			}
 			continue
@@ -200,6 +265,14 @@ func samlBlockedOwners(gqlErr *api.GraphQLError, refs []ActionFileRequest, alias
 			continue
 		}
 		if len(e.Path) == 0 {
+			// A SAML block with no alias path can't be tied to one ref. Mark
+			// every owner in the batch. ResolveActionFiles treats a no-path
+			// error as batch-level and splits down to single refs, so by the
+			// time a result survives the split the batch holds one owner and
+			// this attribution is exact.
+			for _, r := range refs {
+				owners[r.Owner] = true
+			}
 			continue
 		}
 		alias, ok := e.Path[0].(string)
