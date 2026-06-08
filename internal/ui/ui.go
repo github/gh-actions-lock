@@ -1061,6 +1061,12 @@ func (u *UI) PauseProgress() {
 	}
 	if u.spinWriter != nil {
 		u.spinWriter.stopAnimator()
+	}
+	// Clear worker lines before stopping the spinner (see StopProgress).
+	if u.isTTY {
+		u.clearSpinnerLines()
+	}
+	if u.spinWriter != nil {
 		u.spinWriter.mu.Lock()
 		u.spinWriter.workers = nil
 		u.spinWriter.hints = nil
@@ -1068,9 +1074,6 @@ func (u *UI) PauseProgress() {
 	}
 	u.spinner.Stop()
 	u.progPaused = true
-	if u.isTTY {
-		u.clearSpinnerLines()
-	}
 }
 
 // ResumeProgress restarts a spinner previously paused by PauseProgress,
@@ -1104,13 +1107,19 @@ func (u *UI) StopProgress() {
 		}
 		if u.spinWriter != nil {
 			u.spinWriter.stopAnimator()
+		}
+		// Erase worker lines BEFORE stopping the spinner — at this point
+		// the cursor is on the spinner line, so the down/up dance to
+		// clear worker rows below is safe. Doing this after Stop() races
+		// with the shell prompt redraw and clobbers it.
+		u.clearSpinnerLines()
+		if u.spinWriter != nil {
 			u.spinWriter.mu.Lock()
 			u.spinWriter.workers = nil
 			u.spinWriter.hints = nil
 			u.spinWriter.mu.Unlock()
 		}
 		u.spinner.Stop()
-		u.clearSpinnerLines()
 		u.spinner = nil
 		u.spinWriter = nil
 		u.progLabel = ""
