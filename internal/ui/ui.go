@@ -48,9 +48,8 @@ type UI struct {
 	headless bool
 	spinner  *spinner.Spinner
 
-	// headlessLabelStem is the last printed phase label stem (everything
-	// before the first '[' in an UpdateLabel call). Used in headless mode to
-	// deduplicate `Resolving actions [1/42]` … `[42/42]` into one line.
+	// headlessLabelStem deduplicates repeated UpdateLabel calls in headless
+	// mode so the same phase label isn't printed more than once.
 	headlessLabelStem string
 
 	// progLabel and progDetail hold the two halves of the active spinner line
@@ -1205,31 +1204,11 @@ func (u *UI) UpdateLabel(label string) {
 	u.renderProgress()
 }
 
-// labelStem reduces a progress label to a phase identifier used for headless
-// dedup. It strips both a trailing " [N/M]" and a leading "[N/M] " progress
-// counter, then takes the leading "verb" portion (everything before the first
-// digit) so labels like "Scanning 78 workflows", "Scanning [1/78] foo.yml",
-// "Pinning dependencies [1/78]", and "Scanning" all collapse to the same
-// stem. A label without recognizable structure is trimmed and returned as-is.
-// The leading "[N/M] " form is kept as a fallback for any future callers,
-// though the canonical format is now "Verb [N/M]" (counter on the right).
+// labelStem returns the label trimmed of whitespace, used as a phase
+// identifier for headless dedup so repeated UpdateLabel calls with the
+// same text don't spam the log.
 func labelStem(label string) string {
-	label = strings.TrimSpace(label)
-	if strings.HasPrefix(label, "[") {
-		if end := strings.Index(label, "]"); end > 0 {
-			label = strings.TrimSpace(label[end+1:])
-		}
-	}
-	if i := strings.LastIndex(label, " ["); i >= 0 {
-		label = label[:i]
-	}
-	label = strings.TrimSpace(label)
-	for i, r := range label {
-		if r >= '0' && r <= '9' {
-			return strings.TrimSpace(label[:i])
-		}
-	}
-	return label
+	return strings.TrimSpace(label)
 }
 
 // renderProgress recombines the label and detail into a single line that is
