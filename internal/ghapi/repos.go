@@ -107,37 +107,65 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 	return res.tags, res.err
 }
 
-// GetDefaultBranch returns the repo's default branch name (e.g. "main").
-// On lookup failure an empty string is cached so subsequent callers don't
-// retry. Results are coalesced via singleflight.
-func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) string {
+// repoMeta is the slice of repos/{owner}/{repo} the resolver needs: the
+// default branch plus the numeric owner and repo IDs.
+type repoMeta struct {
+	DefaultBranch string
+	OwnerID       int64
+	RepoID        int64
+}
+
+// repoMetadata fetches repos/{owner}/{repo} at most once per run, coalescing
+// concurrent callers via singleflight and caching the result. Both
+// GetDefaultBranch and RepoIDs derive from it, so a repo costs one round-trip
+// instead of one per consumer. The request runs under a cancel-free context:
+// callers fan out under scan/errgroup contexts that cancel on first
+// match/error, and a coalesced caller's cancellation must not abort the shared
+// fetch for the others waiting on it.
+func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta, error) {
 	key := ForRepo(owner, repo)
-	if name, ok := c.defaultBranchCache.Get(key); ok {
-		return name
+	if m, ok := c.repoMetaCache.Get(key); ok {
+		return m, nil
 	}
-	sfKey := key.String()
-	v, _, _ := c.defaultBranchSF.Do(sfKey, func() (any, error) {
-		if name, ok := c.defaultBranchCache.Get(key); ok {
-			return name, nil
+	v, err, _ := c.repoMetaSF.Do(key.String(), func() (any, error) {
+		if m, ok := c.repoMetaCache.Get(key); ok {
+			return m, nil
 		}
 		var resp struct {
 			DefaultBranch string `json:"default_branch"`
+			ID            int64  `json:"id"`
+			Owner         struct {
+				ID int64 `json:"id"`
+			} `json:"owner"`
 		}
 		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
-		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			c.defaultBranchCache.Put(key, "")
-			return "", nil
+		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
+			return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
 		}
-		c.defaultBranchCache.Put(key, resp.DefaultBranch)
-		return resp.DefaultBranch, nil
+		m := repoMeta{DefaultBranch: resp.DefaultBranch, OwnerID: resp.Owner.ID, RepoID: resp.ID}
+		c.repoMetaCache.Put(key, m)
+		return m, nil
 	})
-	return v.(string)
+	if err != nil {
+		return repoMeta{}, err
+	}
+	return v.(repoMeta), nil
+}
+
+// GetDefaultBranch returns the repo's default branch name (e.g. "main"), or
+// "" if the lookup fails. Backed by the shared repoMetadata fetch.
+func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) string {
+	m, err := c.repoMetadata(ctx, owner, repo)
+	if err != nil {
+		return ""
+	}
+	return m.DefaultBranch
 }
 
 // GetBranchHead resolves a single branch's HEAD commit directly via the
 // git/ref endpoint. Unlike ListBranches this is not subject to the paginated
-// 300-branch cap. Results (including 404s) are cached. Returns ok=false on
-// any error.
+// 300-branch cap. Results (including 404s) are cached and concurrent lookups
+// are coalesced via singleflight. Returns ok=false on any error.
 func (c *Client) GetBranchHead(ctx context.Context, owner, repo, name string) (BranchHead, bool) {
 	if name == "" {
 		return BranchHead{}, false
@@ -146,30 +174,37 @@ func (c *Client) GetBranchHead(ctx context.Context, owner, repo, name string) (B
 	if bh, ok := c.namedBranchCache.Get(key); ok {
 		return bh, bh.Name != ""
 	}
-	path := fmt.Sprintf("repos/%s/%s/git/ref/heads/%s",
-		url.PathEscape(owner), url.PathEscape(repo), escapeBranchPath(name))
-	var resp struct {
-		Ref    string `json:"ref"`
-		Object struct {
-			SHA  string `json:"sha"`
-			Type string `json:"type"`
-		} `json:"object"`
-	}
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-		var httpErr *api.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
-			c.namedBranchCache.Put(key, BranchHead{}) // negative cache
+	v, _, _ := c.namedBranchSF.Do(key.String(), func() (any, error) {
+		if bh, ok := c.namedBranchCache.Get(key); ok {
+			return bh, nil
 		}
-		return BranchHead{}, false
-	}
-	// A prefix (non-exact) match returns an array, decoding to an empty
-	// object here; treat that as "not found" rather than guessing.
-	if resp.Object.SHA == "" {
-		return BranchHead{}, false
-	}
-	bh := BranchHead{Name: name, SHA: resp.Object.SHA}
-	c.namedBranchCache.Put(key, bh)
-	return bh, true
+		path := fmt.Sprintf("repos/%s/%s/git/ref/heads/%s",
+			url.PathEscape(owner), url.PathEscape(repo), escapeBranchPath(name))
+		var resp struct {
+			Ref    string `json:"ref"`
+			Object struct {
+				SHA  string `json:"sha"`
+				Type string `json:"type"`
+			} `json:"object"`
+		}
+		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
+			var httpErr *api.HTTPError
+			if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+				c.namedBranchCache.Put(key, BranchHead{}) // negative cache
+			}
+			return BranchHead{}, nil
+		}
+		// A prefix (non-exact) match returns an array, decoding to an empty
+		// object here; treat that as "not found" rather than guessing.
+		if resp.Object.SHA == "" {
+			return BranchHead{}, nil
+		}
+		bh := BranchHead{Name: name, SHA: resp.Object.SHA}
+		c.namedBranchCache.Put(key, bh)
+		return bh, nil
+	})
+	bh := v.(BranchHead)
+	return bh, bh.Name != ""
 }
 
 // ListProtectedBranches returns the repo's protected branches. Best-effort:
@@ -262,7 +297,11 @@ type compareResponse struct {
 // CompareCommits reports whether sha is on the lineage of branchHeadSHA
 // using the Compare API. A 404 or 422 response (unrelated histories or
 // missing commit) is treated as a non-error false return. Results are
-// memoized for the lifetime of the Client.
+// memoized for the lifetime of the Client and concurrent identical
+// comparisons are coalesced via singleflight. The request runs under a
+// cancel-free context so that one fanned-out caller's cancellation (the
+// reachability scan cancels siblings on first match) cannot abort the shared
+// comparison the others are waiting on.
 func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHeadSHA string) (bool, error) {
 	if strings.EqualFold(sha, branchHeadSHA) {
 		return true, nil
@@ -271,22 +310,31 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 	if v, ok := c.compareCache.Get(key); ok {
 		return v, nil
 	}
-	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
-		url.PathEscape(owner), url.PathEscape(repo),
-		url.PathEscape(sha), url.PathEscape(branchHeadSHA))
-	var resp compareResponse
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-		var httpErr *api.HTTPError
-		if errors.As(err, &httpErr) &&
-			(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {
-			c.compareCache.Put(key, false)
-			return false, nil
+	v, err, _ := c.compareSF.Do(key.String(), func() (any, error) {
+		if v, ok := c.compareCache.Get(key); ok {
+			return v, nil
 		}
+		path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
+			url.PathEscape(owner), url.PathEscape(repo),
+			url.PathEscape(sha), url.PathEscape(branchHeadSHA))
+		var resp compareResponse
+		if err := c.rest.DoWithContext(context.WithoutCancel(ctx), http.MethodGet, path, nil, &resp); err != nil {
+			var httpErr *api.HTTPError
+			if errors.As(err, &httpErr) &&
+				(httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusUnprocessableEntity) {
+				c.compareCache.Put(key, false)
+				return false, nil
+			}
+			return false, err
+		}
+		contains := strings.EqualFold(resp.MergeBaseCommit.SHA, sha)
+		c.compareCache.Put(key, contains)
+		return contains, nil
+	})
+	if err != nil {
 		return false, err
 	}
-	contains := strings.EqualFold(resp.MergeBaseCommit.SHA, sha)
-	c.compareCache.Put(key, contains)
-	return contains, nil
+	return v.(bool), nil
 }
 
 // CompareRefs returns the Compare API status and merge-base SHA for
@@ -305,28 +353,19 @@ func (c *Client) CompareRefs(ctx context.Context, owner, repo, base, head string
 	return resp.Status, resp.MergeBaseCommit.SHA, nil
 }
 
-// RepoIDs returns the numeric owner ID and repo ID for a NWO, querying
-// the GitHub REST API on cache miss.
+// RepoIDs returns the numeric owner ID and repo ID for a NWO. Backed by the
+// shared repoMetadata fetch, so it shares a single repos/{owner}/{repo}
+// round-trip with GetDefaultBranch.
 func (c *Client) RepoIDs(ctx context.Context, owner, repo string) (int64, int64, error) {
-	key := ForRepo(owner, repo)
-	if ids, ok := c.repoIDsCache.Get(key); ok {
-		return ids[0], ids[1], nil
+	m, err := c.repoMetadata(ctx, owner, repo)
+	if err != nil {
+		return 0, 0, err
 	}
-	var resp struct {
-		ID    int64 `json:"id"`
-		Owner struct {
-			ID int64 `json:"id"`
-		} `json:"owner"`
+	if m.OwnerID == 0 || m.RepoID == 0 {
+		return 0, 0, fmt.Errorf("repos/%s/%s returned zero IDs (owner=%d repo=%d)",
+			owner, repo, m.OwnerID, m.RepoID)
 	}
-	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-		return 0, 0, fmt.Errorf("fetching %s: %w", path, err)
-	}
-	if resp.ID == 0 || resp.Owner.ID == 0 {
-		return 0, 0, fmt.Errorf("%s returned zero IDs (owner=%d repo=%d)", path, resp.Owner.ID, resp.ID)
-	}
-	c.repoIDsCache.Put(key, [2]int64{resp.Owner.ID, resp.ID})
-	return resp.Owner.ID, resp.ID, nil
+	return m.OwnerID, m.RepoID, nil
 }
 
 // OrderedBranches returns branches in tiered order so the most trust-bearing

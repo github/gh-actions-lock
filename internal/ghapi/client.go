@@ -30,14 +30,15 @@ type Client struct {
 	// Caches for raw GitHub resources. These live here so all consumers
 	// (resolver, auditor, tag lister) share a single cache per CLI run.
 	compareCache         syncmap.Map[Compare, bool]
-	repoIDsCache         syncmap.Map[Repo, [2]int64]
+	compareSF            singleflight.Group
+	repoMetaCache        syncmap.Map[Repo, repoMeta]
+	repoMetaSF           singleflight.Group
 	branchListCache      syncmap.Map[Repo, []BranchHead]
 	branchListSF         singleflight.Group
 	tagListCache         syncmap.Map[Repo, []TagEntry]
 	tagListSF            singleflight.Group
-	defaultBranchCache   syncmap.Map[Repo, string]
-	defaultBranchSF      singleflight.Group
 	namedBranchCache     syncmap.Map[NWOName, BranchHead]
+	namedBranchSF        singleflight.Group
 	protectedBranchCache syncmap.Map[Repo, []BranchHead]
 	protectedBranchSF    singleflight.Group
 }
