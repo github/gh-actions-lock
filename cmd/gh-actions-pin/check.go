@@ -293,6 +293,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	endPlan := prof.Phase("pin.Plan (narrowing+reverse)")
+	if showSpinner {
+		console.ClearWorkerStatuses()
+	}
 	record, planErr := pin.Plan(ctx, report, pin.PlanOptions{
 		Resolver:  r,
 		Tagger:    tagger,
