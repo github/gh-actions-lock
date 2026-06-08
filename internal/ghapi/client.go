@@ -151,6 +151,10 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		resp, err = rt.inner.RoundTrip(req)
 		if err != nil {
+			// Don't retry context cancellation — the caller wants to stop.
+			if req.Context().Err() != nil {
+				return nil, err
+			}
 			if attempt < rt.maxRetries {
 				rt.backoff(attempt)
 				continue
