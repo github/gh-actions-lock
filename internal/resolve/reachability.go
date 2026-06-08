@@ -284,7 +284,7 @@ func (r *Resolver) checkReachabilityAllPooled(ctx context.Context, unique []dep.
 			}
 		}
 		if len(repos) > 0 {
-			_ = pinpool.RunTyped(r.Pool, ctx, "Pre-warming metadata",
+			_ = pinpool.RunTyped(r.Pool, ctx, "",
 				repos,
 				func(re repoEntry) string { return re.owner + "/" + re.repo },
 				func(ctx context.Context, _ int, re repoEntry) error {
@@ -332,7 +332,7 @@ func (r *Resolver) checkReachabilityAllPooled(ctx context.Context, unique []dep.
 	// Submit first-claimers to the pool (visible in spinner).
 	var poolErr error
 	if len(pooled) > 0 {
-		poolErr = pinpool.RunTyped(r.Pool, ctx, "Verifying reachability",
+		poolErr = pinpool.RunTyped(r.Pool, ctx, "",
 			pooled,
 			func(id indexedDep) string { return id.dep.NWO + "@" + id.dep.Ref },
 			func(ctx context.Context, _ int, id indexedDep) error {

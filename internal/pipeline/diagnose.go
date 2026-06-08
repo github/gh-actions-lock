@@ -29,7 +29,7 @@ func DiagnoseParsed(ctx context.Context, parsed []checks.ParsedWorkflow, r *reso
 	}
 
 	results := make([]checks.WorkflowReport, len(parsed))
-	_ = pinpool.RunTyped(pool, ctx, "Diagnosing workflows",
+	_ = pinpool.RunTyped(pool, ctx, "",
 		items,
 		func(ipw indexedPW) string { return ipw.pw.Path },
 		func(ctx context.Context, _ int, ipw indexedPW) error {

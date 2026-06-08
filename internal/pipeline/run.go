@@ -23,11 +23,8 @@ type RunOptions struct {
 
 	// OnScan fires with 1-based progress before each workflow is parsed.
 	OnScan func(done, total int, path string)
-	// OnProgress fires at each pipeline phase boundary.
-	OnProgress func(phase string)
 	// Resolver UX hooks — set these for interactive spinner mode.
 	OnResolveProgress func(done, total int)
-	OnVerifyProgress  func(done, total int)
 	// Profile receives phase timing when profiling is enabled.
 	Profile *profile.Session
 }
@@ -42,10 +39,6 @@ type RunResult struct {
 // Run executes the full diagnostic pipeline: parse → trust-check →
 // resolve → reachability pre-warm → diagnose → enrich impostors.
 func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
-	progress := opts.OnProgress
-	if progress == nil {
-		progress = func(string) {}
-	}
 	r := opts.Resolver
 	prof := opts.Profile
 
@@ -85,17 +78,11 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		// No resolver means no network resolution or reachability.
 		// Diagnose will still flag structural issues (not-pinned, etc.).
 	} else {
-		// Wire resolver progress hooks.
+		// Wire resolver progress hook.
 		if opts.OnResolveProgress != nil {
 			r.OnResolveProgress = opts.OnResolveProgress
 		}
-		if opts.OnVerifyProgress != nil {
-			r.OnVerifyProgress = opts.OnVerifyProgress
-		}
 
-		if len(refs) > 0 || (opts.Rescan && len(deps) > 0) {
-			progress("Resolving actions")
-		}
 		if len(refs) > 0 {
 			endResolve := prof.Phase("  resolve refs")
 			// First call warms the resolver's cache; results are consumed
@@ -130,7 +117,6 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		}
 
 		if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
-			progress("Verifying reachability")
 			endReach := prof.Phase("  reachability pre-warm")
 			if len(reachDeps) > 0 {
 				_ = r.CheckReachabilityAll(ctx, reachDeps)
@@ -146,7 +132,6 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 		// Quiet resolver hooks before diagnostics (cache-only, no progress).
 		r.OnResolveProgress = nil
-		r.OnVerifyProgress = nil
 	}
 
 	if ctx.Err() != nil {
@@ -154,7 +139,6 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}
 
 	// Phase 4: Diagnose.
-	progress("Analyzing")
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
 	endDiag()
