@@ -27,6 +27,9 @@
       "hash_algo": "sha1",
       "nwo": "helper/only-transitive",
       "ref": "v1",
+      "required_by": [
+        "actions/setup-go@v6"
+      ],
       "sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     },
     {
@@ -39,13 +42,6 @@
   ],
   "findings": [
     {
-      "category": "reachability-unknown",
-      "confidence": "low",
-      "detail": "could not re-resolve actions: actions/setup-go@v6: Post \"https://api.github.com/graphql\": no registered HTTP stubs matched https://api.github.com/graphql",
-      "severity": "warning",
-      "workflow": ".github/workflows/ci.yml"
-    },
-    {
       "category": "ref-changed",
       "confidence": "high",
       "dependency": "actions/cache@v3",
@@ -53,26 +49,6 @@
       "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
       "remediation": "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line",
       "severity": "error",
-      "workflow": ".github/workflows/ci.yml"
-    },
-    {
-      "category": "stale",
-      "confidence": "high",
-      "dependency": "actions/cache@v4",
-      "detail": "lockfile pins actions/cache@v4 but no uses: in this workflow references it",
-      "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-      "remediation": "remove the entry or re-run `gh actions-pin`",
-      "severity": "warning",
-      "workflow": ".github/workflows/ci.yml"
-    },
-    {
-      "category": "stale",
-      "confidence": "high",
-      "dependency": "helper/only-transitive@v1",
-      "detail": "lockfile pins helper/only-transitive@v1 but no uses: in this workflow references it",
-      "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-      "remediation": "remove the entry or re-run `gh actions-pin`",
-      "severity": "warning",
       "workflow": ".github/workflows/ci.yml"
     },
     {
@@ -117,6 +93,9 @@
           "hash_algo": "sha1",
           "nwo": "helper/only-transitive",
           "ref": "v1",
+          "required_by": [
+            "actions/setup-go@v6"
+          ],
           "sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         },
         {
@@ -129,13 +108,6 @@
       ],
       "findings": [
         {
-          "category": "reachability-unknown",
-          "confidence": "low",
-          "detail": "could not re-resolve actions: actions/setup-go@v6: Post \"https://api.github.com/graphql\": no registered HTTP stubs matched https://api.github.com/graphql",
-          "severity": "warning",
-          "workflow": ".github/workflows/ci.yml"
-        },
-        {
           "category": "ref-changed",
           "confidence": "high",
           "dependency": "actions/cache@v3",
@@ -143,26 +115,6 @@
           "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
           "remediation": "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line",
           "severity": "error",
-          "workflow": ".github/workflows/ci.yml"
-        },
-        {
-          "category": "stale",
-          "confidence": "high",
-          "dependency": "actions/cache@v4",
-          "detail": "lockfile pins actions/cache@v4 but no uses: in this workflow references it",
-          "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-          "remediation": "remove the entry or re-run `gh actions-pin`",
-          "severity": "warning",
-          "workflow": ".github/workflows/ci.yml"
-        },
-        {
-          "category": "stale",
-          "confidence": "high",
-          "dependency": "helper/only-transitive@v1",
-          "detail": "lockfile pins helper/only-transitive@v1 but no uses: in this workflow references it",
-          "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-          "remediation": "remove the entry or re-run `gh actions-pin`",
-          "severity": "warning",
           "workflow": ".github/workflows/ci.yml"
         },
         {
