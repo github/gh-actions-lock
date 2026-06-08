@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 // RepoTag is a tag name paired with the commit SHA it resolves to, as
@@ -34,44 +33,6 @@ func (c *Client) RepoTags(ctx context.Context, owner, repo string) ([]RepoTag, e
 	out := make([]RepoTag, 0, len(apiTags))
 	for _, t := range apiTags {
 		out = append(out, RepoTag{Name: t.Name, SHA: t.Commit.SHA})
-	}
-	return out, nil
-}
-
-// TagObjectRef is a tag ref paired with the SHA and type of the object it
-// points at: the tag object SHA for annotated tags, the commit SHA for
-// lightweight tags. Name has the refs/tags/ prefix stripped.
-type TagObjectRef struct {
-	Name       string
-	ObjectSHA  string
-	ObjectType string
-}
-
-// MatchingTagRefs lists raw tag refs (up to 100) without dereferencing
-// annotated tag objects, so callers can recover the tag object SHA that
-// immutable release pins resolve to.
-func (c *Client) MatchingTagRefs(ctx context.Context, owner, repo string) ([]TagObjectRef, error) {
-	path := fmt.Sprintf("repos/%s/%s/git/matching-refs/tags?per_page=100",
-		url.PathEscape(owner), url.PathEscape(repo))
-
-	var refs []struct {
-		Ref    string `json:"ref"`
-		Object struct {
-			SHA  string `json:"sha"`
-			Type string `json:"type"`
-		} `json:"object"`
-	}
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &refs); err != nil {
-		return nil, fmt.Errorf("fetching tag refs for %s/%s: %w", owner, repo, err)
-	}
-
-	out := make([]TagObjectRef, 0, len(refs))
-	for _, r := range refs {
-		out = append(out, TagObjectRef{
-			Name:       strings.TrimPrefix(r.Ref, "refs/tags/"),
-			ObjectSHA:  r.Object.SHA,
-			ObjectType: r.Object.Type,
-		})
 	}
 	return out, nil
 }
