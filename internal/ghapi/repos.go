@@ -69,9 +69,16 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 	return v.([]BranchHead), nil
 }
 
-// ListTags returns all tags with their commit SHAs for a repo (first page,
-// up to 100). Results are cached per owner/repo and coalesced via singleflight.
+// ListTags returns all tags with their commit SHAs for a repo, paginating to
+// the cap below so version discovery sees every tag — the read-only `outdated`
+// picker must match dependabot-core, which enumerates all tags via
+// `git ls-remote --tags`; a single-page listing would silently under-offer on
+// repos with more than 100 tags. Results are cached per owner/repo and
+// coalesced via singleflight.
 func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, error) {
+	// maxTagPages caps pagination at 5000 tags — far beyond any real action
+	// repo, but a hard stop against a pathological listing.
+	const maxTagPages = 50
 	key := ForRepo(owner, repo)
 	if cached, ok := c.tagListCache.Get(key); ok {
 		return cached, nil
@@ -85,20 +92,25 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 		if cached, ok := c.tagListCache.Get(key); ok {
 			return result{tags: cached}, nil
 		}
-		path := fmt.Sprintf("repos/%s/%s/tags?per_page=100",
-			url.PathEscape(owner), url.PathEscape(repo))
-		var resp []struct {
-			Name   string `json:"name"`
-			Commit struct {
-				SHA string `json:"sha"`
-			} `json:"commit"`
-		}
-		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)}, nil
-		}
-		tags := make([]TagEntry, 0, len(resp))
-		for _, t := range resp {
-			tags = append(tags, TagEntry{Name: t.Name, SHA: t.Commit.SHA})
+		var tags []TagEntry
+		for page := 1; page <= maxTagPages; page++ {
+			path := fmt.Sprintf("repos/%s/%s/tags?per_page=100&page=%d",
+				url.PathEscape(owner), url.PathEscape(repo), page)
+			var resp []struct {
+				Name   string `json:"name"`
+				Commit struct {
+					SHA string `json:"sha"`
+				} `json:"commit"`
+			}
+			if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
+				return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)}, nil
+			}
+			for _, t := range resp {
+				tags = append(tags, TagEntry{Name: t.Name, SHA: t.Commit.SHA})
+			}
+			if len(resp) < 100 {
+				break
+			}
 		}
 		c.tagListCache.Put(key, tags)
 		return result{tags: tags}, nil

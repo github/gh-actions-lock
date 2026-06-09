@@ -302,3 +302,15 @@ func PresentUpdateSummary(console *ui.UI, res UpdateResult, wrote bool) {
 		console.TermDetail("%s: %s — %s", f.Severity, f.Category, f.Detail)
 	}
 }
+
+// PresentOutdatedSummary renders the read-only discovery result for humans.
+func PresentOutdatedSummary(console *ui.UI, updates []AvailableUpdate) {
+	if len(updates) == 0 {
+		console.TermNeutral("Everything is up to date.")
+		return
+	}
+	for _, u := range updates {
+		console.TermNeutral("%s: %s → %s", u.NWO, u.CurrentRef, u.AvailableRef)
+	}
+	console.TermDetail("%d %s available.", len(updates), ui.Pluralize(len(updates), "update", "updates"))
+}

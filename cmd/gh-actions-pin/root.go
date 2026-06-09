@@ -121,6 +121,7 @@ $ gh actions-pin --no-fix --json=valid,findings
 	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts (accepted and ignored)")
 	cmd.AddCommand(newCheckCmd(newResolver))
 	cmd.AddCommand(newUpdateCmd(newResolver))
+	cmd.AddCommand(newOutdatedCmd(newResolver))
 
 	return cmd
 }
