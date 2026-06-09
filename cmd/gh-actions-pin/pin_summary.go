@@ -103,16 +103,16 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 			label = fmt.Sprintf("%s (%s)", label, short)
 		}
 		console.TermDetail("  %s", console.TermYellow(label))
-		if g.AutoFixedRef != "" {
-			short := g.AutoFixedRef
-			if len(short) > 12 {
-				short = short[:12]
-			}
-			console.TermDetail("    ↳ pinned commit %s was unreachable; re-pinned to latest release %s",
-				console.TermDim(short), console.TermBold(g.Ref))
-		}
 		for _, wf := range g.workflows {
 			console.TermDetail("    └─ %s", console.TermDim(wf))
+		}
+		if g.AutoFixedRef != "" {
+			prev := g.AutoFixedRef
+			if len(prev) > 7 {
+				prev = prev[:7]
+			}
+			console.TermDetail("    %s re-pinned from unreachable %s to %s",
+				console.TermYellow("!"), console.TermDim(prev), console.TermBold(g.Ref))
 		}
 	}
 }
@@ -139,23 +139,50 @@ func renderFullScanWarnings(console *ui.UI, pinned []pin.Entry) {
 
 // renderInvestigationAlerts prints error-level alerts for entries that
 // require manual investigation (impostor commits, forgery, etc.).
+// Entries sharing the same NWO@Ref are grouped so the action line
+// appears once with all affected workflows listed underneath.
 func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *resolve.Resolver) {
-	console.TermBlank()
-	console.TermError("%d %s %s investigation — do not auto-fix",
-		len(investigated), ui.Pluralize(len(investigated), "action", "actions"),
-		ui.Pluralize(len(investigated), "requires", "require"))
+	type investigateGroup struct {
+		pin.Entry
+		workflows []string
+	}
+	seen := map[string]int{} // NWO@Ref → index
+	var groups []investigateGroup
+	var groupWFs []map[string]bool
 	for _, e := range investigated {
-		dep := e.NWO + "@" + e.Ref
-		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+		key := e.NWO + "@" + e.Ref
+		idx, ok := seen[key]
+		if !ok {
+			idx = len(groups)
+			seen[key] = idx
+			groups = append(groups, investigateGroup{Entry: e})
+			groupWFs = append(groupWFs, map[string]bool{})
+		}
 		for _, wf := range e.Workflows {
+			if !groupWFs[idx][wf] {
+				groupWFs[idx][wf] = true
+				groups[idx].workflows = append(groups[idx].workflows, wf)
+			}
+		}
+	}
+
+	console.TermBlank()
+	console.TermError("%d %s %s maintainer action — pinned commit is not reachable from any branch",
+		len(groups), ui.Pluralize(len(groups), "action", "actions"),
+		ui.Pluralize(len(groups), "requires", "require"))
+	for _, g := range groups {
+		dep := g.NWO + "@" + g.Ref
+		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+		for _, wf := range g.workflows {
 			console.TermDetail("    └─ %s", console.TermDim(wf))
 		}
-		if e.Suggestion != "" {
+		if g.Suggestion != "" {
 			console.TermDetail("    %s Suggested re-pin: %s",
-				console.TermBold("→"), console.TermYellow(e.NWO+"@"+e.Suggestion))
+				console.TermBold("→"), console.TermYellow(g.NWO+"@"+g.Suggestion))
 		}
-		if e.Issue == string(checks.ImpostorCommit) {
-			console.TermDetail("    %s", pipeline.PublisherEscalationCopy)
+		if g.Issue == string(checks.ImpostorCommit) {
+			console.TermDetail("    %s %s", console.TermBold("→"), pipeline.PublisherEscalationCopy)
+			console.TermDetail("    see: %s", console.TermLink(console.TermDim("Using tags for release management"), pipeline.PublisherTagReleasesDocURL))
 		}
 	}
 }
