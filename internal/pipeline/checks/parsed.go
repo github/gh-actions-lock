@@ -35,3 +35,50 @@ type ParsedWorkflow struct {
 	// is in effect.
 	SkipReachWhenUnchanged bool
 }
+
+// PartitionRefs splits refs into recorded (matching a lockfile entry by
+// NWO@Ref) and unrecorded (need network resolution). When an error
+// prevented loading refs or deps, everything is unrecorded.
+func (pw ParsedWorkflow) PartitionRefs() (recorded, unrecorded []parserlock.ActionRef) {
+	if pw.LoadErr != nil || pw.DepsErr != nil {
+		return nil, pw.Refs
+	}
+	if len(pw.Refs) == 0 {
+		return nil, nil
+	}
+	haveDep := make(map[string]bool, len(pw.ExistingDeps))
+	for _, d := range pw.ExistingDeps {
+		haveDep[d.NWO+"@"+d.Ref] = true
+	}
+	for _, r := range pw.Refs {
+		if haveDep[r.Owner+"/"+r.Repo+"@"+r.Ref] {
+			recorded = append(recorded, r)
+		} else {
+			unrecorded = append(unrecorded, r)
+		}
+	}
+	return recorded, unrecorded
+}
+
+// IsFullyRecorded returns true when every direct ref has a matching
+// lockfile entry — the steady-state happy path.
+func (pw ParsedWorkflow) IsFullyRecorded() bool {
+	_, unrecorded := pw.PartitionRefs()
+	return len(pw.Refs) == 0 || len(unrecorded) == 0
+}
+
+// RecordedDeps returns the subset of ExistingDeps whose NWO@Ref matches
+// one of the given recorded refs.
+func (pw ParsedWorkflow) RecordedDeps(recorded []parserlock.ActionRef) []dep.Dependency {
+	refKeys := make(map[string]bool, len(recorded))
+	for _, r := range recorded {
+		refKeys[r.Owner+"/"+r.Repo+"@"+r.Ref] = true
+	}
+	var out []dep.Dependency
+	for _, d := range pw.ExistingDeps {
+		if refKeys[d.Key()] {
+			out = append(out, d)
+		}
+	}
+	return out
+}

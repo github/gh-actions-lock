@@ -103,7 +103,7 @@ func TestPartitionRefs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			recorded, unrecorded := partitionRefs(tt.pw)
+			recorded, unrecorded := tt.pw.PartitionRefs()
 			assert.Len(t, recorded, tt.wantRecordedLen)
 			assert.Len(t, unrecorded, tt.wantUnrecordLen)
 
@@ -128,7 +128,7 @@ func TestIsFullyRecorded(t *testing.T) {
 				mkDep("actions/checkout", "v4", "aaa"),
 			},
 		}
-		assert.True(t, isFullyRecorded(pw))
+		assert.True(t, pw.IsFullyRecorded())
 	})
 
 	t.Run("partially recorded", func(t *testing.T) {
@@ -141,12 +141,12 @@ func TestIsFullyRecorded(t *testing.T) {
 				mkDep("actions/checkout", "v4", "aaa"),
 			},
 		}
-		assert.False(t, isFullyRecorded(pw))
+		assert.False(t, pw.IsFullyRecorded())
 	})
 
 	t.Run("no refs", func(t *testing.T) {
 		pw := checks.ParsedWorkflow{}
-		assert.True(t, isFullyRecorded(pw))
+		assert.True(t, pw.IsFullyRecorded())
 	})
 }
 
@@ -163,7 +163,7 @@ func TestRecordedDeps(t *testing.T) {
 		ref("third-party", "tool", "", "v1"),
 	}
 
-	got := recordedDeps(pw, recorded)
+	got := pw.RecordedDeps(recorded)
 	assert.Len(t, got, 2)
 
 	keys := make(map[string]bool)
