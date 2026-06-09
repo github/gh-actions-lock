@@ -765,6 +765,56 @@ jobs:
 	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "stdout must be pure, parseable JSON")
 }
 
+// TestUpdateCommand_InteractiveDefaultIsCorePick proves the picker's DEFAULT
+// selection mirrors dependabot-core's precision-preserving pick rather than the
+// numerically-highest tag. For a major-form current pin (@v4), the highest tag
+// overall is v6.1.2 (so it heads the list), but core would land the highest
+// major-FORM tag, v6 — so the default must be v6, not v6.1.2. The prompter errors
+// right after capturing its arguments, isolating the default-selection behavior
+// from the relock that would otherwise follow.
+func TestUpdateCommand_InteractiveDefaultIsCorePick(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	tag := func(name, sha string) map[string]any {
+		return map[string]any{"name": name, "commit": map[string]any{"sha": sha}}
+	}
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/tags"),
+		httpmock.JSONResponse([]map[string]any{
+			tag("v4", "de0fac2e4500dabe0009e67214ff5f5447ce83dd"),
+			tag("v5", "22222222222222222222222222222222222222bb"),
+			tag("v6", "11111111111111111111111111111111111111aa"),
+			tag("v6.1.2", "33333333333333333333333333333333333333cc"),
+		}),
+	)
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+	)
+
+	// Error after the prompter records its arguments so no relock follows.
+	prompt := &fakePrompter{err: assert.AnError}
+	_, _, err := runUpdateInteractive(t, reg, prompt,
+		"update", "--action", "actions/checkout@v4", "--json=updated", wfPath,
+	)
+	require.Error(t, err)
+
+	require.NotEmpty(t, prompt.gotOpts, "picker must be shown options")
+	assert.True(t, strings.HasPrefix(prompt.gotOpts[0], "v6.1.2 "),
+		"highest semver heads the list, got %q", prompt.gotOpts[0])
+	assert.True(t, strings.HasPrefix(prompt.gotDefault, "v6 "),
+		"default must be the core precision pick v6, not %q", prompt.gotDefault)
+}
+
 // TestUpdateCommand_NoTargetNonInteractive verifies that omitting --target in a
 // non-interactive session (no TTY, default prompter factory) is a tool failure
 // (exit 2), never a hang or silent auto-pick.

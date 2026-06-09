@@ -235,7 +235,20 @@ func pickTargetRef(ctx context.Context, cmd *cobra.Command, console *ui.UI, opts
 			options[i] = c.Ref
 		}
 	}
-	idx, err := p.Select(fmt.Sprintf("Select a version for %s (current %s)", nwo, currentRef), options[0], options)
+
+	// Seed the default selection with the ref a dependabot PR would land
+	// (core's precision-preserving pick) so hitting Enter matches eventual-PR
+	// behavior; the full list is still offered for a deliberate manual choice.
+	def := options[0]
+	if pick, ok := discover.CorePick(currentRef, cands); ok {
+		for i, c := range cands {
+			if c.Ref == pick.Ref {
+				def = options[i]
+				break
+			}
+		}
+	}
+	idx, err := p.Select(fmt.Sprintf("Select a version for %s (current %s)", nwo, currentRef), def, options)
 	if err != nil {
 		return "", false, fmt.Errorf("selecting a version: %w", err)
 	}

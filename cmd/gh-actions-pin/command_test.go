@@ -171,14 +171,16 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 // fakePrompter is a versionPrompter that records the options it was shown and
 // returns a fixed selection, so interactive picker tests run without a TTY.
 type fakePrompter struct {
-	selectIdx int
-	err       error
-	gotPrompt string
-	gotOpts   []string
+	selectIdx  int
+	err        error
+	gotPrompt  string
+	gotDefault string
+	gotOpts    []string
 }
 
-func (f *fakePrompter) Select(prompt, _ string, options []string) (int, error) {
+func (f *fakePrompter) Select(prompt, defaultValue string, options []string) (int, error) {
 	f.gotPrompt = prompt
+	f.gotDefault = defaultValue
 	f.gotOpts = options
 	if f.err != nil {
 		return 0, f.err

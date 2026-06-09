@@ -93,6 +93,95 @@ func Candidates(ctx context.Context, nwo, currentRef string, tags TagLister) ([]
 	return out, nil
 }
 
+// CorePick returns the candidate that dependabot-core's GitCommitChecker would
+// land for currentRef, or (_, false) when there is no such pick. It mirrors
+// core's two-step precision rule so the interactive picker can seed its default
+// selection with the ref a dependabot PR would land — the dev's default choice
+// then matches eventual-PR behavior, while the full Candidates list stays
+// available for manual selection.
+//
+// The rule (core's local_ref_for_latest_version_matching_existing_precision,
+// falling back to local_ref_for_latest_version_lower_precision):
+//  1. Among candidates whose precision == current's, take the semver-max.
+//  2. Only if step 1 is empty: among candidates whose precision <= current's,
+//     take the global semver-max (not the first coarser level).
+//
+// Precision is the dot-segment count of the version (major=1, minor=2, full=3),
+// matching core's version.split(".").length. Candidates are gated to
+// core-versions: same prefix as current, v-prefixed or dotted (core's
+// VERSION_REGEX rejects bare single-segment numerics like "5"), strictly
+// greater, and stable unless current is itself a prerelease. When currentRef is
+// not a core-version, there is no deterministic pick and CorePick returns false.
+func CorePick(currentRef string, cands []Candidate) (Candidate, bool) {
+	cur, ok := parserlock.ParseSemVer(currentRef)
+	if !ok || !isCoreVersionForm(cur) {
+		return Candidate{}, false
+	}
+	curPrec := precisionOf(cur)
+	curPrerelease := !cur.IsStable()
+
+	type coreCand struct {
+		cand Candidate
+		sv   parserlock.SemVer
+		prec int
+	}
+	var gated []coreCand
+	for _, c := range cands {
+		sv, isVer := parserlock.ParseSemVer(c.Ref)
+		if !isVer || !isCoreVersionForm(sv) {
+			continue
+		}
+		if sv.Prefix != cur.Prefix {
+			continue // core's same_prefix? — only same-prefix tags are candidates
+		}
+		if !strictlyGreater(sv, cur) {
+			continue
+		}
+		if !sv.IsStable() && !curPrerelease {
+			continue // prereleases only when the current ref is one
+		}
+		gated = append(gated, coreCand{cand: c, sv: sv, prec: precisionOf(sv)})
+	}
+
+	pickMax := func(exact bool) (Candidate, bool) {
+		var best coreCand
+		found := false
+		for _, g := range gated {
+			if exact && g.prec != curPrec {
+				continue
+			}
+			if !exact && g.prec > curPrec {
+				continue
+			}
+			if !found || g.sv.Greater(best.sv) {
+				best, found = g, true
+			}
+		}
+		return best.cand, found
+	}
+
+	if c, found := pickMax(true); found { // step 1: same precision
+		return c, true
+	}
+	return pickMax(false) // step 2: global max over <= precision
+}
+
+// precisionOf returns the dot-segment count of a version (major=1, minor=2,
+// full=3), matching core's version.split(".").length on the prefix-stripped
+// version string. e.g. v5->1, v5.1->2, v5.1.2->3, CalVer 20230101->1.
+func precisionOf(sv parserlock.SemVer) int {
+	return strings.Count(strings.TrimPrefix(sv.Raw, sv.Prefix), ".") + 1
+}
+
+// isCoreVersionForm reports whether a parsed tag satisfies core's VERSION_REGEX
+// shape: a single-segment version must be v-prefixed (core anchors the
+// single-segment alternative at ^v), while a multi-segment version must contain
+// a dot. This rejects bare numerics like "5" that our liberal shared parser
+// would otherwise accept.
+func isCoreVersionForm(sv parserlock.SemVer) bool {
+	return sv.Prefix == "v" || strings.Contains(sv.Raw, ".")
+}
+
 // strictlyGreater reports whether cand is a newer version than cur, using the
 // shared parser's ordering (major.minor.patch then prerelease), and never
 // treating an identical raw ref as an upgrade.
