@@ -518,3 +518,173 @@ jobs:
 	assert.Contains(t, pins, "vendor/dep@v2:sha1-"+transSHA, "new transitive must be written to the lockfile")
 	assert.NotContains(t, pins, oldSHA)
 }
+
+func TestUpdateCommand_SHAShapedTargetIsBlocking(t *testing.T) {
+	// A bare-SHA target ref would relock to a sha-as-ref instead of a
+	// freshly-pinned human ref. update must refuse it structurally — before any
+	// network resolution — with a blocking sha-as-ref finding, touching nothing.
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t) // no HTTP expected: the guard short-circuits pre-resolve
+
+	const (
+		oldSHA    = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+		targetSHA = "abcdef0123456789abcdef0123456789abcdef01"
+	)
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-"+oldSHA,
+	)
+	before, err := os.ReadFile(wfPath)
+	require.NoError(t, err)
+	lockBefore := readTempLockfilePins(t)
+
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"update", "--action", "actions/checkout@"+targetSHA, "--write", "--no-onboard", "--json=updated",
+		wfPath,
+	)
+	require.ErrorIs(t, err, errSilent, "sha-shaped target is a blocking finding (exit 1), not a tool failure")
+
+	var got updateJSON
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "stdout must carry clean JSON")
+
+	assert.False(t, got.Valid)
+	assert.Empty(t, got.Updated)
+	assert.Empty(t, got.Workflows)
+	require.Len(t, got.Findings, 1)
+	assert.Equal(t, "sha-as-ref", got.Findings[0].Category)
+	assert.Equal(t, "error", got.Findings[0].Severity)
+
+	// Working tree untouched (no --write side effects).
+	after, err := os.ReadFile(wfPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+	assert.Equal(t, lockBefore, readTempLockfilePins(t))
+}
+
+func TestUpdateCommand_WriteFailureLeavesTreeConsistent(t *testing.T) {
+	// Atomicity guarantee: if a workflow write fails mid-commit, neither the
+	// workflow YAML nor the lockfile may advance. We force the failure by making
+	// the workflow directory read-only so staging the rewritten YAML fails
+	// before the lockfile is saved.
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions; cannot inject a write failure")
+	}
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	const (
+		oldSHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+		newSHA = "77777777777777777777777777777777777777cc"
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", newSHA, nodeActionYAML),
+			},
+		}),
+	)
+	registerBranchDiscovery(reg, "actions", "checkout", newSHA, "v6")
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-"+oldSHA,
+	)
+	before, err := os.ReadFile(wfPath)
+	require.NoError(t, err)
+	lockBefore := readTempLockfilePins(t)
+
+	// Make the workflow dir read-only so staging the new YAML fails. The
+	// lockfile lives in the same dir, so a successful save is impossible too —
+	// but staging happens first, so the lockfile is never even attempted.
+	wfDir := filepath.Dir(wfPath)
+	require.NoError(t, os.Chmod(wfDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(wfDir, 0o755) })
+
+	_, _, err = runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		wfPath,
+	)
+	require.Error(t, err, "a write failure must surface as an error")
+	assert.NotErrorIs(t, err, errSilent, "an IO failure is a tool failure (exit 2), not a findings exit")
+
+	// Restore perms so we can read back and so TempDir cleanup succeeds.
+	require.NoError(t, os.Chmod(wfDir, 0o755))
+
+	after, err := os.ReadFile(wfPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "workflow YAML must be untouched after a failed write")
+	assert.Equal(t, lockBefore, readTempLockfilePins(t), "lockfile must not advance past a failed workflow write")
+
+	// No leftover staging temp file.
+	entries, err := os.ReadDir(wfDir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".gh-actions-pin.tmp", "staging temp must be cleaned up on failure")
+	}
+}
+
+func TestUpdateCommand_WritePreservesFileMode(t *testing.T) {
+	// The temp+rename writer must not widen a workflow's permission bits. The
+	// test harness writes workflows at 0600; after a relock the file must still
+	// be 0600, not a fresh 0644.
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	const (
+		oldSHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+		newSHA = "88888888888888888888888888888888888888bb"
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", newSHA, nodeActionYAML),
+			},
+		}),
+	)
+	registerBranchDiscovery(reg, "actions", "checkout", newSHA, "v6")
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-"+oldSHA,
+	)
+	require.NoError(t, os.Chmod(wfPath, 0o600))
+
+	_, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		wfPath,
+	)
+	require.NoError(t, err)
+
+	info, err := os.Stat(wfPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "relock must preserve the workflow's mode")
+
+	body, err := os.ReadFile(wfPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "actions/checkout@v6", "the rewrite still happened")
+}

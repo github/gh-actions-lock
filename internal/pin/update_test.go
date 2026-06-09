@@ -176,3 +176,72 @@ func TestUnionStrings(t *testing.T) {
 	got := unionStrings([]string{"a", "b"}, []string{"b", "c"})
 	assert.Equal(t, []string{"a", "b", "c"}, got)
 }
+
+func TestLooksLikeSHA(t *testing.T) {
+	cases := []struct {
+		ref  string
+		want bool
+	}{
+		{"de0fac2e4500dabe0009e67214ff5f5447ce83dd", true},
+		{"DE0FAC2E4500DABE0009E67214FF5F5447CE83DD", true},
+		{"de0fac2e4500dabe0009e67214ff5f5447ce83d", false},   // 39 chars
+		{"de0fac2e4500dabe0009e67214ff5f5447ce83ddd", false}, // 41 chars
+		{"v6", false},
+		{"de0fac2e4500dabe0009e67214ff5f5447ce83dg", false}, // non-hex 'g'
+		{"", false},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, looksLikeSHA(c.ref), "looksLikeSHA(%q)", c.ref)
+	}
+}
+
+func TestVerifyTargetPin(t *testing.T) {
+	const newSHA = "11111111111111111111111111111111111111aa"
+	edit := func(closure []dep.Dependency, direct map[string]bool) workflowEdit {
+		return workflowEdit{path: ".github/workflows/ci.yml", closure: closure, directKeys: direct}
+	}
+
+	t.Run("satisfied", func(t *testing.T) {
+		e := edit(
+			[]dep.Dependency{{NWO: "actions/checkout", Ref: "v6", SHA: newSHA}},
+			map[string]bool{"actions/checkout@v6": true},
+		)
+		_, bad := verifyTargetPin(e, "actions/checkout", "v6", newSHA)
+		assert.False(t, bad, "a correct pin must not produce a finding")
+	})
+
+	t.Run("not a direct pin", func(t *testing.T) {
+		e := edit(
+			[]dep.Dependency{{NWO: "actions/checkout", Ref: "v6", SHA: newSHA}},
+			map[string]bool{}, // target missing from direct set
+		)
+		f, bad := verifyTargetPin(e, "actions/checkout", "v6", newSHA)
+		require.True(t, bad)
+		assert.Equal(t, checksNotPinned, string(f.Category))
+	})
+
+	t.Run("stale sha", func(t *testing.T) {
+		e := edit(
+			[]dep.Dependency{{NWO: "actions/checkout", Ref: "v6", SHA: "wrongsha"}},
+			map[string]bool{"actions/checkout@v6": true},
+		)
+		f, bad := verifyTargetPin(e, "actions/checkout", "v6", newSHA)
+		require.True(t, bad)
+		assert.Equal(t, checksStale, string(f.Category))
+	})
+
+	t.Run("missing from closure", func(t *testing.T) {
+		e := edit(
+			[]dep.Dependency{{NWO: "other/dep", Ref: "v1", SHA: "x"}},
+			map[string]bool{"actions/checkout@v6": true},
+		)
+		f, bad := verifyTargetPin(e, "actions/checkout", "v6", newSHA)
+		require.True(t, bad)
+		assert.Equal(t, checksNotPinned, string(f.Category))
+	})
+}
+
+const (
+	checksNotPinned = "not-pinned"
+	checksStale     = "stale"
+)

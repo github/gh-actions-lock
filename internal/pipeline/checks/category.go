@@ -52,11 +52,12 @@ const (
 	// Non-blocking diagnostic: surfaced so consumers can retry rather
 	// than treating the dep as verified.
 	ReachabilityUnknown Category = "reachability-unknown"
-	// OnboardingRequired means an `update --no-onboard` run targeted
-	// a workflow that has no existing entry in `lockfile.workflows{}`.
-	// The CLI refuses to silently add it during a dependency-update
-	// run; the operator must onboard the workflow explicitly before
-	// re-running update.
+	// OnboardingRequired means an `update` run targeted a workflow that
+	// has no existing entry in `lockfile.workflows{}`. update refuses to
+	// onboard new workflows unconditionally — the `--no-onboard` flag is
+	// accepted for symmetry with check but does not gate this refusal. The
+	// operator must pin the workflow explicitly (e.g. `gh actions-pin
+	// check`) before update will touch it.
 	OnboardingRequired Category = "onboarding-required"
 )
 

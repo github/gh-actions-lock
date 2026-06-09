@@ -60,9 +60,10 @@ func ValidateUpdateJSONFields(fieldsCSV string) error {
 // WriteUpdateJSON writes the `update` JSON output. cli_version,
 // lockfile_version, valid, and all three arrays (updated, findings, workflows)
 // are always emitted: the three arrays are always-on diagnostics per the
-// contract. The --json selector is accepted/validated but does not gate any
-// array; the consumer always reads `updated`.
-func WriteUpdateJSON(w io.Writer, res UpdateResult, fieldsCSV, cliVersion, lockfileVersion string) error {
+// contract. The --json selector is validated at flag-parse time (see
+// ValidateUpdateJSONFields) but never gates any array — the consumer always
+// reads updated/findings/workflows — so it is deliberately not threaded here.
+func WriteUpdateJSON(w io.Writer, res UpdateResult, cliVersion, lockfileVersion string) error {
 	findings := res.Findings
 	if findings == nil {
 		findings = []Finding{}

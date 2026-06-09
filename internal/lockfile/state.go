@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -228,7 +229,7 @@ func (s *State) WorkflowClosure(workflowKey string) (deps []dep.Dependency, pare
 			if !ok {
 				return fmt.Errorf("invalid child pin %q in %s", childPin, parserlock.Path)
 			}
-			if !containsStr(parentMap[childKey], depKey) {
+			if !slices.Contains(parentMap[childKey], depKey) {
 				parentMap[childKey] = append(parentMap[childKey], depKey)
 			}
 			if err := walk(childPin); err != nil {
@@ -250,15 +251,6 @@ func (s *State) WorkflowClosure(workflowKey string) (deps []dep.Dependency, pare
 	}
 
 	return deps, parentMap, directKeys, nil
-}
-
-func containsStr(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // AllDeps returns every action entry in the lockfile as a Dependency,

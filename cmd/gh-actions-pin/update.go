@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/MakeNowJust/heredoc"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -52,8 +53,9 @@ func newUpdateCmd(newResolver resolverFunc) *cobra.Command {
 
 			Exit status:
 			  0  relock succeeded (or was a no-op) with no blocking findings.
-			  1  blocking findings remain (e.g. onboarding-required); stdout
-			     still carries well-formed JSON.
+			  1  blocking findings remain (e.g. onboarding-required). With
+			     --json, stdout still carries well-formed JSON; without it,
+			     findings are printed to stderr.
 			  2  the tool itself failed (bad --action, IO error, resolve or
 			     auth failure).
 		`),
@@ -79,7 +81,7 @@ func newUpdateCmd(newResolver resolverFunc) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.action, "action", "", "Action to relock as `<owner>/<repo>@<ref>` (required)")
-	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (updated,findings,workflows,valid)")
+	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON (all of updated,findings,workflows always emitted; `fields` accepted for symmetry with check but does not filter)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "updated"
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.write, "write", false, "Apply changes to workflows and the lockfile (omit for a dry run)")
@@ -140,11 +142,14 @@ func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc
 	res := buildUpdateResult(plan, saved)
 
 	if opts.jsonFields != "" {
-		if err := format.WriteUpdateJSON(out, res, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+		if err := format.WriteUpdateJSON(out, res, cliVersion(), store.File().Version); err != nil {
 			return err
 		}
 	} else {
-		renderUpdateSummary(console, res, opts.write)
+		for _, w := range plan.Warnings {
+			console.TermDetail("warning: %s", w)
+		}
+		format.PresentUpdateSummary(console, res, opts.write)
 	}
 
 	if !res.Valid {
@@ -179,25 +184,17 @@ func buildUpdateResult(plan *pin.UpdatePlan, saved []string) format.UpdateResult
 			res.Valid = false
 		}
 	}
+	// findings[] is an always-on diagnostic array; give it an explicit total
+	// order so the JSON is byte-deterministic regardless of plan traversal.
+	sort.Slice(res.Findings, func(i, j int) bool {
+		a, b := res.Findings[i], res.Findings[j]
+		if a.Workflow != b.Workflow {
+			return a.Workflow < b.Workflow
+		}
+		if a.Category != b.Category {
+			return a.Category < b.Category
+		}
+		return a.Detail < b.Detail
+	})
 	return res
-}
-
-func renderUpdateSummary(console *ui.UI, res format.UpdateResult, wrote bool) {
-	if len(res.Updated) == 0 {
-		console.TermNeutral("No changes — every targeted workflow is already current.")
-	} else {
-		verb := "Would update"
-		if wrote {
-			verb = "Updated"
-		}
-		for _, u := range res.Updated {
-			console.TermNeutral("%s %s: %s → %s", verb, u.NWO, u.OldRef, u.NewRef)
-		}
-		if wrote {
-			console.TermNeutral("Saved %d %s.", len(res.Workflows), ui.Pluralize(len(res.Workflows), "workflow", "workflows"))
-		}
-	}
-	for _, f := range res.Findings {
-		console.TermDetail("%s: %s — %s", f.Severity, f.Category, f.Detail)
-	}
 }

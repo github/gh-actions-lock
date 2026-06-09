@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -53,6 +52,11 @@ type UpdatePlan struct {
 	Changes  []ActionChange
 	Findings []checks.Finding
 
+	// Warnings are human-only diagnostics (e.g. expression-templated uses: refs
+	// that update can't match). They never enter the JSON contract; runUpdate
+	// surfaces them on stderr in non-JSON mode so a silent no-op is explainable.
+	Warnings []string
+
 	edits []workflowEdit
 }
 
@@ -86,6 +90,19 @@ func PlanUpdate(ctx context.Context, opts UpdateOptions) (*UpdatePlan, error) {
 		return nil, err
 	}
 	if len(eligible) == 0 {
+		return plan, nil
+	}
+
+	// Relock invariant (spec #9): the whole point of update is to swap a
+	// human-readable ref for a freshly-pinned SHA. A bare-SHA TargetRef would
+	// write `uses: nwo@<sha>` (sha-as-ref) and pin it to itself — a silent
+	// non-relock. Refuse it structurally, before any network resolution, with a
+	// blocking finding per eligible workflow. (Un-onboarded workflows already
+	// have their onboarding-required findings appended by selectEligible.)
+	if looksLikeSHA(opts.TargetRef) {
+		for _, e := range eligible {
+			plan.Findings = append(plan.Findings, shaAsRefTargetFinding(e.path, opts.TargetNWO, opts.TargetRef))
+		}
 		return plan, nil
 	}
 
@@ -131,14 +148,15 @@ func PlanUpdate(ctx context.Context, opts UpdateOptions) (*UpdatePlan, error) {
 		}
 		existingSHA := make(map[string]string, len(existing))
 		for _, d := range existing {
-			existingSHA[d.Key()] = d.SHA
+			existingSHA[strings.ToLower(d.Key())] = d.SHA
 		}
 
 		rewrites := make(map[string]string)
 		changed := false
+		var localChanges []ActionChange
 		for _, t := range e.targets {
 			oldRef := t.Ref
-			oldSHA := existingSHA[canonNWO+"@"+oldRef]
+			oldSHA := existingSHA[strings.ToLower(canonNWO+"@"+oldRef)]
 			if oldRef == opts.TargetRef && oldSHA == newSHA {
 				continue // already current — no-op
 			}
@@ -149,17 +167,13 @@ func PlanUpdate(ctx context.Context, opts UpdateOptions) (*UpdatePlan, error) {
 				// anchored substitution matches.
 				rewrites[t.FullName()+"@"+oldRef] = t.FullName() + "@" + opts.TargetRef
 			}
-			ch := ActionChange{
+			localChanges = append(localChanges, ActionChange{
 				NWO:    canonNWO,
 				OldRef: oldRef,
 				NewRef: opts.TargetRef,
 				OldSHA: oldSHA,
 				NewSHA: newSHA,
-			}
-			if !seen[ch] {
-				seen[ch] = true
-				plan.Changes = append(plan.Changes, ch)
-			}
+			})
 		}
 		if !changed {
 			continue
@@ -170,22 +184,41 @@ func PlanUpdate(ctx context.Context, opts UpdateOptions) (*UpdatePlan, error) {
 			targetDeps, targetPM,
 			canonNWO, opts.TargetRef,
 		)
-		plan.edits = append(plan.edits, workflowEdit{
+		edit := workflowEdit{
 			path:       e.path,
 			wfKey:      e.wfKey,
 			rewrites:   rewrites,
 			closure:    closure,
 			parentMap:  mergedPM,
 			directKeys: mergedDirect,
-		})
+		}
+		// Verify the spliced closure actually upholds the relock postcondition
+		// for this workflow before we commit to writing it. In the current
+		// engine this holds by construction, but a future change to
+		// spliceClosure that silently dropped the target pin would otherwise
+		// ship a no-op `update` as success. A violation is blocking, not fatal.
+		// We record this workflow's changes only after it passes, so updated[]
+		// never advertises a bump for an edit we end up skipping.
+		if f, bad := verifyTargetPin(edit, canonNWO, opts.TargetRef, newSHA); bad {
+			plan.Findings = append(plan.Findings, f)
+			continue
+		}
+		plan.edits = append(plan.edits, edit)
+		for _, ch := range localChanges {
+			if !seen[ch] {
+				seen[ch] = true
+				plan.Changes = append(plan.Changes, ch)
+			}
+		}
 	}
 
 	sortChanges(plan.Changes)
 	return plan, nil
 }
 
-// sortChanges orders the updated[] array deterministically; the engine builds
-// it partly from map iteration (a workflow's distinct target refs).
+// sortChanges orders the updated[] array deterministically. The engine appends
+// changes while iterating workflows and their matched target refs, so the raw
+// order depends on traversal; this imposes a stable total order on the tuple.
 func sortChanges(changes []ActionChange) {
 	sort.Slice(changes, func(i, j int) bool {
 		a, b := changes[i], changes[j]
@@ -205,60 +238,6 @@ func sortChanges(changes []ActionChange) {
 	})
 }
 
-// CommitUpdate applies a plan to disk: rewrites each eligible workflow's uses:
-// line, updates the lockfile closure, and saves once atomically. It returns the
-// sorted set of workflow paths that were saved. All replacement bytes are
-// computed before any write so a mid-run failure leaves the tree consistent.
-func CommitUpdate(ctx context.Context, store *lockfile.State, plan *UpdatePlan) ([]string, error) {
-	if len(plan.edits) == 0 {
-		return nil, nil
-	}
-
-	type pendingWrite struct {
-		path    string
-		content []byte
-	}
-	var writes []pendingWrite
-	for _, e := range plan.edits {
-		if len(e.rewrites) == 0 {
-			continue // lockfile-only change (same ref, moved SHA)
-		}
-		wf, err := workflowfile.Load(e.path)
-		if err != nil {
-			return nil, fmt.Errorf("loading %s: %w", e.path, err)
-		}
-		content, changed, err := wf.RewriteActionRefs(e.rewrites)
-		if err != nil {
-			return nil, fmt.Errorf("rewriting %s: %w", e.path, err)
-		}
-		if changed == 0 {
-			return nil, fmt.Errorf("rewriting %s: no uses: line matched %v (workflow/lockfile desync)", e.path, e.rewrites)
-		}
-		writes = append(writes, pendingWrite{path: e.path, content: content})
-	}
-
-	for _, e := range plan.edits {
-		if err := store.Set(ctx, e.wfKey, e.closure, e.parentMap, e.directKeys); err != nil {
-			return nil, fmt.Errorf("updating lockfile for %s: %w", e.path, err)
-		}
-	}
-	for _, w := range writes {
-		if err := os.WriteFile(w.path, w.content, 0o644); err != nil {
-			return nil, fmt.Errorf("writing %s: %w", w.path, err)
-		}
-	}
-	if err := store.Save(); err != nil {
-		return nil, fmt.Errorf("saving lockfile: %w", err)
-	}
-
-	saved := make([]string, 0, len(plan.edits))
-	for _, e := range plan.edits {
-		saved = append(saved, e.path)
-	}
-	sort.Strings(saved)
-	return saved, nil
-}
-
 // eligibleWorkflow is a workflow that uses the target and already has a
 // lockfile entry, so it can be relocked.
 type eligibleWorkflow struct {
@@ -273,12 +252,19 @@ type eligibleWorkflow struct {
 // onboarding-required finding for any targeted-but-unonboarded workflow.
 func selectEligible(opts UpdateOptions, plan *UpdatePlan) ([]eligibleWorkflow, error) {
 	var eligible []eligibleWorkflow
+	seenWarn := make(map[string]bool)
 	for _, path := range opts.WorkflowPaths {
 		wf, err := workflowfile.Load(path)
 		if err != nil {
 			return nil, fmt.Errorf("loading %s: %w", path, err)
 		}
-		refs, _, _ := wf.ExtractActionRefs()
+		refs, warnings, _ := wf.ExtractActionRefs()
+		for _, w := range warnings {
+			if !seenWarn[w] {
+				seenWarn[w] = true
+				plan.Warnings = append(plan.Warnings, w)
+			}
+		}
 		var targets []parserlock.ActionRef
 		for _, r := range refs {
 			if strings.EqualFold(r.NWO(), opts.TargetNWO) {
@@ -457,7 +443,7 @@ func onboardingFinding(path, nwo, ref string) checks.Finding {
 		Detail: fmt.Sprintf(
 			"%s has no lockfile entry; update refuses to onboard new workflows (target %s@%s)",
 			path, nwo, ref),
-		Remediation: "run `gh actions-pin check` to onboard this workflow before updating it",
+		Remediation: "pin this workflow first (run `gh actions-pin check`), then re-run update",
 	}
 }
 
@@ -468,6 +454,86 @@ func impostorFinding(path string, imp *resolve.ImpostorError) checks.Finding {
 		Severity:     checks.SeverityError,
 		Confidence:   checks.ConfidenceHigh,
 		Detail:       imp.Error(),
+		Remediation:  "the resolved commit is on no branch of the upstream repo; pin to a tagged release instead, or escalate to the action maintainer if you expected this ref to be reachable",
 		ObservedSHA:  imp.SHA,
+	}
+}
+
+// looksLikeSHA reports whether ref is shaped like a full git commit SHA (40 hex
+// digits). update refuses a SHA-shaped target ref because relocking to a bare
+// SHA would write a sha-as-ref instead of a freshly-pinned human-readable ref.
+func looksLikeSHA(ref string) bool {
+	if len(ref) != 40 {
+		return false
+	}
+	for _, c := range ref {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// verifyTargetPin re-checks one workflow's spliced closure against the relock
+// postcondition: the target is a direct dep pinned at NewRef (a human-readable
+// ref, not a bare SHA) whose recorded SHA equals the freshly-resolved newSHA. It
+// returns a blocking finding and true when the postcondition is violated. The
+// current engine satisfies this by construction; the guard converts any future
+// regression in spliceClosure from a silent no-op-success into a loud blocking
+// finding.
+func verifyTargetPin(e workflowEdit, nwo, newRef, newSHA string) (checks.Finding, bool) {
+	newKey := nwo + "@" + newRef
+	if !e.directKeys[newKey] {
+		return notPinnedTargetFinding(e.path, nwo, newRef), true
+	}
+	for _, d := range e.closure {
+		if d.Key() == newKey {
+			if d.SHA != newSHA {
+				return staleTargetFinding(e.path, nwo, newRef, newSHA, d.SHA), true
+			}
+			return checks.Finding{}, false
+		}
+	}
+	return notPinnedTargetFinding(e.path, nwo, newRef), true
+}
+
+func shaAsRefTargetFinding(path, nwo, ref string) checks.Finding {
+	return checks.Finding{
+		WorkflowPath: path,
+		Category:     checks.ShaAsRef,
+		Severity:     checks.SeverityError,
+		Confidence:   checks.ConfidenceHigh,
+		Detail: fmt.Sprintf(
+			"target ref %q for %s is a bare commit SHA; update needs a tag or branch ref so it can keep a human-readable ref while pinning the SHA",
+			ref, nwo),
+		Remediation: fmt.Sprintf("pass --action %s@<tag|branch> (e.g. a release tag); update records the SHA for you", nwo),
+	}
+}
+
+func notPinnedTargetFinding(path, nwo, ref string) checks.Finding {
+	return checks.Finding{
+		WorkflowPath: path,
+		Category:     checks.NotPinned,
+		Severity:     checks.SeverityError,
+		Confidence:   checks.ConfidenceHigh,
+		Detail: fmt.Sprintf(
+			"after relock, %s@%s is not pinned in %s (lockfile entry missing)",
+			nwo, ref, path),
+		Remediation: "re-run update; if it persists, run `gh actions-pin check` to inspect the lockfile",
+	}
+}
+
+func staleTargetFinding(path, nwo, ref, want, got string) checks.Finding {
+	return checks.Finding{
+		WorkflowPath: path,
+		Category:     checks.Stale,
+		Severity:     checks.SeverityError,
+		Confidence:   checks.ConfidenceHigh,
+		Detail: fmt.Sprintf(
+			"after relock, %s@%s is pinned to %s but the ref resolves to %s",
+			nwo, ref, got, want),
+		Remediation: "re-run update to re-pin the target",
 	}
 }
