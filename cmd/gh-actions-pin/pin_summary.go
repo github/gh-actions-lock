@@ -167,9 +167,25 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 	}
 
 	console.TermBlank()
-	console.TermError("%d %s %s maintainer action — pinned commit is not reachable from any branch",
-		len(groups), ui.Pluralize(len(groups), "action", "actions"),
-		ui.Pluralize(len(groups), "requires", "require"))
+
+	// Use a specific header when all entries are impostor-commit;
+	// fall back to a generic header when other issue types are mixed in.
+	allImpostor := true
+	for _, g := range groups {
+		if g.Issue != string(checks.ImpostorCommit) {
+			allImpostor = false
+			break
+		}
+	}
+	if allImpostor {
+		console.TermError("%d %s %s maintainer action — pinned commit is not reachable from any branch",
+			len(groups), ui.Pluralize(len(groups), "action", "actions"),
+			ui.Pluralize(len(groups), "requires", "require"))
+	} else {
+		console.TermError("%d %s %s investigation — do not auto-pin",
+			len(groups), ui.Pluralize(len(groups), "action", "actions"),
+			ui.Pluralize(len(groups), "requires", "require"))
+	}
 	for _, g := range groups {
 		dep := g.NWO + "@" + g.Ref
 		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))

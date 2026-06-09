@@ -152,6 +152,11 @@ func TestRenderInvestigationAlerts_ImpostorCommitEscalation(t *testing.T) {
 	renderInvestigationAlerts(console, entries, r)
 	out := buf.String()
 
+	// All-impostor header.
+	if !strings.Contains(out, "requires maintainer action") {
+		t.Errorf("expected maintainer action header for all-impostor entries, got:\n%s", out)
+	}
+
 	// Impostor context line.
 	if !strings.Contains(out, "indistinguishable from impostor") {
 		t.Errorf("expected impostor commit context line, got:\n%s", out)
@@ -168,6 +173,37 @@ func TestRenderInvestigationAlerts_ImpostorCommitEscalation(t *testing.T) {
 	// Doc link present — plain UI renders the display text, not the URL.
 	if !strings.Contains(out, "Using tags for release management") {
 		t.Errorf("expected doc link for tag release management, got:\n%s", out)
+	}
+}
+
+func TestRenderInvestigationAlerts_MixedIssuesFallbackHeader(t *testing.T) {
+	entries := []pin.Entry{
+		{
+			NWO:       "octo/action",
+			Ref:       "abc123abc123abc123abc123abc123abc123abcd",
+			Issue:     "impostor-commit",
+			Workflows: []string{"ci.yml"},
+		},
+		{
+			NWO:       "other/dep",
+			Ref:       "v2",
+			Issue:     "ref-moved",
+			Workflows: []string{"deploy.yml"},
+		},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	r := &resolve.Resolver{}
+	renderInvestigationAlerts(console, entries, r)
+	out := buf.String()
+
+	// Mixed issues should use the generic header, not the impostor-specific one.
+	if strings.Contains(out, "requires maintainer action") {
+		t.Errorf("expected generic header for mixed issues, got:\n%s", out)
+	}
+	if !strings.Contains(out, "investigation") {
+		t.Errorf("expected investigation header for mixed issues, got:\n%s", out)
 	}
 }
 
