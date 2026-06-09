@@ -168,6 +168,56 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 	return runCommandWithHTTPAndReach(t, rt, nil, args...)
 }
 
+// fakePrompter is a versionPrompter that records the options it was shown and
+// returns a fixed selection, so interactive picker tests run without a TTY.
+type fakePrompter struct {
+	selectIdx int
+	err       error
+	gotPrompt string
+	gotOpts   []string
+}
+
+func (f *fakePrompter) Select(prompt, _ string, options []string) (int, error) {
+	f.gotPrompt = prompt
+	f.gotOpts = options
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.selectIdx, nil
+}
+
+// runUpdateInteractive runs the root command with an injected prompter so the
+// interactive picker is exercised without a real terminal.
+func runUpdateInteractive(t *testing.T, rt http.RoundTripper, prompt versionPrompter, args ...string) (string, string, error) {
+	t.Helper()
+
+	stdoutR, stdoutW, err := os.Pipe()
+	require.NoError(t, err)
+	stderrR, stderrW, err := os.Pipe()
+	require.NoError(t, err)
+
+	newResolver := func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
+		return resolve.New(hostname, pool, resolve.WithCheckReachabilityFunc(reachableFunc()), resolve.WithTransport(rt))
+	}
+	factory := func() (versionPrompter, bool) { return prompt, true }
+
+	cmd := newRootCmdWithPrompter(newResolver, factory)
+	cmd.SetOut(stdoutW)
+	cmd.SetErr(stderrW)
+	cmd.SetArgs(args)
+	runErr := cmd.Execute()
+
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+
+	stdoutBytes, readErr := io.ReadAll(stdoutR)
+	require.NoError(t, readErr)
+	stderrBytes, readErr := io.ReadAll(stderrR)
+	require.NoError(t, readErr)
+
+	return string(stdoutBytes), string(stderrBytes), runErr
+}
+
 func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string), args ...string) (string, string, error) {
 	t.Helper()
 

@@ -4,92 +4,130 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/go-gh/v2/pkg/prompter"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
+	"github.com/github/gh-actions-pin/internal/discover"
 	"github.com/github/gh-actions-pin/internal/pin"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/pipeline"
 	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 	"github.com/github/gh-actions-pin/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type updateOptions struct {
 	action        string
+	target        string
 	workflowPaths []string
 	jsonFields    string
 	hostname      string
-	write         bool
 }
 
-func newUpdateCmd(newResolver resolverFunc) *cobra.Command {
+// versionPrompter selects one option from a list. Satisfied by
+// *prompter.Prompter; an interface so tests inject a fake without a TTY.
+type versionPrompter interface {
+	Select(prompt, defaultValue string, options []string) (int, error)
+}
+
+// promptFactory returns an interactive prompter and whether the session can
+// prompt (stdin and stderr are both terminals). Injected for tests; the prod
+// default binds to the real terminal and renders to stderr so stdout stays
+// reserved for JSON.
+type promptFactory func() (versionPrompter, bool)
+
+func defaultPromptFactory() (versionPrompter, bool) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
+		return nil, false
+	}
+	// Render the picker to stderr (not stdout) so `update --json | jq` stays clean.
+	return prompter.New(os.Stdin, os.Stderr, os.Stderr), true
+}
+
+func newUpdateCmd(newResolver resolverFunc, newPrompt promptFactory) *cobra.Command {
 	opts := &updateOptions{}
+	if newPrompt == nil {
+		newPrompt = defaultPromptFactory
+	}
 
 	cmd := &cobra.Command{
-		Use:   "update --action <owner>/<repo>@<ref> [<workflow-path>...]",
+		Use:   "update --action <owner>/<repo>@<current-ref> [--target <ref>] [<workflow-path>...]",
 		Args:  cobra.ArbitraryArgs,
 		Short: "Relock a single action to a new ref",
 		Long: heredoc.Doc(`
-			Relock one action dependency to a new ref across the workflows that
-			already use it, updating both the workflow uses: line and the
-			lockfile pin (the immutable SHA the new ref resolves to).
+Relock one action dependency across the workflows that already use
+it, updating both the workflow uses: line and the lockfile pin (the
+immutable SHA the new ref resolves to).
 
-			Resolves --action's ref to its newest immutable SHA and rewrites
-			every matching workflow that already has a lockfile entry. The
-			human-readable ref you pass is preserved verbatim (v4 → v6, never
-			narrowed to v6.1.2). Untargeted dependencies are left untouched.
+--action names the dependency and its CURRENT pinned ref
+(owner/repo@ref); the ref anchors version selection and is matched
+against the lockfile. --target is the destination ref to move to. The
+human-readable ref you pass is preserved verbatim in the workflow
+(v4 → v6, never narrowed to v6.1.2); untargeted dependencies are
+left untouched.
 
-			Onboarding is refused: a workflow that uses the action but has no
-			existing lockfile entry is skipped with an onboarding-required
-			finding. Run 'gh actions-pin check' to onboard it first.
+When --target is omitted and the session is interactive, update
+lists the newer versions available for the action and lets you pick
+one. In a non-interactive session (--no-interactive, or stdin/stderr
+not a terminal) --target is required.
 
-			--write applies the changes to disk; without it the diff is computed
-			but nothing is written. All three result arrays (updated, workflows,
-			findings) are always present in --json output; the selector is
-			accepted for symmetry with check but does not gate any field.
+update always writes: a successful relock mutates the workflow files
+and the lockfile in place. Onboarding is refused — a workflow that
+uses the action but has no lockfile entry is skipped with an
+onboarding-required finding (run 'gh actions-pin check' to onboard
+it first).
 
-			Exit status:
-			  0  relock succeeded (or was a no-op) with no blocking findings.
-			  1  blocking findings remain (e.g. onboarding-required). With
-			     --json, stdout still carries well-formed JSON; without it,
-			     findings are printed to stderr.
-			  2  the tool itself failed (bad --action, IO error, resolve or
-			     auth failure).
-		`),
+All three result arrays (updated, workflows, findings) are always
+present in --json output; the selector is accepted for symmetry with
+check but does not gate any field.
+
+Exit status:
+  0  relock succeeded (or was a no-op) with no blocking findings.
+  1  blocking findings remain (e.g. onboarding-required). With
+     --json, stdout still carries well-formed JSON; without it,
+     findings are printed to stderr.
+  2  the tool itself failed (bad flags, IO error, resolve or auth
+     failure, or --target missing in a non-interactive session).
+`),
 		Example: heredoc.Doc(`
-			# Bump actions/checkout to v6 and write the changes
-			$ gh actions-pin update --action actions/checkout@v6 --write --json=updated
+# Bump actions/checkout from v4 to v6
+$ gh actions-pin update --action actions/checkout@v4 --target v6
 
-			# Dry-run: compute the diff without touching disk
-			$ gh actions-pin update --action actions/checkout@v6 --json=updated
-		`),
+# Pick a newer version interactively (no --target)
+$ gh actions-pin update --action actions/checkout@v4
+
+# Emit JSON for tooling (relock still applied)
+$ gh actions-pin update --action actions/checkout@v4 --target v6 --json=updated
+`),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.workflowPaths = args
 			}
 			if opts.action == "" {
-				return fmt.Errorf("--action is required (expected <owner>/<repo>@<ref>)")
+				return fmt.Errorf("--action is required (expected <owner>/<repo>@<current-ref>)")
 			}
 			return format.ValidateUpdateJSONFields(opts.jsonFields)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(cmd, opts, newResolver)
+			return runUpdate(cmd, opts, newResolver, newPrompt)
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.action, "action", "", "Action to relock as `<owner>/<repo>@<ref>` (required)")
+	cmd.Flags().StringVar(&opts.action, "action", "", "Action and its current ref as `<owner>/<repo>@<ref>` (required)")
+	cmd.Flags().StringVar(&opts.target, "target", "", "Destination `ref` to relock to (omit to pick interactively)")
 	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON (all of updated,findings,workflows always emitted; `fields` accepted for symmetry with check but does not filter)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "updated"
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.write, "write", false, "Apply changes to workflows and the lockfile (omit for a dry run)")
 
 	return cmd
 }
 
-func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc) error {
+func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc, newPrompt promptFactory) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -101,10 +139,10 @@ func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc
 
 	ar := parserlock.ParseActionRef(opts.action)
 	if ar == nil {
-		return fmt.Errorf("invalid --action %q: expected <owner>/<repo>@<ref>", opts.action)
+		return fmt.Errorf("invalid --action %q: expected <owner>/<repo>@<current-ref>", opts.action)
 	}
 	targetNWO := ar.NWO()
-	targetRef := ar.Ref
+	currentRef := ar.Ref
 
 	pool := pinpool.New(0, console)
 	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver)
@@ -115,6 +153,26 @@ func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc
 
 	if opts.jsonFields == "" {
 		console.SetLog(io.Discard)
+	}
+
+	// Resolve the destination ref: explicit --target, or an interactive pick
+	// anchored on the current ref. A non-interactive session with no --target
+	// is a usage error (exit 2), never a hang or silent auto-pick.
+	targetRef := opts.target
+	if targetRef == "" {
+		picked, ok, err := pickTargetRef(ctx, cmd, console, opts, newPrompt, targetNWO, currentRef, r.GHClient())
+		if err != nil {
+			console.StopProgress()
+			return err
+		}
+		if !ok {
+			// No newer version to offer; nothing to do. Emit an empty,
+			// well-formed result so JSON consumers still parse cleanly.
+			console.StopProgress()
+			res := format.UpdateResult{Valid: true}
+			return emitUpdateResult(out, console, opts, store.File().Version, res)
+		}
+		targetRef = picked
 	}
 
 	plan, err := pin.PlanUpdate(ctx, pin.UpdateOptions{
@@ -129,33 +187,82 @@ func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc
 		return err
 	}
 
-	var saved []string
-	if opts.write {
-		saved, err = pin.CommitUpdate(ctx, store, plan)
-		if err != nil {
-			console.StopProgress()
-			return err
-		}
+	saved, err := pin.CommitUpdate(ctx, store, plan)
+	if err != nil {
+		console.StopProgress()
+		return err
 	}
 	console.StopProgress()
 
 	res := buildUpdateResult(plan, saved)
-
-	if opts.jsonFields != "" {
-		if err := format.WriteUpdateJSON(out, res, cliVersion(), store.File().Version); err != nil {
-			return err
-		}
-	} else {
+	if opts.jsonFields == "" {
 		for _, w := range plan.Warnings {
 			console.TermDetail("warning: %s", w)
 		}
-		format.PresentUpdateSummary(console, res, opts.write)
+	}
+	return emitUpdateResult(out, console, opts, store.File().Version, res)
+}
+
+// pickTargetRef drives interactive version selection. It returns (ref, true)
+// when the user picks a version, (\"\", false) when there is nothing newer to
+// offer, and an error (exit 2) when the session can't prompt or discovery
+// fails.
+func pickTargetRef(ctx context.Context, cmd *cobra.Command, console *ui.UI, opts *updateOptions, newPrompt promptFactory, nwo, currentRef string, lister discover.TagLister) (string, bool, error) {
+	noInteractive, _ := cmd.Flags().GetBool("no-interactive")
+	var p versionPrompter
+	if !noInteractive {
+		p, _ = newPrompt()
+	}
+	if p == nil {
+		return "", false, fmt.Errorf("--target is required: pass the destination ref, or run in an interactive terminal to pick one")
 	}
 
+	cands, err := discover.Candidates(ctx, nwo, currentRef, lister)
+	if err != nil {
+		return "", false, err
+	}
+	console.StopProgress()
+	if len(cands) == 0 {
+		console.TermNeutral("No newer versions available for %s (current %s).", nwo, currentRef)
+		return "", false, nil
+	}
+
+	options := make([]string, len(cands))
+	for i, c := range cands {
+		if c.SHA != "" {
+			options[i] = fmt.Sprintf("%s (%s)", c.Ref, shortSHA(c.SHA))
+		} else {
+			options[i] = c.Ref
+		}
+	}
+	idx, err := p.Select(fmt.Sprintf("Select a version for %s (current %s)", nwo, currentRef), options[0], options)
+	if err != nil {
+		return "", false, fmt.Errorf("selecting a version: %w", err)
+	}
+	return cands[idx].Ref, true, nil
+}
+
+// emitUpdateResult writes the result as JSON (stdout) or a human summary
+// (stderr), then maps blocking findings to the errSilent (exit 1) sentinel.
+func emitUpdateResult(out io.Writer, console *ui.UI, opts *updateOptions, lockfileVersion string, res format.UpdateResult) error {
+	if opts.jsonFields != "" {
+		if err := format.WriteUpdateJSON(out, res, cliVersion(), lockfileVersion); err != nil {
+			return err
+		}
+	} else {
+		format.PresentUpdateSummary(console, res)
+	}
 	if !res.Valid {
 		return errSilent
 	}
 	return nil
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 // buildUpdateResult assembles the JSON-facing result from the engine plan and

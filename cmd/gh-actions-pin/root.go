@@ -60,6 +60,12 @@ type resolverFunc func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, 
 // newRootCmd returns the cobra command for the root `actions-pin` invocation.
 // newResolver supplies the resolver builder; pass nil for production wiring.
 func newRootCmd(newResolver resolverFunc) *cobra.Command {
+	return newRootCmdWithPrompter(newResolver, nil)
+}
+
+// newRootCmdWithPrompter is newRootCmd with an injectable interactive prompter
+// factory for `update`. newPrompt nil selects the terminal-bound default.
+func newRootCmdWithPrompter(newResolver resolverFunc, newPrompt promptFactory) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
@@ -120,8 +126,7 @@ $ gh actions-pin --no-fix --json=valid,findings
 	cmd.PersistentFlags().Bool("no-onboard", false, "Refuse to add new workflow lockfile entries (update refuses onboarding regardless)")
 	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts (accepted and ignored)")
 	cmd.AddCommand(newCheckCmd(newResolver))
-	cmd.AddCommand(newUpdateCmd(newResolver))
-	cmd.AddCommand(newOutdatedCmd(newResolver))
+	cmd.AddCommand(newUpdateCmd(newResolver, newPrompt))
 
 	return cmd
 }

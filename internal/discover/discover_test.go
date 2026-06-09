@@ -2,10 +2,9 @@ package discover
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/ghapi"
 )
 
@@ -24,184 +23,153 @@ func checkoutTags() []ghapi.RepoTag {
 	}
 }
 
-func TestPickUpgrade(t *testing.T) {
+// fakeLister serves canned tags keyed by owner/repo.
+type fakeLister struct {
+	byRepo map[string][]ghapi.RepoTag
+	err    error
+}
+
+func (f *fakeLister) RepoTags(_ context.Context, owner, repo string) ([]ghapi.RepoTag, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.byRepo[owner+"/"+repo], nil
+}
+
+func refs(cands []Candidate) []string {
+	out := make([]string, len(cands))
+	for i, c := range cands {
+		out[i] = c.Ref
+	}
+	return out
+}
+
+func TestCandidates(t *testing.T) {
 	tests := []struct {
-		name      string
-		current   string
-		tags      []ghapi.RepoTag
-		wantRef   string
-		wantSHA   string
-		wantPrec  precision
-		wantOffer bool
+		name     string
+		current  string
+		tags     []ghapi.RepoTag
+		wantRefs []string
 	}{
 		{
-			name:      "major float offers highest major-form tag",
-			current:   "v5",
-			tags:      checkoutTags(),
-			wantRef:   "v6",
-			wantSHA:   "sha-v6",
-			wantPrec:  precMajor,
-			wantOffer: true,
+			name:    "semver current: only strictly-greater, semver-desc",
+			current: "v5",
+			tags:    checkoutTags(),
+			// v4/v4.2.2/v5 dropped (<= 5.0.0); v5.1.0 is newer than the v5
+			// float (5.1.0 > 5.0.0); v6.x ranks highest.
+			wantRefs: []string{"v6.1.2", "v6", "v5.1.0"},
 		},
 		{
-			name:      "full pin offers highest full tag, not the major float",
-			current:   "v5.1.0",
-			tags:      checkoutTags(),
-			wantRef:   "v6.1.2",
-			wantSHA:   "sha-v612",
-			wantPrec:  precFull,
-			wantOffer: true,
+			name:     "full-precision current still offers higher fulls and floats",
+			current:  "v5.1.0",
+			tags:     checkoutTags(),
+			wantRefs: []string{"v6.1.2", "v6"},
 		},
 		{
-			name:      "minor pin offers highest minor-form tag",
-			current:   "v5.1",
-			tags:      []ghapi.RepoTag{tag("v5.1", "a"), tag("v6.1", "b"), tag("v6.1.2", "c")},
-			wantRef:   "v6.1",
-			wantSHA:   "b",
-			wantPrec:  precMinor,
-			wantOffer: true,
+			name:     "newest current: nothing newer",
+			current:  "v6.1.2",
+			tags:     checkoutTags(),
+			wantRefs: []string{},
 		},
 		{
-			name:      "cross-major is allowed",
-			current:   "v5",
-			tags:      []ghapi.RepoTag{tag("v5", "a"), tag("v6", "b")},
-			wantRef:   "v6",
-			wantSHA:   "b",
-			wantPrec:  precMajor,
-			wantOffer: true,
+			name:    "mixed major and full both offered, desc",
+			current: "v4",
+			tags:    checkoutTags(),
+			// v6.1.2 > v6 > v5.1.0 > v5 > v4.2.2 (v4 itself excluded).
+			wantRefs: []string{"v6.1.2", "v6", "v5.1.0", "v5", "v4.2.2"},
 		},
 		{
-			name:      "already newest is a no-op",
-			current:   "v6",
-			tags:      checkoutTags(),
-			wantOffer: false,
+			name:    "prereleases dropped when current is stable",
+			current: "v1",
+			tags: []ghapi.RepoTag{
+				tag("v1", "sha-v1"),
+				tag("v2.0.0-beta.1", "sha-beta"),
+				tag("v2.0.0", "sha-v200"),
+			},
+			wantRefs: []string{"v2.0.0"},
 		},
 		{
-			name:      "full already newest is a no-op",
-			current:   "v6.1.2",
-			tags:      checkoutTags(),
-			wantOffer: false,
+			name:    "prereleases kept when current is a prerelease",
+			current: "v2.0.0-beta.1",
+			tags: []ghapi.RepoTag{
+				tag("v2.0.0-beta.1", "sha-b1"),
+				tag("v2.0.0-beta.2", "sha-b2"),
+				tag("v2.0.0", "sha-v200"),
+			},
+			wantRefs: []string{"v2.0.0", "v2.0.0-beta.2"},
 		},
 		{
-			name:      "prereleases dropped when current is stable",
-			current:   "v5",
-			tags:      []ghapi.RepoTag{tag("v5", "a"), tag("v6.0.0-beta.1", "b")},
-			wantOffer: false,
+			name:    "non-version current: every tag offered, semver-desc then release order",
+			current: "main",
+			tags: []ghapi.RepoTag{
+				tag("v1.0.0", "sha-v100"),
+				tag("nightly", "sha-nightly"),
+				tag("v2.0.0", "sha-v200"),
+				tag("latest", "sha-latest"),
+			},
+			// semver desc first (v2 > v1), then non-semver in listing order.
+			wantRefs: []string{"v2.0.0", "v1.0.0", "nightly", "latest"},
 		},
 		{
-			name:      "prereleases kept when current is a prerelease",
-			current:   "v5.0.0-beta.1",
-			tags:      []ghapi.RepoTag{tag("v5.0.0-beta.1", "a"), tag("v5.0.0-beta.2", "b")},
-			wantRef:   "v5.0.0-beta.2",
-			wantSHA:   "b",
-			wantPrec:  precFull,
-			wantOffer: true,
-		},
-		{
-			name:      "non-semver candidates are ignored",
-			current:   "v5",
-			tags:      []ghapi.RepoTag{tag("v5", "a"), tag("latest", "b"), tag("nightly", "c"), tag("v6", "d")},
-			wantRef:   "v6",
-			wantSHA:   "d",
-			wantPrec:  precMajor,
-			wantOffer: true,
-		},
-		{
-			name:      "lower-precision fallback: full current, only a higher major tag",
-			current:   "v5.1.0",
-			tags:      []ghapi.RepoTag{tag("v5.1.0", "a"), tag("v6", "b")},
-			wantRef:   "v6",
-			wantSHA:   "b",
-			wantPrec:  precMajor,
-			wantOffer: true,
-		},
-		{
-			name:      "no fallback past major: major current with only full higher tags",
-			current:   "v5",
-			tags:      []ghapi.RepoTag{tag("v5", "a"), tag("v5.3.1", "b")},
-			wantOffer: false,
+			name:    "non-semver tags appended after semver upgrades",
+			current: "v1.0.0",
+			tags: []ghapi.RepoTag{
+				tag("v1.0.0", "sha-v100"),
+				tag("v2.0.0", "sha-v200"),
+				tag("stable", "sha-stable"),
+			},
+			wantRefs: []string{"v2.0.0", "stable"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cur, ok := parserlock.ParseSemVer(tt.current)
-			if !ok {
-				t.Fatalf("test ref %q did not parse as semver", tt.current)
+			lister := &fakeLister{byRepo: map[string][]ghapi.RepoTag{
+				"actions/checkout": tt.tags,
+			}}
+			got, err := Candidates(context.Background(), "actions/checkout", tt.current, lister)
+			if err != nil {
+				t.Fatalf("Candidates: %v", err)
 			}
-			gotTag, gotPrec, gotOffer := pickUpgrade(cur, tt.tags)
-			if gotOffer != tt.wantOffer {
-				t.Fatalf("offer = %v, want %v (tag=%+v)", gotOffer, tt.wantOffer, gotTag)
+			gotRefs := refs(got)
+			if len(gotRefs) != len(tt.wantRefs) {
+				t.Fatalf("refs = %v, want %v", gotRefs, tt.wantRefs)
 			}
-			if !tt.wantOffer {
-				return
-			}
-			if gotTag.Name != tt.wantRef {
-				t.Errorf("ref = %q, want %q", gotTag.Name, tt.wantRef)
-			}
-			if gotTag.SHA != tt.wantSHA {
-				t.Errorf("sha = %q, want %q", gotTag.SHA, tt.wantSHA)
-			}
-			if gotPrec != tt.wantPrec {
-				t.Errorf("precision = %q, want %q", gotPrec, tt.wantPrec)
+			for i := range gotRefs {
+				if gotRefs[i] != tt.wantRefs[i] {
+					t.Fatalf("refs = %v, want %v", gotRefs, tt.wantRefs)
+				}
 			}
 		})
 	}
 }
 
-// fakeLister serves canned tags keyed by owner/repo.
-type fakeLister struct {
-	byRepo map[string][]ghapi.RepoTag
-	calls  int
-}
-
-func (f *fakeLister) RepoTags(_ context.Context, owner, repo string) ([]ghapi.RepoTag, error) {
-	f.calls++
-	return f.byRepo[owner+"/"+repo], nil
-}
-
-func TestDiscover(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "actions/checkout", Ref: "v5", SHA: "sha-v5"},
-		{NWO: "actions/setup-go", Ref: "v5.1.0", SHA: "sha-sg510"},
-		{NWO: "some/branch-pinned", Ref: "main", SHA: "sha-main"}, // skipped: not semver
-		{NWO: "actions/checkout", Ref: "v5", SHA: "sha-v5"},       // duplicate: deduped
-	}
+func TestCandidates_CarriesSHA(t *testing.T) {
 	lister := &fakeLister{byRepo: map[string][]ghapi.RepoTag{
 		"actions/checkout": checkoutTags(),
-		"actions/setup-go": {tag("v5.1.0", "sha-sg510"), tag("v5.2.0", "sha-sg520")},
 	}}
-
-	offers, err := Discover(context.Background(), deps, lister)
+	got, err := Candidates(context.Background(), "actions/checkout", "v5", lister)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Candidates: %v", err)
 	}
-	if len(offers) != 2 {
-		t.Fatalf("expected 2 offers, got %d: %+v", len(offers), offers)
+	if len(got) == 0 {
+		t.Fatal("expected candidates")
 	}
-	// Sorted by NWO: checkout before setup-go.
-	if offers[0].NWO != "actions/checkout" || offers[0].AvailableRef != "v6" || offers[0].Precision != "major" {
-		t.Errorf("offer[0] = %+v", offers[0])
-	}
-	if offers[0].CurrentSHA != "sha-v5" {
-		t.Errorf("offer[0] current sha = %q", offers[0].CurrentSHA)
-	}
-	if offers[1].NWO != "actions/setup-go" || offers[1].AvailableRef != "v5.2.0" || offers[1].Precision != "full" {
-		t.Errorf("offer[1] = %+v", offers[1])
-	}
-	if offers[1].AvailableSHA != "sha-sg520" {
-		t.Errorf("offer[1] available sha = %q", offers[1].AvailableSHA)
+	if got[0].Ref != "v6.1.2" || got[0].SHA != "sha-v612" {
+		t.Errorf("top candidate = %+v, want {v6.1.2 sha-v612}", got[0])
 	}
 }
 
-func TestDiscover_NoOffersWhenCurrent(t *testing.T) {
-	deps := []dep.Dependency{{NWO: "actions/checkout", Ref: "v6", SHA: "sha-v6"}}
-	lister := &fakeLister{byRepo: map[string][]ghapi.RepoTag{"actions/checkout": checkoutTags()}}
-	offers, err := Discover(context.Background(), deps, lister)
-	if err != nil {
-		t.Fatal(err)
+func TestCandidates_InvalidNWO(t *testing.T) {
+	lister := &fakeLister{}
+	if _, err := Candidates(context.Background(), "checkout", "v5", lister); err == nil {
+		t.Fatal("expected error for nwo without owner/repo")
 	}
-	if len(offers) != 0 {
-		t.Fatalf("expected no offers, got %+v", offers)
+}
+
+func TestCandidates_ListerError(t *testing.T) {
+	lister := &fakeLister{err: errors.New("boom")}
+	if _, err := Candidates(context.Background(), "actions/checkout", "v5", lister); err == nil {
+		t.Fatal("expected listing error to propagate")
 	}
 }

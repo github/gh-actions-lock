@@ -39,6 +39,21 @@ type updateJSON struct {
 // freshly bumped SHA: repo metadata (default branch + IDs), the default-branch
 // HEAD, the ancestry compare, and the tag list.
 func registerBranchDiscovery(reg *httpmock.Registry, owner, repo, sha, tag string) {
+	registerResolveNoTags(reg, owner, repo, sha)
+	reg.Register(
+		httpmock.REST("GET", `repos/`+owner+`/`+repo+`/tags`),
+		httpmock.JSONResponse([]map[string]any{
+			{"name": tag, "commit": map[string]any{"sha": sha}},
+		}),
+	)
+}
+
+// registerResolveNoTags registers the repo-metadata, default-branch, and
+// compare stubs a relock needs, but NOT the /tags stub. Interactive picker
+// tests supply their own multi-tag /tags stub because discover.Candidates and
+// the resolver share one cached tag listing — registering two would leave one
+// unmatched.
+func registerResolveNoTags(reg *httpmock.Registry, owner, repo, sha string) {
 	reg.Register(
 		httpmock.REST("GET", `repos/`+owner+`/`+repo+`$`),
 		httpmock.JSONResponse(map[string]any{
@@ -59,12 +74,6 @@ func registerBranchDiscovery(reg *httpmock.Registry, owner, repo, sha, tag strin
 		httpmock.JSONResponse(map[string]any{
 			"status":            "identical",
 			"merge_base_commit": map[string]any{"sha": sha},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/`+owner+`/`+repo+`/tags`),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": tag, "commit": map[string]any{"sha": sha}},
 		}),
 	)
 }
@@ -102,7 +111,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.NoError(t, err, "clean relock should exit 0")
@@ -178,7 +187,7 @@ jobs:
 `)+"\n"), 0o600))
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		onboarded, filepath.ToSlash(filepath.Join(".github", "workflows", "workflow2.yml")),
 	)
 	require.ErrorIs(t, err, errSilent, "onboarding-required is a blocking finding → exit 1")
@@ -231,7 +240,7 @@ jobs:
 	lockBefore := readTempLockfilePins(t)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v6", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.NoError(t, err, "no-op should exit 0")
@@ -259,58 +268,6 @@ jobs:
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after), "no-op must not touch the workflow")
 	assert.Equal(t, lockBefore, readTempLockfilePins(t), "no-op must not touch the lockfile")
-}
-
-func TestUpdateCommand_DryRunWritesNothing(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	const (
-		oldSHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
-		newSHA = "44444444444444444444444444444444444444dd"
-	)
-	reg.Register(
-		httpmock.GraphQLForRepo("actions", "checkout"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", newSHA, nodeActionYAML),
-			},
-		}),
-	)
-	registerBranchDiscovery(reg, "actions", "checkout", newSHA, "v6")
-
-	wfPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-`,
-		"actions/checkout@v4:sha1-"+oldSHA,
-	)
-	before, err := os.ReadFile(wfPath)
-	require.NoError(t, err)
-	lockBefore := readTempLockfilePins(t)
-
-	// No --write: the diff is computed but nothing is written.
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--no-onboard", "--json=updated",
-		wfPath,
-	)
-	require.NoError(t, err)
-
-	var got updateJSON
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
-
-	require.Len(t, got.Updated, 1, "dry run still reports the diff")
-	assert.Empty(t, got.Workflows, "dry run saves no workflows")
-
-	after, err := os.ReadFile(wfPath)
-	require.NoError(t, err)
-	assert.Equal(t, string(before), string(after), "dry run must not touch the workflow")
-	assert.Equal(t, lockBefore, readTempLockfilePins(t), "dry run must not touch the lockfile")
 }
 
 func TestUpdateCommand_MissingActionFlag(t *testing.T) {
@@ -368,7 +325,7 @@ jobs:
 	lockBefore := readTempLockfilePins(t)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.ErrorIs(t, err, errSilent, "impostor is a blocking finding (exit 1), not a tool failure (exit 2)")
@@ -424,7 +381,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.NoError(t, err)
@@ -496,7 +453,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.NoError(t, err)
@@ -547,7 +504,7 @@ jobs:
 	lockBefore := readTempLockfilePins(t)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@"+targetSHA, "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", targetSHA, "--json=updated",
 		wfPath,
 	)
 	require.ErrorIs(t, err, errSilent, "sha-shaped target is a blocking finding (exit 1), not a tool failure")
@@ -618,7 +575,7 @@ jobs:
 	t.Cleanup(func() { _ = os.Chmod(wfDir, 0o755) })
 
 	_, _, err = runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.Error(t, err, "a write failure must surface as an error")
@@ -675,7 +632,7 @@ jobs:
 	require.NoError(t, os.Chmod(wfPath, 0o600))
 
 	_, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		"update", "--action", "actions/checkout@v4", "--target", "v6", "--json=updated",
 		wfPath,
 	)
 	require.NoError(t, err)
@@ -687,4 +644,187 @@ jobs:
 	body, err := os.ReadFile(wfPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "actions/checkout@v6", "the rewrite still happened")
+}
+
+// checkoutTagsResponse is the repos/tags REST payload for actions/checkout used
+// by the interactive picker tests.
+func checkoutTagsResponse() []map[string]any {
+	tag := func(name, sha string) map[string]any {
+		return map[string]any{"name": name, "commit": map[string]any{"sha": sha}}
+	}
+	return []map[string]any{
+		tag("v4", "de0fac2e4500dabe0009e67214ff5f5447ce83dd"),
+		tag("v5", "22222222222222222222222222222222222222bb"),
+		tag("v6", "11111111111111111111111111111111111111aa"),
+	}
+}
+
+// TestUpdateCommand_InteractivePick exercises the no-target interactive flow:
+// with no --target, update lists newer versions and relocks to the picked ref.
+func TestUpdateCommand_InteractivePick(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	const (
+		oldSHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+		newSHA = "11111111111111111111111111111111111111aa"
+	)
+
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/tags"),
+		httpmock.JSONResponse(checkoutTagsResponse()),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", newSHA, nodeActionYAML),
+			},
+		}),
+	)
+	registerResolveNoTags(reg, "actions", "checkout", newSHA)
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-"+oldSHA,
+	)
+
+	// Candidates for current v4 are [v6, v5] (semver-desc, strictly greater);
+	// index 0 picks v6.
+	prompt := &fakePrompter{selectIdx: 0}
+	stdout, _, err := runUpdateInteractive(t, reg, prompt,
+		"update", "--action", "actions/checkout@v4", "--json=updated", wfPath,
+	)
+	require.NoError(t, err, "interactive relock should exit 0")
+
+	require.NotEmpty(t, prompt.gotOpts, "picker must be shown options")
+	assert.Contains(t, prompt.gotOpts[0], "v6", "newest candidate ranks first")
+
+	var got updateJSON
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	require.Len(t, got.Updated, 1)
+	assert.Equal(t, "v4", got.Updated[0].OldRef)
+	assert.Equal(t, "v6", got.Updated[0].NewRef)
+
+	body, err := os.ReadFile(wfPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "actions/checkout@v6")
+	pins := readTempLockfilePins(t)
+	assert.Contains(t, pins, "actions/checkout@v6:sha1-"+newSHA)
+}
+
+// TestUpdateCommand_InteractiveStdoutPurity guards that the picker UI never
+// leaks onto stdout: with --json, stdout must be exactly the update JSON.
+func TestUpdateCommand_InteractiveStdoutPurity(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	const newSHA = "11111111111111111111111111111111111111aa"
+	reg.Register(
+		httpmock.REST("GET", "repos/actions/checkout/tags"),
+		httpmock.JSONResponse(checkoutTagsResponse()),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", newSHA, nodeActionYAML),
+			},
+		}),
+	)
+	registerResolveNoTags(reg, "actions", "checkout", newSHA)
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+	)
+
+	prompt := &fakePrompter{selectIdx: 0}
+	stdout, _, err := runUpdateInteractive(t, reg, prompt,
+		"update", "--action", "actions/checkout@v4", "--json=updated", wfPath,
+	)
+	require.NoError(t, err)
+
+	trimmed := strings.TrimSpace(stdout)
+	assert.True(t, strings.HasPrefix(trimmed, "{"), "stdout must start with JSON, got: %q", stdout)
+	var got updateJSON
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "stdout must be pure, parseable JSON")
+}
+
+// TestUpdateCommand_NoTargetNonInteractive verifies that omitting --target in a
+// non-interactive session (no TTY, default prompter factory) is a tool failure
+// (exit 2), never a hang or silent auto-pick.
+func TestUpdateCommand_NoTargetNonInteractive(t *testing.T) {
+	reg := &httpmock.Registry{}
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+	)
+
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"update", "--action", "actions/checkout@v4", "--json=updated", wfPath,
+	)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errSilent, "missing --target non-interactively is exit 2, not a findings exit")
+	assert.Empty(t, strings.TrimSpace(stdout), "no JSON on a usage failure")
+}
+
+// TestUpdateCommand_NoTargetNoInteractiveFlag verifies --no-interactive forces
+// the same exit-2 usage failure even if a prompter is available.
+func TestUpdateCommand_NoTargetNoInteractiveFlag(t *testing.T) {
+	reg := &httpmock.Registry{}
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+	)
+
+	prompt := &fakePrompter{selectIdx: 0}
+	_, _, err := runUpdateInteractive(t, reg, prompt,
+		"update", "--action", "actions/checkout@v4", "--no-interactive", "--json=updated", wfPath,
+	)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errSilent, "--no-interactive without --target is exit 2")
+	assert.Empty(t, prompt.gotOpts, "prompter must not be invoked under --no-interactive")
+}
+
+// TestUpdateCommand_MissingRefOnAction verifies --action without an @ref is a
+// usage error (exit 2): the ref is the required precision anchor.
+func TestUpdateCommand_MissingRefOnAction(t *testing.T) {
+	reg := &httpmock.Registry{}
+
+	_, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"update", "--action", "actions/checkout", "--target", "v6", "--json=updated",
+	)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errSilent, "missing @ref is a tool failure, not a findings exit")
 }

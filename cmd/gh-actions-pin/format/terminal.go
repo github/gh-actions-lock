@@ -277,20 +277,15 @@ func WorkflowsForDep(report *checks.Report, depKey string) []string {
 }
 
 // PresentUpdateSummary renders the human-readable outcome of an `update` run
-// (non-JSON mode). wrote distinguishes an applied relock from a dry run.
-func PresentUpdateSummary(console *ui.UI, res UpdateResult, wrote bool) {
+// (non-JSON mode). update always writes, so a successful relock is reported as
+// applied.
+func PresentUpdateSummary(console *ui.UI, res UpdateResult) {
 	switch {
 	case len(res.Updated) > 0:
-		verb := "Would update"
-		if wrote {
-			verb = "Updated"
-		}
 		for _, u := range res.Updated {
-			console.TermNeutral("%s %s: %s → %s", verb, u.NWO, u.OldRef, u.NewRef)
+			console.TermNeutral("Updated %s: %s → %s", u.NWO, u.OldRef, u.NewRef)
 		}
-		if wrote {
-			console.TermNeutral("Saved %d %s.", len(res.Workflows), ui.Pluralize(len(res.Workflows), "workflow", "workflows"))
-		}
+		console.TermNeutral("Saved %d %s.", len(res.Workflows), ui.Pluralize(len(res.Workflows), "workflow", "workflows"))
 	case len(res.Findings) > 0:
 		// Findings but no updates: the run was blocked (e.g. onboarding-required
 		// or a relock-invariant violation), not a clean no-op.
@@ -301,16 +296,4 @@ func PresentUpdateSummary(console *ui.UI, res UpdateResult, wrote bool) {
 	for _, f := range res.Findings {
 		console.TermDetail("%s: %s — %s", f.Severity, f.Category, f.Detail)
 	}
-}
-
-// PresentOutdatedSummary renders the read-only discovery result for humans.
-func PresentOutdatedSummary(console *ui.UI, updates []AvailableUpdate) {
-	if len(updates) == 0 {
-		console.TermNeutral("Everything is up to date.")
-		return
-	}
-	for _, u := range updates {
-		console.TermNeutral("%s: %s → %s", u.NWO, u.CurrentRef, u.AvailableRef)
-	}
-	console.TermDetail("%d %s available.", len(updates), ui.Pluralize(len(updates), "update", "updates"))
 }
