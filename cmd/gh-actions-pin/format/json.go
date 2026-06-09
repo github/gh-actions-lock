@@ -71,6 +71,13 @@ type Workflow struct {
 	Dependencies []Dependency `json:"dependencies,omitempty"`
 }
 
+// FindingJSON converts a checks.Finding to its JSON-safe view. Exported for
+// commands (e.g. `update`) that synthesize findings outside the check pipeline
+// and need the identical wire shape.
+func FindingJSON(f checks.Finding) Finding {
+	return findingFromReport(f)
+}
+
 // findingFromReport converts an checks.Finding to a JSON-safe Finding.
 func findingFromReport(f checks.Finding) Finding {
 	jf := Finding{

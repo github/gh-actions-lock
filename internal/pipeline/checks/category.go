@@ -52,11 +52,11 @@ const (
 	// Non-blocking diagnostic: surfaced so consumers can retry rather
 	// than treating the dep as verified.
 	ReachabilityUnknown Category = "reachability-unknown"
-	// OnboardingRequired means an `upgrade --no-onboard` run targeted
+	// OnboardingRequired means an `update --no-onboard` run targeted
 	// a workflow that has no existing entry in `lockfile.workflows{}`.
 	// The CLI refuses to silently add it during a dependency-update
 	// run; the operator must onboard the workflow explicitly before
-	// re-running upgrade.
+	// re-running update.
 	OnboardingRequired Category = "onboarding-required"
 )
 

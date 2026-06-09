@@ -113,7 +113,14 @@ $ gh actions-pin --no-fix --json=valid,findings
 	}
 
 	bindCheckFlags(cmd, opts)
+	// Accept --no-onboard and --no-interactive everywhere for symmetry and
+	// Dependabot compatibility. `check` ignores both; `update` refuses
+	// onboarding unconditionally (so --no-onboard reaffirms the default) and
+	// treats --no-interactive as a no-op.
+	cmd.PersistentFlags().Bool("no-onboard", false, "Refuse to add new workflow lockfile entries (update refuses onboarding regardless)")
+	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts (accepted and ignored)")
 	cmd.AddCommand(newCheckCmd(newResolver))
+	cmd.AddCommand(newUpdateCmd(newResolver))
 
 	return cmd
 }

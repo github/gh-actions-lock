@@ -400,3 +400,63 @@ func TestState_RefusesFutureVersionLockfile(t *testing.T) {
 		t.Errorf("lockfile was overwritten: %s", got)
 	}
 }
+
+// setupClosure writes a workflow + its closure into a fresh store at dir. The
+// closure is a direct action with one transitive child.
+func setupClosure(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	deps := []dep.Dependency{
+		{NWO: "actions/setup-go", Ref: "v6", Branch: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1"},
+		{NWO: "actions/cache", Ref: "v4", Branch: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1"},
+	}
+	parentMap := map[string][]string{"actions/cache@v4": {"actions/setup-go@v6"}}
+	directKeys := map[string]bool{"actions/setup-go@v6": true}
+	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
+	if err := store.Set(context.Background(), wfKey, deps, parentMap, directKeys); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+}
+
+// TestState_WorkflowClosure roundtrips a saved closure back through the helper
+// the update engine uses to read the existing pin graph.
+func TestState_WorkflowClosure(t *testing.T) {
+	dir := t.TempDir()
+	setupClosure(t, dir)
+
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("reopening store: %v", err)
+	}
+	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
+	deps, parentMap, directKeys, err := store.WorkflowClosure(wfKey)
+	if err != nil {
+		t.Fatalf("WorkflowClosure: %v", err)
+	}
+
+	keys := make(map[string]bool, len(deps))
+	for _, d := range deps {
+		keys[d.Key()] = true
+	}
+	if !keys["actions/setup-go@v6"] || !keys["actions/cache@v4"] {
+		t.Fatalf("closure missing deps, got keys=%v", keys)
+	}
+	if !directKeys["actions/setup-go@v6"] {
+		t.Errorf("expected setup-go to be a direct pin, got %v", directKeys)
+	}
+	if directKeys["actions/cache@v4"] {
+		t.Errorf("cache is transitive, must not be direct")
+	}
+	if got := parentMap["actions/cache@v4"]; len(got) != 1 || got[0] != "actions/setup-go@v6" {
+		t.Errorf("expected cache parent setup-go, got %v", got)
+	}
+}
