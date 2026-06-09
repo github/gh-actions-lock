@@ -28,6 +28,13 @@ type confirmer interface {
 // recovery policy fails closed instead of blocking on input that never comes.
 type confirmFactory func() (confirmer, bool)
 
+// confirmFactoryHook is the confirm factory commands use to build the
+// corrupt-lockfile recovery policy. Production points at defaultConfirmFactory
+// (real terminal). Tests override it to drive the interactive delete-and-
+// recreate path without a TTY; the command tests run serially (t.Chdir) so a
+// package-level override with cleanup is safe.
+var confirmFactoryHook confirmFactory = defaultConfirmFactory
+
 // defaultConfirmFactory binds to the real terminal and renders to stderr so
 // `--json` stdout stays clean. It reports canPrompt only when both stdin and
 // stderr are TTYs and CI is unset — a CI runner with a stray TTY must never
