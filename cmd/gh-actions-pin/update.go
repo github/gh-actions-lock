@@ -46,9 +46,9 @@ func newUpdateCmd(newResolver resolverFunc) *cobra.Command {
 			finding. Run 'gh actions-pin check' to onboard it first.
 
 			--write applies the changes to disk; without it the diff is computed
-			but nothing is written. The three result arrays (updated, workflows,
-			findings) are always present in --json output; the selector only
-			gates the updated diff.
+			but nothing is written. All three result arrays (updated, workflows,
+			findings) are always present in --json output; the selector is
+			accepted for symmetry with check but does not gate any field.
 
 			Exit status:
 			  0  relock succeeded (or was a no-op) with no blocking findings.
