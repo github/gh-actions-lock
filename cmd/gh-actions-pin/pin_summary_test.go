@@ -152,6 +152,11 @@ func TestRenderInvestigationAlerts_ImpostorCommitEscalation(t *testing.T) {
 	renderInvestigationAlerts(console, entries, r)
 	out := buf.String()
 
+	// Impostor context line.
+	if !strings.Contains(out, "indistinguishable from impostor") {
+		t.Errorf("expected impostor commit context line, got:\n%s", out)
+	}
+
 	// Actionable copy with → arrow.
 	if !strings.Contains(out, "→") {
 		t.Errorf("expected → action arrow, got:\n%s", out)

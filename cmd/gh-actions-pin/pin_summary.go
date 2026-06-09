@@ -181,6 +181,7 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 				console.TermBold("→"), console.TermYellow(g.NWO+"@"+g.Suggestion))
 		}
 		if g.Issue == string(checks.ImpostorCommit) {
+			console.TermDetail("    %s %s", console.TermYellow("!"), pipeline.ImpostorCommitContext)
 			console.TermDetail("    %s %s", console.TermBold("→"), pipeline.PublisherEscalationCopy)
 			console.TermDetail("    see: %s", console.TermLink(console.TermDim("Using tags for release management"), pipeline.PublisherTagReleasesDocURL))
 		}

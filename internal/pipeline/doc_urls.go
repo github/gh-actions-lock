@@ -28,6 +28,10 @@ const PublisherTagReleasesDocURL = "https://docs.github.com/en/actions/how-tos/c
 // a branch.
 const PublisherEscalationCopy = "Ask the action maintainer to tag releases from a branch"
 
+// ImpostorCommitContext explains why off-branch commits are dangerous.
+// Shown just before the escalation copy so users understand the risk.
+const ImpostorCommitContext = "Off-branch commits are indistinguishable from impostor commits"
+
 // docURLs maps every Category that can appear on a checks.Finding to its
 // documentation URL. Categories representing "no issue" (Valid, RunOnly)
 // have no URL — they aren't rendered as findings.
