@@ -345,7 +345,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Build entries for all pinned deps (skip any already emitted from inventory).
 	directKeys := directTracker.Keys(deps)
 	for _, dep := range deps {
-		nwoSHA := strings.ToLower(dep.NWO) + ":" + dep.SHA
+		nwoSHA := strings.ToLower(dep.NWO) + ":" + strings.ToLower(dep.SHA)
 		if inventorySHA[nwoSHA] {
 			continue // already emitted as Verified from inventory
 		}
@@ -448,11 +448,11 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 	shaSeen = make(map[string]bool, len(inventory))
 	for _, inv := range inventory {
 		nwo := strings.ToLower(inv.Dep.NWO)
-		byKey[nwo+"@"+strings.ToLower(inv.Dep.Ref)] = true
-		shaSeen[nwo+":"+inv.Dep.SHA] = true
+		byKey[nwo+"@"+inv.Dep.Ref] = true
+		shaSeen[nwo+":"+strings.ToLower(inv.Dep.SHA)] = true
 	}
 	for _, ref := range refs {
-		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + strings.ToLower(ref.Ref)
+		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
 		if !byKey[key] {
 			unrecorded = append(unrecorded, ref)
 		}

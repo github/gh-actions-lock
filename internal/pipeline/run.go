@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/lockfile"
@@ -70,7 +71,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 				rd := parsed[i].RecordedDeps(recorded)
 				seedDeps = append(seedDeps, rd...)
 				for _, r := range recorded {
-					recordedKeys[r.Owner+"/"+r.Repo+"@"+r.Ref] = true
+					recordedKeys[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = true
 				}
 			}
 		}

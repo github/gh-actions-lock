@@ -1,6 +1,8 @@
 package checks
 
 import (
+	"strings"
+
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 )
@@ -48,10 +50,10 @@ func (pw ParsedWorkflow) PartitionRefs() (recorded, unrecorded []parserlock.Acti
 	}
 	haveDep := make(map[string]bool, len(pw.ExistingDeps))
 	for _, d := range pw.ExistingDeps {
-		haveDep[d.NWO+"@"+d.Ref] = true
+		haveDep[strings.ToLower(d.NWO)+"@"+d.Ref] = true
 	}
 	for _, r := range pw.Refs {
-		if haveDep[r.Owner+"/"+r.Repo+"@"+r.Ref] {
+		if haveDep[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] {
 			recorded = append(recorded, r)
 		} else {
 			unrecorded = append(unrecorded, r)
@@ -72,7 +74,7 @@ func (pw ParsedWorkflow) IsFullyRecorded() bool {
 func (pw ParsedWorkflow) RecordedDeps(recorded []parserlock.ActionRef) []dep.Dependency {
 	refKeys := make(map[string]bool, len(recorded))
 	for _, r := range recorded {
-		refKeys[r.Owner+"/"+r.Repo+"@"+r.Ref] = true
+		refKeys[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = true
 	}
 	var out []dep.Dependency
 	for _, d := range pw.ExistingDeps {
