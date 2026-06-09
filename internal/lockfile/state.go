@@ -46,8 +46,17 @@ type State struct {
 	idSF     singleflight.Group
 }
 
+// ErrCorruptLockfile reports that a lockfile exists on disk but cannot be
+// parsed (malformed YAML, unknown fields, or a dependency entry missing a
+// required key). It is distinct from a missing lockfile (legitimately empty)
+// and from a future-version lockfile (ErrFutureVersion). Callers decide
+// recovery policy: prompt to delete and recreate, or fail loudly. Loading
+// must never silently discard an unreadable lockfile and overwrite it.
+var ErrCorruptLockfile = errors.New("lockfile is unreadable")
+
 // LoadState reads the lockfile at repoRoot, returning an empty in-memory file
-// when none exists on disk.
+// when none exists on disk. A lockfile that exists but cannot be parsed is
+// surfaced as ErrCorruptLockfile rather than being silently treated as empty.
 func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 	full := filepath.Join(repoRoot, parserlock.Path)
 	contents, err := os.ReadFile(full)
@@ -59,9 +68,7 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 		if err != nil {
 			// A future-version lockfile (written by a newer binary) must
 			// surface to the user — silently overwriting it would destroy
-			// pins this binary cannot interpret. Other parse failures
-			// (corrupt YAML, unknown fields) are treated as empty so a
-			// recoverable lockfile can be rewritten.
+			// pins this binary cannot interpret.
 			//
 			// The standalone parser emits a tool-agnostic hint ("upgrade the
 			// tool that reads this lockfile"), so name the concrete command
@@ -69,8 +76,11 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 			if errors.Is(err, parserlock.ErrFutureVersion) {
 				return nil, fmt.Errorf("reading %s: %w; run `gh extension upgrade gh-actions-pin` to update", parserlock.Path, err)
 			}
-			// Corrupt or unrecognized lockfile — treat as empty and overwrite.
-			file = parserlock.File{Version: parserlock.Version}
+			// Any other parse failure (corrupt YAML, unknown fields, a
+			// dependency entry missing a required key) is surfaced, not
+			// swallowed. Treating it as empty here would silently discard
+			// the user's pins and overwrite them on the next save.
+			return nil, fmt.Errorf("%w: %s: %v", ErrCorruptLockfile, parserlock.Path, err)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		file = parserlock.File{Version: parserlock.Version}

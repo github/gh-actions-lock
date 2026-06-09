@@ -12,6 +12,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/resolve"
@@ -136,7 +137,7 @@ $ gh actions-pin --no-fix --json=valid,findings
 // resolved hostname, open the lockfile store against it, and seed branch hints
 // from the existing lockfile so repeat scans short-circuit the per-branch
 // Compare walk. newResolver is the DI seam; pass nil for production wiring.
-func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc) ([]string, *resolve.Resolver, *lockfile.State, error) {
+func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc, onCorrupt lockRecovery) ([]string, *resolve.Resolver, *lockfile.State, error) {
 	paths, err := discoverWorkflowPaths(workflowPaths)
 	if err != nil {
 		return nil, nil, nil, err
@@ -154,7 +155,23 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 
 	store, err := lockfile.LoadState(".", r)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
+		// An unreadable (non-future-version) lockfile is never silently
+		// discarded. Recovery policy may delete-and-recreate (interactive
+		// fix mode) or fail (CI, read-only, relock); either way the choice
+		// is explicit and surfaces to the user.
+		if errors.Is(err, lockfile.ErrCorruptLockfile) && onCorrupt != nil {
+			lockPath := filepath.Join(".", parserlock.Path)
+			recovered, rerr := onCorrupt(lockPath, err)
+			if rerr != nil {
+				return nil, nil, nil, rerr
+			}
+			if recovered {
+				store, err = lockfile.LoadState(".", r)
+			}
+		}
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
+		}
 	}
 	r.SeedBranchHints(store.AllDeps())
 

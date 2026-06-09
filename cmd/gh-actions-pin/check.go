@@ -173,7 +173,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	endSetup := prof.Phase("setup (discover + lockfile)")
-	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver)
+	// check fix mode can rebuild a deleted lockfile, so interactive sessions
+	// may delete-and-recreate an unreadable one. --no-fix is read-only and
+	// must not delete; it fails instead.
+	recoverLock := newLockRecovery(noInteractiveFlag(cmd), console, defaultConfirmFactory, !opts.noFix)
+	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver, recoverLock)
 	if err != nil {
 		return err
 	}

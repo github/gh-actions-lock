@@ -145,7 +145,11 @@ func runUpdate(cmd *cobra.Command, opts *updateOptions, newResolver resolverFunc
 	currentRef := ar.Ref
 
 	pool := pinpool.New(0, console)
-	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver)
+	// update only relocks workflows already in the lockfile; deleting an
+	// unreadable lockfile would make it a silent no-op. So update never
+	// offers delete — it fails and points at `check` to rebuild.
+	recoverLock := newLockRecovery(noInteractiveFlag(cmd), console, defaultConfirmFactory, false)
+	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver, recoverLock)
 	if err != nil {
 		return err
 	}

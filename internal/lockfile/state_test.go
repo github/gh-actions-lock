@@ -401,8 +401,40 @@ func TestState_RefusesFutureVersionLockfile(t *testing.T) {
 	}
 }
 
-// setupClosure writes a workflow + its closure into a fresh store at dir. The
-// closure is a direct action with one transitive child.
+func TestState_CorruptLockfileSurfacesError(t *testing.T) {
+	// A lockfile that exists but can't be parsed (here: a dependency entry
+	// missing the required owner_id/repo_id keys) must surface as
+	// ErrCorruptLockfile, not be silently treated as empty and overwritten.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dir, parserlock.Path)
+	// branch + commit present, but owner_id/repo_id absent → whole-file reject.
+	body := "version: 'v0.0.1'\ndependencies:\n" +
+		"  'actions/checkout@v4:sha1-1111111111111111111111111111111111111111':\n" +
+		"    branch: 'main'\n" +
+		"    commit: 'sha1-1111111111111111111111111111111111111111'\n"
+	if err := os.WriteFile(lockPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadState(dir, fakeMetadataResolver{})
+	if err == nil {
+		t.Fatal("expected error opening corrupt lockfile, got nil")
+	}
+	if !errors.Is(err, ErrCorruptLockfile) {
+		t.Errorf("error does not match ErrCorruptLockfile sentinel: %v", err)
+	}
+	if errors.Is(err, parserlock.ErrFutureVersion) {
+		t.Errorf("corrupt lockfile must not be classified as future-version: %v", err)
+	}
+
+	// LoadState must not delete or rewrite the file; recovery is the caller's job.
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Errorf("lockfile must remain on disk after a corrupt-load error: %v", err)
+	}
+}
 func setupClosure(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
