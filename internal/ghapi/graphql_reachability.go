@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/profile"
 )
 
 // batchReachabilitySize is the maximum number of branches per GraphQL query.
@@ -52,7 +53,7 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 	query, vars := buildBranchCompareQuery(owner, repo, sha, branches)
 
 	var data map[string]json.RawMessage
-	gqlErr := c.graphql.DoWithContext(ctx, query, vars, &data)
+	gqlErr := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "reachability"), query, vars, &data)
 	if gqlErr != nil {
 		var httpErr *api.HTTPError
 		if errors.As(gqlErr, &httpErr) {
