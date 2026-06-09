@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-pin/internal/profile"
 )
 
 // ActionFileRequest identifies a GitHub Action ref to resolve via GraphQL.
@@ -97,7 +98,7 @@ func (c *Client) resolveActionFilesOnce(ctx context.Context, refs []ActionFileRe
 	query, vars, aliasMap := buildActionFileQuery(refs)
 
 	var data map[string]json.RawMessage
-	err := c.graphql.DoWithContext(ctx, query, vars, &data)
+	err := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "resolve"), query, vars, &data)
 	var gqlErr *api.GraphQLError
 	if err != nil {
 		if !errors.As(err, &gqlErr) {

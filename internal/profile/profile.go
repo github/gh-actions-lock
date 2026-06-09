@@ -3,6 +3,7 @@
 package profile
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,25 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+type gqlLabelKeyT struct{}
+
+var gqlLabelKey gqlLabelKeyT
+
+// WithGraphQLLabel returns a context that tags subsequent HTTP requests
+// with a GraphQL operation label (e.g. "resolve", "reachability", "peel").
+// The loggingTransport uses this to break down POST /graphql by purpose.
+func WithGraphQLLabel(ctx context.Context, label string) context.Context {
+	return context.WithValue(ctx, gqlLabelKey, label)
+}
+
+// GraphQLLabel extracts the operation label from ctx, or "" if absent.
+func GraphQLLabel(ctx context.Context) string {
+	if v, ok := ctx.Value(gqlLabelKey).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // Session holds all profiling state for one CLI invocation.
 // Create with Start, tear down with Stop (writes summaries).
@@ -182,6 +202,7 @@ type HTTPLog struct {
 type httpEntry struct {
 	method   string
 	path     string
+	gqlLabel string
 	status   int
 	duration time.Duration
 	ts       time.Time
@@ -222,7 +243,7 @@ func (h *HTTPLog) WriteSummary(w io.Writer) {
 	var totalErrors int
 
 	for _, e := range entries {
-		pat := classifyPath(e.method, e.path)
+		pat := classifyPath(e.method, e.path, e.gqlLabel)
 		b, ok := byPattern[pat]
 		if !ok {
 			b = &bucket{pattern: pat, min: e.duration}
@@ -270,8 +291,12 @@ func (h *HTTPLog) WriteSummary(w io.Writer) {
 }
 
 // classifyPath normalizes API paths into patterns for aggregation.
-func classifyPath(method, path string) string {
+func classifyPath(method, path, gqlLabel string) string {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	// GraphQL: break down by operation label when available.
+	if method == "POST" && path == "/graphql" && gqlLabel != "" {
+		return "POST /graphql (" + gqlLabel + ")"
+	}
 	if len(parts) < 3 {
 		return method + " " + path
 	}
@@ -319,6 +344,7 @@ func (lt *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	lt.log.record(httpEntry{
 		method:   req.Method,
 		path:     req.URL.Path,
+		gqlLabel: GraphQLLabel(req.Context()),
 		status:   status,
 		duration: dur,
 		ts:       start,

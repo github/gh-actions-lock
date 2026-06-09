@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
@@ -65,10 +66,27 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 // across all parsed workflows. Use the returned slices to pre-warm the
 // resolver caches once before per-workflow diagnostics.
 func CollectResolvable(parsed []checks.ParsedWorkflow) ([]parserlock.ActionRef, []dep.Dependency) {
+	return collectResolvable(parsed, nil)
+}
+
+// CollectUnrecordedResolvable is like CollectResolvable but excludes refs
+// whose NWO@Ref key appears in recordedKeys. Deps whose key is in
+// recordedKeys are also excluded. Use this when per-dep lockfile trust
+// has already seeded the resolver cache for recorded deps, so only
+// genuinely new refs need network resolution.
+func CollectUnrecordedResolvable(parsed []checks.ParsedWorkflow, recordedKeys map[string]bool) ([]parserlock.ActionRef, []dep.Dependency) {
+	return collectResolvable(parsed, recordedKeys)
+}
+
+func collectResolvable(parsed []checks.ParsedWorkflow, excludeKeys map[string]bool) ([]parserlock.ActionRef, []dep.Dependency) {
 	seenRef := make(map[ghapi.ActionRef]bool)
 	var refs []parserlock.ActionRef
 	for _, pw := range parsed {
 		for _, ref := range pw.Refs {
+			nwoRef := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
+			if excludeKeys[nwoRef] {
+				continue
+			}
 			key := ghapi.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 			if seenRef[key] {
 				continue
@@ -82,7 +100,7 @@ func CollectResolvable(parsed []checks.ParsedWorkflow) ([]parserlock.ActionRef, 
 	for _, pw := range parsed {
 		for _, dep := range pw.ExistingDeps {
 			key := dep.Key()
-			if seenDep[key] {
+			if excludeKeys[key] || seenDep[key] {
 				continue
 			}
 			seenDep[key] = true

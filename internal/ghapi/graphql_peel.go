@@ -1,6 +1,10 @@
 package ghapi
 
-import "context"
+import (
+	"context"
+
+	"github.com/github/gh-actions-pin/internal/profile"
+)
 
 // tagObjectPeelQuery resolves both the type of the object at $oid and the
 // commit it peels to in a single round trip. The `^{commit}` suffix follows
@@ -45,7 +49,7 @@ func (c *Client) PeelTagObject(ctx context.Context, owner, repo, sha string) (Pe
 		"oid":   sha,
 		"expr":  sha + "^{commit}",
 	}
-	if err := c.graphql.DoWithContext(ctx, tagObjectPeelQuery, vars, &resp); err != nil {
+	if err := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "peel"), tagObjectPeelQuery, vars, &resp); err != nil {
 		return PeelTagObjectResult{}, err
 	}
 	if resp.Repository == nil || resp.Repository.Head == nil {
