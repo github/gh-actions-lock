@@ -241,21 +241,86 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	for _, g := range groups {
 		console.TermDetail("  %s", console.TermYellow(g.nwo+"@"+g.ref))
 		if g.reason != "" {
-			reason := g.reason
-			if nl := strings.IndexByte(reason, '\n'); nl > 0 {
-				first := reason[:nl]
-				rest := strings.TrimSpace(reason[nl+1:])
-				if strings.HasSuffix(first, ":") && rest != "" {
-					reason = rest
-				} else {
-					reason = first
-				}
+			cleaned, fixHint := cleanUnresolvedReason(g.reason, g.nwo, g.ref)
+			if cleaned != "" {
+				console.TermDetail("    %s", console.TermDim(cleaned))
 			}
-			if nl := strings.IndexByte(reason, '\n'); nl > 0 {
-				reason = reason[:nl]
+			if fixHint != "" {
+				console.TermDetail("    %s %s", console.TermBold("→"), fixHint)
 			}
-			reason = strings.TrimSpace(reason)
-			console.TermDetail("    %s", console.TermDim(reason))
 		}
 	}
+}
+
+// cleanUnresolvedReason strips redundant prefixes from an unresolved entry's
+// reason and returns the cleaned text plus an optional actionable fix hint.
+// The stripped prefixes ("resolution failed: ", "NWO@Ref: ") are noise because
+// the action name is already printed on the line above, and the wrapper text
+// adds nothing for the human reader.
+func cleanUnresolvedReason(reason, nwo, ref string) (string, string) {
+	if reason == "" {
+		return "", ""
+	}
+
+	// Strip "resolution failed: " wrapper added by plan.go.
+	reason = strings.TrimPrefix(reason, "resolution failed: ")
+
+	// Strip redundant "NWO@Ref: " — the action is already on the line above.
+	reason = strings.TrimPrefix(reason, nwo+"@"+ref+": ")
+
+	// Multi-line: prefer the detail line over the category label.
+	if nl := strings.IndexByte(reason, '\n'); nl > 0 {
+		first := reason[:nl]
+		rest := strings.TrimSpace(reason[nl+1:])
+		if strings.HasSuffix(first, ":") && rest != "" {
+			reason = rest
+		} else {
+			reason = first
+		}
+	}
+	if nl := strings.IndexByte(reason, '\n'); nl > 0 {
+		reason = reason[:nl]
+	}
+	reason = strings.TrimSpace(reason)
+
+	fixHint := extractFixHint(reason)
+
+	// When we extracted a fix hint, trim the trailing "Authorize it at <url>
+	// and retry" noise from the reason — our → line replaces it.
+	if fixHint != "" {
+		for _, sep := range []string{". Authorize it at", " Authorize it at"} {
+			if i := strings.Index(reason, sep); i > 0 {
+				reason = strings.TrimSpace(reason[:i])
+				break
+			}
+		}
+	}
+
+	return reason, fixHint
+}
+
+// extractFixHint returns an actionable hint for common resolution errors.
+// Returns "" when no actionable guidance can be inferred.
+func extractFixHint(reason string) string {
+	// SSO/SAML enforcement: extract the authorization URL.
+	if strings.Contains(reason, "SSO authorization required") ||
+		strings.Contains(reason, "SAML enforcement") {
+		if url := extractURLWithPrefix(reason, "https://github.com/orgs/"); url != "" {
+			return fmt.Sprintf("Authorize your token: %s", url)
+		}
+	}
+	return ""
+}
+
+// extractURLWithPrefix finds the first URL in text starting with prefix.
+func extractURLWithPrefix(text, prefix string) string {
+	idx := strings.Index(text, prefix)
+	if idx < 0 {
+		return ""
+	}
+	end := idx
+	for end < len(text) && text[end] != ' ' && text[end] != '\n' && text[end] != ')' {
+		end++
+	}
+	return text[idx:end]
 }

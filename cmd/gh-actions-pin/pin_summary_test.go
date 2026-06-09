@@ -176,6 +176,157 @@ func TestRenderInvestigationAlerts_ImpostorCommitEscalation(t *testing.T) {
 	}
 }
 
+func TestCleanUnresolvedReason(t *testing.T) {
+	tests := []struct {
+		name     string
+		reason   string
+		nwo      string
+		ref      string
+		wantText string
+		wantHint string
+	}{
+		{
+			name:     "strips resolution failed and NWO@Ref prefix",
+			reason:   "resolution failed: actions/checkout@v4.3.1: connection refused",
+			nwo:      "actions/checkout",
+			ref:      "v4.3.1",
+			wantText: "connection refused",
+			wantHint: "",
+		},
+		{
+			name:     "strips resolution failed prefix only",
+			reason:   "resolution failed: some generic error",
+			nwo:      "actions/checkout",
+			ref:      "v4",
+			wantText: "some generic error",
+			wantHint: "",
+		},
+		{
+			name:     "SSO error extracts fix hint and trims authorize guidance",
+			reason:   `resolution failed: actions/checkout@v4.3.1: SSO authorization required: your token is not authorized for the "actions" organization (SAML enforcement). Authorize it at https://github.com/orgs/actions/sso and retry`,
+			nwo:      "actions/checkout",
+			ref:      "v4.3.1",
+			wantText: `SSO authorization required: your token is not authorized for the "actions" organization (SAML enforcement)`,
+			wantHint: "Authorize your token: https://github.com/orgs/actions/sso",
+		},
+		{
+			name:     "bare reason without prefixes passes through",
+			reason:   "repository not found",
+			nwo:      "octo/action",
+			ref:      "v1",
+			wantText: "repository not found",
+			wantHint: "",
+		},
+		{
+			name:     "empty reason returns empty",
+			reason:   "",
+			nwo:      "octo/action",
+			ref:      "v1",
+			wantText: "",
+			wantHint: "",
+		},
+		{
+			name:     "multiline reason prefers detail after colon header",
+			reason:   "resolution failed:\nactual error details here",
+			nwo:      "octo/action",
+			ref:      "v1",
+			wantText: "actual error details here",
+			wantHint: "",
+		},
+		{
+			name:     "NWO@Ref prefix not stripped when it does not match",
+			reason:   "resolution failed: other/action@v2: not found",
+			nwo:      "actions/checkout",
+			ref:      "v4",
+			wantText: "other/action@v2: not found",
+			wantHint: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotHint := cleanUnresolvedReason(tt.reason, tt.nwo, tt.ref)
+			if gotText != tt.wantText {
+				t.Errorf("text: got %q, want %q", gotText, tt.wantText)
+			}
+			if gotHint != tt.wantHint {
+				t.Errorf("hint: got %q, want %q", gotHint, tt.wantHint)
+			}
+		})
+	}
+}
+
+func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
+	entries := []pin.Entry{
+		{
+			NWO:       "actions/checkout",
+			Ref:       "v4.3.1",
+			Reason:    `resolution failed: actions/checkout@v4.3.1: SSO authorization required: your token is not authorized for the "actions" organization (SAML enforcement). Authorize it at https://github.com/orgs/actions/sso and retry`,
+			Workflows: []string{".github/workflows/ci.yml", ".github/workflows/deploy.yml"},
+		},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderUnresolvedWarnings(console, entries)
+	out := buf.String()
+
+	// Redundant "resolution failed: actions/checkout@v4.3.1:" prefix must be gone.
+	if strings.Contains(out, "resolution failed:") {
+		t.Errorf("expected 'resolution failed:' prefix stripped, got:\n%s", out)
+	}
+	if strings.Contains(out, "actions/checkout@v4.3.1: SSO") {
+		t.Errorf("expected redundant NWO@Ref prefix stripped from reason, got:\n%s", out)
+	}
+
+	// Clean reason should appear.
+	if !strings.Contains(out, "SSO authorization required") {
+		t.Errorf("expected clean reason text, got:\n%s", out)
+	}
+
+	// Fix hint with → arrow and SSO URL.
+	if !strings.Contains(out, "→") {
+		t.Errorf("expected → fix hint arrow, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Authorize your token: https://github.com/orgs/actions/sso") {
+		t.Errorf("expected SSO fix hint with URL, got:\n%s", out)
+	}
+
+	// The trailing "Authorize it at ... and retry" noise should be trimmed from the reason.
+	if strings.Contains(out, "and retry") {
+		t.Errorf("expected trailing 'and retry' guidance trimmed, got:\n%s", out)
+	}
+}
+
+func TestRenderUnresolvedWarnings_PlainErrorNoHint(t *testing.T) {
+	entries := []pin.Entry{
+		{
+			NWO:       "octo/action",
+			Ref:       "v1",
+			Reason:    "resolution failed: octo/action@v1: repository not found",
+			Workflows: []string{"ci.yml"},
+		},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderUnresolvedWarnings(console, entries)
+	out := buf.String()
+
+	// Prefixes stripped, clean reason shown.
+	if strings.Contains(out, "resolution failed:") {
+		t.Errorf("expected prefix stripped, got:\n%s", out)
+	}
+	if !strings.Contains(out, "repository not found") {
+		t.Errorf("expected clean reason, got:\n%s", out)
+	}
+
+	// No fix hint for generic errors.
+	if strings.Contains(out, "→") {
+		t.Errorf("expected no fix hint for generic error, got:\n%s", out)
+	}
+}
+
 func TestRenderInvestigationAlerts_MixedIssuesFallbackHeader(t *testing.T) {
 	entries := []pin.Entry{
 		{
