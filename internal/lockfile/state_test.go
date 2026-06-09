@@ -460,3 +460,274 @@ func TestState_WorkflowClosure(t *testing.T) {
 		t.Errorf("expected cache parent setup-go, got %v", got)
 	}
 }
+
+// resaveBumped reloads the store from disk (as `update` does), replaces the
+// given workflow's closure, and saves — returning the new on-disk bytes.
+func resaveBumped(t *testing.T, dir, wfKey string, deps []dep.Dependency, pm map[string][]string, direct map[string]bool) []byte {
+	t.Helper()
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("reopening store: %v", err)
+	}
+	if err := store.Set(context.Background(), wfKey, deps, pm, direct); err != nil {
+		t.Fatalf("Set %s: %v", wfKey, err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, parserlock.Path))
+	if err != nil {
+		t.Fatalf("reading lockfile: %v", err)
+	}
+	return raw
+}
+
+func lineSet(b []byte) map[string]bool {
+	m := map[string]bool{}
+	for _, l := range strings.Split(string(b), "\n") {
+		m[l] = true
+	}
+	return m
+}
+
+// TestState_BumpYieldsMinimalDiff is the writer-side guarantee behind the
+// consumer's diff-hygiene requirement: bumping ONE dependency in an
+// already-canonical lockfile must leave every untouched entry byte-identical.
+// Only the changed dep's lines (and its workflow direct-list line) may move.
+func TestState_BumpYieldsMinimalDiff(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	base := []dep.Dependency{
+		{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
+		{NWO: "owner/b", Ref: "v2", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1", Branch: "main"},
+		{NWO: "owner/c", Ref: "v3", SHA: "cccccccccccccccccccccccccccccccccccccccc", HashAlgo: "sha1", Branch: "main"},
+	}
+	direct := map[string]bool{"owner/a@v1": true, "owner/b@v2": true, "owner/c@v3": true}
+
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", base, nil, direct); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, parserlock.Path))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	bumped := []dep.Dependency{
+		base[0],
+		{NWO: "owner/b", Ref: "v6", SHA: "9999999999999999999999999999999999999999", HashAlgo: "sha1", Branch: "main"},
+		base[2],
+	}
+	bumpedDirect := map[string]bool{"owner/a@v1": true, "owner/b@v6": true, "owner/c@v3": true}
+	after := resaveBumped(t, dir, ".github/workflows/ci.yml", bumped, nil, bumpedDirect)
+
+	beforeLines := lineSet(before)
+	for _, l := range strings.Split(string(after), "\n") {
+		if strings.Contains(l, "owner/a") || strings.Contains(l, "owner/c") ||
+			strings.Contains(l, "aaaa") || strings.Contains(l, "cccc") {
+			if !beforeLines[l] {
+				t.Fatalf("untouched entry line changed: %q\n--- before ---\n%s\n--- after ---\n%s", l, before, after)
+			}
+		}
+	}
+	// Sanity: the bump actually landed.
+	if strings.Contains(string(after), "owner/b@v2") {
+		t.Fatalf("expected owner/b@v2 to be gone after bump, got:\n%s", after)
+	}
+	if !strings.Contains(string(after), "owner/b@v6:sha1-9999999999999999999999999999999999999999") {
+		t.Fatalf("expected bumped owner/b@v6 pin, got:\n%s", after)
+	}
+}
+
+// TestState_BumpTransitiveRemoval covers the GC side of a relock: when a bump
+// drops a transitive, its lock entry is reclaimed unless another workflow still
+// reaches it.
+func TestState_BumpTransitiveRemoval(t *testing.T) {
+	t.Run("orphaned transitive is removed", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		store, _ := LoadState(dir, fakeMetadataResolver{})
+		deps := []dep.Dependency{
+			{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
+			{NWO: "trans/x", Ref: "v1", SHA: "1111111111111111111111111111111111111111", HashAlgo: "sha1", Branch: "main"},
+		}
+		pm := map[string][]string{"trans/x@v1": {"owner/a@v1"}}
+		direct := map[string]bool{"owner/a@v1": true}
+		if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, pm, direct); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Bump owner/a -> v2, no longer using trans/x.
+		bumped := []dep.Dependency{
+			{NWO: "owner/a", Ref: "v2", SHA: "2222222222222222222222222222222222222222", HashAlgo: "sha1", Branch: "main"},
+		}
+		after := resaveBumped(t, dir, ".github/workflows/ci.yml", bumped, nil, map[string]bool{"owner/a@v2": true})
+		if strings.Contains(string(after), "trans/x@v1") {
+			t.Fatalf("expected orphaned transitive trans/x@v1 to be GC'd, got:\n%s", after)
+		}
+		if strings.Contains(string(after), "owner/a@v1:") {
+			t.Fatalf("expected old direct owner/a@v1 to be gone, got:\n%s", after)
+		}
+	})
+
+	t.Run("transitive still reachable from another workflow is preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		store, _ := LoadState(dir, fakeMetadataResolver{})
+		shared := dep.Dependency{NWO: "shared/s", Ref: "v1", SHA: "5555555555555555555555555555555555555555", HashAlgo: "sha1", Branch: "main"}
+		ci := []dep.Dependency{
+			{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
+			shared,
+		}
+		rel := []dep.Dependency{
+			{NWO: "owner/b", Ref: "v1", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1", Branch: "main"},
+			shared,
+		}
+		if err := store.Set(context.Background(), ".github/workflows/ci.yml", ci, map[string][]string{"shared/s@v1": {"owner/a@v1"}}, map[string]bool{"owner/a@v1": true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Set(context.Background(), ".github/workflows/release.yml", rel, map[string][]string{"shared/s@v1": {"owner/b@v1"}}, map[string]bool{"owner/b@v1": true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := os.ReadFile(filepath.Join(dir, parserlock.Path))
+		sharedPin := "shared/s@v1:sha1-5555555555555555555555555555555555555555"
+		if !strings.Contains(string(before), sharedPin) {
+			t.Fatalf("setup: expected shared pin present, got:\n%s", before)
+		}
+
+		// Bump ONLY ci.yml's owner/a -> v2, dropping the shared transitive there.
+		bumped := []dep.Dependency{
+			{NWO: "owner/a", Ref: "v2", SHA: "2222222222222222222222222222222222222222", HashAlgo: "sha1", Branch: "main"},
+		}
+		after := resaveBumped(t, dir, ".github/workflows/ci.yml", bumped, nil, map[string]bool{"owner/a@v2": true})
+
+		if !strings.Contains(string(after), sharedPin) {
+			t.Fatalf("shared transitive still used by release.yml must be preserved, got:\n%s", after)
+		}
+		// And preserved byte-identically (the shared entry's lines didn't move).
+		beforeLines := lineSet(before)
+		for _, l := range strings.Split(string(after), "\n") {
+			if strings.Contains(l, "shared/s") || strings.Contains(l, "5555") || strings.Contains(l, "owner/b") || strings.Contains(l, "bbbb") {
+				if !beforeLines[l] {
+					t.Fatalf("untouched entry line changed: %q\n--- before ---\n%s\n--- after ---\n%s", l, before, after)
+				}
+			}
+		}
+	})
+
+	t.Run("dropped transitive subgraph is fully removed", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		store, _ := LoadState(dir, fakeMetadataResolver{})
+		deps := []dep.Dependency{
+			{NWO: "owner/a", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1", Branch: "main"},
+			{NWO: "mid/m", Ref: "v1", SHA: "3333333333333333333333333333333333333333", HashAlgo: "sha1", Branch: "main"},
+			{NWO: "leaf/l", Ref: "v1", SHA: "4444444444444444444444444444444444444444", HashAlgo: "sha1", Branch: "main"},
+		}
+		pm := map[string][]string{
+			"mid/m@v1":  {"owner/a@v1"},
+			"leaf/l@v1": {"mid/m@v1"},
+		}
+		if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, pm, map[string]bool{"owner/a@v1": true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(); err != nil {
+			t.Fatal(err)
+		}
+
+		bumped := []dep.Dependency{
+			{NWO: "owner/a", Ref: "v2", SHA: "2222222222222222222222222222222222222222", HashAlgo: "sha1", Branch: "main"},
+		}
+		after := resaveBumped(t, dir, ".github/workflows/ci.yml", bumped, nil, map[string]bool{"owner/a@v2": true})
+		if strings.Contains(string(after), "mid/m@v1") || strings.Contains(string(after), "leaf/l@v1") {
+			t.Fatalf("expected whole orphaned subgraph (mid/m, leaf/l) to be GC'd, got:\n%s", after)
+		}
+	})
+}
+
+// TestState_SaveFormatIsStable pins the exact canonical byte format of the
+// writer. It guards the "heal" decision for `update`: diff-minimality relies on
+// the on-disk lockfile already being canonical under THIS writer, so any change
+// to the serialized format (sort order, quoting, field order, indentation,
+// header) is a breaking change that would reformat every existing lockfile on
+// its next write. If this fails intentionally, regenerate the golden and treat
+// it as a format migration.
+func TestState_SaveFormatIsStable(t *testing.T) {
+	const golden = "# This file is machine-generated by `gh actions-pin`.\n" +
+		"# Do not edit by hand; run `gh actions-pin` to update.\n" +
+		"# Docs: https://gh.io/actions-lockfile\n" +
+		"version: 'v0.0.1'\n" +
+		"workflows:\n" +
+		"    '.github/workflows/ci.yml':\n" +
+		"        - 'actions/checkout@v4:sha1-11111111111111111111111111111111111111aa'\n" +
+		"        - 'actions/setup-go@v5:sha1-22222222222222222222222222222222222222bb'\n" +
+		"dependencies:\n" +
+		"    'actions/checkout@v4:sha1-11111111111111111111111111111111111111aa':\n" +
+		"        tag: 'v4'\n" +
+		"        branch: 'main'\n" +
+		"        commit: 'sha1-11111111111111111111111111111111111111aa'\n" +
+		"        owner_id: 1\n" +
+		"        repo_id: 2\n" +
+		"        uses:\n" +
+		"            - 'shared/dep@v1:sha1-33333333333333333333333333333333333333cc'\n" +
+		"    'actions/setup-go@v5:sha1-22222222222222222222222222222222222222bb':\n" +
+		"        branch: 'main'\n" +
+		"        commit: 'sha1-22222222222222222222222222222222222222bb'\n" +
+		"        owner_id: 1\n" +
+		"        repo_id: 2\n" +
+		"    'shared/dep@v1:sha1-33333333333333333333333333333333333333cc':\n" +
+		"        branch: 'main'\n" +
+		"        commit: 'sha1-33333333333333333333333333333333333333cc'\n" +
+		"        owner_id: 1\n" +
+		"        repo_id: 2\n"
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	deps := []dep.Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "11111111111111111111111111111111111111aa", HashAlgo: "sha1", Tag: "v4", Branch: "main"},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "22222222222222222222222222222222222222bb", HashAlgo: "sha1", Branch: "main"},
+		{NWO: "shared/dep", Ref: "v1", SHA: "33333333333333333333333333333333333333cc", HashAlgo: "sha1", Branch: "main"},
+	}
+	pm := map[string][]string{"shared/dep@v1": {"actions/checkout@v4"}}
+	direct := map[string]bool{"actions/checkout@v4": true, "actions/setup-go@v5": true}
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, pm, direct); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, parserlock.Path))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(raw) != golden {
+		t.Fatalf("serialized lockfile format drifted from golden.\n--- got ---\n%s\n--- want ---\n%s", raw, golden)
+	}
+}

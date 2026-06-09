@@ -446,3 +446,75 @@ jobs:
 	assert.Contains(t, pins, "actions/checkout@v6:sha1-"+newSHA, "lockfile key must be canonical")
 	assert.NotContains(t, pins, oldSHA)
 }
+
+func TestUpdateCommand_BumpPullsInNewTransitive(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	const (
+		oldSHA   = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+		newSHA   = "11111111111111111111111111111111111111aa"
+		transSHA = "abababababababababababababababababababab"
+	)
+
+	// checkout@v6 is now a composite that fans out to a brand-new transitive.
+	compositeYAML := "name: Checkout\n" +
+		"runs:\n" +
+		"  using: composite\n" +
+		"  steps:\n" +
+		"    - uses: vendor/dep@v2\n"
+
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", newSHA, compositeYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("vendor", "dep"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("vendor/dep", transSHA, nodeActionYAML),
+			},
+		}),
+	)
+	registerBranchDiscovery(reg, "actions", "checkout", newSHA, "v6")
+	registerBranchDiscovery(reg, "vendor", "dep", transSHA, "v2")
+
+	wfPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+		"actions/checkout@v4:sha1-"+oldSHA,
+	)
+
+	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"update", "--action", "actions/checkout@v6", "--write", "--no-onboard", "--json=updated",
+		wfPath,
+	)
+	require.NoError(t, err)
+
+	var got updateJSON
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+
+	assert.True(t, got.Valid)
+	// The transitive add does NOT create a second updated[] entry — only the
+	// targeted action is reported as changed.
+	require.Len(t, got.Updated, 1)
+	assert.Equal(t, "actions/checkout", got.Updated[0].NWO)
+	require.Len(t, got.Workflows, 1)
+	assert.Empty(t, got.Findings)
+
+	// The new transitive landed in the lockfile alongside the bumped target.
+	pins := readTempLockfilePins(t)
+	assert.Contains(t, pins, "actions/checkout@v6:sha1-"+newSHA)
+	assert.Contains(t, pins, "vendor/dep@v2:sha1-"+transSHA, "new transitive must be written to the lockfile")
+	assert.NotContains(t, pins, oldSHA)
+}
