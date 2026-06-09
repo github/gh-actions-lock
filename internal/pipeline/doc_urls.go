@@ -23,10 +23,14 @@ const securityHardeningBase = "https://docs.github.com/en/actions/security-for-g
 const PublisherTagReleasesDocURL = "https://docs.github.com/en/actions/how-tos/create-and-publish-actions/manage-custom-actions#using-tags-for-release-management"
 
 // PublisherEscalationCopy is the standardized one-liner shown in any block
-// where a SHA fell off-branch on the publisher side. Phrased as a direct
-// instruction to maintainers so users have a copy-paste sentence to drop
-// into an issue or release-process discussion when escalating.
-const PublisherEscalationCopy = "Actions publishers should ensure released actions are reachable from a branch. Otherwise, they are indistinguishable from impostor commits"
+// where a SHA fell off-branch on the publisher side. Phrased as direct
+// guidance so users know what to do next: ask the maintainer to tag from
+// a branch.
+const PublisherEscalationCopy = "Ask the action maintainer to tag releases from a branch"
+
+// ImpostorCommitContext explains why off-branch commits are dangerous.
+// Shown just before the escalation copy so users understand the risk.
+const ImpostorCommitContext = "Off-branch commits are indistinguishable from impostor commits"
 
 // docURLs maps every Category that can appear on a checks.Finding to its
 // documentation URL. Categories representing "no issue" (Valid, RunOnly)

@@ -143,7 +143,8 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 			out.Bold("→"), nwo, f.RecommendedTag, sha)
 	}
 	if f.Category == checks.ImpostorCommit {
-		out.Detail("  %s", pipeline.PublisherEscalationCopy)
+		out.Detail("  %s %s", out.Yellow("!"), pipeline.ImpostorCommitContext)
+		out.Detail("  %s %s", out.Bold("→"), pipeline.PublisherEscalationCopy)
 		out.Detail("  see: %s", out.DocLink(pipeline.PublisherTagReleasesDocURL))
 	}
 	if f.DocURL != "" {
