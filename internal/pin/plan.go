@@ -89,24 +89,21 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	var wplans []WorkflowPlan
 
 	if !wr.NeedsAttention() {
-		// Already pinned and valid — record as verified.
-		for _, inv := range wr.Inventory {
-			entries = append(entries, Entry{
-				NWO:        inv.Dep.NWO,
-				Ref:        inv.Dep.Ref,
-				SHA:        inv.Dep.SHA,
-				Resolution: Verified,
-				Workflows:  []string{wr.Path},
-				Direct:     inv.Direct,
-				RequiredBy: inv.Parents,
-			})
-		}
+		entries = verifiedEntries(wr.Inventory, wr.Path)
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
-	// Resolve live state for this workflow's refs.
+	// Per-dep trust: recorded deps skip the network path.
+	unrecordedRefs, inventorySHA := partitionByInventory(wr.Inventory, wr.ActionRefs)
+	entries = verifiedEntries(wr.Inventory, wr.Path)
+
+	if len(unrecordedRefs) == 0 {
+		return planResult{entries: entries, wplans: wplans}, nil
+	}
+
+	// Resolve live state for unrecorded refs only.
 	status("resolving " + wr.Path)
-	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, wr.ActionRefs)
+	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
 		// Partial failure: some refs resolved (in deps), others didn't.
 		// Build a set of resolved NWO@Ref keys so we can continue with
@@ -115,13 +112,20 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		for _, d := range deps {
 			resolved[strings.ToLower(d.NWO+"@"+d.Ref)] = true
 		}
+		// Only mark findings as unresolved if they were actually attempted
+		// (i.e., part of unrecordedRefs). Recorded refs were never sent to
+		// ResolveAllRecursive and should not be marked as failures.
+		attempted := make(map[string]bool, len(unrecordedRefs))
+		for _, ref := range unrecordedRefs {
+			attempted[strings.ToLower(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
+		}
 		for _, f := range wr.Findings {
 			if f.ActionRef == nil {
 				continue
 			}
 			key := strings.ToLower(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
-			if resolved[key] {
-				continue // this ref resolved fine; process it below
+			if !attempted[key] || resolved[key] {
+				continue
 			}
 			entries = append(entries, Entry{
 				NWO:        f.ActionRef.Owner + "/" + f.ActionRef.Repo,
@@ -222,7 +226,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// dep.Ref — the tracker records index-aligned booleans at construction,
 	// then Keys() reads post-mutation refs. Must be built while deps and
 	// ActionRefs still share the same ref strings.
-	directTracker := lockfile.NewDirectTracker(wr.ActionRefs, deps)
+	directTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
 
 	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
 	// to a symbolic tag when one exists.
@@ -338,9 +342,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		}
 	}
 
-	// Build entries for all pinned deps.
+	// Build entries for all pinned deps (skip any already emitted from inventory).
 	directKeys := directTracker.Keys(deps)
 	for _, dep := range deps {
+		nwoSHA := strings.ToLower(dep.NWO) + ":" + dep.SHA
+		if inventorySHA[nwoSHA] {
+			continue // already emitted as Verified from inventory
+		}
 		depKey := dep.Key()
 		parents := parentMap[depKey]
 		res := Pinned
@@ -430,4 +438,41 @@ func dropDeps(deps []dep.Dependency, pm dep.ParentMap, bad map[string]bool) ([]d
 		}
 	}
 	return kept, newPM
+}
+
+// partitionByInventory splits refs into those with a matching inventory
+// entry (recorded) and those without (unrecorded). Returns the unrecorded
+// refs and an NWO:SHA index for deduplicating resolved deps later.
+func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.ActionRef) (unrecorded []parserlock.ActionRef, shaSeen map[string]bool) {
+	byKey := make(map[string]bool, len(inventory))
+	shaSeen = make(map[string]bool, len(inventory))
+	for _, inv := range inventory {
+		nwo := strings.ToLower(inv.Dep.NWO)
+		byKey[nwo+"@"+strings.ToLower(inv.Dep.Ref)] = true
+		shaSeen[nwo+":"+inv.Dep.SHA] = true
+	}
+	for _, ref := range refs {
+		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + strings.ToLower(ref.Ref)
+		if !byKey[key] {
+			unrecorded = append(unrecorded, ref)
+		}
+	}
+	return unrecorded, shaSeen
+}
+
+// verifiedEntries builds Verified plan entries for every inventory item.
+func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
+	out := make([]Entry, len(inventory))
+	for i, inv := range inventory {
+		out[i] = Entry{
+			NWO:        inv.Dep.NWO,
+			Ref:        inv.Dep.Ref,
+			SHA:        inv.Dep.SHA,
+			Resolution: Verified,
+			Workflows:  []string{path},
+			Direct:     inv.Direct,
+			RequiredBy: inv.Parents,
+		}
+	}
+	return out
 }

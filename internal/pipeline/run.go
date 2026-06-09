@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/lockfile"
 	"github.com/github/gh-actions-pin/internal/pinpool"
@@ -49,17 +50,45 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		return nil, ctx.Err()
 	}
 
-	// Fast path: trust fully-recorded workflows.
+	// Fast path: trust fully-recorded workflows. For partially-recorded
+	// workflows, seed the resolver cache with recorded deps so only
+	// unrecorded refs hit the network.
 	skippedRescan := 0
+	var seedDeps []dep.Dependency
+	recordedKeys := make(map[string]bool)
 	if !opts.Rescan {
 		for i := range parsed {
-			if isFullyRecorded(parsed[i]) {
+			recorded, unrecorded := partitionRefs(parsed[i])
+			if len(parsed[i].Refs) == 0 || len(unrecorded) == 0 {
 				parsed[i].Resolved = true
 				skippedRescan++
 			} else {
 				parsed[i].SkipReachWhenUnchanged = true
+				// Collect deps covered by recorded refs for cache
+				// seeding. These refs have matching lockfile entries,
+				// so their resolve + reachability results can be
+				// served from the lockfile rather than the network.
+				rd := recordedDeps(parsed[i], recorded)
+				seedDeps = append(seedDeps, rd...)
+				for _, r := range recorded {
+					recordedKeys[r.Owner+"/"+r.Repo+"@"+r.Ref] = true
+				}
 			}
 		}
+	}
+
+	// Seed the resolver cache with lockfile entries for recorded deps
+	// in partially-recorded workflows. This makes the pipeline
+	// self-sufficient: diagnoseOneParsed re-resolves ALL refs per
+	// workflow, and seeded entries become free cache hits.
+	//
+	// Trust boundary: seeded entries have no actionYML, so the BFS in
+	// ResolveAllRecursive won't discover new transitive deps through
+	// them. This is intentional — the same trust model as
+	// isFullyRecorded, which skips resolution entirely. If the
+	// lockfile's transitive closure is incomplete, --rescan detects it.
+	if r != nil && len(seedDeps) > 0 {
+		r.SeedFromLockfile(dep.Dedup(seedDeps))
 	}
 
 	// Collect unresolved workflows for network work.
@@ -69,7 +98,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			unresolved = append(unresolved, pw)
 		}
 	}
-	refs, deps := CollectResolvable(unresolved)
+	refs, deps := CollectUnrecordedResolvable(unresolved, recordedKeys)
 
 	// Phase 2: Resolve.
 	if r == nil {
@@ -105,6 +134,12 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			}
 		} else {
 			live, _, _ := r.ResolveAllRecursive(ctx, refs)
+			// Merge recorded deps into the live set so CollectReachDeps
+			// treats them as confirmed at their lockfile SHAs, preventing
+			// unnecessary reachability network checks.
+			if len(seedDeps) > 0 {
+				live = append(live, dep.Dedup(seedDeps)...)
+			}
 			reachDeps = CollectReachDeps(unresolved, live)
 			liveMoved = CollectLiveMovedReachDeps(unresolved, live)
 			liveDirect = CollectLiveDirectReachDeps(unresolved, live)
@@ -158,25 +193,53 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}, nil
 }
 
-// isFullyRecorded returns true when every direct ref in the workflow has a
-// matching lockfile entry — the steady-state happy path.
-func isFullyRecorded(pw checks.ParsedWorkflow) bool {
+// partitionRefs splits a workflow's refs into recorded (have a matching
+// lockfile entry) and unrecorded (need network resolution). The split
+// uses NWO@Ref identity — the same granularity the lockfile pins at.
+// When an error prevented loading refs or deps, everything is unrecorded.
+func partitionRefs(pw checks.ParsedWorkflow) (recorded, unrecorded []parserlock.ActionRef) {
 	if pw.LoadErr != nil || pw.DepsErr != nil {
-		return false
+		return nil, pw.Refs
 	}
 	if len(pw.Refs) == 0 {
-		return true
+		return nil, nil
 	}
 	haveDep := make(map[string]bool, len(pw.ExistingDeps))
 	for _, d := range pw.ExistingDeps {
 		haveDep[d.NWO+"@"+d.Ref] = true
 	}
 	for _, r := range pw.Refs {
-		if !haveDep[r.Owner+"/"+r.Repo+"@"+r.Ref] {
-			return false
+		if haveDep[r.Owner+"/"+r.Repo+"@"+r.Ref] {
+			recorded = append(recorded, r)
+		} else {
+			unrecorded = append(unrecorded, r)
 		}
 	}
-	return true
+	return recorded, unrecorded
+}
+
+// isFullyRecorded returns true when every direct ref in the workflow has a
+// matching lockfile entry — the steady-state happy path.
+func isFullyRecorded(pw checks.ParsedWorkflow) bool {
+	_, unrecorded := partitionRefs(pw)
+	return len(pw.Refs) == 0 || len(unrecorded) == 0
+}
+
+// recordedDeps returns the subset of pw.ExistingDeps whose NWO@Ref matches
+// one of the recorded refs. These are the lockfile entries that correspond
+// to refs the workflow already has pinned.
+func recordedDeps(pw checks.ParsedWorkflow, recorded []parserlock.ActionRef) []dep.Dependency {
+	refKeys := make(map[string]bool, len(recorded))
+	for _, r := range recorded {
+		refKeys[r.Owner+"/"+r.Repo+"@"+r.Ref] = true
+	}
+	var out []dep.Dependency
+	for _, d := range pw.ExistingDeps {
+		if refKeys[d.Key()] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func hasImpostorFindings(r *checks.Report) bool {
