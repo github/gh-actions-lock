@@ -346,7 +346,19 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	// Terminal summary.
-	return renderPinSummary(console, record, report, r, skippedRescan)
+	hasInconclusive := opts.rescan && report.HasInconclusive()
+	if err := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive); err != nil {
+		return err
+	}
+
+	// --rescan strict gate: inconclusive reachability is a hard failure when
+	// the user explicitly requested a full re-verification. Without this,
+	// inconclusive findings (e.g. SAML-blocked branch listing) silently pass
+	// and the "✓ All N workflows valid" message is misleading.
+	if hasInconclusive {
+		return errSilent
+	}
+	return nil
 }
 
 // cliVersion returns the gh-actions-pin extension version embedded by the Go

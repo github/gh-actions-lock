@@ -15,7 +15,7 @@ import (
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int) error {
+func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -35,7 +35,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 
 	total := len(report.Workflows)
-	if len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0 {
+	if len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
@@ -204,8 +204,10 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 	}
 }
 
-// renderUnresolvedWarnings prints caution-level warnings for actions whose
+// renderUnresolvedWarnings prints error-level output for actions whose
 // refs could not be resolved (network errors, deleted repos, etc.).
+// When multiple actions share the same root cause (e.g. SSO enforcement),
+// they are grouped under a single explanation to avoid noisy repetition.
 func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	type unresolvedGroup struct {
 		nwo    string
@@ -238,17 +240,65 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	console.TermError("%d %s could not be resolved — %d %s affected",
 		len(groups), ui.Pluralize(len(groups), "action", "actions"),
 		len(affectedWFs), ui.Pluralize(len(affectedWFs), "workflow", "workflows"))
+
+	// Group actions by their cleaned reason + fix hint so identical errors
+	// are shown once with all affected actions listed underneath.
+	type reasonBucket struct {
+		cleaned string
+		fixHint string
+		deps    []string // "NWO@Ref" labels
+	}
+	var bucketOrder []string
+	buckets := map[string]*reasonBucket{}
+	var noReasonDeps []string
+
 	for _, g := range groups {
-		console.TermDetail("  %s", console.TermYellow(g.nwo+"@"+g.ref))
-		if g.reason != "" {
-			cleaned, fixHint := cleanUnresolvedReason(g.reason, g.nwo, g.ref)
-			if cleaned != "" {
-				console.TermDetail("    %s", console.TermDim(cleaned))
-			}
-			if fixHint != "" {
-				console.TermDetail("    %s %s", console.TermBold("→"), fixHint)
+		if g.reason == "" {
+			noReasonDeps = append(noReasonDeps, g.nwo+"@"+g.ref)
+			continue
+		}
+		cleaned, fixHint := cleanUnresolvedReason(g.reason, g.nwo, g.ref)
+		key := cleaned + "\x00" + fixHint
+		if b, ok := buckets[key]; ok {
+			b.deps = append(b.deps, g.nwo+"@"+g.ref)
+		} else {
+			bucketOrder = append(bucketOrder, key)
+			buckets[key] = &reasonBucket{
+				cleaned: cleaned,
+				fixHint: fixHint,
+				deps:    []string{g.nwo + "@" + g.ref},
 			}
 		}
+	}
+
+	for _, key := range bucketOrder {
+		b := buckets[key]
+		if len(b.deps) == 1 {
+			// Single action: inline style (action on top, reason below).
+			console.TermDetail("  %s", console.TermYellow(b.deps[0]))
+			if b.cleaned != "" {
+				console.TermDetail("    %s", console.TermDim(b.cleaned))
+			}
+			if b.fixHint != "" {
+				console.TermDetail("    %s %s", console.TermBold("→"), b.fixHint)
+			}
+		} else {
+			// Multiple actions share the same cause: show reason first,
+			// then list all affected actions indented below.
+			if b.cleaned != "" {
+				console.TermDetail("  %s", console.TermDim(b.cleaned))
+			}
+			if b.fixHint != "" {
+				console.TermDetail("  %s %s", console.TermBold("→"), b.fixHint)
+			}
+			for _, dep := range b.deps {
+				console.TermDetail("    %s", console.TermYellow(dep))
+			}
+		}
+	}
+
+	for _, dep := range noReasonDeps {
+		console.TermDetail("  %s", console.TermYellow(dep))
 	}
 }
 

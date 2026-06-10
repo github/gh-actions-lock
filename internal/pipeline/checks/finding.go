@@ -166,6 +166,21 @@ func (r *Report) IsValid() bool {
 	return true
 }
 
+// HasInconclusive reports whether the report contains any inconclusive
+// findings (reachability-unknown, ancestry-unknown). These are treated as
+// warnings by default, but callers that need a strict gate (e.g. --rescan)
+// can use this to fail when verification couldn't complete.
+func (r *Report) HasInconclusive() bool {
+	for _, wr := range r.Workflows {
+		for _, f := range wr.Findings {
+			if f.Category.IsInconclusive() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // IsValid returns true if no findings represent integrity violations.
 func (wr *WorkflowReport) IsValid() bool {
 	for _, f := range wr.Findings {
