@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/github/gh-actions-pin/internal/dep"
 	"github.com/github/gh-actions-pin/internal/lockfile"
+	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 	"github.com/github/gh-actions-pin/internal/workflowfile"
 	"golang.org/x/sync/errgroup"
 )
@@ -64,6 +66,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		wfKey := workflowfile.KeyFromPath(wfPath)
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
+		deps = retainImpostorPins(rec, store, wfPath, deps, directKeys)
 		if err := store.Set(ctx, wfKey, deps, parentMap, directKeys); err != nil {
 			return fmt.Errorf("updating lockfile for %s: %w", wfPath, err)
 		}
@@ -113,6 +116,42 @@ func groupPinnedByWorkflow(rec *Record) map[string][]dep.Dependency {
 		}
 	}
 	return result
+}
+
+// retainImpostorPins re-adds the workflow's existing on-disk pins for any
+// impostor-flagged dep so a co-located re-pin never silently drops them.
+func retainImpostorPins(rec *Record, store *lockfile.State, wfPath string, deps []dep.Dependency, directKeys map[string]bool) []dep.Dependency {
+	impostor := make(map[string]bool)
+	for _, e := range rec.Entries {
+		if e.Resolution != Investigate || e.Issue != string(checks.ImpostorCommit) {
+			continue
+		}
+		for _, wf := range e.Workflows {
+			if wf == wfPath {
+				impostor[strings.ToLower(e.NWO+"@"+e.Ref)] = true
+			}
+		}
+	}
+	if len(impostor) == 0 {
+		return deps
+	}
+	existing, err := store.Get(workflowfile.KeyFromPath(wfPath))
+	if err != nil {
+		return deps
+	}
+	have := make(map[string]bool, len(deps))
+	for _, d := range deps {
+		have[strings.ToLower(d.NWO+"@"+d.Ref)] = true
+	}
+	for _, d := range existing {
+		k := strings.ToLower(d.NWO + "@" + d.Ref)
+		if impostor[k] && !have[k] {
+			deps = append(deps, d)
+			directKeys[d.Key()] = true
+			have[k] = true
+		}
+	}
+	return deps
 }
 
 func buildParentMap(rec *Record, wfPath string) map[string][]string {
