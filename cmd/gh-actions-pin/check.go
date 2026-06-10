@@ -269,6 +269,12 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Strict gate — any blocking finding is a non-zero exit.
 	if opts.noFix {
 		console.StopProgress()
+		if gc := r.GHClient(); gc != nil {
+			if ssoURL := gc.SSOURL(); ssoURL != "" {
+				console.TermBlank()
+				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+			}
+		}
 		if opts.jsonFields != "" {
 			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 				return err
@@ -349,6 +355,15 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	hasInconclusive := opts.rescan && report.HasInconclusive()
 	if err := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive); err != nil {
 		return err
+	}
+
+	// Surface the SAML SSO authorization URL if one was captured during
+	// the run, matching cli/cli's "Authorize in your web browser:" line.
+	if gc := r.GHClient(); gc != nil {
+		if ssoURL := gc.SSOURL(); ssoURL != "" {
+			console.TermBlank()
+			console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+		}
 	}
 
 	// --rescan strict gate: inconclusive reachability is a hard failure when

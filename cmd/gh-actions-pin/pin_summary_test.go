@@ -281,21 +281,15 @@ func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
 		t.Errorf("expected clean reason text, got:\n%s", out)
 	}
 
-	// Fix hint with → arrow and SSO URL.
-	if !strings.Contains(out, "Authorize in your web browser:  https://github.com/orgs/actions/sso") {
-		t.Errorf("expected SSO fix hint with URL, got:\n%s", out)
-	}
-
 	// The trailing "Authorize it at ... and retry" noise should be trimmed from the reason.
 	if strings.Contains(out, "and retry") {
 		t.Errorf("expected trailing 'and retry' guidance trimmed, got:\n%s", out)
 	}
 
-	// Fix hint should come after the action name.
-	actionIdx := strings.Index(out, "actions/checkout@v4.3.1")
-	hintIdx := strings.Index(out, "Authorize in your web browser:")
-	if hintIdx < actionIdx {
-		t.Errorf("fix hint should come after action name\noutput:\n%s", out)
+	// SSO URL is NOT rendered here — it comes from the X-GitHub-SSO header
+	// and is surfaced by check.go at the end of the run.
+	if strings.Contains(out, "Authorize in your web browser") {
+		t.Errorf("SSO hint should not be rendered by renderUnresolvedWarnings (comes from check.go), got:\n%s", out)
 	}
 }
 
@@ -312,12 +306,9 @@ func TestRenderUnresolvedWarnings_DedupsBySameReason(t *testing.T) {
 	renderUnresolvedWarnings(console, entries)
 	out := buf.String()
 
-	// The SSO reason + fix hint should appear exactly once (deduped).
+	// The SSO reason should appear exactly once (deduped).
 	if got := strings.Count(out, "SSO authorization required"); got != 1 {
 		t.Errorf("expected SSO reason to appear once (deduped), got %d\noutput:\n%s", got, out)
-	}
-	if got := strings.Count(out, "Authorize in your web browser:"); got != 1 {
-		t.Errorf("expected fix hint to appear once, got %d\noutput:\n%s", got, out)
 	}
 
 	// All three actions should be listed.
@@ -336,16 +327,11 @@ func TestRenderUnresolvedWarnings_DedupsBySameReason(t *testing.T) {
 		t.Errorf("expected '3 actions' in header\noutput:\n%s", out)
 	}
 
-	// Actions should appear BEFORE the reason/CTA (multi-action layout).
+	// Actions should appear BEFORE the reason (multi-action layout).
 	lastAction := strings.LastIndex(out, "actions/cache@v5.0.5")
 	reasonIdx := strings.Index(out, "SSO authorization required")
 	if lastAction > reasonIdx {
 		t.Errorf("actions should appear before reason in multi-action layout\noutput:\n%s", out)
-	}
-
-	// Authorize hint should be at the end after the actions.
-	if got := strings.Count(out, "Authorize in your web browser:"); got != 1 {
-		t.Errorf("expected fix hint to appear once, got %d\noutput:\n%s", got, out)
 	}
 }
 

@@ -11,7 +11,9 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -26,6 +28,11 @@ type Client struct {
 	graphql  *api.GraphQLClient
 	rest     *api.RESTClient
 	Hostname string
+
+	// ssoHeader captures the X-GitHub-SSO response header value. Protected
+	// by ssoMu because concurrent API calls from the pool may race on it.
+	ssoMu     sync.Mutex
+	ssoHeader string
 
 	// Caches for raw GitHub resources. These live here so all consumers
 	// (resolver, auditor, tag lister) share a single cache per CLI run.
@@ -42,6 +49,11 @@ type Client struct {
 	protectedBranchCache syncmap.Map[Repo, []BranchHead]
 	protectedBranchSF    singleflight.Group
 }
+
+// ssoURLRE extracts the authorization URL from the X-GitHub-SSO header.
+// Copied from cli/cli (pkg/cmd/factory/default.go); drops when we're
+// no longer an extension and can use cli/cli's SSO plumbing directly.
+var ssoURLRE = regexp.MustCompile(`\burl=([^;]+)`)
 
 // ClientOption configures a Client at construction time. Pass to New.
 type ClientOption func(*clientConfig)
@@ -80,6 +92,8 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		o(&cfg)
 	}
 
+	c := &Client{Hostname: hostname}
+
 	apiOpts := api.ClientOptions{Host: hostname}
 
 	switch {
@@ -88,10 +102,14 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		apiOpts.AuthToken = cfg.authToken
 		apiOpts.LogIgnoreEnv = cfg.logIgnore
 	default:
-		apiOpts.Transport = newRetryTransport(http.DefaultTransport, 3)
+		var t http.RoundTripper = newRetryTransport(http.DefaultTransport, 3)
 		if cfg.profile != nil {
-			apiOpts.Transport = cfg.profile.WrapTransport(apiOpts.Transport)
+			t = cfg.profile.WrapTransport(t)
 		}
+		// Capture X-GitHub-SSO header for SAML enforcement errors.
+		// Copied from cli/cli (pkg/cmd/factory/default.go); drops when
+		// we're no longer an extension and can use cli/cli's plumbing.
+		apiOpts.Transport = &ssoTransport{inner: t, client: c}
 	}
 
 	gql, err := api.NewGraphQLClient(apiOpts)
@@ -104,11 +122,46 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{
-		graphql:  gql,
-		rest:     rest,
-		Hostname: hostname,
-	}, nil
+	c.graphql = gql
+	c.rest = rest
+	return c, nil
+}
+
+// SSOURL returns the SAML SSO authorization URL captured from the most
+// recent X-GitHub-SSO response header, or "" if none was seen.
+// Copied from cli/cli (pkg/cmd/factory/default.go); drops when we're
+// no longer an extension and can use cli/cli's SSO plumbing directly.
+func (c *Client) SSOURL() string {
+	c.ssoMu.Lock()
+	h := c.ssoHeader
+	c.ssoMu.Unlock()
+	if h == "" {
+		return ""
+	}
+	m := ssoURLRE.FindStringSubmatch(h)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// ssoTransport captures the X-GitHub-SSO response header into the
+// owning Client so SSOURL() can return it after the run completes.
+type ssoTransport struct {
+	inner  http.RoundTripper
+	client *Client
+}
+
+func (t *ssoTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.inner.RoundTrip(req)
+	if err == nil {
+		if v := resp.Header.Get("X-GitHub-SSO"); v != "" {
+			t.client.ssoMu.Lock()
+			t.client.ssoHeader = v
+			t.client.ssoMu.Unlock()
+		}
+	}
+	return resp, err
 }
 
 // retryTransport wraps an http.RoundTripper with retry logic for transient
