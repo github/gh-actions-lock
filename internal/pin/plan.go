@@ -92,14 +92,21 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	var entries []Entry
 	var wplans []WorkflowPlan
 
+	// Drop stale inventory entries (lockfile pins this workflow no longer
+	// references via uses:) so a re-pin run converges: the orphaned pin is
+	// not carried into workflows[path], and Save's GC then removes the now
+	// unreferenced dependencies[] entry. checkStale only flags genuinely
+	// orphaned direct pins, so this prunes exactly the stale finding set.
+	inventory := pruneStaleInventory(wr.Inventory, wr.Findings)
+
 	if !wr.NeedsAttention() {
-		entries = verifiedEntries(wr.Inventory, wr.Path)
+		entries = verifiedEntries(inventory, wr.Path)
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
 	// Per-dep trust: recorded deps skip the network path.
-	unrecordedRefs, inventorySHA := partitionByInventory(wr.Inventory, wr.ActionRefs)
-	entries = verifiedEntries(wr.Inventory, wr.Path)
+	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
+	entries = verifiedEntries(inventory, wr.Path)
 
 	if len(unrecordedRefs) == 0 {
 		return planResult{entries: entries, wplans: wplans}, nil
@@ -484,6 +491,35 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 		}
 	}
 	return unrecorded, shaSeen
+}
+
+// pruneStaleInventory removes inventory entries that have a matching stale
+// finding — lockfile pins this workflow no longer references via uses:. This
+// makes a fix-mode re-pin converge: the orphaned pin is dropped from the
+// workflow's recorded set instead of being carried forward as a Verified
+// entry. checkStale already accounts for SHA-pinned workflows (it surfaces
+// keys both ways), so its finding set is exactly the orphaned direct pins.
+func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding) []checks.InventoryEntry {
+	stale := make(map[string]bool)
+	for _, f := range findings {
+		if f.Category != checks.Stale || f.Dependency == nil {
+			continue
+		}
+		d := f.Dependency
+		stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
+	}
+	if len(stale) == 0 {
+		return inventory
+	}
+	out := make([]checks.InventoryEntry, 0, len(inventory))
+	for _, inv := range inventory {
+		key := strings.ToLower(inv.Dep.NWO + "@" + inv.Dep.Ref + ":" + inv.Dep.SHA)
+		if stale[key] {
+			continue
+		}
+		out = append(out, inv)
+	}
+	return out
 }
 
 // verifiedEntries builds Verified plan entries for every inventory item.

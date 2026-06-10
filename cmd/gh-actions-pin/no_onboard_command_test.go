@@ -225,10 +225,12 @@ jobs:
 	assert.Contains(t, pins, "checkout@v6.0.0",
 		"the bumped action must be re-pinned at the new ref")
 	assert.Contains(t, pins, newSHA, "the lockfile must record the new SHA")
-	// NOTE: the stale v5.0.0 entry is NOT pruned here — `check` carries all
-	// inventory entries as verified pins and only WARNS on stale (severity:
-	// warning, non-blocking). Stale pruning is a separate, pre-existing concern
-	// orthogonal to this write-path fix and the onboarding gate.
+	// The stale v5.0.0 entry must be pruned: a re-pin converges so the lock
+	// matches the workflow's uses: exactly (no dead pins accumulate).
+	assert.NotContains(t, pins, "v5.0.0",
+		"the stale ref must be pruned after the re-pin write")
+	assert.NotContains(t, pins, oldSHA,
+		"the orphaned dependency entry must be GC'd once nothing references it")
 }
 
 // TestCheck_NoOnboard_RefusesNewWorkflow proves that under --no-onboard a
