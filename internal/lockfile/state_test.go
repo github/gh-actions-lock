@@ -149,6 +149,70 @@ func TestState_SetRejectsEmptyBranch(t *testing.T) {
 	}
 }
 
+// TestState_SetPreservesBranchForUnchangedPin reproduces the write-path bug
+// where adding a new action to an already-tracked workflow failed with
+// "branch is required". The lockfile read path (parserlock.Pin) drops branch,
+// so a carried Verified dep arrives at Set branchless; Set must fall back to
+// the branch already recorded on disk for that unchanged pin instead of
+// rejecting the whole write.
+func TestState_SetPreservesBranchForUnchangedPin(t *testing.T) {
+	dir := t.TempDir()
+	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
+
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	checkout := dep.Dependency{
+		NWO: "actions/checkout", Ref: "v4", Tag: "v4", Branch: "main",
+		SHA: "abc123abc123abc123abc123abc123abc123abc1", HashAlgo: "sha1",
+	}
+	if err := store.Set(context.Background(), wfKey, []dep.Dependency{checkout}, nil, nil); err != nil {
+		t.Fatalf("initial Set: %v", err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatalf("initial Save: %v", err)
+	}
+
+	// Reload from disk and re-Set with the existing checkout dep arriving
+	// branchless (the Verified read-path shape) plus a genuinely new dep.
+	store2, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("reopening store: %v", err)
+	}
+	carriedCheckout := dep.Dependency{
+		NWO: "actions/checkout", Ref: "v4",
+		SHA: "abc123abc123abc123abc123abc123abc123abc1", HashAlgo: "sha1",
+		// Branch/Tag intentionally empty — dropped by the read path.
+	}
+	newSetupGo := dep.Dependency{
+		NWO: "actions/setup-go", Ref: "v5", Tag: "v5", Branch: "main",
+		SHA: "def456def456def456def456def456def456def4", HashAlgo: "sha1",
+	}
+	if err := store2.Set(context.Background(), wfKey, []dep.Dependency{carriedCheckout, newSetupGo}, nil, nil); err != nil {
+		t.Fatalf("re-Set with carried branchless dep should succeed, got: %v", err)
+	}
+	if err := store2.Save(); err != nil {
+		t.Fatalf("second Save: %v", err)
+	}
+
+	store3, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("reopening store: %v", err)
+	}
+	checkoutKey := "actions/checkout@v4:sha1-abc123abc123abc123abc123abc123abc123abc1"
+	a, ok := store3.file.Dependencies[checkoutKey]
+	if !ok {
+		t.Fatalf("expected %s preserved, keys=%v", checkoutKey, actionKeys(store3.file.Dependencies))
+	}
+	if a.Branch != "main" {
+		t.Errorf("expected preserved Branch=main for unchanged pin, got %q", a.Branch)
+	}
+	if a.Tag != "v4" {
+		t.Errorf("expected preserved Tag=v4 for unchanged pin, got %q", a.Tag)
+	}
+}
+
 // TestState_DiamondTransitiveDepEmittedCorrectly verifies that when two direct
 // actions share a transitive dependency (diamond pattern: A→C, B→C), the
 // lockfile correctly records `uses: [C]` on both A and B, and the shared dep

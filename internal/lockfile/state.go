@@ -243,15 +243,23 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 	// keyToPin: Dependency.Key() (NWO@Ref) → canonical pin (NWO@Ref:algo-hex).
 	keyToPin := make(map[string]string, len(deps))
 	for _, d := range deps {
-		if d.Branch == "" {
-			return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
-		}
 		pin, err := depToPin(d)
 		if err != nil {
 			return err
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
+		// Branch is required to write a pin, but an unchanged pin already
+		// recorded on disk carries its branch in s.file.Dependencies. The
+		// lockfile read path (parserlock.Pin) drops branch/tag, so a carried
+		// Verified dep arrives here branchless; fall back to the existing
+		// entry's metadata rather than forcing a re-resolve. Only a genuinely
+		// new pin with no recorded branch is an error.
+		if d.Branch == "" {
+			if existing, ok := s.file.Dependencies[pinKey]; !ok || existing.Branch == "" {
+				return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
+			}
+		}
 		keyToPin[d.Key()] = pinKey
 		var isDirect bool
 		if directKeys != nil {
@@ -312,9 +320,21 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			}
 			sort.Strings(uses)
 		}
+		// Preserve branch/tag from the existing on-disk entry for an unchanged
+		// pin that arrived branchless (the read path drops branch/tag). A pin
+		// carrying its own branch (a fresh/changed resolution) overrides.
+		branch, tag := d.Branch, d.Tag
+		if existing, ok := s.file.Dependencies[pinKey]; ok {
+			if branch == "" {
+				branch = existing.Branch
+			}
+			if tag == "" {
+				tag = existing.Tag
+			}
+		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
-			Tag:     d.Tag,
-			Branch:  d.Branch,
+			Tag:     tag,
+			Branch:  branch,
 			Commit:  pin.Algo + "-" + pin.Hex,
 			OwnerID: ids[0],
 			RepoID:  ids[1],

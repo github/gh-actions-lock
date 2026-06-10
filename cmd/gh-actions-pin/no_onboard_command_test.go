@@ -169,6 +169,68 @@ jobs:
 	assert.Contains(t, refChanged.Dependency, "checkout")
 }
 
+// TestCheck_NoOnboardNoNarrow_RefBumpRepinsAndWrites is the consumer's headline
+// case: under combined --no-onboard --no-narrow, a tracked action whose ref was
+// bumped in the workflow (v5.0.0 → v6.0.0) re-pins to the new SHA AND the
+// lockfile is written to disk. This exercises the verified-entry write path
+// that previously failed with "branch is required" (the carried v5.0.0 entry
+// arrives branchless from the read path; Set must preserve metadata for
+// unchanged pins and still write the changed one).
+func TestCheck_NoOnboardNoNarrow_RefBumpRepinsAndWrites(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	oldSHA := "1111111111111111111111111111111111111111"
+	newSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+	mainSHA := "2222222222222222222222222222222222222222"
+
+	reg.Register(httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{"data": map[string]any{
+			"a0": testRepoResponse("actions/checkout", newSHA, nodeActionYAML)}}))
+	reg.Register(httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{"ref": "refs/heads/main",
+			"object": map[string]any{"sha": mainSHA, "type": "commit"}}))
+	reg.Register(httpmock.REST("GET", `repos/actions/checkout/compare/`),
+		httpmock.JSONResponse(map[string]any{"status": "identical",
+			"merge_base_commit": map[string]any{"sha": newSHA}}))
+	reg.Register(httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse([]map[string]any{{"name": "v6.0.0", "commit": map[string]any{"sha": newSHA}}}))
+	reg.Register(httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main", "id": 1, "owner": map[string]any{"id": 1}}))
+
+	lockYAML := "version: 'v0.0.1'\ndependencies:\n" +
+		"  'actions/checkout@v5.0.0:sha1-" + oldSHA + "':\n" +
+		"    branch: 'main'\n    commit: 'sha1-" + oldSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"workflows:\n  '.github/workflows/workflow.yml':\n" +
+		"    - 'actions/checkout@v5.0.0:sha1-" + oldSHA + "'\n"
+
+	_, wfPath := writeRepoWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.0
+`, lockYAML)
+
+	// Fix mode (no --no-fix): the bump must re-pin and write.
+	_, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
+		"check", "--no-onboard", "--no-narrow", "--json=valid,findings", wfPath,
+	)
+	// Auto-fixed: a clean re-pin run exits 0 (no surviving blocking findings).
+	require.NoError(t, err)
+
+	pins := readTempLockfilePins(t)
+	assert.Contains(t, pins, "checkout@v6.0.0",
+		"the bumped action must be re-pinned at the new ref")
+	assert.Contains(t, pins, newSHA, "the lockfile must record the new SHA")
+	// NOTE: the stale v5.0.0 entry is NOT pruned here — `check` carries all
+	// inventory entries as verified pins and only WARNS on stale (severity:
+	// warning, non-blocking). Stale pruning is a separate, pre-existing concern
+	// orthogonal to this write-path fix and the onboarding gate.
+}
+
 // TestCheck_NoOnboard_RefusesNewWorkflow proves that under --no-onboard a
 // brand-new workflow (no lockfile entry at all) is refused entirely: every
 // uses: ref becomes an onboarding-required finding, nothing is pinned, and the
