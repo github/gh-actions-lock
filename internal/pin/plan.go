@@ -92,11 +92,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	var entries []Entry
 	var wplans []WorkflowPlan
 
-	// Drop stale inventory entries (lockfile pins this workflow no longer
-	// references via uses:) so a re-pin run converges: the orphaned pin is
-	// not carried into workflows[path], and Save's GC then removes the now
-	// unreferenced dependencies[] entry. checkStale only flags genuinely
-	// orphaned direct pins, so this prunes exactly the stale finding set.
+	// Drop stale inventory entries so a re-pin converges: the orphan leaves
+	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings)
 
 	if !wr.NeedsAttention() {
@@ -493,12 +490,8 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 	return unrecorded, shaSeen
 }
 
-// pruneStaleInventory removes inventory entries that have a matching stale
-// finding — lockfile pins this workflow no longer references via uses:. This
-// makes a fix-mode re-pin converge: the orphaned pin is dropped from the
-// workflow's recorded set instead of being carried forward as a Verified
-// entry. checkStale already accounts for SHA-pinned workflows (it surfaces
-// keys both ways), so its finding set is exactly the orphaned direct pins.
+// pruneStaleInventory drops inventory entries matching a stale finding (a pin
+// the workflow no longer references), so a fix-mode re-pin converges.
 func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {

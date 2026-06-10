@@ -249,12 +249,8 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
-		// Branch is required to write a pin, but an unchanged pin already
-		// recorded on disk carries its branch in s.file.Dependencies. The
-		// lockfile read path (parserlock.Pin) drops branch/tag, so a carried
-		// Verified dep arrives here branchless; fall back to the existing
-		// entry's metadata rather than forcing a re-resolve. Only a genuinely
-		// new pin with no recorded branch is an error.
+		// The read path (parserlock.Pin) drops branch, so an unchanged carried
+		// dep arrives branchless; reuse the recorded branch. Only a new pin errors.
 		if d.Branch == "" {
 			if existing, ok := s.file.Dependencies[pinKey]; !ok || existing.Branch == "" {
 				return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
@@ -320,9 +316,8 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			}
 			sort.Strings(uses)
 		}
-		// Preserve branch/tag from the existing on-disk entry for an unchanged
-		// pin that arrived branchless (the read path drops branch/tag). A pin
-		// carrying its own branch (a fresh/changed resolution) overrides.
+		// Preserve branch/tag from the existing entry for an unchanged branchless
+		// pin; a pin carrying its own branch (fresh/changed resolution) overrides.
 		branch, tag := d.Branch, d.Tag
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
 			if branch == "" {

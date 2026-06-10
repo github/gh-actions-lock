@@ -15,20 +15,8 @@ func noOnboardFlag(cmd *cobra.Command) bool {
 	return v
 }
 
-// gateNoOnboard enforces --no-onboard on a diagnosed report.
-//
-// A direct uses: ref with no lockfile entry for its own workflow surfaces
-// as a NotPinned finding: the known-action set in checkNotPinned is scoped
-// per workflow (run.go looks up only that workflow's recorded deps), so
-// NotPinned fires exactly at the onboarding boundary — a brand-new
-// workflow, or a new action inside an already-tracked one. Each such
-// finding is rewritten to OnboardingRequired and its ref dropped from the
-// workflow's ActionRefs, so the Plan pass never resolves or pins it.
-//
-// An already-tracked action whose ref was bumped surfaces as RefChanged
-// instead (its NWO is in the workflow's recorded deps at a different ref).
-// Those are left untouched and still re-pin. Returns the number of refs
-// refused.
+// gateNoOnboard rewrites per-workflow NotPinned findings to OnboardingRequired
+// and drops their refs so Plan never pins them. Returns refs refused.
 func gateNoOnboard(report *checks.Report) int {
 	refused := 0
 	for wi := range report.Workflows {
