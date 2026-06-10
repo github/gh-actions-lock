@@ -15,7 +15,7 @@ import (
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int) error {
+func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan, onboardingRefused int) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -35,7 +35,8 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 
 	total := len(report.Workflows)
-	if len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0 {
+	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
+	if allClean && onboardingRefused == 0 {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
@@ -44,11 +45,14 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		return nil
 	}
 
-	if len(unresolvedEntries) == 0 && len(investigated) == 0 {
-		return nil
+	if onboardingRefused > 0 {
+		console.TermBlank()
+		console.TermCaution("%d onboarding-required %s skipped — re-run without --no-onboard to add %s",
+			onboardingRefused, ui.Pluralize(onboardingRefused, "entry", "entries"),
+			ui.Pluralize(onboardingRefused, "it", "them"))
 	}
 
-	if len(investigated) > 0 {
+	if len(investigated) > 0 || onboardingRefused > 0 {
 		return errSilent
 	}
 	return nil

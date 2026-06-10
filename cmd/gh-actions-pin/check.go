@@ -259,6 +259,20 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	valid := result.Valid
 	skippedRescan := result.SkippedRescan
 
+	// --no-onboard: refuse to onboard new workflows or actions. Rewrite the
+	// relevant not-pinned findings to onboarding-required and drop their refs
+	// so Plan/Commit never pins them; already-tracked refs that were bumped
+	// (ref-changed) are left to re-pin as usual. Runs before the diagnosis is
+	// rendered so the terminal and JSON both report the refusal, and before
+	// the exit-code decision so refused entries drive a blocking (exit 1) run.
+	onboardingRefused := 0
+	if noOnboardFlag(cmd) {
+		onboardingRefused = gateNoOnboard(report)
+		if onboardingRefused > 0 {
+			valid = report.IsValid()
+		}
+	}
+
 	// Render the read-only diagnosis. --json selects the renderer; it does
 	// not decide whether fixes are applied. Terminal output is shown up front
 	// (the human narrative). JSON is emitted later, after any fixes land, so
@@ -349,14 +363,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 			return err
 		}
-		if len(record.Investigated()) > 0 {
+		if len(record.Investigated()) > 0 || onboardingRefused > 0 {
 			return errSilent
 		}
 		return nil
 	}
 
 	// Terminal summary.
-	return renderPinSummary(console, record, report, r, skippedRescan)
+	return renderPinSummary(console, record, report, r, skippedRescan, onboardingRefused)
 }
 
 // cliVersion returns the gh-actions-pin extension version embedded by the Go
