@@ -274,25 +274,27 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	for _, key := range bucketOrder {
 		b := buckets[key]
 		if len(b.deps) == 1 {
-			// Single action: inline style (action on top, reason below).
+			// Single action: action on top, reason below, CTA last.
 			console.TermDetail("  %s", console.TermYellow(b.deps[0]))
 			if b.cleaned != "" {
 				console.TermDetail("    %s", console.TermDim(b.cleaned))
 			}
 			if b.fixHint != "" {
 				console.TermDetail("    %s %s", console.TermBold("→"), b.fixHint)
+				console.TermDetail("    %s %s", console.TermBold("→"), console.TermDim("Then re-run: ")+"`gh actions-pin --rescan`")
 			}
 		} else {
-			// Multiple actions share the same cause: show reason first,
-			// then list all affected actions indented below.
+			// Multiple actions share the same cause: list actions first,
+			// then show reason + CTA at the end.
+			for _, dep := range b.deps {
+				console.TermDetail("  %s", console.TermYellow(dep))
+			}
 			if b.cleaned != "" {
 				console.TermDetail("  %s", console.TermDim(b.cleaned))
 			}
 			if b.fixHint != "" {
 				console.TermDetail("  %s %s", console.TermBold("→"), b.fixHint)
-			}
-			for _, dep := range b.deps {
-				console.TermDetail("    %s", console.TermYellow(dep))
+				console.TermDetail("  %s %s", console.TermBold("→"), console.TermDim("Then re-run: ")+"`gh actions-pin --rescan`")
 			}
 		}
 	}

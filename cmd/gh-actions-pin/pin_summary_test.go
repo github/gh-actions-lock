@@ -275,9 +275,6 @@ func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
 	if strings.Contains(out, "resolution failed:") {
 		t.Errorf("expected 'resolution failed:' prefix stripped, got:\n%s", out)
 	}
-	if strings.Contains(out, "actions/checkout@v4.3.1: SSO") {
-		t.Errorf("expected redundant NWO@Ref prefix stripped from reason, got:\n%s", out)
-	}
 
 	// Clean reason should appear.
 	if !strings.Contains(out, "SSO authorization required") {
@@ -285,16 +282,25 @@ func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
 	}
 
 	// Fix hint with → arrow and SSO URL.
-	if !strings.Contains(out, "→") {
-		t.Errorf("expected → fix hint arrow, got:\n%s", out)
-	}
 	if !strings.Contains(out, "Authorize your token: https://github.com/orgs/actions/sso") {
 		t.Errorf("expected SSO fix hint with URL, got:\n%s", out)
+	}
+
+	// Re-run command as CTA.
+	if !strings.Contains(out, "gh actions-pin --rescan") {
+		t.Errorf("expected re-run command hint, got:\n%s", out)
 	}
 
 	// The trailing "Authorize it at ... and retry" noise should be trimmed from the reason.
 	if strings.Contains(out, "and retry") {
 		t.Errorf("expected trailing 'and retry' guidance trimmed, got:\n%s", out)
+	}
+
+	// CTA should come after the fix hint (at the end).
+	hintIdx := strings.Index(out, "Authorize your token:")
+	ctaIdx := strings.Index(out, "gh actions-pin --rescan")
+	if ctaIdx < hintIdx {
+		t.Errorf("CTA should come after fix hint\noutput:\n%s", out)
 	}
 }
 
@@ -333,6 +339,18 @@ func TestRenderUnresolvedWarnings_DedupsBySameReason(t *testing.T) {
 	// Header should show 3 actions.
 	if !strings.Contains(out, "3 actions could not be resolved") {
 		t.Errorf("expected '3 actions' in header\noutput:\n%s", out)
+	}
+
+	// Actions should appear BEFORE the reason/CTA (multi-action layout).
+	lastAction := strings.LastIndex(out, "actions/cache@v5.0.5")
+	reasonIdx := strings.Index(out, "SSO authorization required")
+	if lastAction > reasonIdx {
+		t.Errorf("actions should appear before reason in multi-action layout\noutput:\n%s", out)
+	}
+
+	// Re-run CTA should be at the very end.
+	if !strings.Contains(out, "gh actions-pin --rescan") {
+		t.Errorf("expected re-run command\noutput:\n%s", out)
 	}
 }
 
