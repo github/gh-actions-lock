@@ -459,40 +459,6 @@ func setupClosure(t *testing.T, dir string) {
 	}
 }
 
-// TestState_WorkflowClosure roundtrips a saved closure back through the helper
-// the update engine uses to read the existing pin graph.
-func TestState_WorkflowClosure(t *testing.T) {
-	dir := t.TempDir()
-	setupClosure(t, dir)
-
-	store, err := LoadState(dir, fakeMetadataResolver{})
-	if err != nil {
-		t.Fatalf("reopening store: %v", err)
-	}
-	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
-	deps, parentMap, directKeys, err := store.WorkflowClosure(wfKey)
-	if err != nil {
-		t.Fatalf("WorkflowClosure: %v", err)
-	}
-
-	keys := make(map[string]bool, len(deps))
-	for _, d := range deps {
-		keys[d.Key()] = true
-	}
-	if !keys["actions/setup-go@v6"] || !keys["actions/cache@v4"] {
-		t.Fatalf("closure missing deps, got keys=%v", keys)
-	}
-	if !directKeys["actions/setup-go@v6"] {
-		t.Errorf("expected setup-go to be a direct pin, got %v", directKeys)
-	}
-	if directKeys["actions/cache@v4"] {
-		t.Errorf("cache is transitive, must not be direct")
-	}
-	if got := parentMap["actions/cache@v4"]; len(got) != 1 || got[0] != "actions/setup-go@v6" {
-		t.Errorf("expected cache parent setup-go, got %v", got)
-	}
-}
-
 // resaveBumped reloads the store from disk (as `update` does), replaces the
 // given workflow's closure, and saves — returning the new on-disk bytes.
 func resaveBumped(t *testing.T, dir, wfKey string, deps []dep.Dependency, pm map[string][]string, direct map[string]bool) []byte {

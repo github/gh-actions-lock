@@ -14,9 +14,9 @@ type RepoTag struct {
 	SHA  string
 }
 
-// RepoTags lists a repository's tags with the commit SHA each resolves to.
-// Delegates to ListTags so it shares the cached, singleflight-coalesced,
-// paginated tag fetch rather than issuing a second identical request.
+// RepoTags lists a repository's tags (up to 100) with the commit SHA each
+// resolves to. Delegates to ListTags so it shares the cached, singleflight-
+// coalesced tag fetch rather than issuing a second identical request.
 func (c *Client) RepoTags(ctx context.Context, owner, repo string) ([]RepoTag, error) {
 	entries, err := c.ListTags(ctx, owner, repo)
 	if err != nil {

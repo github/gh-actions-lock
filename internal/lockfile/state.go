@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -181,86 +180,6 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 		out = append(out, pinToDep(pin))
 	}
 	return out, nil
-}
-
-// WorkflowClosure returns the full transitive dependency closure recorded for
-// workflowKey: every pin reachable from the workflow's direct entries through
-// the per-action uses: graph. Results are in dep.Key() (NWO@Ref) form — the
-// exact shape Set consumes — so a caller that relocks a single action can
-// re-supply the complete closure to Set without re-resolving untargeted deps:
-//
-//   - deps carry the Tag/Branch metadata from each action block (so Set's
-//     branch-required invariant holds for preserved entries).
-//   - parentMap is child key → parent keys, rebuilt by inverting the uses graph.
-//   - directKeys is the set of workflow-direct keys.
-//
-// Returns all-nil when the workflow has no entry.
-func (s *State) WorkflowClosure(workflowKey string) (deps []dep.Dependency, parentMap map[string][]string, directKeys map[string]bool, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	directPins, ok := s.file.Workflows[workflowKey]
-	if !ok {
-		return nil, nil, nil, nil
-	}
-
-	directKeys = make(map[string]bool)
-	parentMap = make(map[string][]string)
-	seen := make(map[string]bool) // visited pin keys
-
-	depKeyOf := func(pinKey string) (string, parserlock.Pin, bool) {
-		p, ok := parserlock.ParsePin(pinKey)
-		if !ok {
-			return "", parserlock.Pin{}, false
-		}
-		return p.NWO + "@" + p.Ref, p, true
-	}
-
-	var walk func(pinKey string) error
-	walk = func(pinKey string) error {
-		if seen[pinKey] {
-			return nil
-		}
-		seen[pinKey] = true
-		action, ok := s.file.Dependencies[pinKey]
-		if !ok {
-			return fmt.Errorf("workflow %q references unknown pin %q in %s", workflowKey, pinKey, parserlock.Path)
-		}
-		depKey, p, ok := depKeyOf(pinKey)
-		if !ok {
-			return fmt.Errorf("invalid pin %q in %s", pinKey, parserlock.Path)
-		}
-		d := pinToDep(p)
-		d.Tag = action.Tag
-		d.Branch = action.Branch
-		deps = append(deps, d)
-		for _, childPin := range action.Uses {
-			childKey, _, ok := depKeyOf(childPin)
-			if !ok {
-				return fmt.Errorf("invalid child pin %q in %s", childPin, parserlock.Path)
-			}
-			if !slices.Contains(parentMap[childKey], depKey) {
-				parentMap[childKey] = append(parentMap[childKey], depKey)
-			}
-			if err := walk(childPin); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for _, pinKey := range directPins {
-		depKey, _, ok := depKeyOf(pinKey)
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("invalid direct pin %q in %s for workflow %q", pinKey, parserlock.Path, workflowKey)
-		}
-		directKeys[depKey] = true
-		if err := walk(pinKey); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	return deps, parentMap, directKeys, nil
 }
 
 // AllDeps returns every action entry in the lockfile as a Dependency,

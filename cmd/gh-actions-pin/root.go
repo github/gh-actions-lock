@@ -61,12 +61,6 @@ type resolverFunc func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, 
 // newRootCmd returns the cobra command for the root `actions-pin` invocation.
 // newResolver supplies the resolver builder; pass nil for production wiring.
 func newRootCmd(newResolver resolverFunc) *cobra.Command {
-	return newRootCmdWithPrompter(newResolver, nil)
-}
-
-// newRootCmdWithPrompter is newRootCmd with an injectable interactive prompter
-// factory for `update`. newPrompt nil selects the terminal-bound default.
-func newRootCmdWithPrompter(newResolver resolverFunc, newPrompt promptFactory) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
@@ -120,14 +114,13 @@ $ gh actions-pin --no-fix --json=valid,findings
 	}
 
 	bindCheckFlags(cmd, opts)
-	// Accept --no-onboard and --no-interactive everywhere for symmetry and
-	// Dependabot compatibility. `check` ignores both; `update` refuses
-	// onboarding unconditionally (so --no-onboard reaffirms the default) and
-	// treats --no-interactive as a no-op.
-	cmd.PersistentFlags().Bool("no-onboard", false, "Refuse to add new workflow lockfile entries (update refuses onboarding regardless)")
-	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts (accepted and ignored)")
+	// --no-onboard and --no-interactive are persistent so they apply to the
+	// root check invocation. --no-onboard refuses to onboard new workflows or
+	// actions (re-pinning already-tracked entries still happens); used by
+	// Dependabot so a relock never silently adds an entry it didn't ask for.
+	cmd.PersistentFlags().Bool("no-onboard", false, "Refuse to onboard new workflows or actions; only re-pin already-tracked entries")
+	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts")
 	cmd.AddCommand(newCheckCmd(newResolver))
-	cmd.AddCommand(newUpdateCmd(newResolver, newPrompt))
 
 	return cmd
 }

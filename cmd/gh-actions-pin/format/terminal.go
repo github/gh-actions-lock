@@ -275,25 +275,3 @@ func WorkflowsForDep(report *checks.Report, depKey string) []string {
 	}
 	return out
 }
-
-// PresentUpdateSummary renders the human-readable outcome of an `update` run
-// (non-JSON mode). update always writes, so a successful relock is reported as
-// applied.
-func PresentUpdateSummary(console *ui.UI, res UpdateResult) {
-	switch {
-	case len(res.Updated) > 0:
-		for _, u := range res.Updated {
-			console.TermNeutral("Updated %s: %s → %s", u.NWO, u.OldRef, u.NewRef)
-		}
-		console.TermNeutral("Saved %d %s.", len(res.Workflows), ui.Pluralize(len(res.Workflows), "workflow", "workflows"))
-	case len(res.Findings) > 0:
-		// Findings but no updates: the run was blocked (e.g. onboarding-required
-		// or a relock-invariant violation), not a clean no-op.
-		console.TermNeutral("No changes applied; see findings below.")
-	default:
-		console.TermNeutral("No changes — every targeted workflow is already current.")
-	}
-	for _, f := range res.Findings {
-		console.TermDetail("%s: %s — %s", f.Severity, f.Category, f.Detail)
-	}
-}

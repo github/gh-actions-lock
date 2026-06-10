@@ -50,7 +50,7 @@ jobs:
 	assert.FileExists(t, lockPath, "corrupt lockfile must be left in place under --no-fix")
 }
 
-func TestCorruptLockfile_Update_FailsCleanly(t *testing.T) {
+func TestCorruptLockfile_CheckUpdate_FailsCleanly(t *testing.T) {
 	body := `
 name: ci
 on: push
@@ -64,12 +64,12 @@ jobs:
 	lockPath := writeCorruptLock(t)
 
 	stdout, _, err := runCommandWithHTTP(t, &httpmock.Registry{},
-		"update", "--action", "actions/checkout@v4", "--target", "v5", "--json=updated")
+		"check", ".github/workflows/workflow.yml")
 
 	require.Error(t, err, "corrupt lockfile must fail the relock")
 	assert.Contains(t, err.Error(), "unreadable")
 	assert.Empty(t, strings.TrimSpace(stdout), "no JSON on stdout for a tool failure (exit 2)")
-	assert.FileExists(t, lockPath, "update must not delete the lockfile")
+	assert.FileExists(t, lockPath, "a non-interactive relock must not delete the lockfile")
 }
 
 // fakeConfirmer (defined in lockrecovery_test.go) drives the interactive

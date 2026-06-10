@@ -2,7 +2,6 @@ package ghapi
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -242,44 +241,6 @@ func TestListTags(t *testing.T) {
 	}
 	if tags[0].Name != "v1.0.0" {
 		t.Fatalf("unexpected first tag: %+v", tags[0])
-	}
-}
-
-// TestListTags_Paginates verifies ListTags walks past the 100-tag first page.
-// A repo with >100 tags must surface every tag so version discovery matches
-// dependabot-core's full `git ls-remote --tags` enumeration.
-func TestListTags_Paginates(t *testing.T) {
-	reg := &httpmock.Registry{}
-	page1 := make([]map[string]any, 100)
-	for i := range page1 {
-		page1[i] = map[string]any{
-			"name":   fmt.Sprintf("v1.0.%d", i),
-			"commit": map[string]string{"sha": fmt.Sprintf("sha%d", i)},
-		}
-	}
-	// Page 1 is full (100) so the loop must request page 2.
-	reg.Register(
-		httpmock.RESTWithQuery("GET", "repos/o/r/tags", "page=1"),
-		httpmock.JSONResponse(page1),
-	)
-	reg.Register(
-		httpmock.RESTWithQuery("GET", "repos/o/r/tags", "page=2"),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": "v2.0.0", "commit": map[string]string{"sha": "newest"}},
-		}),
-	)
-
-	c := newTestClient(t, reg)
-	tags, err := c.ListTags(context.Background(), "o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tags) != 101 {
-		t.Fatalf("expected 101 tags across two pages, got %d", len(tags))
-	}
-	last := tags[len(tags)-1]
-	if last.Name != "v2.0.0" || last.SHA != "newest" {
-		t.Fatalf("expected page-2 tag last, got %+v", last)
 	}
 }
 
