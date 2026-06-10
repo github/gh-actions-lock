@@ -26,6 +26,10 @@ type PlanOptions struct {
 	RepoOwner string // for same-owner narrowing skip
 	RepoName  string
 	Version   string // CLI version for the record
+	// NoNarrow disables tag narrowing: mutable version refs (v4, v3.1)
+	// are kept as the lock comment instead of being resolved to full
+	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
+	NoNarrow bool
 
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
@@ -235,6 +239,23 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	for k, v := range autoFixRewrites {
 		rewrites[k] = v
 	}
+
+	// Build set of NWOs previously locked with a mutable ref. When a dep
+	// was stored imprecisely (e.g. v4), we respect that choice on re-pin
+	// rather than narrowing to v4.2.1.
+	prevMutableNWO := make(map[string]bool)
+	if opts.Store != nil {
+		wfKey := workflowfile.KeyFromPath(wr.Path)
+		if existing, err := opts.Store.Get(wfKey); err == nil {
+			for _, d := range existing {
+				sv, ok := parserlock.ParseSemVer(d.Ref)
+				if ok && sv.IsMutable() {
+					prevMutableNWO[strings.ToLower(d.NWO)] = true
+				}
+			}
+		}
+	}
+
 	if opts.Tagger != nil {
 		for i := range deps {
 			dep := &deps[i]
@@ -269,6 +290,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			}
 
 			// Mutable version tags (v4, v3.1): narrow to patch release.
+			// Skip if --no-narrow or if the lockfile already recorded this
+			// dep with a mutable ref (respect prior precision choice).
+			if opts.NoNarrow || prevMutableNWO[strings.ToLower(dep.NWO)] {
+				continue
+			}
 			sv, ok := parserlock.ParseSemVer(dep.Ref)
 			if !ok || !sv.IsMutable() {
 				continue
