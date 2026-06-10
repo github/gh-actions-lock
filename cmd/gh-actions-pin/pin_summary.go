@@ -48,7 +48,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		return nil
 	}
 
-	if len(investigated) > 0 {
+	if len(investigated) > 0 || len(unresolvedEntries) > 0 {
 		return errSilent
 	}
 	return nil
@@ -235,7 +235,7 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 		}
 	}
 	console.TermBlank()
-	console.TermCaution("%d %s could not be resolved — %d %s affected",
+	console.TermError("%d %s could not be resolved — %d %s affected",
 		len(groups), ui.Pluralize(len(groups), "action", "actions"),
 		len(affectedWFs), ui.Pluralize(len(affectedWFs), "workflow", "workflows"))
 	for _, g := range groups {
