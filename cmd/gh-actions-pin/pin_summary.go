@@ -274,28 +274,17 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	for _, key := range bucketOrder {
 		b := buckets[key]
 		if len(b.deps) == 1 {
-			// Single action: action on top, reason below, CTA last.
 			console.TermDetail("  %s", console.TermYellow(b.deps[0]))
-			if b.cleaned != "" {
-				console.TermDetail("    %s", console.TermDim(b.cleaned))
-			}
-			if b.fixHint != "" {
-				console.TermDetail("    %s %s", console.TermBold("→"), b.fixHint)
-				console.TermDetail("    %s %s", console.TermBold("→"), console.TermDim("Then re-run: ")+"`gh actions-pin --rescan`")
-			}
 		} else {
-			// Multiple actions share the same cause: list actions first,
-			// then show reason + CTA at the end.
 			for _, dep := range b.deps {
 				console.TermDetail("  %s", console.TermYellow(dep))
 			}
-			if b.cleaned != "" {
-				console.TermDetail("  %s", console.TermDim(b.cleaned))
-			}
-			if b.fixHint != "" {
-				console.TermDetail("  %s %s", console.TermBold("→"), b.fixHint)
-				console.TermDetail("  %s %s", console.TermBold("→"), console.TermDim("Then re-run: ")+"`gh actions-pin --rescan`")
-			}
+		}
+		if b.cleaned != "" {
+			console.TermDetail("  %s", console.TermDim(b.cleaned))
+		}
+		if b.fixHint != "" {
+			console.TermDetail("  %s", b.fixHint)
 		}
 	}
 
@@ -357,10 +346,11 @@ func cleanUnresolvedReason(reason, nwo, ref string) (string, string) {
 // Returns "" when no actionable guidance can be inferred.
 func extractFixHint(reason string) string {
 	// SSO/SAML enforcement: extract the authorization URL.
+	// Matches cli/cli's format: "Authorize in your web browser:  <url>"
 	if strings.Contains(reason, "SSO authorization required") ||
 		strings.Contains(reason, "SAML enforcement") {
 		if url := extractURLWithPrefix(reason, "https://github.com/orgs/"); url != "" {
-			return fmt.Sprintf("Authorize your token: %s", url)
+			return fmt.Sprintf("Authorize in your web browser:  %s", url)
 		}
 	}
 	return ""

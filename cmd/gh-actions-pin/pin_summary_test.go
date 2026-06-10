@@ -207,7 +207,7 @@ func TestCleanUnresolvedReason(t *testing.T) {
 			nwo:      "actions/checkout",
 			ref:      "v4.3.1",
 			wantText: `SSO authorization required: your token is not authorized for the "actions" organization (SAML enforcement)`,
-			wantHint: "Authorize your token: https://github.com/orgs/actions/sso",
+			wantHint: "Authorize in your web browser:  https://github.com/orgs/actions/sso",
 		},
 		{
 			name:     "bare reason without prefixes passes through",
@@ -282,13 +282,8 @@ func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
 	}
 
 	// Fix hint with → arrow and SSO URL.
-	if !strings.Contains(out, "Authorize your token: https://github.com/orgs/actions/sso") {
+	if !strings.Contains(out, "Authorize in your web browser:  https://github.com/orgs/actions/sso") {
 		t.Errorf("expected SSO fix hint with URL, got:\n%s", out)
-	}
-
-	// Re-run command as CTA.
-	if !strings.Contains(out, "gh actions-pin --rescan") {
-		t.Errorf("expected re-run command hint, got:\n%s", out)
 	}
 
 	// The trailing "Authorize it at ... and retry" noise should be trimmed from the reason.
@@ -296,11 +291,11 @@ func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
 		t.Errorf("expected trailing 'and retry' guidance trimmed, got:\n%s", out)
 	}
 
-	// CTA should come after the fix hint (at the end).
-	hintIdx := strings.Index(out, "Authorize your token:")
-	ctaIdx := strings.Index(out, "gh actions-pin --rescan")
-	if ctaIdx < hintIdx {
-		t.Errorf("CTA should come after fix hint\noutput:\n%s", out)
+	// Fix hint should come after the action name.
+	actionIdx := strings.Index(out, "actions/checkout@v4.3.1")
+	hintIdx := strings.Index(out, "Authorize in your web browser:")
+	if hintIdx < actionIdx {
+		t.Errorf("fix hint should come after action name\noutput:\n%s", out)
 	}
 }
 
@@ -321,7 +316,7 @@ func TestRenderUnresolvedWarnings_DedupsBySameReason(t *testing.T) {
 	if got := strings.Count(out, "SSO authorization required"); got != 1 {
 		t.Errorf("expected SSO reason to appear once (deduped), got %d\noutput:\n%s", got, out)
 	}
-	if got := strings.Count(out, "Authorize your token:"); got != 1 {
+	if got := strings.Count(out, "Authorize in your web browser:"); got != 1 {
 		t.Errorf("expected fix hint to appear once, got %d\noutput:\n%s", got, out)
 	}
 
@@ -348,9 +343,9 @@ func TestRenderUnresolvedWarnings_DedupsBySameReason(t *testing.T) {
 		t.Errorf("actions should appear before reason in multi-action layout\noutput:\n%s", out)
 	}
 
-	// Re-run CTA should be at the very end.
-	if !strings.Contains(out, "gh actions-pin --rescan") {
-		t.Errorf("expected re-run command\noutput:\n%s", out)
+	// Authorize hint should be at the end after the actions.
+	if got := strings.Count(out, "Authorize in your web browser:"); got != 1 {
+		t.Errorf("expected fix hint to appear once, got %d\noutput:\n%s", got, out)
 	}
 }
 
