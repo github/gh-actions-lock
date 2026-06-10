@@ -234,11 +234,11 @@ func TestCleanUnresolvedReason(t *testing.T) {
 			wantHint: "",
 		},
 		{
-			name:     "NWO@Ref prefix not stripped when it does not match",
+			name:     "cross-action NWO@Ref prefix also stripped",
 			reason:   "resolution failed: other/action@v2: not found",
 			nwo:      "actions/checkout",
 			ref:      "v4",
-			wantText: "other/action@v2: not found",
+			wantText: "not found",
 			wantHint: "",
 		},
 	}

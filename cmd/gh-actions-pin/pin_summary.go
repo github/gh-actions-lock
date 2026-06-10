@@ -315,8 +315,10 @@ func cleanUnresolvedReason(reason, nwo, ref string) (string, string) {
 	// Strip "resolution failed: " wrapper added by plan.go.
 	reason = strings.TrimPrefix(reason, "resolution failed: ")
 
-	// Strip redundant "NWO@Ref: " — the action is already on the line above.
-	reason = strings.TrimPrefix(reason, nwo+"@"+ref+": ")
+	// Strip any "owner/repo@ref: " prefix — this might be the current action
+	// or a different action that caused the cascade failure. The action name
+	// is already shown on the line above; cross-action refs are noise.
+	reason = stripNWORefPrefix(reason)
 
 	// Multi-line: prefer the detail line over the category label.
 	if nl := strings.IndexByte(reason, '\n'); nl > 0 {
@@ -373,4 +375,35 @@ func extractURLWithPrefix(text, prefix string) string {
 		end++
 	}
 	return text[idx:end]
+}
+
+// stripNWORefPrefix removes a leading "owner/repo@ref: " pattern from s.
+// The ref can be a tag (v4.3.1), branch, or full SHA. This handles both
+// the current action's own prefix and cross-action references that appear
+// when resolution cascades through a shared dependency.
+func stripNWORefPrefix(s string) string {
+	// Pattern: word/word@non-space-colon-terminated, e.g.:
+	//   "actions/checkout@v4.3.1: SSO authorization..."
+	//   "actions/checkout@de0fac2e...: SSO authorization..."
+	atIdx := strings.IndexByte(s, '@')
+	if atIdx < 0 {
+		return s
+	}
+	// Verify there's a "/" before the "@" (NWO shape).
+	slashIdx := strings.IndexByte(s[:atIdx], '/')
+	if slashIdx < 0 {
+		return s
+	}
+	// Find ": " after the "@" — that's the separator between ref and message.
+	rest := s[atIdx+1:]
+	colonIdx := strings.Index(rest, ": ")
+	if colonIdx < 0 {
+		return s
+	}
+	// Validate the ref portion has no spaces (it's a contiguous token).
+	ref := rest[:colonIdx]
+	if strings.ContainsAny(ref, " \t\n") {
+		return s
+	}
+	return rest[colonIdx+2:]
 }
