@@ -40,6 +40,10 @@ type checkOptions struct {
 	// rewriting workflows or updating the lockfile. Orthogonal to the
 	// renderer choice (--json).
 	noFix bool
+	// noNarrow disables tag narrowing: mutable version refs like "v4"
+	// are kept as-is in the lock comment instead of being resolved to
+	// the full patch tag (e.g. "v4.2.1").
+	noNarrow bool
 }
 
 func newCheckCmd(newResolver resolverFunc) *cobra.Command {
@@ -124,6 +128,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
+	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false, "Keep mutable version refs (e.g. v4) instead of narrowing to full patch tags (e.g. v4.2.1)")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
 
@@ -303,6 +308,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		RepoOwner: repoOwner,
 		RepoName:  repoName,
 		Version:   cliVersion(),
+		NoNarrow:  opts.noNarrow,
 	})
 	endPlan()
 	if planErr != nil {
