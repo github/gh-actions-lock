@@ -15,6 +15,7 @@ require "json"
 require "open3"
 require "openssl"
 require "pty"
+require "readline"
 require "set"
 require "shellwords"
 require "tmpdir"
@@ -560,13 +561,38 @@ module ActionsPin
         puts
 
         active_ctx = nil
+        scenario_names = @scenarios.map { |s| s.name.to_s }
+        commands = %w[list ls run test inspect cd rerun quit exit q]
+
+        # Tab completion: commands first, then scenario names for run/test/inspect/cd
+        Readline.completion_proc = proc do |input|
+          # If the line so far has a command prefix, complete scenario names
+          line = Readline.line_buffer
+          parts = line.split(/\s+/, 2)
+          if parts.size >= 2 && %w[run test inspect cd].include?(parts[0])
+            # Completing a scenario name
+            candidates = scenario_names + ["all"]
+            candidates.select { |n| n.start_with?(input) }
+          elsif parts.size <= 1
+            # Completing a command
+            (commands + scenario_names).select { |c| c.start_with?(input) }
+          else
+            []
+          end
+        end
+
+        Readline.completion_append_character = " "
 
         loop do
           prompt = active_ctx ? "\e[33m#{active_ctx.scenario.name}\e[0m > " : "\e[35mpin-test\e[0m > "
-          print prompt
-          line = $stdin.gets
+          line = Readline.readline(prompt, true)
           break if line.nil?
           line = line.strip
+
+          # Remove blank/duplicate entries from history
+          if line.empty? || (Readline::HISTORY.size > 1 && Readline::HISTORY[-2] == line)
+            Readline::HISTORY.pop
+          end
           next if line.empty?
 
           parts = line.split(/\s+/, 2)
