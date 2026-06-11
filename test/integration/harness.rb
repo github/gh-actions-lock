@@ -586,7 +586,12 @@ module ActionsPin
 
         loop do
           prompt = active_ctx ? "\e[33m#{active_ctx.scenario.name}\e[0m > " : "\e[35mpin-test\e[0m > "
-          line = Reline.readline(prompt, true)
+          begin
+            line = Reline.readline(prompt, true)
+          rescue Interrupt
+            puts
+            next
+          end
           break if line.nil?
           line = line.strip
 
