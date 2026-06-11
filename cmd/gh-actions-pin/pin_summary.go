@@ -15,7 +15,7 @@ import (
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int) error {
+func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -35,7 +35,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 
 	total := len(report.Workflows)
-	if len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0 {
+	if len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
@@ -48,7 +48,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		return nil
 	}
 
-	if len(investigated) > 0 {
+	if len(investigated) > 0 || len(unresolvedEntries) > 0 {
 		return errSilent
 	}
 	return nil
@@ -204,8 +204,10 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 	}
 }
 
-// renderUnresolvedWarnings prints caution-level warnings for actions whose
+// renderUnresolvedWarnings prints error-level output for actions whose
 // refs could not be resolved (network errors, deleted repos, etc.).
+// When multiple actions share the same root cause (e.g. SSO enforcement),
+// they are grouped under a single explanation to avoid noisy repetition.
 func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 	type unresolvedGroup struct {
 		nwo    string
@@ -235,27 +237,162 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 		}
 	}
 	console.TermBlank()
-	console.TermCaution("%d %s could not be resolved — %d %s affected",
+	console.TermError("%d %s could not be resolved — %d %s affected",
 		len(groups), ui.Pluralize(len(groups), "action", "actions"),
 		len(affectedWFs), ui.Pluralize(len(affectedWFs), "workflow", "workflows"))
+
+	// Group actions by their cleaned reason + fix hint so identical errors
+	// are shown once with all affected actions listed underneath.
+	type reasonBucket struct {
+		cleaned string
+		fixHint string
+		deps    []string // "NWO@Ref" labels
+	}
+	var bucketOrder []string
+	buckets := map[string]*reasonBucket{}
+	var noReasonDeps []string
+
 	for _, g := range groups {
-		console.TermDetail("  %s", console.TermYellow(g.nwo+"@"+g.ref))
-		if g.reason != "" {
-			reason := g.reason
-			if nl := strings.IndexByte(reason, '\n'); nl > 0 {
-				first := reason[:nl]
-				rest := strings.TrimSpace(reason[nl+1:])
-				if strings.HasSuffix(first, ":") && rest != "" {
-					reason = rest
-				} else {
-					reason = first
-				}
+		if g.reason == "" {
+			noReasonDeps = append(noReasonDeps, g.nwo+"@"+g.ref)
+			continue
+		}
+		cleaned, fixHint := cleanUnresolvedReason(g.reason, g.nwo, g.ref)
+		key := cleaned + "\x00" + fixHint
+		if b, ok := buckets[key]; ok {
+			b.deps = append(b.deps, g.nwo+"@"+g.ref)
+		} else {
+			bucketOrder = append(bucketOrder, key)
+			buckets[key] = &reasonBucket{
+				cleaned: cleaned,
+				fixHint: fixHint,
+				deps:    []string{g.nwo + "@" + g.ref},
 			}
-			if nl := strings.IndexByte(reason, '\n'); nl > 0 {
-				reason = reason[:nl]
-			}
-			reason = strings.TrimSpace(reason)
-			console.TermDetail("    %s", console.TermDim(reason))
 		}
 	}
+
+	for _, key := range bucketOrder {
+		b := buckets[key]
+		if len(b.deps) == 1 {
+			console.TermDetail("  %s", console.TermYellow(b.deps[0]))
+		} else {
+			for _, dep := range b.deps {
+				console.TermDetail("  %s", console.TermYellow(dep))
+			}
+		}
+		if b.cleaned != "" {
+			console.TermDetail("  %s", console.TermDim(b.cleaned))
+		}
+	}
+
+	for _, dep := range noReasonDeps {
+		console.TermDetail("  %s", console.TermYellow(dep))
+	}
+}
+
+// cleanUnresolvedReason strips redundant prefixes from an unresolved entry's
+// reason and returns the cleaned text plus an optional actionable fix hint.
+// The stripped prefixes ("resolution failed: ", "NWO@Ref: ") are noise because
+// the action name is already printed on the line above, and the wrapper text
+// adds nothing for the human reader.
+func cleanUnresolvedReason(reason, nwo, ref string) (string, string) {
+	if reason == "" {
+		return "", ""
+	}
+
+	// Strip "resolution failed: " wrapper added by plan.go.
+	reason = strings.TrimPrefix(reason, "resolution failed: ")
+
+	// Strip any "owner/repo@ref: " prefix — this might be the current action
+	// or a different action that caused the cascade failure. The action name
+	// is already shown on the line above; cross-action refs are noise.
+	reason = stripNWORefPrefix(reason)
+
+	// Multi-line: prefer the detail line over the category label.
+	if nl := strings.IndexByte(reason, '\n'); nl > 0 {
+		first := reason[:nl]
+		rest := strings.TrimSpace(reason[nl+1:])
+		if strings.HasSuffix(first, ":") && rest != "" {
+			reason = rest
+		} else {
+			reason = first
+		}
+	}
+	if nl := strings.IndexByte(reason, '\n'); nl > 0 {
+		reason = reason[:nl]
+	}
+	reason = strings.TrimSpace(reason)
+
+	fixHint := extractFixHint(reason)
+
+	// When we extracted a fix hint, trim the trailing "Authorize it at <url>
+	// and retry" noise from the reason — our → line replaces it.
+	if fixHint != "" {
+		for _, sep := range []string{". Authorize it at", " Authorize it at"} {
+			if i := strings.Index(reason, sep); i > 0 {
+				reason = strings.TrimSpace(reason[:i])
+				break
+			}
+		}
+	}
+
+	return reason, fixHint
+}
+
+// extractFixHint returns an actionable hint for common resolution errors.
+// Returns "" when no actionable guidance can be inferred.
+func extractFixHint(reason string) string {
+	// SSO/SAML enforcement: extract the authorization URL.
+	// Matches cli/cli's format: "Authorize in your web browser:  <url>"
+	if strings.Contains(reason, "SSO authorization required") ||
+		strings.Contains(reason, "SAML enforcement") {
+		if url := extractURLWithPrefix(reason, "https://github.com/orgs/"); url != "" {
+			return fmt.Sprintf("Authorize in your web browser:  %s", url)
+		}
+	}
+	return ""
+}
+
+// extractURLWithPrefix finds the first URL in text starting with prefix.
+func extractURLWithPrefix(text, prefix string) string {
+	idx := strings.Index(text, prefix)
+	if idx < 0 {
+		return ""
+	}
+	end := idx
+	for end < len(text) && text[end] != ' ' && text[end] != '\n' && text[end] != ')' {
+		end++
+	}
+	return text[idx:end]
+}
+
+// stripNWORefPrefix removes a leading "owner/repo@ref: " pattern from s.
+// The ref can be a tag (v4.3.1), branch, or full SHA. This handles both
+// the current action's own prefix and cross-action references that appear
+// when resolution cascades through a shared dependency.
+func stripNWORefPrefix(s string) string {
+	// Pattern: word/word@non-space-colon-terminated, e.g.:
+	//   "actions/checkout@v4.3.1: SSO authorization..."
+	//   "actions/checkout@de0fac2e...: SSO authorization..."
+	atIdx := strings.IndexByte(s, '@')
+	if atIdx < 0 {
+		return s
+	}
+	// Verify there's a "/" before the "@" (NWO shape).
+	slashIdx := strings.IndexByte(s[:atIdx], '/')
+	if slashIdx < 0 {
+		return s
+	}
+	// Find ": " after the "@" — that's the separator between ref and message.
+	rest := s[atIdx+1:]
+	colonIdx := strings.Index(rest, ": ")
+	if colonIdx < 0 {
+		return s
+	}
+	// Validate the ref portion has no spaces (it's a contiguous token).
+	ref := rest[:colonIdx]
+	if strings.ContainsAny(ref, " \t\n") {
+		return s
+	}
+	return rest[colonIdx+2:]
 }
