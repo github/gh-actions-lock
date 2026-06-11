@@ -310,10 +310,12 @@ module ActionsPin
         dir = Dir.mktmpdir("actions-pin-live-")
         nwo = @live_repo
 
-        # Shallow clone — just enough for workflow discovery
+        $stderr.print "\e[2m  cloning #{nwo}…\e[0m "
+        $stderr.flush
         system("git", "clone", "--depth=1", "--quiet",
                "https://github.com/#{nwo}.git", dir,
                exception: true)
+        $stderr.puts "\e[2mdone\e[0m"
 
         env = @env.dup
         @setup_blocks.each { |b| b.call(dir) }
@@ -413,7 +415,8 @@ module ActionsPin
         begin
           PTY.spawn("/bin/bash", "-c", shell_cmd) do |reader, _writer, pid|
             begin
-              # Flush each char immediately so spinners animate in real time.
+              # Unbuffer both sides so spinners animate in real time.
+              reader.sync = true
               $stdout.sync = true
               reader.each_char do |ch|
                 $stdout.print ch
