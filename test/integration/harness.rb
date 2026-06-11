@@ -413,12 +413,16 @@ module ActionsPin
         begin
           PTY.spawn("/bin/bash", "-c", shell_cmd) do |reader, _writer, pid|
             begin
+              # Flush each char immediately so spinners animate in real time.
+              $stdout.sync = true
               reader.each_char do |ch|
-                $stdout.print ch       # live to terminal
+                $stdout.print ch
                 combined << ch
               end
             rescue Errno::EIO
               # PTY closed — normal on macOS when process exits
+            ensure
+              $stdout.sync = false
             end
             _, status = Process.wait2(pid)
             exit_code = status.exitstatus
