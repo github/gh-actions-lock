@@ -416,4 +416,8 @@ runner.scenario(:prefix_stripping) do |s|
 end
 
 # ── Run ─────────────────────────────────────────────────────────────────
-runner.run(filter: ARGV[0])
+if ARGV.delete("--shell") || ARGV.delete("-i")
+  runner.shell
+else
+  runner.run(filter: ARGV[0])
+end
