@@ -15,7 +15,7 @@ require "json"
 require "open3"
 require "openssl"
 require "pty"
-require "readline"
+require "reline"
 require "set"
 require "shellwords"
 require "tmpdir"
@@ -565,33 +565,30 @@ module ActionsPin
         commands = %w[list ls run test inspect cd rerun quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
-        Readline.completion_proc = proc do |input|
-          # If the line so far has a command prefix, complete scenario names
-          line = Readline.line_buffer
+        Reline.completion_proc = proc do |input|
+          line = Reline.line_buffer
           parts = line.split(/\s+/, 2)
           if parts.size >= 2 && %w[run test inspect cd].include?(parts[0])
-            # Completing a scenario name
             candidates = scenario_names + ["all"]
             candidates.select { |n| n.start_with?(input) }
           elsif parts.size <= 1
-            # Completing a command
             (commands + scenario_names).select { |c| c.start_with?(input) }
           else
             []
           end
         end
 
-        Readline.completion_append_character = " "
+        Reline.completion_append_character = " "
 
         loop do
           prompt = active_ctx ? "\e[33m#{active_ctx.scenario.name}\e[0m > " : "\e[35mpin-test\e[0m > "
-          line = Readline.readline(prompt, true)
+          line = Reline.readline(prompt, true)
           break if line.nil?
           line = line.strip
 
           # Remove blank/duplicate entries from history
-          if line.empty? || (Readline::HISTORY.size > 1 && Readline::HISTORY[-2] == line)
-            Readline::HISTORY.pop
+          if line.empty? || (Reline::HISTORY.size > 1 && Reline::HISTORY[-2] == line)
+            Reline::HISTORY.pop
           end
           next if line.empty?
 
