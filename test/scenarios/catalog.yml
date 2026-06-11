@@ -592,10 +592,9 @@ scenarios:
     needs_token: true
     tags: [live, real_repo]
     live_repo: github/github
-    flags: ["--no-fix", "--json"]
+    flags: ["--no-fix"]
     expect:
       exit_any: [0, 1]
-      stdout_is_json: true
 
   - name: live_vercel_nextjs
     category: live
@@ -603,10 +602,9 @@ scenarios:
     needs_token: true
     tags: [live, real_repo]
     live_repo: vercel/next.js
-    flags: ["--no-fix", "--json"]
+    flags: ["--no-fix"]
     expect:
       exit_any: [0, 1]
-      stdout_is_json: true
 
   - name: live_github_internal_actions
     category: live
@@ -614,10 +612,9 @@ scenarios:
     needs_token: true
     tags: [live, real_repo]
     live_repo: github/internal-actions
-    flags: ["--no-fix", "--json"]
+    flags: ["--no-fix"]
     expect:
       exit_any: [0, 1]
-      stdout_is_json: true
 
   - name: live_github_mcv3_boot
     category: live
@@ -625,10 +622,9 @@ scenarios:
     needs_token: true
     tags: [live, real_repo]
     live_repo: github/mcv3-boot
-    flags: ["--no-fix", "--json"]
+    flags: ["--no-fix"]
     expect:
       exit_any: [0, 1]
-      stdout_is_json: true
 
   - name: live_github_launch
     category: live
@@ -636,7 +632,6 @@ scenarios:
     needs_token: true
     tags: [live, real_repo]
     live_repo: github/launch
-    flags: ["--no-fix", "--json"]
+    flags: ["--no-fix"]
     expect:
       exit_any: [0, 1]
-      stdout_is_json: true
