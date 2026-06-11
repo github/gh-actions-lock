@@ -353,17 +353,21 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// Terminal summary.
 	hasInconclusive := opts.rescan && report.HasInconclusive()
-	if err := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive); err != nil {
-		return err
-	}
+	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive)
 
 	// Surface the SAML SSO authorization URL if one was captured during
 	// the run, matching cli/cli's "Authorize in your web browser:" line.
+	// This runs even when renderPinSummary returns errSilent (unresolved
+	// entries exist) because the SSO hint is the fix for those entries.
 	if gc := r.GHClient(); gc != nil {
 		if ssoURL := gc.SSOURL(); ssoURL != "" {
 			console.TermBlank()
 			console.TermDetail("Authorize in your web browser:  %s", ssoURL)
 		}
+	}
+
+	if summaryErr != nil {
+		return summaryErr
 	}
 
 	// --rescan strict gate: inconclusive reachability is a hard failure when

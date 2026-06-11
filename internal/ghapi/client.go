@@ -7,10 +7,12 @@ package ghapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"sync"
@@ -102,7 +104,14 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		apiOpts.AuthToken = cfg.authToken
 		apiOpts.LogIgnoreEnv = cfg.logIgnore
 	default:
-		var t http.RoundTripper = newRetryTransport(http.DefaultTransport, 3)
+		base := http.DefaultTransport
+		// Integration tests: skip TLS verification when GH_ACTIONS_PIN_INSECURE is set.
+		if os.Getenv("GH_ACTIONS_PIN_INSECURE") != "" {
+			base = &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // integration tests only
+			}
+		}
+		var t http.RoundTripper = newRetryTransport(base, 3)
 		if cfg.profile != nil {
 			t = cfg.profile.WrapTransport(t)
 		}
