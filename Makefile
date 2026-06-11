@@ -7,7 +7,7 @@ EXT_DIR := $(XDG_DATA_HOME)/gh/extensions/$(EXT_NAME)
 
 RUBY := $(shell command -v /opt/homebrew/opt/ruby/bin/ruby 2>/dev/null || echo ruby)
 
-.PHONY: build test test-integration test-shell install reinstall uninstall
+.PHONY: build test test-integration test-shell test-live test-matrix install reinstall uninstall
 
 build:
 	go build -o $(BIN) ./cmd/gh-actions-pin
@@ -20,6 +20,21 @@ test-integration: build
 
 test-shell: build
 	$(RUBY) test/integration/run.rb --shell
+
+test-live: build
+	$(RUBY) test/integration/run.rb --live
+
+test-smoke: build
+	$(RUBY) test/integration/run.rb --smoke
+
+test-stub: build
+	$(RUBY) test/integration/run.rb --stub
+
+test-real: build
+	$(RUBY) test/integration/run.rb --real
+
+test-matrix: build
+	$(RUBY) test/integration/run.rb --matrix
 
 # install/reinstall work from any checkout — main repo or worktree — by
 # placing the built binary directly into gh's extension dir. We skip

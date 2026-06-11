@@ -15,6 +15,7 @@ require "json"
 require "open3"
 require "openssl"
 require "pty"
+require "set"
 require "shellwords"
 require "tmpdir"
 require "webrick"
@@ -23,6 +24,9 @@ require "yaml"
 
 module ActionsPin
   module Integration
+    # Raised to skip a scenario gracefully (e.g. missing token for live tests).
+    class SkipScenario < StandardError; end
+
     # ── Result ──────────────────────────────────────────────────────────
     Result = Struct.new(:stdout, :stderr, :status, :dir, keyword_init: true) do
       def exit_code; status.exitstatus; end
@@ -124,6 +128,15 @@ module ActionsPin
       end
     end
 
+    # ── Catalog ─────────────────────────────────────────────────────────
+    # Loads the shared scenario catalog from test/scenarios/catalog.yml.
+    class Catalog
+      def self.load
+        catalog_path = File.expand_path("../../scenarios/catalog.yml", __FILE__)
+        YAML.load_file(catalog_path)
+      end
+    end
+
     # ── Scenario ────────────────────────────────────────────────────────
     class Scenario
       attr_reader :name, :failures
@@ -138,6 +151,8 @@ module ActionsPin
         @assertions = []
         @failures = []
         @setup_blocks = []
+        @live_repo = nil
+        @tags = []
       end
 
       # ── DSL: fixtures ──────────────────────────────────────────────
@@ -170,6 +185,16 @@ module ActionsPin
 
       def setup(&block)
         @setup_blocks << block
+        self
+      end
+
+      def live_repo(nwo)
+        @live_repo = nwo
+        self
+      end
+
+      def tags(*t)
+        @tags = t.flatten
         self
       end
 
@@ -235,6 +260,10 @@ module ActionsPin
 
       # Prepare fixtures without running. Returns a Context.
       def prepare(binary)
+        if @live_repo
+          return prepare_live(binary)
+        end
+
         dir = Dir.mktmpdir("actions-pin-test-")
 
         @workflows.each do |path, content|
@@ -274,8 +303,33 @@ module ActionsPin
                     server: server, scenario: self)
       end
 
+      # Prepare a live repo scenario: shallow-clone the real repo and run
+      # against its actual workflows. No stub server — hits real GitHub API.
+      def prepare_live(binary)
+        dir = Dir.mktmpdir("actions-pin-live-")
+        nwo = @live_repo
+
+        # Shallow clone — just enough for workflow discovery
+        system("git", "clone", "--depth=1", "--quiet",
+               "https://github.com/#{nwo}.git", dir,
+               exception: true)
+
+        env = @env.dup
+        @setup_blocks.each { |b| b.call(dir) }
+        env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
+
+        Context.new(dir: dir, env: env, cmd: [binary] + @args,
+                    server: nil, scenario: self, live_repo: nwo)
+      end
+
       # Batch mode: capture output, run assertions.
       def run(binary)
+        # Live repo scenarios need a token
+        if @live_repo
+          token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || ""
+          raise SkipScenario, "no GH_TOKEN" if token.empty?
+        end
+
         ctx = prepare(binary)
         begin
           result = ctx.run_captured
@@ -325,14 +379,15 @@ module ActionsPin
     # A prepared scenario environment. Supports captured runs (batch) and
     # PTY runs (interactive shell) so you see real ANSI output.
     class Context
-      attr_reader :dir, :env, :cmd, :server, :scenario
+      attr_reader :dir, :env, :cmd, :server, :scenario, :live_repo
 
-      def initialize(dir:, env:, cmd:, server:, scenario:)
+      def initialize(dir:, env:, cmd:, server:, scenario:, live_repo: nil)
         @dir = dir
         @env = env
         @cmd = cmd
         @server = server
         @scenario = scenario
+        @live_repo = live_repo
         @torn_down = false
       end
 
@@ -408,12 +463,27 @@ module ActionsPin
 
       # ── Batch mode ─────────────────────────────────────────────────
 
-      def run(filter: nil)
-        to_run = filter ? @scenarios.select { |s| s.name.to_s.include?(filter) } : @scenarios
+      def run(filter: nil, tag_filter: nil, catalog: nil)
+        to_run = @scenarios.dup
+
+        # Name filter (positional arg)
+        to_run = to_run.select { |s| s.name.to_s.include?(filter) } if filter
+
+        # Tag filter (--live, --stub, --smoke, --real)
+        if tag_filter && catalog
+          tagged_names = catalog["scenarios"]
+            .select { |cs| (cs["tags"] || []).include?(tag_filter) }
+            .map { |cs| cs["name"] }
+            .to_set
+
+          to_run = to_run.select { |s| tagged_names.include?(s.name.to_s) }
+        end
+
         puts "Running #{to_run.size} integration scenario(s)...\n\n"
 
         passed = 0
         failed = 0
+        skipped = 0
 
         to_run.each do |s|
           print "  #{s.name} ... "
@@ -427,6 +497,9 @@ module ActionsPin
               s.failures.each { |f| puts "    \e[31m#{f}\e[0m" }
               failed += 1
             end
+          rescue SkipScenario => e
+            puts "\e[33m⊘ skip\e[0m #{e.message}"
+            skipped += 1
           rescue => e
             puts "\e[31m✗ (exception)\e[0m"
             puts "    #{e.class}: #{e.message}"
@@ -435,8 +508,38 @@ module ActionsPin
           end
         end
 
-        puts "\n#{passed} passed, #{failed} failed"
+        parts = ["#{passed} passed", "#{failed} failed"]
+        parts << "#{skipped} skipped" if skipped > 0
+        puts "\n#{parts.join(', ')}"
         exit(failed > 0 ? 1 : 0)
+      end
+
+      # ── Matrix display ──────────────────────────────────────────────
+
+      def print_matrix(catalog)
+        puts "\e[1mScenario Matrix\e[0m\n\n"
+
+        categories = catalog["categories"] || []
+        scenarios = catalog["scenarios"] || []
+
+        categories.each do |cat|
+          cat_scenarios = scenarios.select { |s| s["category"] == cat["name"] }
+          next if cat_scenarios.empty?
+
+          puts "  \e[1m#{cat["name"]}\e[0m — #{cat["description"]}"
+          cat_scenarios.each do |cs|
+            tags = (cs["tags"] || []).map { |t| "\e[36m##{t}\e[0m" }.join(" ")
+            mode = cs["needs_stub"] ? "\e[33mstub\e[0m" : cs["needs_token"] ? "\e[32mlive\e[0m" : "\e[90mnone\e[0m"
+            registered = @scenarios.any? { |s| s.name.to_s == cs["name"] } ? "✓" : "✗"
+            puts "    #{registered} \e[37m%-35s\e[0m [#{mode}] #{tags}" % cs["name"]
+            puts "      #{cs['description']}"
+          end
+          puts
+        end
+
+        total = scenarios.size
+        registered = @scenarios.size
+        puts "#{registered}/#{total} scenarios registered"
       end
 
       # ── Interactive shell ──────────────────────────────────────────

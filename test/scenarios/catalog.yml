@@ -1,0 +1,642 @@
+# Shared scenario catalog for gh-actions-pin integration tests.
+#
+# Both the Ruby integration harness (test/integration/) and the Go scenario
+# loader (test/scenarios/) consume this file. Each scenario describes:
+#
+#   name:        unique identifier (snake_case)
+#   category:    grouping for matrix display
+#   description: what the scenario validates
+#   needs_token: true if the scenario requires a real GH_TOKEN
+#   needs_stub:  true if the scenario uses a stub HTTP server
+#   tags:        labels for filtering (e.g. "smoke", "live", "security")
+#   flags:       CLI flags passed to the binary
+#   fixtures:    inline workflow/lockfile content (Ruby-side hydrates these)
+#   expect:      expected exit code and output assertions
+#
+# The Ruby harness adds stub server wiring and custom assertions on top of
+# what's declared here. The Go side uses these for table-driven scenario
+# validation and matrix reporting.
+#
+# Live scenarios (needs_token: true) run against real GitHub repos and are
+# skipped gracefully when no token is present.
+
+version: 1
+
+categories:
+  - name: happy_path
+    description: "Normal operation — actions resolve and pin successfully"
+  - name: sso_auth
+    description: "SAML SSO enforcement and authorization flows"
+  - name: api_errors
+    description: "GitHub API error conditions (404, 429, 5xx, timeout)"
+  - name: lockfile
+    description: "Lockfile loading, trust, corruption, and version handling"
+  - name: workflow_parsing
+    description: "Workflow file parsing edge cases"
+  - name: output_modes
+    description: "CLI flag combinations (--json, --no-fix, --rescan)"
+  - name: multi_workflow
+    description: "Cross-workflow scenarios and dependency tracking"
+  - name: security
+    description: "Impostor commit, lockfile forgery, reachability"
+  - name: live
+    description: "Live testing against real GitHub repositories"
+
+scenarios:
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: happy_path
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: happy_path
+    category: happy_path
+    description: "Single action resolves and pins successfully"
+    needs_token: true
+    tags: [smoke, live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+
+  - name: already_pinned_all_valid
+    category: happy_path
+    description: "Already-pinned actions pass without network calls (fast path)"
+    needs_token: true
+    tags: [smoke, live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+
+  - name: multi_action_happy
+    category: happy_path
+    description: "Multiple actions from different orgs all resolve"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions:
+            - "actions/checkout@v4"
+            - "actions/setup-go@v5"
+            - "actions/cache@v4"
+    expect:
+      exit: 0
+
+  - name: composite_action_transitive
+    category: happy_path
+    description: "Composite action with transitive deps resolves recursively"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/create-github-app-token@v1"]
+    expect:
+      exit: 0
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: sso_auth
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: sso_auth_failure
+    category: sso_auth
+    description: "SSO-gated org returns 403 with X-GitHub-SSO header"
+    needs_stub: true
+    tags: [smoke, stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions:
+            - "actions/checkout@v4"
+            - "actions/setup-go@v5"
+            - "actions/cache@v4"
+    expect:
+      exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "actions/checkout"
+        - "actions/setup-go"
+        - "actions/cache"
+        - "SAML enforcement"
+        - "Authorize in your web browser"
+      output_excludes:
+        - "resolution failed:"
+
+  - name: sso_dedup
+    category: sso_auth
+    description: "11 actions from same org — SSO reason shown only once"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions:
+            - "actions/checkout@v4"
+            - "actions/setup-go@v5"
+            - "actions/cache@v4"
+            - "actions/upload-artifact@v4"
+            - "actions/download-artifact@v4"
+            - "actions/setup-python@v5"
+        deploy.yml:
+          name: Deploy
+          actions:
+            - "actions/download-artifact@v4"
+            - "actions/setup-dotnet@v4"
+            - "actions/setup-node@v4"
+            - "actions/create-github-app-token@v1"
+            - "actions/github-script@v7"
+            - "actions/stale@v9"
+    expect:
+      exit: 1
+      output_contains:
+        - "actions/checkout"
+        - "actions/stale"
+        - "actions/github-script"
+      custom: sso_dedup_count
+
+  - name: mixed_failures
+    category: sso_auth
+    description: "SSO + repo-not-found — different errors not deduped"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions:
+            - "actions/checkout@v4"
+            - "octo-org/private-action@v1"
+    expect:
+      exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "actions/checkout"
+        - "octo-org/private-action"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: api_errors
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: api_404_not_found
+    category: api_errors
+    description: "Action repo does not exist — 404 surfaced cleanly"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["nonexistent-org/nonexistent-action@v1"]
+    expect:
+      exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "nonexistent-org/nonexistent-action"
+
+  - name: api_rate_limit_429
+    category: api_errors
+    description: "Rate limit 429 with Retry-After — retries and recovers or fails gracefully"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+
+  - name: api_server_error_500
+    category: api_errors
+    description: "Server error 500 — fails gracefully"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+
+  - name: api_unauthorized_401
+    category: api_errors
+    description: "Unauthorized 401 — permission denied error"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_contains:
+        - "could not be resolved"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: lockfile
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: no_lockfile_first_run
+    category: lockfile
+    description: "No lockfile exists — created on first run"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+      lockfile_exists: true
+
+  - name: corrupt_lockfile_recovery
+    category: lockfile
+    description: "Corrupt YAML lockfile — treated as empty, rewritten"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile: "{{{{invalid yaml content not parseable at all}}}}"
+    expect:
+      exit: 0
+
+  - name: future_version_lockfile
+    category: lockfile
+    description: "Lockfile from future version — refuses with upgrade hint"
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: future_version
+    expect:
+      exit: 2
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: workflow_parsing
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: no_workflows
+    category: workflow_parsing
+    description: "No workflow files found — graceful error"
+    tags: [smoke, stub]
+    fixtures:
+      workflows: {}
+    expect:
+      exit: 2
+
+  - name: run_only_workflow
+    category: workflow_parsing
+    description: "Workflow with only run: steps (no actions) — RunOnly finding"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo hello
+    expect:
+      exit: 0
+
+  - name: expression_in_uses
+    category: workflow_parsing
+    description: "Expression-based uses: (${{ }}) — skipped with warning"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ${{ matrix.action }}
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+
+  - name: local_action_skipped
+    category: workflow_parsing
+    description: "Local action (./path) — skipped without warning"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./my-local-action
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+
+  - name: sub_path_action
+    category: workflow_parsing
+    description: "Sub-path action (actions/cache/restore@v4) handled"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions:
+            - "actions/cache/restore@v4"
+            - "actions/cache/save@v4"
+    expect:
+      exit: 0
+
+  - name: duplicate_action_refs
+    category: workflow_parsing
+    description: "Same action used twice in workflow — deduplicated"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@v4
+                  - run: make build
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: output_modes
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: no_fix_mode
+    category: output_modes
+    description: "--no-fix with valid lockfile — exit 0, nothing written"
+    needs_token: true
+    tags: [live]
+    flags: ["--no-fix"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit_any: [0, 1]
+
+  - name: json_output_valid
+    category: output_modes
+    description: "--json=valid produces well-formed JSON on stdout"
+    needs_token: true
+    tags: [live]
+    flags: ["--no-fix", "--json=valid"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit_any: [0, 1]
+      stdout_is_json: true
+
+  - name: json_output_findings
+    category: output_modes
+    description: "--json=findings includes findings array"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-fix", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      stdout_is_json: true
+      stdout_contains: ["findings"]
+
+  - name: rescan_mode
+    category: output_modes
+    description: "--rescan forces full re-verification"
+    needs_token: true
+    tags: [live]
+    flags: ["--rescan"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+
+  - name: rescan_inconclusive_fails
+    category: output_modes
+    description: "--rescan with SSO-blocked verification — fails, no 'All valid'"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--rescan"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      output_excludes: ["All", "valid"]
+
+  - name: no_fix_json_combined
+    category: output_modes
+    description: "--no-fix --json combined produces JSON without modifying disk"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-fix", "--json"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      stdout_is_json: true
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: multi_workflow
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: shared_action_across_workflows
+    category: multi_workflow
+    description: "Same action in multiple workflows — resolved once, tracked per-workflow"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4", "actions/setup-go@v5"]
+        deploy.yml:
+          name: Deploy
+          actions: ["actions/checkout@v4", "actions/setup-node@v4"]
+    expect:
+      exit: 0
+
+  - name: many_workflows
+    category: multi_workflow
+    description: "5 workflows with overlapping actions"
+    needs_token: true
+    tags: [live]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4", "actions/setup-go@v5"]
+        test.yml:
+          name: Test
+          actions: ["actions/checkout@v4", "actions/cache@v4"]
+        lint.yml:
+          name: Lint
+          actions: ["actions/checkout@v4", "actions/setup-node@v4"]
+        deploy.yml:
+          name: Deploy
+          actions: ["actions/checkout@v4", "actions/upload-artifact@v4"]
+        release.yml:
+          name: Release
+          actions: ["actions/checkout@v4", "actions/create-release@v1"]
+    expect:
+      exit: 0
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: security
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: unresolved_uses_error_icon
+    category: security
+    description: "Unresolved actions use error severity, not warning"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_contains: ["could not be resolved"]
+
+  - name: resolution_record_shown
+    category: security
+    description: "Resolution record path is displayed after pin"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      output_contains: ["Resolution record:"]
+
+  - name: prefix_stripping
+    category: security
+    description: "Error reason prefix stripped — no 'resolution failed:' in output"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_excludes: ["resolution failed:"]
+      output_contains: ["SAML enforcement"]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CATEGORY: live — Real GitHub repos
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - name: live_github_github
+    category: live
+    description: "Live: github/github — large internal monorepo workflows"
+    needs_token: true
+    tags: [live, real_repo]
+    live_repo: github/github
+    flags: ["--no-fix", "--json"]
+    expect:
+      exit_any: [0, 1]
+      stdout_is_json: true
+
+  - name: live_vercel_nextjs
+    category: live
+    description: "Live: vercel/next.js — popular OSS with many actions"
+    needs_token: true
+    tags: [live, real_repo]
+    live_repo: vercel/next.js
+    flags: ["--no-fix", "--json"]
+    expect:
+      exit_any: [0, 1]
+      stdout_is_json: true
+
+  - name: live_github_internal_actions
+    category: live
+    description: "Live: github/internal-actions — internal action library"
+    needs_token: true
+    tags: [live, real_repo]
+    live_repo: github/internal-actions
+    flags: ["--no-fix", "--json"]
+    expect:
+      exit_any: [0, 1]
+      stdout_is_json: true
+
+  - name: live_github_mcv3_boot
+    category: live
+    description: "Live: github/mcv3-boot — codespace boot workflows"
+    needs_token: true
+    tags: [live, real_repo]
+    live_repo: github/mcv3-boot
+    flags: ["--no-fix", "--json"]
+    expect:
+      exit_any: [0, 1]
+      stdout_is_json: true
+
+  - name: live_github_launch
+    category: live
+    description: "Live: github/launch — deployment workflows"
+    needs_token: true
+    tags: [live, real_repo]
+    live_repo: github/launch
+    flags: ["--no-fix", "--json"]
+    expect:
+      exit_any: [0, 1]
+      stdout_is_json: true
