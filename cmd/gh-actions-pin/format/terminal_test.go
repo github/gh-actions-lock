@@ -135,6 +135,24 @@ func TestPresentResults_WarningsReachTerminal(t *testing.T) {
 	}
 }
 
+// TestPresentResults_NoSuccessLine verifies PresentResults no longer emits
+// the "All N workflows valid" success line — renderPinSummary owns that.
+func TestPresentResults_NoSuccessLine(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			{Path: ".github/workflows/a.yml"},
+			{Path: ".github/workflows/b.yml"},
+		},
+	}
+	PresentResults(u, report, true, false)
+
+	got := buf.String()
+	if strings.Contains(got, "All") && strings.Contains(got, "valid") {
+		t.Errorf("PresentResults should not print success line, got:\n%s", got)
+	}
+}
+
 // TestPresentResults_RemediateHints locks the willRemediate-aware "↳"
 // follow-up lines that PresentResults emits under each warning headline.
 // Categories the remediator auto-fixes (NotPinned, SHAAsRef) flip between

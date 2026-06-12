@@ -37,9 +37,7 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 	}
 	checked := validCount + failedCount
 
-	if valid && checked > 0 {
-		out.Success("All %d %s valid", checked, ui.Pluralize(checked, "workflow", "workflows"))
-	} else if checked > 0 {
+	if !valid && checked > 0 {
 		renderErrorFindings(out, report, failedCount, checked)
 	}
 

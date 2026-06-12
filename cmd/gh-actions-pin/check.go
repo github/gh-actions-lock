@@ -269,12 +269,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Strict gate — any blocking finding is a non-zero exit.
 	if opts.noFix {
 		console.StopProgress()
-		if gc := r.GHClient(); gc != nil {
-			if ssoURL := gc.SSOURL(); ssoURL != "" {
-				console.TermBlank()
-				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
-			}
-		}
 		if opts.jsonFields != "" {
 			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 				return err
@@ -332,7 +326,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if path, werr := record.WriteJSON(); werr == nil {
 		defer func() {
 			console.TermBlank()
-			console.TermNeutral("Resolution record: %s", path)
+			console.TermDetail("Resolution record: %s", path)
 		}()
 	}
 
