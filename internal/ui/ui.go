@@ -378,17 +378,23 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 
 	// briandowns calls Write twice per tick:
 	//   1. erase:  \r\033[K          — wipe the previous frame
-	//   2. frame:  \r{glyph}{prefix} — paint the new frame
+	//   2. frame:  \r{Prefix}{glyph}{Suffix} — paint the new frame
 	//
 	// Only render worker rows on the frame write. Rendering them on the
 	// erase write too means two cursor-down/up sequences per 120ms tick,
 	// which is the primary cause of residual flicker on embedded terminals.
-	isErase := len(p) >= 3 && p[1] == '\033' && p[2] == '['
+	//
+	// Match the two specific erase sequences the library emits rather than
+	// any generic CSI prefix — frame writes that start with a color SGR
+	// (e.g. \r\033[36m…) must not be misclassified as erases.
+	isErase := (len(p) == 4 && string(p) == "\r\033[K\n") ||
+		(len(p) == 3 && string(p) == "\r\033[K") ||
+		(len(p) == 5 && string(p) == "\r\033[2K\n") ||
+		(len(p) == 4 && string(p) == "\r\033[2K")
 	if isErase {
 		// Just pass the erase through; worker rows are still on screen
 		// from the previous frame and will be refreshed momentarily.
 		n, err = sw.w.Write(p)
-		n = len(p)
 		return
 	}
 
@@ -403,7 +409,7 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 	buf.Write(p[1:]) // p[0] is the \r we already emitted above
 	sw.buildWorkerFrameLocked(&buf)
 	buf.WriteString("\033[?2026l") // end synchronized output
-	_, err = sw.w.Write([]byte(buf.String()))
+	_, err = io.WriteString(sw.w, buf.String())
 	n = len(p)
 	return
 }
@@ -495,7 +501,7 @@ func (sw *spinnerWriter) renderWorkersLocked() {
 	buf.WriteString("\033[?2026h") // begin synchronized output
 	sw.buildWorkerFrameLocked(&buf)
 	buf.WriteString("\033[?2026l") // end synchronized output
-	sw.w.Write([]byte(buf.String()))
+	io.WriteString(sw.w, buf.String())
 }
 
 // startAnimator launches a goroutine that periodically redraws the worker
@@ -513,23 +519,25 @@ func (sw *spinnerWriter) startAnimator() {
 	done := sw.done
 	sw.mu.Unlock()
 
-	fmt.Fprint(sw.w, "\033[?25l")
+	sw.mu.Lock()
+	// Wrap cursor-hide in a synchronized block so it can't interleave
+	// with a concurrent spinner frame write mid-output.
+	io.WriteString(sw.w, "\033[?2026h\033[?25l\033[?2026l")
+	sw.mu.Unlock()
 
 	// Write a synthetic first frame immediately so the spinner line is never
 	// blank during the ~120ms gap before the library's first ticker tick.
 	// briandowns never writes a frame on Start() — it always waits for the
 	// first tick — so without this, every Resume causes a visible blank line.
 	sw.mu.Lock()
-	if sw.prefix != "" {
-		var buf strings.Builder
-		buf.WriteString("\033[?2026h")
-		buf.WriteString("\r\033[2K")
-		buf.WriteString(sw.prefix)
-		buf.WriteString(workerSpinFrames[0]) // placeholder glyph; real tick replaces it
-		sw.buildWorkerFrameLocked(&buf)
-		buf.WriteString("\033[?2026l")
-		sw.w.Write([]byte(buf.String()))
-	}
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h")
+	buf.WriteString("\r\033[2K")
+	buf.WriteString(sw.prefix)
+	buf.WriteString(workerSpinFrames[0]) // placeholder glyph; real tick replaces it
+	sw.buildWorkerFrameLocked(&buf)
+	buf.WriteString("\033[?2026l")
+	io.WriteString(sw.w, buf.String())
 	sw.mu.Unlock()
 
 	go func() {
@@ -572,8 +580,11 @@ func (sw *spinnerWriter) stopAnimator() {
 	}
 	close(stop)
 	<-done
-	// Restore the cursor that startAnimator hid.
-	fmt.Fprint(sw.w, "\033[?25h")
+	// Restore the cursor that startAnimator hid, synchronized so it can't
+	// interleave with any write still draining from the ticker goroutine.
+	sw.mu.Lock()
+	io.WriteString(sw.w, "\033[?2026h\033[?25h\033[?2026l")
+	sw.mu.Unlock()
 }
 
 // setDetail is a backward-compat shim that sets a single worker slot (slot 0).
