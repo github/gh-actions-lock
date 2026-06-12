@@ -585,7 +585,7 @@ module ActionsPin
 
         active_ctx = nil
         scenario_names = @scenarios.map { |s| s.name.to_s }
-        commands = %w[list ls run test inspect diff cd rerun pause profile auth status clear help quit exit q]
+        commands = %w[list ls run test inspect diff cd rerun build pause profile auth status clear help quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
         Reline.completion_proc = proc do |input|
@@ -736,6 +736,20 @@ module ActionsPin
           when "clear"
             print "\033[2J\033[H"
 
+          when "build"
+            repo_root = File.expand_path("../..", __dir__)
+            print "  \e[2mbuilding…\e[0m "
+            $stdout.flush
+            t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            ok = system("cd #{Shellwords.shellescape(repo_root)} && go build -o gh-actions-pin ./cmd/gh-actions-pin 2>&1")
+            elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+            if ok
+              puts "\e[32m✓\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
+              @binary = File.join(repo_root, "gh-actions-pin")
+            else
+              puts "\e[31m✗ build failed\e[0m"
+            end
+
           when "help", "?"
             print_help
 
@@ -788,6 +802,7 @@ module ActionsPin
         puts "  \e[36mdiff\e[0m                  Show git diff from last run"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mrerun\e[0m                 Re-run active scenario"
+        puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
         puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
         puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
         puts "  \e[36mauth\e[0m                  Show current auth source"
