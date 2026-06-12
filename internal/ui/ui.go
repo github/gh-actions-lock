@@ -330,6 +330,11 @@ type spinnerWriter struct {
 	nRendered int      // number of worker lines written in the last tick
 	noColor   bool
 	output    *termenv.Output
+	// prefix is the static label text written before the spinner glyph
+	// (e.g. "Resolving actions "). Stored here so startAnimator can write
+	// an immediate frame on resume, avoiding the one-tick blank gap that
+	// occurs because briandowns never fires a tick immediately on Start().
+	prefix string
 	// stop closes to signal the independent worker-redraw ticker to exit.
 	// done is closed once the ticker goroutine has returned. The ticker
 	// keeps worker glyphs animating even when the spinner library coalesces,
@@ -420,7 +425,7 @@ func (sw *spinnerWriter) buildWorkerFrameLocked(buf *strings.Builder) {
 		body := w
 		if len(w) >= len("→ ") && w[:len("→ ")] == "→ " {
 			frame := workerSpinFrames[(step+slot)%len(workerSpinFrames)]
-			body = frame + " " + w[len("→ "):]
+			body = w[len("→ "):] + " " + frame
 		}
 		hint := ""
 		if slot < len(sw.hints) {
@@ -508,11 +513,24 @@ func (sw *spinnerWriter) startAnimator() {
 	done := sw.done
 	sw.mu.Unlock()
 
-	// Hide the cursor for the duration of the animation so per-tick
-	// cursor repositioning doesn't create visual noise. Restored in
-	// stopAnimator unconditionally so a crash or early-stop can't leave
-	// the cursor permanently invisible.
 	fmt.Fprint(sw.w, "\033[?25l")
+
+	// Write a synthetic first frame immediately so the spinner line is never
+	// blank during the ~120ms gap before the library's first ticker tick.
+	// briandowns never writes a frame on Start() — it always waits for the
+	// first tick — so without this, every Resume causes a visible blank line.
+	sw.mu.Lock()
+	if sw.prefix != "" {
+		var buf strings.Builder
+		buf.WriteString("\033[?2026h")
+		buf.WriteString("\r\033[2K")
+		buf.WriteString(sw.prefix)
+		buf.WriteString(workerSpinFrames[0]) // placeholder glyph; real tick replaces it
+		sw.buildWorkerFrameLocked(&buf)
+		buf.WriteString("\033[?2026l")
+		sw.w.Write([]byte(buf.String()))
+	}
+	sw.mu.Unlock()
 
 	go func() {
 		defer close(done)
@@ -1060,6 +1078,7 @@ func (u *UI) StartProgress(label string) {
 	// before sp.Start() — the goroutine isn't running yet so no lock needed.
 	if label != "" {
 		sp.Prefix = label + " "
+		sw.prefix = label + " "
 	}
 	u.spinner = sp
 	u.progDetail = ""
