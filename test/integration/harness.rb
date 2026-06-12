@@ -726,7 +726,7 @@ module ActionsPin
         end
 
         active_ctx&.teardown
-        puts "Bye."
+        puts "\nBye."
       end
 
       private
@@ -774,8 +774,6 @@ module ActionsPin
             puts "  \e[2mprofile: #{pdir}\e[0m"
           end
           puts
-        rescue Interrupt
-          puts "\n  \e[33m⊘ interrupted\e[0m\n"
         ensure
           ctx.teardown unless ENV["KEEP_FIXTURES"]
         end
@@ -783,6 +781,8 @@ module ActionsPin
 
       def run_all_live
         @scenarios.each { |s| run_one_live(s) }
+      rescue Interrupt
+        puts "\n  \e[33m⊘ interrupted\e[0m"
       end
 
       def run_batch(to_run)
