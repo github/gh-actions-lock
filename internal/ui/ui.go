@@ -1074,11 +1074,12 @@ func (u *UI) StartProgress(label string) {
 		sw.mu.Unlock()
 	}
 	u.spinner = sp
-	u.progLabel = label
+	u.progLabel = ""
 	u.progDetail = ""
 	u.progLast = ""
 	u.progPaused = false
-	u.renderProgress()
+	// No suffix — top line is just the spinning glyph. All detail lives
+	// in the worker rows below.
 
 	// Defer the visible start so fast runs never flicker.
 	done := make(chan struct{})
@@ -1238,8 +1239,9 @@ func (u *UI) ClearWorkerStatuses() {
 	u.spinWriter.mu.Unlock()
 }
 
-// UpdateLabel changes the spinner prefix label (e.g. to show per-workflow
-// "[i/N] path" progress). No-op when no spinner is active.
+// UpdateLabel records the phase label for headless output. On a TTY the
+// spinner glyph is the only top-line indicator (static, no text suffix), so
+// label changes don't cause any redraws — all detail is in the worker rows.
 func (u *UI) UpdateLabel(label string) {
 	u.traceProgress("label", label)
 	if u.headless {
@@ -1248,13 +1250,7 @@ func (u *UI) UpdateLabel(label string) {
 			u.headlessEmit(stem)
 			u.headlessLabelStem = stem
 		}
-		return
 	}
-	if u.spinner == nil {
-		return
-	}
-	u.progLabel = label
-	u.renderProgress()
 }
 
 // labelStem returns the label trimmed of whitespace, used as a phase
