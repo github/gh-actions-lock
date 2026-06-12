@@ -364,6 +364,15 @@ type spinnerWriter struct {
 	// deferredHints mirrors deferredWrites for hint state so concurrent
 	// stall-watcher updates aren't clobbered by printLine's restore.
 	deferredHints map[int]string
+
+	// pendingSuffix holds the label text to apply to the spinner on the
+	// next PreUpdate callback. PreUpdate fires inside s.mu (the spinner's
+	// internal lock) so the s.Suffix assignment is race-free with the
+	// spinner goroutine's concurrent read. renderProgress writes here
+	// under sw.mu instead of writing s.Suffix directly; the lock order
+	// s.mu → sw.mu is consistent with how Write is called from the
+	// spinner goroutine.
+	pendingSuffix string
 }
 
 // workerSpinFrames is the rotating glyph shown next to each ACTIVE worker row
@@ -1054,6 +1063,16 @@ func (u *UI) StartProgress(label string) {
 		opts = append(opts, spinner.WithColor("fgCyan"))
 	}
 	sp := spinner.New(spinner.CharSets[11], 120*time.Millisecond, opts...)
+	// PreUpdate fires inside the spinner's internal lock (s.mu) immediately
+	// before Suffix is read for the frame. Applying pendingSuffix here
+	// makes label updates race-free: renderProgress writes pendingSuffix
+	// under sw.mu; PreUpdate reads it under s.mu→sw.mu, consistent with
+	// how Write is called from the same goroutine.
+	sp.PreUpdate = func(s *spinner.Spinner) {
+		sw.mu.Lock()
+		s.Suffix = sw.pendingSuffix
+		sw.mu.Unlock()
+	}
 	u.spinner = sp
 	u.progLabel = label
 	u.progDetail = ""
@@ -1308,11 +1327,26 @@ func (u *UI) renderProgress() {
 		suffix = label
 	}
 
-	u.spinner.Prefix = ""
-	if suffix != "" {
-		u.spinner.Suffix = " " + suffix
+	// Store the suffix in pendingSuffix; PreUpdate applies it to s.Suffix
+	// under the spinner's internal lock, eliminating the data race between
+	// this goroutine's write and the spinner goroutine's concurrent read.
+	if u.spinWriter != nil {
+		u.spinWriter.mu.Lock()
+		if suffix != "" {
+			u.spinWriter.pendingSuffix = " " + suffix
+		} else {
+			u.spinWriter.pendingSuffix = ""
+		}
+		u.spinWriter.mu.Unlock()
 	} else {
-		u.spinner.Suffix = ""
+		// spinWriter not yet set (shouldn't happen after StartProgress,
+		// but be defensive).
+		u.spinner.Prefix = ""
+		if suffix != "" {
+			u.spinner.Suffix = " " + suffix
+		} else {
+			u.spinner.Suffix = ""
+		}
 	}
 }
 
