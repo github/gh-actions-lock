@@ -900,6 +900,7 @@ module ActionsPin
           result = ctx.run_pty
           elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
           puts
+          puts "  \e[2m#{"─" * 40}\e[0m"
           if result.success?
             puts "  \e[32m✓ exit 0\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
           else

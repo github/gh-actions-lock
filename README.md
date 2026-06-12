@@ -93,26 +93,14 @@ rather than silently trusted.
 
 ## Development
 
-### Build
-
 ```bash
-make build
+make build              # build
+make test               # Go unit tests
+make test-integration   # all integration scenarios (stub + live)
+make test-stub          # stub scenarios only (no network, fast)
+make test-live          # live repo scenarios only (clones real repos)
+make test-shell         # interactive REPL (type help inside for commands)
 ```
-
-### Tests
-
-```bash
-make test              # Go unit tests
-make test-integration  # all integration scenarios (stub + live)
-make test-stub         # stub scenarios only (no network, fast)
-make test-live         # live repo scenarios only (clones real repos)
-```
-
-### Interactive shell
-
-`make test-shell` drops into a REPL for rapid iteration. It runs scenarios
-through a PTY so you see real ANSI output, spinners, and colors exactly as a
-user would. Type `help` inside the shell for the full command list.
 
 ### Scenario catalog
 
