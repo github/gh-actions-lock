@@ -164,6 +164,21 @@ scenarios:
         - "actions/github-script"
       custom: sso_dedup_count
 
+  - name: sso_no_fix_single_url
+    category: sso_auth
+    description: "SSO URL shown only once in --no-fix path"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-fix"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      custom: sso_url_shown_once
+
   - name: mixed_failures
     category: sso_auth
     description: "SSO + repo-not-found — different errors not deduped"
@@ -301,6 +316,16 @@ scenarios:
       workflows: {}
     expect:
       exit: 2
+
+  - name: no_workflows_summary
+    category: workflow_parsing
+    description: "No workflows to check — summary says so, not 'All 0 valid'"
+    tags: [stub]
+    fixtures:
+      workflows: {}
+    expect:
+      exit: 2
+      output_excludes: ["All 0"]
 
   - name: run_only_workflow
     category: workflow_parsing
