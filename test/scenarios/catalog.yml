@@ -8,7 +8,7 @@
 #   description: what the scenario validates
 #   needs_token: true if the scenario requires a real GH_TOKEN
 #   needs_stub:  true if the scenario uses a stub HTTP server
-#   tags:        labels for filtering (e.g. "smoke", "live", "security")
+#   tags:        labels for filtering (e.g. "smoke", "security")
 #   flags:       CLI flags passed to the binary
 #   fixtures:    inline workflow/lockfile content (Ruby-side hydrates these)
 #   expect:      expected exit code and output assertions
@@ -17,7 +17,7 @@
 # what's declared here. The Go side uses these for table-driven scenario
 # validation and matrix reporting.
 #
-# Live scenarios (needs_token: true) run against real GitHub repos and are
+# Scenarios with needs_token: true require a real GH_TOKEN and are
 # skipped gracefully when no token is present.
 
 version: 1
@@ -39,19 +39,23 @@ categories:
     description: "Cross-workflow scenarios and dependency tracking"
   - name: security
     description: "Impostor commit, lockfile forgery, reachability"
-  - name: live
-    description: "Live testing against real GitHub repositories"
+  - name: narrowing
+    description: "Tag narrowing, --no-narrow, sticky precision, and version-ref nudges"
+  - name: onboarding
+    description: "--no-onboard gating, onboarding-required findings, and CI flag composition"
+  - name: dependabot
+    description: "Dependabot consumer contract — JSON findings shape, exit codes, and category/severity for --no-onboard --no-narrow --no-interactive"
 
 scenarios:
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: happy_path
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║══════════════════════════════ happy_path ═══════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: happy_path
     category: happy_path
     description: "Single action resolves and pins successfully"
     needs_token: true
-    tags: [smoke, live]
+    tags: [smoke]
     fixtures:
       workflows:
         ci.yml:
@@ -62,14 +66,15 @@ scenarios:
 
   - name: already_pinned_all_valid
     category: happy_path
-    description: "Already-pinned actions pass without network calls (fast path)"
+    description: "Already-pinned workflow validates without network calls (fast path)"
     needs_token: true
-    tags: [smoke, live]
+    tags: [smoke]
     fixtures:
       workflows:
         ci.yml:
           name: CI
           actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
     expect:
       exit: 0
 
@@ -77,7 +82,6 @@ scenarios:
     category: happy_path
     description: "Multiple actions from different orgs all resolve"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -91,9 +95,8 @@ scenarios:
 
   - name: composite_action_transitive
     category: happy_path
-    description: "Composite action with transitive deps resolves recursively"
+    description: "Action with transitive dependencies (create-github-app-token) resolves correctly"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -102,9 +105,9 @@ scenarios:
     expect:
       exit: 0
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: sso_auth
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║═══════════════════════════════ sso_auth ════════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: sso_auth_failure
     category: sso_auth
@@ -166,7 +169,7 @@ scenarios:
 
   - name: sso_no_fix_single_url
     category: sso_auth
-    description: "SSO URL shown only once in --no-fix path"
+    description: "--no-fix: SSO details absent — only shows 'Re-run without --no-fix' (known gap)"
     needs_stub: true
     tags: [stub]
     flags: ["--no-fix"]
@@ -177,7 +180,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
-      custom: sso_url_shown_once
+      output_excludes: ["SAML enforcement"]
 
   - name: mixed_failures
     category: sso_auth
@@ -198,9 +201,9 @@ scenarios:
         - "actions/checkout"
         - "octo-org/private-action"
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: api_errors
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║══════════════════════════════ api_errors ═══════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: api_404_not_found
     category: api_errors
@@ -259,15 +262,14 @@ scenarios:
       output_contains:
         - "could not be resolved"
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: lockfile
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║═══════════════════════════════ lockfile ════════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
-  - name: no_lockfile_first_run
+  - name: fresh_first_run
     category: lockfile
     description: "No lockfile exists — created on first run"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -277,21 +279,23 @@ scenarios:
       exit: 0
       lockfile_exists: true
 
-  - name: corrupt_lockfile_recovery
+  - name: onboarded_corrupt_recovery
     category: lockfile
-    description: "Corrupt YAML lockfile — treated as empty, rewritten"
+    description: "Corrupt YAML lockfile — user confirms delete, lockfile rewritten from scratch"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
           name: CI
           actions: ["actions/checkout@v4"]
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
+    input:
+      - prompt: "(y/N)"
+        response: "y"
     expect:
       exit: 0
 
-  - name: future_version_lockfile
+  - name: onboarded_future_version
     category: lockfile
     description: "Lockfile from future version — refuses with upgrade hint"
     tags: [stub]
@@ -304,9 +308,9 @@ scenarios:
     expect:
       exit: 2
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: workflow_parsing
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║═══════════════════════════ workflow_parsing ════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: no_workflows
     category: workflow_parsing
@@ -331,7 +335,6 @@ scenarios:
     category: workflow_parsing
     description: "Workflow with only run: steps (no actions) — RunOnly finding"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -350,7 +353,6 @@ scenarios:
     category: workflow_parsing
     description: "Expression-based uses: (${{ }}) — skipped with warning"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -370,7 +372,6 @@ scenarios:
     category: workflow_parsing
     description: "Local action (./path) — skipped without warning"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -390,7 +391,6 @@ scenarios:
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -405,7 +405,6 @@ scenarios:
     category: workflow_parsing
     description: "Same action used twice in workflow — deduplicated"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -422,15 +421,14 @@ scenarios:
     expect:
       exit: 0
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: output_modes
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║═════════════════════════════ output_modes ══════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: no_fix_mode
     category: output_modes
     description: "--no-fix with valid lockfile — exit 0, nothing written"
     needs_token: true
-    tags: [live]
     flags: ["--no-fix"]
     fixtures:
       workflows:
@@ -444,7 +442,6 @@ scenarios:
     category: output_modes
     description: "--json=valid produces well-formed JSON on stdout"
     needs_token: true
-    tags: [live]
     flags: ["--no-fix", "--json=valid"]
     fixtures:
       workflows:
@@ -475,7 +472,6 @@ scenarios:
     category: output_modes
     description: "--rescan forces full re-verification"
     needs_token: true
-    tags: [live]
     flags: ["--rescan"]
     fixtures:
       workflows:
@@ -516,15 +512,14 @@ scenarios:
       exit: 1
       stdout_is_json: true
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: multi_workflow
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║════════════════════════════ multi_workflow ═════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: shared_action_across_workflows
     category: multi_workflow
     description: "Same action in multiple workflows — resolved once, tracked per-workflow"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -540,7 +535,6 @@ scenarios:
     category: multi_workflow
     description: "5 workflows with overlapping actions"
     needs_token: true
-    tags: [live]
     fixtures:
       workflows:
         ci.yml:
@@ -561,9 +555,9 @@ scenarios:
     expect:
       exit: 0
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: security
-  # ═══════════════════════════════════════════════════════════════════════
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║═══════════════════════════════ security ════════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
 
   - name: unresolved_uses_error_icon
     category: security
@@ -607,56 +601,428 @@ scenarios:
       output_excludes: ["resolution failed:"]
       output_contains: ["SAML enforcement"]
 
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║═══════════════════════════════ narrowing ═══════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
+
+  - name: fresh_v4_narrows_to_full
+    category: narrowing
+    description: "Default: v4 tag narrows to full semver (e.g. v4.2.1)"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+      lockfile_comment_matches: 'v4\.\d+\.\d+'
+
+  - name: fresh_full_tag_unchanged
+    category: narrowing
+    description: "Full semver v4.2.0 is already precise — no narrowing"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4.2.0"]
+    expect:
+      exit: 0
+      lockfile_comment_matches: 'v4\.2\.0'
+
+  - name: fresh_branch_ref_skipped
+    category: narrowing
+    description: "Branch ref (main) is not a semver — narrowing skips it"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+    expect:
+      exit: 0
+      lockfile_comment_matches: 'main'
+
+  - name: fresh_no_narrow_keeps_major
+    category: narrowing
+    description: "--no-narrow: splat ref v4 stays v4 in lockfile (not narrowed to v4.x.y)"
+    needs_token: true
+    flags: ["--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+      lockfile_comment_excludes: 'v4\.\d+\.\d+'
+
+  - name: fresh_no_narrow_full_tag
+    category: narrowing
+    description: "--no-narrow: full semver v4.2.0 passes through unchanged (already precise)"
+    needs_token: true
+    flags: ["--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4.2.0"]
+    expect:
+      exit: 0
+      lockfile_comment_matches: 'v4\.2\.0'
+
+  - name: onboarded_sticky_imprecise
+    category: narrowing
+    description: "Lockfile has splat ref v4 from prior --no-narrow run — re-pin without --no-narrow still keeps v4 (sticky precision)"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout_v4_imprecise
+    expect:
+      exit: 0
+      lockfile_comment_excludes: 'v4\.\d+\.\d+'
+
+  - name: onboarded_full_tag_unchanged
+    category: narrowing
+    description: "Lockfile dep key is v4.2.0 (from prior narrowed pin), workflow says @v4 (never locked as v4) — re-pin keeps the lockfile's full semver precision"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout_full
+    expect:
+      exit: 0
+      lockfile_comment_matches: 'v4\.\d+\.\d+'
+
+  - name: onboarded_no_narrow_keeps_major
+    category: narrowing
+    description: "--no-narrow on onboarded workflow — splat ref v4 stays v4 in lockfile, semver nudge suppressed"
+    needs_token: true
+    flags: ["--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      lockfile_comment_excludes: 'v4\.\d+\.\d+'
+      output_excludes: ["pinned without a full semver tag"]
+
+  - name: fresh_no_narrow_nudge_suppressed
+    category: narrowing
+    description: "Default narrowing: imprecise ref produces version-ref nudge in terminal"
+    needs_token: true
+    flags: ["--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 0
+      output_excludes: ["Consider using full semver"]
+
+  - name: fresh_no_fix_no_narrow_json_version_ref
+    category: narrowing
+    description: "--no-fix --no-narrow --json=findings: reports not-pinned finding, no version-ref noise"
+    needs_token: true
+    flags: ["--no-narrow", "--no-fix", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      stdout_is_json: true
+      stdout_excludes: ["version-ref"]
+      jq:
+        - expr: '.findings | length'
+          equals: 1
+        - expr: '.findings[0].category'
+          equals: 'not-pinned'
+        - expr: '.findings[0].dependency'
+          contains: 'actions/checkout'
+
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║══════════════════════════════ onboarding ═══════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
+
+  - name: fresh_no_onboard_refused
+    category: onboarding
+    description: "--no-onboard: new (not-yet-tracked) workflow refused — exit 1"
+    needs_token: true
+    flags: ["--no-onboard"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+
+  - name: onboarded_no_onboard_repin
+    category: onboarding
+    description: "--no-onboard: already-tracked workflow re-pins normally"
+    needs_token: true
+    flags: ["--no-onboard"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+
+  - name: onboarded_no_onboard_mixed
+    category: onboarding
+    description: "--no-onboard: mix of tracked and untracked — tracked re-pinned, untracked refused"
+    needs_token: true
+    flags: ["--no-onboard"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+        deploy.yml:
+          name: Deploy
+          actions: ["actions/setup-node@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+
+  - name: fresh_no_fix_no_onboard_json_findings
+    category: onboarding
+    description: "--no-onboard --json=findings: refused entries appear as onboarding-required"
+    needs_token: true
+    flags: ["--no-onboard", "--no-fix", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      stdout_is_json: true
+      stdout_contains: ["onboarding-required"]
+
+  - name: fresh_no_onboard_caution
+    category: onboarding
+    description: "--no-onboard: terminal shows caution about skipped entries"
+    needs_token: true
+    flags: ["--no-onboard"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_contains: ["onboarding-required", "skipped"]
+
+  - name: onboarded_no_narrow_no_onboard_combined
+    category: onboarding
+    description: "--no-onboard --no-narrow: both flags compose — tracked re-pins at imprecise ref"
+    needs_token: true
+    flags: ["--no-onboard", "--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout_v4_imprecise
+    expect:
+      exit: 0
+
+  - name: fresh_no_interactive_no_onboard_ci
+    category: onboarding
+    description: "--no-onboard --no-interactive: CI-safe flags, no prompts"
+    needs_token: true
+    flags: ["--no-onboard", "--no-interactive"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+
   # ═══════════════════════════════════════════════════════════════════════
-  # CATEGORY: live — Real GitHub repos
+  # CATEGORY: lockfile (additional scenarios)
   # ═══════════════════════════════════════════════════════════════════════
 
-  - name: live_github_github
-    category: live
-    description: "Live: github/github — large internal monorepo workflows"
+  - name: onboarded_no_fix_corrupt
+    category: lockfile
+    description: "Corrupt lockfile with --no-fix — fails, no recovery attempted"
     needs_token: true
-    tags: [live, real_repo]
-    live_repo: github/github
     flags: ["--no-fix"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
-      exit_any: [0, 1]
+      exit: 2
 
-  - name: live_vercel_nextjs
-    category: live
-    description: "Live: vercel/next.js — popular OSS with many actions"
+  - name: onboarded_no_interactive_corrupt
+    category: lockfile
+    description: "Corrupt lockfile with --no-interactive — fails without prompt"
     needs_token: true
-    tags: [live, real_repo]
-    live_repo: vercel/next.js
-    flags: ["--no-fix"]
+    flags: ["--no-interactive"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
-      exit_any: [0, 1]
+      exit: 2
 
-  - name: live_github_internal_actions
-    category: live
-    description: "Live: github/internal-actions — internal action library"
-    needs_token: true
-    tags: [live, real_repo]
-    live_repo: github/internal-actions
-    flags: ["--no-fix"]
-    expect:
-      exit_any: [0, 1]
+  # ╔═════════════════════════════════════════════════════════════════════════╗
+  # ║══════════════════════════════ dependabot ═══════════════════════════════║
+  # ╚═════════════════════════════════════════════════════════════════════════╝
+  # These scenarios test the contract surface consumed by dependabot-core's
+  # CliEngine (cli_engine.rb). Every scenario runs with the dependabot flag
+  # set: --no-onboard --no-narrow --no-interactive --json=valid,findings,workflows
+  #
+  # The jq assertions verify the JSON shape that dependabot-core's
+  # FindingMapper relies on. Changes here must be coordinated with
+  # dependabot/dependabot-core github_actions ecosystem.
 
-  - name: live_github_mcv3_boot
-    category: live
-    description: "Live: github/mcv3-boot — codespace boot workflows"
+  - name: dbot_onboarded_clean
+    category: dependabot
+    description: "All pinned, no findings — exit 0, valid true, empty findings"
     needs_token: true
-    tags: [live, real_repo]
-    live_repo: github/mcv3-boot
-    flags: ["--no-fix"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings,workflows"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
     expect:
-      exit_any: [0, 1]
+      exit: 0
+      stdout_is_json: true
+      jq:
+        - expr: ".valid"
+          equals: "true"
+        - expr: ".findings | length"
+          equals: "0"
+        - expr: ".workflows | length"
+          equals: "1"
+        - expr: ".workflows[0].path"
+          contains: "ci.yml"
+        - expr: ".workflows[0].valid"
+          equals: "true"
 
-  - name: live_github_launch
-    category: live
-    description: "Live: github/launch — deployment workflows"
+  - name: dbot_fresh_refused
+    category: dependabot
+    description: "Fresh repo with --no-onboard — exit 1, onboarding-required finding"
     needs_token: true
-    tags: [live, real_repo]
-    live_repo: github/launch
-    flags: ["--no-fix"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings,workflows"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
     expect:
-      exit_any: [0, 1]
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: ".valid"
+          equals: "false"
+        - expr: ".findings | length"
+          greater_than: 0
+        - expr: ".findings[0].category"
+          equals: "onboarding-required"
+        - expr: ".findings[0].severity"
+          equals: "error"
+        - expr: ".findings[0].workflow"
+          contains: "ci.yml"
+
+  - name: dbot_not_pinned
+    category: dependabot
+    description: "Onboarded but action not in lockfile — not-pinned finding"
+    needs_token: true
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=valid,findings,workflows"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4", "actions/setup-node@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: ".valid"
+          equals: "false"
+        - expr: '.findings[] | select(.category == "not-pinned") | .severity'
+          equals: "error"
+        - expr: '.findings[] | select(.category == "not-pinned") | .dependency'
+          contains: "actions/setup-node"
+
+  - name: dbot_corrupt_lockfile_ci
+    category: dependabot
+    description: "Corrupt lockfile with --no-interactive — exit 2, engine error"
+    needs_token: true
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile: "{{{{invalid yaml content not parseable at all}}}}"
+    expect:
+      exit: 2
+
+  - name: dbot_multi_workflow
+    category: dependabot
+    description: "Multiple workflows — per-workflow findings in JSON"
+    needs_token: true
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=valid,findings,workflows"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+        deploy.yml:
+          name: Deploy
+          actions: ["actions/checkout@v4", "actions/setup-node@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: ".workflows | length"
+          equals: "2"
+        - expr: '.workflows[] | select(.path | contains("deploy")) | .valid'
+          equals: "false"
+
+  - name: dbot_version_ref_suppressed
+    category: dependabot
+    description: "--no-narrow suppresses version-ref findings — not in JSON"
+    needs_token: true
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      stdout_is_json: true
+      jq:
+        - expr: '.findings[] | select(.category == "version-ref") | .category'
+          equals: ""
