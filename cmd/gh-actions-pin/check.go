@@ -180,7 +180,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	endSetup := prof.Phase("setup (discover + lockfile)")
-	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver)
+	// check fix mode can rebuild a deleted lockfile, so interactive sessions
+	// may delete-and-recreate an unreadable one. --no-fix is read-only and
+	// must not delete; it fails instead.
+	recoverLock := newLockRecovery(noInteractiveFlag(cmd), console, confirmFactoryHook, !opts.noFix)
+	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver, recoverLock)
 	if err != nil {
 		return err
 	}
@@ -256,6 +260,18 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	report := result.Report
 	valid := result.Valid
 	skippedRescan := result.SkippedRescan
+
+	// --no-onboard: refuse to onboard new workflows or actions. Rewrite the
+	// relevant not-pinned findings to onboarding-required and drop their refs
+	// so Plan/Commit never pins them; already-tracked refs that were bumped
+	// (ref-changed) are left to re-pin as usual.
+	onboardingRefused := 0
+	if noOnboardFlag(cmd) {
+		onboardingRefused = gateNoOnboard(report)
+		if onboardingRefused > 0 {
+			valid = report.IsValid()
+		}
+	}
 
 	// Render the read-only diagnosis. --json selects the renderer; it does
 	// not decide whether fixes are applied. Terminal output is shown up front
@@ -354,16 +370,15 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 			return err
 		}
-		if len(record.Investigated()) > 0 {
+		if len(record.Investigated()) > 0 || onboardingRefused > 0 {
 			return errSilent
 		}
 		return nil
 	}
 
 	// Terminal summary.
-	// Terminal summary.
 	hasInconclusive := opts.rescan && report.HasInconclusive()
-	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive, opts.noNarrow)
+	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive, onboardingRefused, opts.noNarrow)
 
 	// Surface the SAML SSO authorization URL if one was captured during
 	// the run, matching cli/cli's "Authorize in your web browser:" line.
