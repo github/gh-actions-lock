@@ -350,13 +350,6 @@ type spinnerWriter struct {
 	// deferredHints mirrors deferredWrites for hint state so concurrent
 	// stall-watcher updates aren't clobbered by printLine's restore.
 	deferredHints map[int]string
-
-	// pendingPrefix holds the spinner Prefix (label + space, glyph
-	// appended by the library) to apply on the next PreUpdate callback.
-	// PreUpdate fires inside s.mu so the assignment is race-free with the
-	// spinner goroutine's read. Lock order: s.mu → sw.mu, consistent with
-	// how Write is called from the spinner goroutine.
-	pendingPrefix string
 }
 
 // workerSpinFrames is the rotating glyph shown next to each ACTIVE worker row
@@ -1047,25 +1040,14 @@ func (u *UI) StartProgress(label string) {
 		opts = append(opts, spinner.WithColor("fgCyan"))
 	}
 	sp := spinner.New(spinner.CharSets[11], 120*time.Millisecond, opts...)
-	// PreUpdate fires inside s.mu before Prefix/Suffix are read for the
-	// frame. Applying pendingPrefix here keeps label updates race-free:
-	// callers write pendingPrefix under sw.mu; PreUpdate reads it under
-	// s.mu → sw.mu, consistent with how Write is already called.
-	sp.PreUpdate = func(s *spinner.Spinner) {
-		sw.mu.Lock()
-		s.Prefix = sw.pendingPrefix
-		s.Suffix = ""
-		sw.mu.Unlock()
+	// The label is static for the lifetime of this spinner. Set Prefix
+	// before sp.Start() — the goroutine isn't running yet so no lock needed.
+	if label != "" {
+		sp.Prefix = label + " "
 	}
 	u.spinner = sp
 	u.progDetail = ""
 	u.progPaused = false
-	// Set the initial prefix. The goroutine hasn't started yet so
-	// writing the field directly is safe here.
-	if label != "" {
-		sw.pendingPrefix = label + " "
-		sp.Prefix = label + " "
-	}
 
 	// Defer the visible start so fast runs never flicker.
 	done := make(chan struct{})
@@ -1223,30 +1205,19 @@ func (u *UI) ClearWorkerStatuses() {
 	u.spinWriter.mu.Unlock()
 }
 
-// UpdateLabel changes the spinner prefix label. On a TTY the label sits to
-// the LEFT of the glyph (cli/cli style: "Resolving actions ⠋") and is
-// updated race-free via pendingPrefix / PreUpdate. In headless mode it logs
-// a plain-text phase boundary instead.
+// UpdateLabel is a no-op on TTY — the spinner label is static for the
+// lifetime of the spinner. In headless mode it logs a plain-text phase
+// boundary when the label changes.
 func (u *UI) UpdateLabel(label string) {
 	u.traceProgress("label", label)
-	if u.headless {
-		stem := labelStem(label)
-		if stem != "" && stem != u.headlessLabelStem {
-			u.headlessEmit(stem)
-			u.headlessLabelStem = stem
-		}
+	if !u.headless {
 		return
 	}
-	if u.spinWriter == nil {
-		return
+	stem := labelStem(label)
+	if stem != "" && stem != u.headlessLabelStem {
+		u.headlessEmit(stem)
+		u.headlessLabelStem = stem
 	}
-	u.spinWriter.mu.Lock()
-	if label != "" {
-		u.spinWriter.pendingPrefix = label + " "
-	} else {
-		u.spinWriter.pendingPrefix = ""
-	}
-	u.spinWriter.mu.Unlock()
 }
 
 // labelStem returns the label trimmed of whitespace, used as a phase
