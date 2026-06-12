@@ -35,6 +35,10 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 
 	total := len(report.Workflows)
+	if total == 0 {
+		console.TermNeutral("No workflows to check")
+		return nil
+	}
 	if len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
