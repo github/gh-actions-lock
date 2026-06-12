@@ -1230,6 +1230,11 @@ func (u *UI) ClearWorkerStatuses() {
 	for i := range u.spinWriter.hints {
 		u.spinWriter.hints[i] = ""
 	}
+	// Immediately erase the old rows from the terminal rather than
+	// waiting for the next spinner tick (~120ms). Without this, the
+	// stale rows sit on screen for one tick and then all vanish at once,
+	// which looks like a jump at phase transitions.
+	u.spinWriter.renderWorkersLocked()
 	u.spinWriter.mu.Unlock()
 }
 
