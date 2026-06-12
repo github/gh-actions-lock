@@ -31,12 +31,12 @@ type PlanOptions struct {
 	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
 	NoNarrow bool
 
-	// prevMutableNWO is computed once in Plan() from the global lockfile
+	// prevImpreciseNWO is computed once in Plan() from the global lockfile
 	// state. It holds lowercased NWOs that are already recorded with a
 	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
 	// for these to respect the user's prior precision choice and avoid
 	// creating duplicate dep entries at different ref granularities.
-	prevMutableNWO map[string]bool
+	prevImpreciseNWO map[string]bool
 
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
@@ -65,12 +65,12 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	// across all workflows (not per-WF) so two workflows referencing the
 	// same action settle on the same ref precision — avoiding duplicate
 	// dep entries in the lockfile.
-	if opts.prevMutableNWO == nil && opts.Store != nil {
-		opts.prevMutableNWO = make(map[string]bool)
+	if opts.prevImpreciseNWO == nil && opts.Store != nil {
+		opts.prevImpreciseNWO = make(map[string]bool)
 		for _, d := range opts.Store.AllDeps() {
 			sv, ok := parserlock.ParseSemVer(d.Ref)
 			if !ok || !sv.IsFull() {
-				opts.prevMutableNWO[strings.ToLower(d.NWO)] = true
+				opts.prevImpreciseNWO[strings.ToLower(d.NWO)] = true
 			}
 		}
 	}
@@ -294,15 +294,15 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 
-			// Mutable version tags (v4, v3.1): narrow to patch release.
+			// Version tags without full semver (v4, v3.1): narrow to patch release.
 			// Skip if --no-narrow or if the lockfile already recorded this
-			// dep with a mutable ref (respect prior precision choice).
+			// dep without a full semver ref (respect prior precision choice).
 			nwoLower := strings.ToLower(dep.NWO)
-			if opts.NoNarrow || opts.prevMutableNWO[nwoLower] {
+			if opts.NoNarrow || opts.prevImpreciseNWO[nwoLower] {
 				continue
 			}
 			sv, ok := parserlock.ParseSemVer(dep.Ref)
-			if !ok || !sv.IsMutable() {
+			if !ok || sv.IsFull() {
 				continue
 			}
 			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
