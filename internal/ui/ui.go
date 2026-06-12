@@ -52,35 +52,21 @@ type UI struct {
 	// mode so the same phase label isn't printed more than once.
 	headlessLabelStem string
 
-	// progLabel and progDetail hold the two halves of the active spinner line
-	// (the per-workflow label and the resolver's current-action detail). They
-	// are recombined and truncated to one terminal row on every update so the
-	// spinner never wraps — a wrapped spinner breaks the library's
-	// backspace-based erase and causes line jumping/leftover fragments.
-	progLabel  string
+	// progDetail holds the current resolver detail shown in worker slot 0.
 	progDetail string
-
-	// progLast holds the most recent non-empty rendered line. If an update
-	// transiently leaves both label and detail empty (e.g. detail cleared
-	// between phases before the next label is set), we keep showing progLast
-	// so the spinner never flashes a bare, label-less glyph.
-	progLast string
 
 	// progPaused is set while the spinner is temporarily halted (e.g. to let an
 	// interactive prompt own the terminal). The spinner object is retained so
 	// ResumeProgress can restart it with the same label/detail.
 	progPaused bool
 
-	// progHasDetail tracks whether the last renderProgress call rendered a
-	// second detail line. clearSpinnerLines uses this to know whether to also
-	// erase line 2 after stopping the spinner.
+	// progHasDetail tracks whether the last renderProgress call put something
+	// in worker slot 0. Used by clearSpinnerLines to know the row count.
 	progHasDetail bool
 
 	// spinWriter is a thin io.Writer wrapper set while a spinner is active.
-	// It intercepts each spinner tick write (which starts with '\r') and
-	// appends the detail line below the spinner WITHOUT putting the detail text
-	// in the spinner Suffix — keeping the suffix short so the library's
-	// byte-count wrap detection never triggers on the second line's content.
+	// It intercepts each spinner tick write and appends worker status rows
+	// below the spinner line in a single synchronized write.
 	spinWriter *spinnerWriter
 
 	// progGrace delays spinner visibility so fast runs never flicker. When
@@ -344,6 +330,11 @@ type spinnerWriter struct {
 	nRendered int      // number of worker lines written in the last tick
 	noColor   bool
 	output    *termenv.Output
+	// prefix is the static label text written before the spinner glyph
+	// (e.g. "Resolving actions "). Stored here so startAnimator can write
+	// an immediate frame on resume, avoiding the one-tick blank gap that
+	// occurs because briandowns never fires a tick immediately on Start().
+	prefix string
 	// stop closes to signal the independent worker-redraw ticker to exit.
 	// done is closed once the ticker goroutine has returned. The ticker
 	// keeps worker glyphs animating even when the spinner library coalesces,
@@ -380,20 +371,53 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
-	n, err = sw.w.Write(p)
-	if err != nil || len(p) == 0 || p[0] != '\r' {
+	if len(p) == 0 || p[0] != '\r' {
+		n, err = sw.w.Write(p)
 		return
 	}
-	sw.renderWorkersLocked()
+
+	// briandowns calls Write twice per tick:
+	//   1. erase:  \r\033[K          — wipe the previous frame
+	//   2. frame:  \r{Prefix}{glyph}{Suffix} — paint the new frame
+	//
+	// Only render worker rows on the frame write. Rendering them on the
+	// erase write too means two cursor-down/up sequences per 120ms tick,
+	// which is the primary cause of residual flicker on embedded terminals.
+	//
+	// Match the two specific erase sequences the library emits rather than
+	// any generic CSI prefix — frame writes that start with a color SGR
+	// (e.g. \r\033[36m…) must not be misclassified as erases.
+	isErase := (len(p) == 4 && string(p) == "\r\033[K\n") ||
+		(len(p) == 3 && string(p) == "\r\033[K") ||
+		(len(p) == 5 && string(p) == "\r\033[2K\n") ||
+		(len(p) == 4 && string(p) == "\r\033[2K")
+	if isErase {
+		// Just pass the erase through; worker rows are still on screen
+		// from the previous frame and will be refreshed momentarily.
+		n, err = sw.w.Write(p)
+		return
+	}
+
+	// Combine the spinner frame and worker rows into a single
+	// synchronized write so the terminal never shows a partial frame.
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h") // begin synchronized output
+	// Replace the leading \r with \r\033[2K (go-to-col-0 + erase line)
+	// so that when the label shrinks between ticks the old longer text
+	// is fully cleared instead of leaving leftover characters visible.
+	buf.WriteString("\r\033[2K")
+	buf.Write(p[1:]) // p[0] is the \r we already emitted above
+	sw.buildWorkerFrameLocked(&buf)
+	buf.WriteString("\033[?2026l") // end synchronized output
+	_, err = io.WriteString(sw.w, buf.String())
+	n = len(p)
 	return
 }
 
-// renderWorkersLocked redraws the worker rows below the spinner line, leaving
-// the cursor back on the spinner line. Caller must hold sw.mu and the cursor
-// must currently be on the spinner line. Glyph frames are picked from the wall
-// clock so animation continues even when triggered by the independent ticker
-// instead of by a spinner Write.
-func (sw *spinnerWriter) renderWorkersLocked() {
+// buildWorkerFrameLocked appends the escape sequences for worker rows into
+// buf, leaving the cursor back on the spinner line. Caller must hold sw.mu
+// and the cursor must currently be on the spinner line.
+func (sw *spinnerWriter) buildWorkerFrameLocked(buf *strings.Builder) {
 	step := int(time.Now().UnixNano() / int64(workerFrameInterval))
 	// Per-slot phase offset so rows visibly cascade instead of all hitting
 	// the same frame in lockstep — that lockstep was what made them look
@@ -407,7 +431,7 @@ func (sw *spinnerWriter) renderWorkersLocked() {
 		body := w
 		if len(w) >= len("→ ") && w[:len("→ ")] == "→ " {
 			frame := workerSpinFrames[(step+slot)%len(workerSpinFrames)]
-			body = frame + " " + w[len("→ "):]
+			body = w[len("→ "):] + " " + frame
 		}
 		hint := ""
 		if slot < len(sw.hints) {
@@ -452,22 +476,32 @@ func (sw *spinnerWriter) renderWorkersLocked() {
 		// is a no-op at the last row and the subsequent ESC[NA cursor-up
 		// would then overshoot, landing on (and clobbering) lines above
 		// the spinner — including the user's typed command line.
-		fmt.Fprintf(sw.w, "\n\r\033[2K%s", line)
+		fmt.Fprintf(buf, "\n\r\033[2K%s", line)
 	}
 	// Erase stale lines left over from a previous render that had more
 	// active workers. Without this, ghost "→ dep" rows from finished
 	// workers persist below the current set.
 	for i := nLines; i < sw.nRendered; i++ {
-		fmt.Fprintf(sw.w, "\n\r\033[2K")
+		buf.WriteString("\n\r\033[2K")
 	}
 	totalDown := nLines
 	if sw.nRendered > nLines {
 		totalDown = sw.nRendered
 	}
 	if totalDown > 0 {
-		fmt.Fprintf(sw.w, "\033[%dA\r", totalDown)
+		fmt.Fprintf(buf, "\033[%dA\r", totalDown)
 	}
 	sw.nRendered = nLines
+}
+
+// renderWorkersLocked redraws the worker rows below the spinner line as a
+// single synchronized write. Caller must hold sw.mu.
+func (sw *spinnerWriter) renderWorkersLocked() {
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h") // begin synchronized output
+	sw.buildWorkerFrameLocked(&buf)
+	buf.WriteString("\033[?2026l") // end synchronized output
+	io.WriteString(sw.w, buf.String())
 }
 
 // startAnimator launches a goroutine that periodically redraws the worker
@@ -483,6 +517,27 @@ func (sw *spinnerWriter) startAnimator() {
 	sw.done = make(chan struct{})
 	stop := sw.stop
 	done := sw.done
+	sw.mu.Unlock()
+
+	sw.mu.Lock()
+	// Wrap cursor-hide in a synchronized block so it can't interleave
+	// with a concurrent spinner frame write mid-output.
+	io.WriteString(sw.w, "\033[?2026h\033[?25l\033[?2026l")
+	sw.mu.Unlock()
+
+	// Write a synthetic first frame immediately so the spinner line is never
+	// blank during the ~120ms gap before the library's first ticker tick.
+	// briandowns never writes a frame on Start() — it always waits for the
+	// first tick — so without this, every Resume causes a visible blank line.
+	sw.mu.Lock()
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h")
+	buf.WriteString("\r\033[2K")
+	buf.WriteString(sw.prefix)
+	buf.WriteString(workerSpinFrames[0]) // placeholder glyph; real tick replaces it
+	sw.buildWorkerFrameLocked(&buf)
+	buf.WriteString("\033[?2026l")
+	io.WriteString(sw.w, buf.String())
 	sw.mu.Unlock()
 
 	go func() {
@@ -525,6 +580,11 @@ func (sw *spinnerWriter) stopAnimator() {
 	}
 	close(stop)
 	<-done
+	// Restore the cursor that startAnimator hid, synchronized so it can't
+	// interleave with any write still draining from the ticker goroutine.
+	sw.mu.Lock()
+	io.WriteString(sw.w, "\033[?2026h\033[?25h\033[?2026l")
+	sw.mu.Unlock()
 }
 
 // setDetail is a backward-compat shim that sets a single worker slot (slot 0).
@@ -589,17 +649,17 @@ func (u *UI) clearSpinnerLines() {
 		u.spinWriter.nRendered = 0
 		u.spinWriter.mu.Unlock()
 	}
-	// Erase the spinner's own line plus exactly the known worker lines
-	// below it, then move the cursor back up. Using targeted \033[2K
-	// per line instead of \033[J (erase-to-end-of-screen) avoids
-	// clobbering the shell prompt if it starts drawing before we exit.
-	fmt.Fprint(u.w, "\r\033[2K")
+	// Buffer the entire clear into a single write so the terminal
+	// never shows a partially erased frame.
+	var buf strings.Builder
+	buf.WriteString("\r\033[2K")
 	for i := 0; i < lines; i++ {
-		fmt.Fprint(u.w, "\n\033[2K")
+		buf.WriteString("\n\033[2K")
 	}
 	if lines > 0 {
-		fmt.Fprintf(u.w, "\033[%dA\r", lines)
+		fmt.Fprintf(&buf, "\033[%dA\r", lines)
 	}
+	fmt.Fprint(u.w, buf.String())
 	u.progHasDetail = false
 }
 
@@ -1025,12 +1085,15 @@ func (u *UI) StartProgress(label string) {
 		opts = append(opts, spinner.WithColor("fgCyan"))
 	}
 	sp := spinner.New(spinner.CharSets[11], 120*time.Millisecond, opts...)
+	// The label is static for the lifetime of this spinner. Set Prefix
+	// before sp.Start() — the goroutine isn't running yet so no lock needed.
+	if label != "" {
+		sp.Prefix = label + " "
+		sw.prefix = label + " "
+	}
 	u.spinner = sp
-	u.progLabel = label
 	u.progDetail = ""
-	u.progLast = ""
 	u.progPaused = false
-	u.renderProgress()
 
 	// Defer the visible start so fast runs never flicker.
 	done := make(chan struct{})
@@ -1121,9 +1184,7 @@ func (u *UI) StopProgress() {
 		u.spinner.Stop()
 		u.spinner = nil
 		u.spinWriter = nil
-		u.progLabel = ""
 		u.progDetail = ""
-		u.progLast = ""
 		u.progPaused = false
 	}
 }
@@ -1182,26 +1243,27 @@ func (u *UI) ClearWorkerStatuses() {
 	for i := range u.spinWriter.hints {
 		u.spinWriter.hints[i] = ""
 	}
+	// Immediately erase the old rows from the terminal rather than
+	// waiting for the next spinner tick (~120ms). Without this, the
+	// stale rows sit on screen for one tick and then all vanish at once,
+	// which looks like a jump at phase transitions.
+	u.spinWriter.renderWorkersLocked()
 	u.spinWriter.mu.Unlock()
 }
 
-// UpdateLabel changes the spinner prefix label (e.g. to show per-workflow
-// "[i/N] path" progress). No-op when no spinner is active.
+// UpdateLabel is a no-op on TTY — the spinner label is static for the
+// lifetime of the spinner. In headless mode it logs a plain-text phase
+// boundary when the label changes.
 func (u *UI) UpdateLabel(label string) {
 	u.traceProgress("label", label)
-	if u.headless {
-		stem := labelStem(label)
-		if stem != "" && stem != u.headlessLabelStem {
-			u.headlessEmit(stem)
-			u.headlessLabelStem = stem
-		}
+	if !u.headless {
 		return
 	}
-	if u.spinner == nil {
-		return
+	stem := labelStem(label)
+	if stem != "" && stem != u.headlessLabelStem {
+		u.headlessEmit(stem)
+		u.headlessLabelStem = stem
 	}
-	u.progLabel = label
-	u.renderProgress()
 }
 
 // labelStem returns the label trimmed of whitespace, used as a phase
@@ -1211,80 +1273,37 @@ func labelStem(label string) string {
 	return strings.TrimSpace(label)
 }
 
-// renderProgress recombines the label and detail into a single line that is
-// truncated to fit the terminal width (leaving room for the spinner glyph and
-// a space). The spinner glyph is anchored at the left edge (column 0): the
-// combined line is assigned to the spinner Suffix with an empty Prefix, so the
-// library always renders "\r{glyph} {label} — {detail}". Keeping the glyph
-// fixed on the left stops it from drifting as the detail text changes width.
-// The whole string is truncated to one terminal row — wrapping would defeat
-// the library's backspace-based erase and cause the line jumping the user
-// sees.
+// renderProgress updates worker slot 0 with the current detail string.
+// The label (top-line prefix) is managed separately by UpdateLabel.
 func (u *UI) renderProgress() {
 	if u.spinner == nil {
 		return
 	}
 
-	label := u.progLabel
 	detail := u.progDetail
-
-	if label == "" {
-		if u.progLast == "" {
-			return
-		}
-		label = u.progLast
-	} else {
-		u.progLast = label
+	if detail == "" {
+		return
 	}
 
+	// Worker rows animate only when text starts with "→ "; UpdateProgress
+	// callers (resolver hooks) pass plain strings. Prepend the arrow so
+	// the slot pulses instead of looking frozen.
+	if !strings.HasPrefix(detail, "→ ") {
+		detail = "→ " + detail
+	}
 	width := u.termWidth()
-	if width > 8 {
-		budget := width - 6
+	if width > 4 {
+		budget := width - 4
 		if !u.noColor {
-			budget -= 7 // bold escape open+close
+			budget -= 7
 		}
-		label = truncateBytes(label, budget)
+		detail = truncateBytes(detail, budget)
 	}
 
-	if detail != "" {
-		// Worker rows render a pulsing glyph only when the text starts
-		// with "→ "; UpdateProgress callers (resolver progress hooks)
-		// pass plain strings like "resolving foo@bar". Prepend the
-		// arrow so the slot animates instead of looking frozen.
-		if !strings.HasPrefix(detail, "→ ") {
-			detail = "→ " + detail
-		}
-		if width > 4 {
-			budget := width - 4 // "  " indent + faint open+close
-			if !u.noColor {
-				budget -= 7
-			}
-			detail = truncateBytes(detail, budget)
-		}
-	}
-
-	// Pass detail (slot 0) to the writer; it appends worker lines on every
-	// spinner tick without inflating the Suffix byte count.
-	// Only write when detail is non-empty: calling setDetail("") would
-	// overwrite slot 0 that the pool's worker status may have set.
-	if u.spinWriter != nil && detail != "" {
+	if u.spinWriter != nil {
 		u.spinWriter.setDetail(detail)
 	}
-	u.progHasDetail = detail != ""
-
-	var suffix string
-	if !u.noColor {
-		suffix = u.output.String(label).Bold().String()
-	} else {
-		suffix = label
-	}
-
-	u.spinner.Prefix = ""
-	if suffix != "" {
-		u.spinner.Suffix = " " + suffix
-	} else {
-		u.spinner.Suffix = ""
-	}
+	u.progHasDetail = true
 }
 
 // termWidth returns the terminal column count for the spinner writer, or 0 if
