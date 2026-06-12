@@ -389,7 +389,11 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 	// synchronized write so the terminal never shows a partial frame.
 	var buf strings.Builder
 	buf.WriteString("\033[?2026h") // begin synchronized output
-	buf.Write(p)
+	// Replace the leading \r with \r\033[2K (go-to-col-0 + erase line)
+	// so that when the label shrinks between ticks the old longer text
+	// is fully cleared instead of leaving leftover characters visible.
+	buf.WriteString("\r\033[2K")
+	buf.Write(p[1:]) // p[0] is the \r we already emitted above
 	sw.buildWorkerFrameLocked(&buf)
 	buf.WriteString("\033[?2026l") // end synchronized output
 	_, err = sw.w.Write([]byte(buf.String()))
@@ -502,6 +506,12 @@ func (sw *spinnerWriter) startAnimator() {
 	done := sw.done
 	sw.mu.Unlock()
 
+	// Hide the cursor for the duration of the animation so per-tick
+	// cursor repositioning doesn't create visual noise. Restored in
+	// stopAnimator unconditionally so a crash or early-stop can't leave
+	// the cursor permanently invisible.
+	fmt.Fprint(sw.w, "\033[?25l")
+
 	go func() {
 		defer close(done)
 		t := time.NewTicker(workerFrameInterval)
@@ -542,6 +552,8 @@ func (sw *spinnerWriter) stopAnimator() {
 	}
 	close(stop)
 	<-done
+	// Restore the cursor that startAnimator hid.
+	fmt.Fprint(sw.w, "\033[?25h")
 }
 
 // setDetail is a backward-compat shim that sets a single worker slot (slot 0).
