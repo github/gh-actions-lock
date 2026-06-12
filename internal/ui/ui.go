@@ -384,13 +384,12 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 	// erase write too means two cursor-down/up sequences per 120ms tick,
 	// which is the primary cause of residual flicker on embedded terminals.
 	//
-	// Match the two specific erase sequences the library emits rather than
-	// any generic CSI prefix — frame writes that start with a color SGR
+	// Match the specific erase sequence the library emits rather than any
+	// generic CSI prefix — frame writes that start with a color SGR
 	// (e.g. \r\033[36m…) must not be misclassified as erases.
-	isErase := (len(p) == 4 && string(p) == "\r\033[K\n") ||
-		(len(p) == 3 && string(p) == "\r\033[K") ||
-		(len(p) == 5 && string(p) == "\r\033[2K\n") ||
-		(len(p) == 4 && string(p) == "\r\033[2K")
+	// briandowns.erase() always writes "\r\033[K" (4 bytes) for single-line
+	// spinners, optionally followed by "\033[F\033[K" per additional line.
+	isErase := len(p) >= 4 && p[0] == '\r' && p[1] == '\033' && p[2] == '[' && p[3] == 'K'
 	if isErase {
 		// Just pass the erase through; worker rows are still on screen
 		// from the previous frame and will be refreshed momentarily.
@@ -534,7 +533,7 @@ func (sw *spinnerWriter) startAnimator() {
 	buf.WriteString("\033[?2026h")
 	buf.WriteString("\r\033[2K")
 	buf.WriteString(sw.prefix)
-	buf.WriteString(workerSpinFrames[0]) // placeholder glyph; real tick replaces it
+	buf.WriteString(workerSpinFrames[0]) // placeholder glyph from shared braille charset; real tick replaces it
 	sw.buildWorkerFrameLocked(&buf)
 	buf.WriteString("\033[?2026l")
 	io.WriteString(sw.w, buf.String())
@@ -1282,6 +1281,12 @@ func (u *UI) renderProgress() {
 
 	detail := u.progDetail
 	if detail == "" {
+		if u.progHasDetail {
+			if u.spinWriter != nil {
+				u.spinWriter.setDetail("")
+			}
+			u.progHasDetail = false
+		}
 		return
 	}
 
