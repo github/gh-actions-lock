@@ -643,6 +643,8 @@ module ActionsPin
 
             if arg == "all"
               run_all_live
+            elsif arg && repo_nwo?(arg)
+              run_one_live(adhoc_scenario(arg))
             else
               s = find_scenario(arg)
               next unless s
@@ -761,14 +763,20 @@ module ActionsPin
             puts "  " + parts.join("  ")
 
           else
-            # Bare scenario name → run it directly
-            s = @scenarios.find { |sc| sc.name.to_s == verb }
-            if s
+            # Bare scenario name or owner/repo → run it directly
+            if repo_nwo?(verb)
               active_ctx&.teardown
               active_ctx = nil
-              run_one_live(s)
+              run_one_live(adhoc_scenario(verb))
             else
-              puts "Unknown command: #{verb}. Type \e[36mhelp\e[0m for commands."
+              s = @scenarios.find { |sc| sc.name.to_s == verb }
+              if s
+                active_ctx&.teardown
+                active_ctx = nil
+                run_one_live(s)
+              else
+                puts "Unknown command: #{verb}. Type \e[36mhelp\e[0m for commands."
+              end
             end
           end
           rescue Interrupt
@@ -795,8 +803,10 @@ module ActionsPin
         puts "Commands:"
         puts "  \e[36mlist\e[0m                  Show all scenarios (grouped by category)"
         puts "  \e[36mrun <name>\e[0m            Run scenario with live PTY output"
+        puts "  \e[36mrun <owner/repo>\e[0m     Run ad-hoc against any GitHub repo"
         puts "  \e[36mrun all\e[0m               Run all scenarios with live output"
         puts "  \e[36m<name>\e[0m                Run scenario directly (shorthand for run)"
+        puts "  \e[36m<owner/repo>\e[0m          Run ad-hoc against any GitHub repo"
         puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
         puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
         puts "  \e[36mdiff\e[0m                  Show git diff from last run"
@@ -866,6 +876,19 @@ module ActionsPin
           return nil
         end
         matches.first
+      end
+
+      # Build an ad-hoc live Scenario for any owner/repo.
+      def adhoc_scenario(nwo)
+        s = Scenario.new(:"adhoc_#{nwo.tr('/', '_')}")
+        s.live_repo(nwo)
+        s.args("--no-fix")
+        s.category = "adhoc"
+        s
+      end
+
+      def repo_nwo?(str)
+        str.match?(%r{\A[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z})
       end
 
       def run_one_live(s)
