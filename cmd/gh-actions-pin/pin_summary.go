@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/pin"
 	"github.com/github/gh-actions-pin/internal/pipeline"
@@ -15,7 +16,7 @@ import (
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool) error {
+func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, noNarrow bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -24,6 +25,9 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 
 	renderFullScanWarnings(console, pinned)
+	if !noNarrow {
+		renderVersionRefNudge(console, record)
+	}
 
 	if len(investigated) > 0 {
 		renderInvestigationAlerts(console, investigated, r)
@@ -399,4 +403,40 @@ func stripNWORefPrefix(s string) string {
 		return s
 	}
 	return rest[colonIdx+2:]
+}
+
+// renderVersionRefNudge prints an informational nudge when entries are pinned
+// with refs that are not full semver tags (v4.2.1). Full semver tags each
+// resolve to exactly one commit, making the lock comment durable across
+// re-pins.
+func renderVersionRefNudge(console *ui.UI, record *pin.Record) {
+	var nonSemverDeps []string
+	seen := map[string]bool{}
+	for _, e := range record.Entries {
+		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
+			continue
+		}
+		sv, ok := parserlock.ParseSemVer(e.Ref)
+		if ok && sv.IsFull() {
+			continue
+		}
+		key := e.NWO + "@" + e.Ref
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		nonSemverDeps = append(nonSemverDeps, key)
+	}
+	if len(nonSemverDeps) == 0 {
+		return
+	}
+	console.TermBlank()
+	console.TermWarn("%d %s pinned without a full semver tag",
+		len(nonSemverDeps), ui.Pluralize(len(nonSemverDeps), "action", "actions"))
+	for _, dep := range nonSemverDeps {
+		console.TermDetail("  %s", console.TermYellow(dep))
+	}
+	console.TermDetail("  Prefer full semver refs (e.g. v4.2.1) — each patch tag resolves to")
+	console.TermDetail("  exactly one commit, making the lock comment durable across re-pins.")
+	console.TermDetail("  Run without --no-narrow to upgrade.")
 }

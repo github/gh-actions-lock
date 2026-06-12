@@ -58,6 +58,11 @@ const (
 	// run; the operator must onboard the workflow explicitly before
 	// re-running upgrade.
 	OnboardingRequired Category = "onboarding-required"
+	// MutableRef is an informational nudge: a dependency is pinned with a
+	// ref that is not a full semver tag (e.g. v4, v3.1, main). Full semver
+	// tags (v4.2.1) each resolve to exactly one commit, making the lock
+	// comment durable across re-pins.
+	MutableRef Category = "mutable-ref"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

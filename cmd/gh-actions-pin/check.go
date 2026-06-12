@@ -13,11 +13,13 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/config"
 	"github.com/github/gh-actions-pin/internal/pin"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/pipeline"
+	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 	"github.com/github/gh-actions-pin/internal/profile"
 	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/tag"
@@ -327,6 +329,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	console.StopProgress()
 
+	// Inject info-severity findings for non-semver refs so they appear
+	// in --json output. Suppressed when --no-narrow is set (user chose
+	// this deliberately).
+	if !opts.noNarrow {
+		injectVersionRefFindings(report, record)
+	}
+
 	// Write the run log.
 	record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.hostname)}
 	if path, werr := record.WriteJSON(); werr == nil {
@@ -352,8 +361,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	// Terminal summary.
+	// Terminal summary.
 	hasInconclusive := opts.rescan && report.HasInconclusive()
-	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive)
+	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive, opts.noNarrow)
 
 	// Surface the SAML SSO authorization URL if one was captured during
 	// the run, matching cli/cli's "Authorize in your web browser:" line.
@@ -378,6 +388,60 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return errSilent
 	}
 	return nil
+}
+
+// injectVersionRefFindings appends info-severity findings for entries pinned
+// with a non-full-semver ref (v4, v3.1, main, etc.). These surface in --json
+// output so machine consumers can detect imprecise refs.
+func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
+	// Index which workflows each non-semver dep appears in.
+	type depInfo struct {
+		nwo string
+		ref string
+		wfs map[string]bool
+	}
+	seen := map[string]*depInfo{} // NWO@Ref → info
+	for _, e := range record.Entries {
+		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
+			continue
+		}
+		sv, ok := parserlock.ParseSemVer(e.Ref)
+		if ok && sv.IsFull() {
+			continue
+		}
+		key := e.NWO + "@" + e.Ref
+		di, exists := seen[key]
+		if !exists {
+			di = &depInfo{nwo: e.NWO, ref: e.Ref, wfs: map[string]bool{}}
+			seen[key] = di
+		}
+		for _, wf := range e.Workflows {
+			di.wfs[wf] = true
+		}
+	}
+	if len(seen) == 0 {
+		return
+	}
+
+	// Append a finding to each affected workflow report.
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		for _, di := range seen {
+			if !di.wfs[wr.Path] {
+				continue
+			}
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: wr.Path,
+				Category:     checks.VersionRef,
+				Severity:     checks.SeverityInfo,
+				Confidence:   checks.ConfidenceHigh,
+				Detail: fmt.Sprintf(
+					"%s@%s: prefer a full semver ref (e.g. v4.2.1) — each patch tag resolves to exactly one commit",
+					di.nwo, di.ref,
+				),
+			})
+		}
+	}
 }
 
 // cliVersion returns the gh-actions-pin extension version embedded by the Go

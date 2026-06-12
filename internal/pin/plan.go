@@ -31,6 +31,13 @@ type PlanOptions struct {
 	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
 	NoNarrow bool
 
+	// prevMutableNWO is computed once in Plan() from the global lockfile
+	// state. It holds lowercased NWOs that are already recorded with a
+	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
+	// for these to respect the user's prior precision choice and avoid
+	// creating duplicate dep entries at different ref granularities.
+	prevMutableNWO map[string]bool
+
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
 	OnProgress func(phase string)
@@ -52,6 +59,20 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	items := make([]indexedWR, len(report.Workflows))
 	for i, wr := range report.Workflows {
 		items[i] = indexedWR{idx: i, wr: wr}
+	}
+
+	// Build set of NWOs globally recorded with a non-semver ref. Checked
+	// across all workflows (not per-WF) so two workflows referencing the
+	// same action settle on the same ref precision — avoiding duplicate
+	// dep entries in the lockfile.
+	if opts.prevMutableNWO == nil && opts.Store != nil {
+		opts.prevMutableNWO = make(map[string]bool)
+		for _, d := range opts.Store.AllDeps() {
+			sv, ok := parserlock.ParseSemVer(d.Ref)
+			if !ok || !sv.IsFull() {
+				opts.prevMutableNWO[strings.ToLower(d.NWO)] = true
+			}
+		}
 	}
 
 	results := make([]planResult, len(report.Workflows))
@@ -240,22 +261,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		rewrites[k] = v
 	}
 
-	// Build set of NWOs previously locked with a mutable ref. When a dep
-	// was stored imprecisely (e.g. v4), we respect that choice on re-pin
-	// rather than narrowing to v4.2.1.
-	prevMutableNWO := make(map[string]bool)
-	if opts.Store != nil {
-		wfKey := workflowfile.KeyFromPath(wr.Path)
-		if existing, err := opts.Store.Get(wfKey); err == nil {
-			for _, d := range existing {
-				sv, ok := parserlock.ParseSemVer(d.Ref)
-				if ok && sv.IsMutable() {
-					prevMutableNWO[strings.ToLower(d.NWO)] = true
-				}
-			}
-		}
-	}
-
 	if opts.Tagger != nil {
 		for i := range deps {
 			dep := &deps[i]
@@ -292,7 +297,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			// Mutable version tags (v4, v3.1): narrow to patch release.
 			// Skip if --no-narrow or if the lockfile already recorded this
 			// dep with a mutable ref (respect prior precision choice).
-			if opts.NoNarrow || prevMutableNWO[strings.ToLower(dep.NWO)] {
+			nwoLower := strings.ToLower(dep.NWO)
+			if opts.NoNarrow || opts.prevMutableNWO[nwoLower] {
 				continue
 			}
 			sv, ok := parserlock.ParseSemVer(dep.Ref)

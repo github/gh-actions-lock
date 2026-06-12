@@ -24,6 +24,7 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 		{AncestryUnknown, "ancestry-unknown"},
 		{ReachabilityUnknown, "reachability-unknown"},
 		{OnboardingRequired, "onboarding-required"},
+		{MutableRef, "mutable-ref"},
 	}
 	for _, c := range cases {
 		if string(c.got) != c.want {
@@ -45,7 +46,7 @@ func TestCategoryIsInconclusive(t *testing.T) {
 	blocking := []Category{
 		NotPinned, ShaAsRef, RefChanged, RefMoved, Stale,
 		ImpostorCommit, MisleadingSHA, LockfileForgery,
-		Valid, RunOnly, OnboardingRequired,
+		Valid, RunOnly, OnboardingRequired, MutableRef,
 	}
 	for _, c := range blocking {
 		if c.IsInconclusive() {
