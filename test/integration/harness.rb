@@ -134,7 +134,7 @@ module ActionsPin
     class Catalog
       def self.load
         catalog_path = File.expand_path("../../scenarios/catalog.yml", __FILE__)
-        YAML.load_file(catalog_path)
+        YAML.safe_load_file(catalog_path, permitted_classes: [Symbol])
       end
     end
 
@@ -154,6 +154,7 @@ module ActionsPin
         @failures = []
         @setup_blocks = []
         @live_repo = nil
+        @needs_token = false
         @tags = []
       end
 
@@ -192,6 +193,12 @@ module ActionsPin
 
       def live_repo(nwo)
         @live_repo = nwo
+        @needs_token = true
+        self
+      end
+
+      def needs_token(val = true)
+        @needs_token = val
         self
       end
 
@@ -342,8 +349,7 @@ module ActionsPin
 
       # Batch mode: capture output, run assertions.
       def run(binary, profile_dir: nil)
-        # Live repo scenarios need auth — explicit token or gh CLI
-        if @live_repo
+        if @needs_token || @live_repo
           token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
           if token.nil? || token.empty?
             gh_token = `gh auth token 2>/dev/null`.strip
@@ -436,6 +442,7 @@ module ActionsPin
               # Read in chunks so we flush once per available burst instead
               # of once per byte. Eliminates flicker while keeping spinners
               # responsive (readpartial returns as soon as data is available).
+              prev_sync = $stdout.sync
               $stdout.sync = true
               loop do
                 chunk = reader.readpartial(4096)
@@ -445,7 +452,7 @@ module ActionsPin
             rescue Errno::EIO, EOFError
               # PTY closed — normal on macOS when process exits
             ensure
-              $stdout.sync = false
+              $stdout.sync = prev_sync
             end
             _, status = Process.wait2(pid)
             exit_code = status.exitstatus
@@ -743,7 +750,7 @@ module ActionsPin
             print "  \e[2mbuilding…\e[0m "
             $stdout.flush
             t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            ok = system("cd #{Shellwords.shellescape(repo_root)} && go build -o gh-actions-pin ./cmd/gh-actions-pin 2>&1")
+            ok = system("go", "build", "-o", "gh-actions-pin", "./cmd/gh-actions-pin", chdir: repo_root)
             elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
             if ok
               puts "\e[32m✓\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"

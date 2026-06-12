@@ -7,7 +7,7 @@ EXT_DIR := $(XDG_DATA_HOME)/gh/extensions/$(EXT_NAME)
 
 RUBY := $(shell command -v /opt/homebrew/opt/ruby/bin/ruby 2>/dev/null || echo ruby)
 
-.PHONY: build test test-integration test-shell test-live test-matrix install reinstall uninstall
+.PHONY: build test test-integration test-shell test-live test-matrix test-smoke test-stub test-real install reinstall uninstall
 
 build:
 	go build -o $(BIN) ./cmd/gh-actions-pin

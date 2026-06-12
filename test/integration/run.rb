@@ -161,10 +161,7 @@ def hydrate_assertions(s, expect, needs_token: false)
 
   # Token-required scenarios skip gracefully without a token
   if needs_token
-    s.assert_custom do |r|
-      token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || ""
-      nil if token.empty? # skip
-    end
+    s.needs_token(true)
   end
 end
 
@@ -398,10 +395,17 @@ end
 # ── Run ─────────────────────────────────────────────────────────────────
 
 tag_filter = nil
-tag_filter = "live" if ARGV.delete("--live")
-tag_filter = "stub" if ARGV.delete("--stub")
-tag_filter = "smoke" if ARGV.delete("--smoke")
-tag_filter = "real_repo" if ARGV.delete("--real")
+tag_flags = []
+tag_flags << "live"      if ARGV.delete("--live")
+tag_flags << "stub"      if ARGV.delete("--stub")
+tag_flags << "smoke"     if ARGV.delete("--smoke")
+tag_flags << "real_repo" if ARGV.delete("--real")
+
+if tag_flags.size > 1
+  $stderr.puts "Error: only one tag filter allowed, got: #{tag_flags.map { |t| "--#{t}" }.join(', ')}"
+  exit 1
+end
+tag_filter = tag_flags.first
 
 # --profile [dir] enables trace/CPU/HTTP profiling per scenario
 profile_idx = ARGV.index("--profile")
