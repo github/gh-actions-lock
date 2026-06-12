@@ -608,7 +608,8 @@ module ActionsPin
           verb = parts[0]
           arg  = parts[1]
 
-          case verb
+          begin
+            case verb
           when "quit", "exit", "q"
             active_ctx&.teardown
             break
@@ -688,6 +689,9 @@ module ActionsPin
           else
             puts "Unknown command: #{verb}. Type \e[36mlist\e[0m for scenarios."
           end
+          rescue Interrupt
+            puts "\n  \e[33m⊘ interrupted\e[0m"
+          end
         end
 
         active_ctx&.teardown
@@ -735,6 +739,8 @@ module ActionsPin
             puts "  \e[31m✗ exit #{result.exit_code}\e[0m"
           end
           puts
+        rescue Interrupt
+          puts "\n  \e[33m⊘ interrupted\e[0m\n"
         ensure
           ctx.teardown unless ENV["KEEP_FIXTURES"]
         end
