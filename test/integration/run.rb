@@ -339,6 +339,8 @@ catalog["scenarios"].each do |spec|
   live_repo = spec["live_repo"]
 
   runner.scenario(name) do |s|
+    s.category = spec["category"] || "other"
+
     # Hydrate workflow fixtures
     hydrate_workflows(s, fixtures["workflows"])
 

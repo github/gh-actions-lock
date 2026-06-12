@@ -141,6 +141,7 @@ module ActionsPin
     # ── Scenario ────────────────────────────────────────────────────────
     class Scenario
       attr_reader :name, :failures
+      attr_accessor :category
 
       def initialize(name)
         @name = name
@@ -578,25 +579,13 @@ module ActionsPin
       def shell
         puts "\e[1mgh-actions-pin integration shell\e[0m"
         puts "Binary: #{@binary}"
-        puts "Scenarios: #{@scenarios.map(&:name).join(', ')}"
-        puts
-        puts "Commands:"
-        puts "  \e[36mlist\e[0m                  Show all scenarios"
-        puts "  \e[36mrun <name>\e[0m            Run scenario with live PTY output"
-        puts "  \e[36mrun all\e[0m               Run all scenarios with live output"
-        puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
-        puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
-        puts "  \e[36mdiff\e[0m                  Show git diff from last run"
-        puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
-        puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
-        puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
-        puts "  \e[36mauth\e[0m                  Show current auth source"
-        puts "  \e[36mquit\e[0m                  Exit"
+        puts "Scenarios: #{@scenarios.size} loaded"
+        puts "Type \e[36mhelp\e[0m for commands, \e[36mlist\e[0m for scenarios."
         puts
 
         active_ctx = nil
         scenario_names = @scenarios.map { |s| s.name.to_s }
-        commands = %w[list ls run test inspect diff cd rerun pause profile auth quit exit q]
+        commands = %w[list ls run test inspect diff cd rerun pause profile auth status clear help quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
         Reline.completion_proc = proc do |input|
@@ -642,8 +631,10 @@ module ActionsPin
             break
 
           when "list", "ls"
-            @scenarios.each_with_index do |s, i|
-              puts "  \e[36m#{s.name}\e[0m"
+            grouped = @scenarios.group_by { |s| s.respond_to?(:category) ? s.category : "other" }
+            grouped.each do |cat, scenarios|
+              puts "  \e[1m#{cat}\e[0m"
+              scenarios.each { |s| puts "    \e[36m#{s.name}\e[0m" }
             end
 
           when "run"
@@ -740,25 +731,31 @@ module ActionsPin
             end
 
           when "auth"
-            gh_token = ENV["GH_TOKEN"]
-            github_token = ENV["GITHUB_TOKEN"]
-            gh_cli = `gh auth token 2>/dev/null`.strip
-            gh_user = `gh auth status 2>&1`.lines.grep(/Logged in/).first&.strip
+            show_auth
 
-            if gh_token && !gh_token.empty?
-              puts "  \e[32mGH_TOKEN\e[0m env var set (#{gh_token[0..7]}…)"
-            elsif github_token && !github_token.empty?
-              puts "  \e[32mGITHUB_TOKEN\e[0m env var set (#{github_token[0..7]}…)"
-            elsif !gh_cli.empty?
-              puts "  \e[32mgh CLI\e[0m auth (#{gh_cli[0..7]}…)"
-              puts "  #{gh_user}" if gh_user
-            else
-              puts "  \e[31mno auth\e[0m — live scenarios will be skipped"
-              puts "  Set GH_TOKEN or run: gh auth login"
-            end
+          when "clear"
+            print "\033[2J\033[H"
+
+          when "help", "?"
+            print_help
+
+          when "status"
+            parts = []
+            parts << "pause: #{@pause ? "\e[32mon\e[0m" : "\e[33moff\e[0m"}"
+            parts << "profile: #{@profile_dir ? "\e[32m#{@profile_dir}\e[0m" : "\e[33moff\e[0m"}"
+            parts << "active: #{active_ctx ? "\e[36m#{active_ctx.scenario.name}\e[0m" : "\e[90mnone\e[0m"}"
+            puts "  " + parts.join("  ")
 
           else
-            puts "Unknown command: #{verb}. Type \e[36mlist\e[0m for scenarios."
+            # Bare scenario name → run it directly
+            s = @scenarios.find { |sc| sc.name.to_s == verb }
+            if s
+              active_ctx&.teardown
+              active_ctx = nil
+              run_one_live(s)
+            else
+              puts "Unknown command: #{verb}. Type \e[36mhelp\e[0m for commands."
+            end
           end
           rescue Interrupt
             puts "\n  \e[33m⊘ interrupted\e[0m"
@@ -778,6 +775,55 @@ module ActionsPin
         puts
         puts "  \e[1m── diff ──\e[0m"
         diff.each_line { |l| puts "  #{l}" }
+      end
+
+      def print_help
+        puts "Commands:"
+        puts "  \e[36mlist\e[0m                  Show all scenarios (grouped by category)"
+        puts "  \e[36mrun <name>\e[0m            Run scenario with live PTY output"
+        puts "  \e[36mrun all\e[0m               Run all scenarios with live output"
+        puts "  \e[36m<name>\e[0m                Run scenario directly (shorthand for run)"
+        puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
+        puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
+        puts "  \e[36mdiff\e[0m                  Show git diff from last run"
+        puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
+        puts "  \e[36mrerun\e[0m                 Re-run active scenario"
+        puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
+        puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
+        puts "  \e[36mauth\e[0m                  Show current auth source"
+        puts "  \e[36mstatus\e[0m                Show current toggles"
+        puts "  \e[36mclear\e[0m                 Clear screen"
+        puts "  \e[36mhelp\e[0m                  Show this help"
+        puts "  \e[36mquit\e[0m                  Exit (or Ctrl+D)"
+      end
+
+      def show_auth
+        gh_token = ENV["GH_TOKEN"]
+        github_token = ENV["GITHUB_TOKEN"]
+        gh_cli = `gh auth token 2>/dev/null`.strip
+        gh_user = `gh auth status 2>&1`.lines.grep(/Logged in/).first&.strip
+
+        if gh_token && !gh_token.empty?
+          puts "  \e[32mGH_TOKEN\e[0m env var set (#{gh_token[0..7]}…)"
+        elsif github_token && !github_token.empty?
+          puts "  \e[32mGITHUB_TOKEN\e[0m env var set (#{github_token[0..7]}…)"
+        elsif !gh_cli.empty?
+          puts "  \e[32mgh CLI\e[0m auth (#{gh_cli[0..7]}…)"
+          puts "  #{gh_user}" if gh_user
+        else
+          puts "  \e[31mno auth\e[0m — live scenarios will be skipped"
+          puts "  Set GH_TOKEN or run: gh auth login"
+        end
+      end
+
+      def format_elapsed(seconds)
+        if seconds < 1
+          "#{(seconds * 1000).round}ms"
+        elsif seconds < 60
+          "%.1fs" % seconds
+        else
+          "%dm%02ds" % [seconds / 60, seconds % 60]
+        end
       end
 
       def find_binary
@@ -811,13 +857,15 @@ module ActionsPin
         puts "\e[1m── #{s.name} ──\e[0m\n\n"
         ctx = s.prepare(@binary, profile_dir: @profile_dir)
         keep = ENV["KEEP_FIXTURES"]
+        t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         begin
           result = ctx.run_pty
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
           puts
           if result.success?
-            puts "  \e[32m✓ exit 0\e[0m"
+            puts "  \e[32m✓ exit 0\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
           else
-            puts "  \e[31m✗ exit #{result.exit_code}\e[0m"
+            puts "  \e[31m✗ exit #{result.exit_code}\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
           end
           if @profile_dir
             pdir = File.join(@profile_dir, s.name.to_s)
