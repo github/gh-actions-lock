@@ -892,15 +892,15 @@ func (u *UI) TermWarn(msg string, args ...any) {
 	fmt.Fprintf(u.w, "%s %s\n", u.paint("3", IconWarning), fmt.Sprintf(msg, args...))
 }
 
-// TermCaution prints a red "!" summary line directly to the terminal. Use for
+// TermCaution prints a yellow "!" summary line directly to the terminal. Use for
 // non-fatal but attention-worthy signals (e.g. a commit pinned only after a
-// full-branch-scan fallback) that warrant red without the "✗ failure" framing.
+// full-branch-scan fallback) that warrant emphasis without the "✗ failure" framing.
 func (u *UI) TermCaution(msg string, args ...any) {
 	if u.headless {
 		u.headlessEmit(fmt.Sprintf(msg, args...))
 		return
 	}
-	fmt.Fprintf(u.w, "%s %s\n", u.paint("1", IconWarning), fmt.Sprintf(msg, args...))
+	fmt.Fprintf(u.w, "%s %s\n", u.paint("3", IconWarning), fmt.Sprintf(msg, args...))
 }
 
 // TermDetail prints an indented summary detail line directly to the terminal.
