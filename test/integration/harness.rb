@@ -478,6 +478,8 @@ module ActionsPin
         @binary = binary || find_binary
         @scenarios = []
         @profile_dir = nil
+        @pause = false
+        @last_dir = nil
       end
 
       def scenario(name, &block)
@@ -581,14 +583,16 @@ module ActionsPin
         puts "  \e[36mrun all\e[0m               Run all scenarios with live output"
         puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
         puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
+        puts "  \e[36mdiff\e[0m                  Show git diff from last run"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
+        puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
         puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
         puts "  \e[36mquit\e[0m                  Exit"
         puts
 
         active_ctx = nil
         scenario_names = @scenarios.map { |s| s.name.to_s }
-        commands = %w[list ls run test inspect cd rerun profile quit exit q]
+        commands = %w[list ls run test inspect diff cd rerun pause profile quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
         Reline.completion_proc = proc do |input|
@@ -719,6 +723,18 @@ module ActionsPin
               puts "Profiling \e[32mon\e[0m → #{@profile_dir}"
             end
 
+          when "pause"
+            @pause = !@pause
+            puts "Pause between scenarios: #{@pause ? "\e[32mon\e[0m" : "\e[33moff\e[0m"}"
+
+          when "diff"
+            dir = active_ctx&.dir || @last_dir
+            if dir && Dir.exist?(dir)
+              show_diff(dir)
+            else
+              puts "No scenario dir available. Run a scenario first."
+            end
+
           else
             puts "Unknown command: #{verb}. Type \e[36mlist\e[0m for scenarios."
           end
@@ -732,6 +748,15 @@ module ActionsPin
       end
 
       private
+
+      def show_diff(dir)
+        return unless dir && Dir.exist?(dir)
+        diff = `cd #{Shellwords.shellescape(dir)} && git --no-pager diff --color 2>/dev/null`.strip
+        return if diff.empty?
+        puts
+        puts "  \e[1m── diff ──\e[0m"
+        diff.each_line { |l| puts "  #{l}" }
+      end
 
       def find_binary
         repo_bin = File.expand_path("../../../gh-actions-pin", __FILE__)
@@ -763,6 +788,7 @@ module ActionsPin
       def run_one_live(s)
         puts "\e[1m── #{s.name} ──\e[0m\n\n"
         ctx = s.prepare(@binary, profile_dir: @profile_dir)
+        keep = ENV["KEEP_FIXTURES"]
         begin
           result = ctx.run_pty
           puts
@@ -775,14 +801,23 @@ module ActionsPin
             pdir = File.join(@profile_dir, s.name.to_s)
             puts "  \e[2mprofile: #{pdir}\e[0m"
           end
+          show_diff(ctx.dir)
+          @last_dir = ctx.dir
           puts
         ensure
-          ctx.teardown unless ENV["KEEP_FIXTURES"]
+          ctx.teardown unless keep
         end
       end
 
       def run_all_live
-        @scenarios.each { |s| run_one_live(s) }
+        @scenarios.each_with_index do |s, i|
+          run_one_live(s)
+          if @pause && i < @scenarios.size - 1
+            print "\e[2m  press Enter to continue (q to stop)…\e[0m "
+            input = $stdin.gets&.strip
+            break if input&.start_with?("q")
+          end
+        end
       rescue Interrupt
         puts "\n  \e[33m⊘ interrupted\e[0m"
       end
