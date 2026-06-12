@@ -52,35 +52,21 @@ type UI struct {
 	// mode so the same phase label isn't printed more than once.
 	headlessLabelStem string
 
-	// progLabel and progDetail hold the two halves of the active spinner line
-	// (the per-workflow label and the resolver's current-action detail). They
-	// are recombined and truncated to one terminal row on every update so the
-	// spinner never wraps — a wrapped spinner breaks the library's
-	// backspace-based erase and causes line jumping/leftover fragments.
-	progLabel  string
+	// progDetail holds the current resolver detail shown in worker slot 0.
 	progDetail string
-
-	// progLast holds the most recent non-empty rendered line. If an update
-	// transiently leaves both label and detail empty (e.g. detail cleared
-	// between phases before the next label is set), we keep showing progLast
-	// so the spinner never flashes a bare, label-less glyph.
-	progLast string
 
 	// progPaused is set while the spinner is temporarily halted (e.g. to let an
 	// interactive prompt own the terminal). The spinner object is retained so
 	// ResumeProgress can restart it with the same label/detail.
 	progPaused bool
 
-	// progHasDetail tracks whether the last renderProgress call rendered a
-	// second detail line. clearSpinnerLines uses this to know whether to also
-	// erase line 2 after stopping the spinner.
+	// progHasDetail tracks whether the last renderProgress call put something
+	// in worker slot 0. Used by clearSpinnerLines to know the row count.
 	progHasDetail bool
 
 	// spinWriter is a thin io.Writer wrapper set while a spinner is active.
-	// It intercepts each spinner tick write (which starts with '\r') and
-	// appends the detail line below the spinner WITHOUT putting the detail text
-	// in the spinner Suffix — keeping the suffix short so the library's
-	// byte-count wrap detection never triggers on the second line's content.
+	// It intercepts each spinner tick write and appends worker status rows
+	// below the spinner line in a single synchronized write.
 	spinWriter *spinnerWriter
 
 	// progGrace delays spinner visibility so fast runs never flicker. When
@@ -365,14 +351,12 @@ type spinnerWriter struct {
 	// stall-watcher updates aren't clobbered by printLine's restore.
 	deferredHints map[int]string
 
-	// pendingSuffix holds the label text to apply to the spinner on the
-	// next PreUpdate callback. PreUpdate fires inside s.mu (the spinner's
-	// internal lock) so the s.Suffix assignment is race-free with the
-	// spinner goroutine's concurrent read. renderProgress writes here
-	// under sw.mu instead of writing s.Suffix directly; the lock order
-	// s.mu → sw.mu is consistent with how Write is called from the
-	// spinner goroutine.
-	pendingSuffix string
+	// pendingPrefix holds the spinner Prefix (label + space, glyph
+	// appended by the library) to apply on the next PreUpdate callback.
+	// PreUpdate fires inside s.mu so the assignment is race-free with the
+	// spinner goroutine's read. Lock order: s.mu → sw.mu, consistent with
+	// how Write is called from the spinner goroutine.
+	pendingPrefix string
 }
 
 // workerSpinFrames is the rotating glyph shown next to each ACTIVE worker row
@@ -1063,23 +1047,25 @@ func (u *UI) StartProgress(label string) {
 		opts = append(opts, spinner.WithColor("fgCyan"))
 	}
 	sp := spinner.New(spinner.CharSets[11], 120*time.Millisecond, opts...)
-	// PreUpdate fires inside the spinner's internal lock (s.mu) immediately
-	// before Suffix is read for the frame. Applying pendingSuffix here
-	// makes label updates race-free: renderProgress writes pendingSuffix
-	// under sw.mu; PreUpdate reads it under s.mu→sw.mu, consistent with
-	// how Write is called from the same goroutine.
+	// PreUpdate fires inside s.mu before Prefix/Suffix are read for the
+	// frame. Applying pendingPrefix here keeps label updates race-free:
+	// callers write pendingPrefix under sw.mu; PreUpdate reads it under
+	// s.mu → sw.mu, consistent with how Write is already called.
 	sp.PreUpdate = func(s *spinner.Spinner) {
 		sw.mu.Lock()
-		s.Suffix = sw.pendingSuffix
+		s.Prefix = sw.pendingPrefix
+		s.Suffix = ""
 		sw.mu.Unlock()
 	}
 	u.spinner = sp
-	u.progLabel = ""
 	u.progDetail = ""
-	u.progLast = ""
 	u.progPaused = false
-	// No suffix — top line is just the spinning glyph. All detail lives
-	// in the worker rows below.
+	// Set the initial prefix. The goroutine hasn't started yet so
+	// writing the field directly is safe here.
+	if label != "" {
+		sw.pendingPrefix = label + " "
+		sp.Prefix = label + " "
+	}
 
 	// Defer the visible start so fast runs never flicker.
 	done := make(chan struct{})
@@ -1170,9 +1156,7 @@ func (u *UI) StopProgress() {
 		u.spinner.Stop()
 		u.spinner = nil
 		u.spinWriter = nil
-		u.progLabel = ""
 		u.progDetail = ""
-		u.progLast = ""
 		u.progPaused = false
 	}
 }
@@ -1239,9 +1223,10 @@ func (u *UI) ClearWorkerStatuses() {
 	u.spinWriter.mu.Unlock()
 }
 
-// UpdateLabel records the phase label for headless output. On a TTY the
-// spinner glyph is the only top-line indicator (static, no text suffix), so
-// label changes don't cause any redraws — all detail is in the worker rows.
+// UpdateLabel changes the spinner prefix label. On a TTY the label sits to
+// the LEFT of the glyph (cli/cli style: "Resolving actions ⠋") and is
+// updated race-free via pendingPrefix / PreUpdate. In headless mode it logs
+// a plain-text phase boundary instead.
 func (u *UI) UpdateLabel(label string) {
 	u.traceProgress("label", label)
 	if u.headless {
@@ -1250,7 +1235,18 @@ func (u *UI) UpdateLabel(label string) {
 			u.headlessEmit(stem)
 			u.headlessLabelStem = stem
 		}
+		return
 	}
+	if u.spinWriter == nil {
+		return
+	}
+	u.spinWriter.mu.Lock()
+	if label != "" {
+		u.spinWriter.pendingPrefix = label + " "
+	} else {
+		u.spinWriter.pendingPrefix = ""
+	}
+	u.spinWriter.mu.Unlock()
 }
 
 // labelStem returns the label trimmed of whitespace, used as a phase
@@ -1260,95 +1256,37 @@ func labelStem(label string) string {
 	return strings.TrimSpace(label)
 }
 
-// renderProgress recombines the label and detail into a single line that is
-// truncated to fit the terminal width (leaving room for the spinner glyph and
-// a space). The spinner glyph is anchored at the left edge (column 0): the
-// combined line is assigned to the spinner Suffix with an empty Prefix, so the
-// library always renders "\r{glyph} {label} — {detail}". Keeping the glyph
-// fixed on the left stops it from drifting as the detail text changes width.
-// The whole string is truncated to one terminal row — wrapping would defeat
-// the library's backspace-based erase and cause the line jumping the user
-// sees.
+// renderProgress updates worker slot 0 with the current detail string.
+// The label (top-line prefix) is managed separately by UpdateLabel.
 func (u *UI) renderProgress() {
 	if u.spinner == nil {
 		return
 	}
 
-	label := u.progLabel
 	detail := u.progDetail
-
-	if label == "" {
-		if u.progLast == "" {
-			return
-		}
-		label = u.progLast
-	} else {
-		u.progLast = label
+	if detail == "" {
+		return
 	}
 
+	// Worker rows animate only when text starts with "→ "; UpdateProgress
+	// callers (resolver hooks) pass plain strings. Prepend the arrow so
+	// the slot pulses instead of looking frozen.
+	if !strings.HasPrefix(detail, "→ ") {
+		detail = "→ " + detail
+	}
 	width := u.termWidth()
-	if width > 8 {
-		budget := width - 6
+	if width > 4 {
+		budget := width - 4
 		if !u.noColor {
-			budget -= 7 // bold escape open+close
+			budget -= 7
 		}
-		label = truncateBytes(label, budget)
+		detail = truncateBytes(detail, budget)
 	}
 
-	if detail != "" {
-		// Worker rows render a pulsing glyph only when the text starts
-		// with "→ "; UpdateProgress callers (resolver progress hooks)
-		// pass plain strings like "resolving foo@bar". Prepend the
-		// arrow so the slot animates instead of looking frozen.
-		if !strings.HasPrefix(detail, "→ ") {
-			detail = "→ " + detail
-		}
-		if width > 4 {
-			budget := width - 4 // "  " indent + faint open+close
-			if !u.noColor {
-				budget -= 7
-			}
-			detail = truncateBytes(detail, budget)
-		}
-	}
-
-	// Pass detail (slot 0) to the writer; it appends worker lines on every
-	// spinner tick without inflating the Suffix byte count.
-	// Only write when detail is non-empty: calling setDetail("") would
-	// overwrite slot 0 that the pool's worker status may have set.
-	if u.spinWriter != nil && detail != "" {
+	if u.spinWriter != nil {
 		u.spinWriter.setDetail(detail)
 	}
-	u.progHasDetail = detail != ""
-
-	var suffix string
-	if !u.noColor {
-		suffix = u.output.String(label).Bold().String()
-	} else {
-		suffix = label
-	}
-
-	// Store the suffix in pendingSuffix; PreUpdate applies it to s.Suffix
-	// under the spinner's internal lock, eliminating the data race between
-	// this goroutine's write and the spinner goroutine's concurrent read.
-	if u.spinWriter != nil {
-		u.spinWriter.mu.Lock()
-		if suffix != "" {
-			u.spinWriter.pendingSuffix = " " + suffix
-		} else {
-			u.spinWriter.pendingSuffix = ""
-		}
-		u.spinWriter.mu.Unlock()
-	} else {
-		// spinWriter not yet set (shouldn't happen after StartProgress,
-		// but be defensive).
-		u.spinner.Prefix = ""
-		if suffix != "" {
-			u.spinner.Suffix = " " + suffix
-		} else {
-			u.spinner.Suffix = ""
-		}
-	}
+	u.progHasDetail = true
 }
 
 // termWidth returns the terminal column count for the spinner writer, or 0 if
