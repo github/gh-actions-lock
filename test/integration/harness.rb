@@ -341,10 +341,13 @@ module ActionsPin
 
       # Batch mode: capture output, run assertions.
       def run(binary, profile_dir: nil)
-        # Live repo scenarios need a token
+        # Live repo scenarios need auth — explicit token or gh CLI
         if @live_repo
-          token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || ""
-          raise SkipScenario, "no GH_TOKEN" if token.empty?
+          token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
+          if token.nil? || token.empty?
+            gh_token = `gh auth token 2>/dev/null`.strip
+            raise SkipScenario, "no GH_TOKEN or gh auth" if gh_token.empty?
+          end
         end
 
         ctx = prepare(binary, profile_dir: profile_dir)
@@ -587,12 +590,13 @@ module ActionsPin
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
         puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
+        puts "  \e[36mauth\e[0m                  Show current auth source"
         puts "  \e[36mquit\e[0m                  Exit"
         puts
 
         active_ctx = nil
         scenario_names = @scenarios.map { |s| s.name.to_s }
-        commands = %w[list ls run test inspect diff cd rerun pause profile quit exit q]
+        commands = %w[list ls run test inspect diff cd rerun pause profile auth quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
         Reline.completion_proc = proc do |input|
@@ -733,6 +737,24 @@ module ActionsPin
               show_diff(dir)
             else
               puts "No scenario dir available. Run a scenario first."
+            end
+
+          when "auth"
+            gh_token = ENV["GH_TOKEN"]
+            github_token = ENV["GITHUB_TOKEN"]
+            gh_cli = `gh auth token 2>/dev/null`.strip
+            gh_user = `gh auth status 2>&1`.lines.grep(/Logged in/).first&.strip
+
+            if gh_token && !gh_token.empty?
+              puts "  \e[32mGH_TOKEN\e[0m env var set (#{gh_token[0..7]}…)"
+            elsif github_token && !github_token.empty?
+              puts "  \e[32mGITHUB_TOKEN\e[0m env var set (#{github_token[0..7]}…)"
+            elsif !gh_cli.empty?
+              puts "  \e[32mgh CLI\e[0m auth (#{gh_cli[0..7]}…)"
+              puts "  #{gh_user}" if gh_user
+            else
+              puts "  \e[31mno auth\e[0m — live scenarios will be skipped"
+              puts "  Set GH_TOKEN or run: gh auth login"
             end
 
           else

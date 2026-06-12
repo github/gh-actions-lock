@@ -353,9 +353,22 @@ catalog["scenarios"].each do |spec|
     # CLI flags
     s.args(*flags) unless flags.empty?
 
-    # Token-required scenarios pass the real token (or skip)
+    # Token-required scenarios: use explicit GH_TOKEN if set, otherwise
+    # fall back to gh CLI auth (go-gh resolves this automatically).
+    # Only skip if neither is available.
     if needs_token
-      s.env("GH_TOKEN" => ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || "")
+      token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
+      if token
+        s.env("GH_TOKEN" => token)
+      else
+        # Check gh CLI auth — the binary will use this automatically,
+        # but we need to verify it exists so we can skip gracefully.
+        gh_token = `gh auth token 2>/dev/null`.strip
+        if gh_token.empty?
+          # No auth at all — scenario will be skipped at run time
+        end
+        # Don't set GH_TOKEN — let go-gh resolve from gh CLI config
+      end
     end
 
     # Live repo scenarios clone and run against a real repo
