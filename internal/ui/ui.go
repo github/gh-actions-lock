@@ -371,6 +371,22 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 		return
 	}
 
+	// briandowns calls Write twice per tick:
+	//   1. erase:  \r\033[K          — wipe the previous frame
+	//   2. frame:  \r{glyph}{prefix} — paint the new frame
+	//
+	// Only render worker rows on the frame write. Rendering them on the
+	// erase write too means two cursor-down/up sequences per 120ms tick,
+	// which is the primary cause of residual flicker on embedded terminals.
+	isErase := len(p) >= 3 && p[1] == '\033' && p[2] == '['
+	if isErase {
+		// Just pass the erase through; worker rows are still on screen
+		// from the previous frame and will be refreshed momentarily.
+		n, err = sw.w.Write(p)
+		n = len(p)
+		return
+	}
+
 	// Combine the spinner frame and worker rows into a single
 	// synchronized write so the terminal never shows a partial frame.
 	var buf strings.Builder
