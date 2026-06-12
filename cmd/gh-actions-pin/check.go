@@ -326,7 +326,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if path, werr := record.WriteJSON(); werr == nil {
 		defer func() {
 			console.TermBlank()
-			console.TermNeutral("Resolution record: %s", path)
+			console.TermDetail("Resolution record: %s", path)
 		}()
 	}
 
