@@ -429,14 +429,16 @@ module ActionsPin
         begin
           PTY.spawn("/bin/bash", "-c", shell_cmd) do |reader, _writer, pid|
             begin
-              # Unbuffer both sides so spinners animate in real time.
-              reader.sync = true
+              # Read in chunks so we flush once per available burst instead
+              # of once per byte. Eliminates flicker while keeping spinners
+              # responsive (readpartial returns as soon as data is available).
               $stdout.sync = true
-              reader.each_char do |ch|
-                $stdout.print ch
-                combined << ch
+              loop do
+                chunk = reader.readpartial(4096)
+                $stdout.write chunk
+                combined << chunk
               end
-            rescue Errno::EIO
+            rescue Errno::EIO, EOFError
               # PTY closed — normal on macOS when process exits
             ensure
               $stdout.sync = false
