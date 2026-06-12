@@ -260,9 +260,9 @@ module ActionsPin
       # ── Execution ──────────────────────────────────────────────────
 
       # Prepare fixtures without running. Returns a Context.
-      def prepare(binary)
+      def prepare(binary, profile_dir: nil)
         if @live_repo
-          return prepare_live(binary)
+          return prepare_live(binary, profile_dir: profile_dir)
         end
 
         dir = Dir.mktmpdir("actions-pin-test-")
@@ -300,13 +300,20 @@ module ActionsPin
         @setup_blocks.each { |b| b.call(dir) }
         env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
 
-        Context.new(dir: dir, env: env, cmd: [binary] + @args,
+        cmd = [binary] + @args
+        if profile_dir
+          pdir = File.join(profile_dir, @name.to_s)
+          FileUtils.mkdir_p(pdir)
+          cmd += ["--profile", pdir]
+        end
+
+        Context.new(dir: dir, env: env, cmd: cmd,
                     server: server, scenario: self)
       end
 
       # Prepare a live repo scenario: shallow-clone the real repo and run
       # against its actual workflows. No stub server — hits real GitHub API.
-      def prepare_live(binary)
+      def prepare_live(binary, profile_dir: nil)
         dir = Dir.mktmpdir("actions-pin-live-")
         nwo = @live_repo
 
@@ -321,19 +328,26 @@ module ActionsPin
         @setup_blocks.each { |b| b.call(dir) }
         env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
 
-        Context.new(dir: dir, env: env, cmd: [binary] + @args,
+        cmd = [binary] + @args
+        if profile_dir
+          pdir = File.join(profile_dir, @name.to_s)
+          FileUtils.mkdir_p(pdir)
+          cmd += ["--profile", pdir]
+        end
+
+        Context.new(dir: dir, env: env, cmd: cmd,
                     server: nil, scenario: self, live_repo: nwo)
       end
 
       # Batch mode: capture output, run assertions.
-      def run(binary)
+      def run(binary, profile_dir: nil)
         # Live repo scenarios need a token
         if @live_repo
           token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || ""
           raise SkipScenario, "no GH_TOKEN" if token.empty?
         end
 
-        ctx = prepare(binary)
+        ctx = prepare(binary, profile_dir: profile_dir)
         begin
           result = ctx.run_captured
           @assertions.each { |a| a.call(result) }
@@ -456,10 +470,12 @@ module ActionsPin
     # ── Runner ──────────────────────────────────────────────────────────
     class Runner
       attr_reader :scenarios
+      attr_accessor :profile_dir
 
       def initialize(binary: nil)
         @binary = binary || find_binary
         @scenarios = []
+        @profile_dir = nil
       end
 
       def scenario(name, &block)
@@ -496,7 +512,7 @@ module ActionsPin
         to_run.each do |s|
           print "  #{s.name} ... "
           begin
-            s.run(@binary)
+            s.run(@binary, profile_dir: @profile_dir)
             if s.failures.empty?
               puts "\e[32m✓\e[0m"
               passed += 1
@@ -564,12 +580,13 @@ module ActionsPin
         puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
         puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
+        puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
         puts "  \e[36mquit\e[0m                  Exit"
         puts
 
         active_ctx = nil
         scenario_names = @scenarios.map { |s| s.name.to_s }
-        commands = %w[list ls run test inspect cd rerun quit exit q]
+        commands = %w[list ls run test inspect cd rerun profile quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
         Reline.completion_proc = proc do |input|
@@ -638,7 +655,7 @@ module ActionsPin
           when "inspect"
             s = find_scenario(arg)
             next unless s
-            ctx = s.prepare(@binary)
+            ctx = s.prepare(@binary, profile_dir: @profile_dir)
             puts "\e[1mScenario:\e[0m #{s.name}"
             puts "\e[1mDir:\e[0m      #{ctx.dir}"
             puts "\e[1mCmd:\e[0m      #{ctx.cmd_string}"
@@ -659,7 +676,7 @@ module ActionsPin
             active_ctx&.teardown
             s = find_scenario(arg)
             next unless s
-            ctx = s.prepare(@binary)
+            ctx = s.prepare(@binary, profile_dir: @profile_dir)
             active_ctx = ctx
             puts "\e[1mPrepared:\e[0m #{s.name}"
             puts "\e[1mDir:\e[0m      #{ctx.dir}"
@@ -684,6 +701,20 @@ module ActionsPin
               puts
             else
               puts "No active scenario. Use \e[36mrun <name>\e[0m first."
+            end
+
+          when "profile"
+            if arg.nil? || arg == "on"
+              @profile_dir = File.expand_path("profiles")
+              FileUtils.mkdir_p(@profile_dir)
+              puts "Profiling \e[32mon\e[0m → #{@profile_dir}"
+            elsif arg == "off"
+              @profile_dir = nil
+              puts "Profiling \e[33moff\e[0m"
+            else
+              @profile_dir = File.expand_path(arg)
+              FileUtils.mkdir_p(@profile_dir)
+              puts "Profiling \e[32mon\e[0m → #{@profile_dir}"
             end
 
           else
@@ -729,7 +760,7 @@ module ActionsPin
 
       def run_one_live(s)
         puts "\e[1m── #{s.name} ──\e[0m\n\n"
-        ctx = s.prepare(@binary)
+        ctx = s.prepare(@binary, profile_dir: @profile_dir)
         begin
           result = ctx.run_pty
           puts
@@ -737,6 +768,10 @@ module ActionsPin
             puts "  \e[32m✓ exit 0\e[0m"
           else
             puts "  \e[31m✗ exit #{result.exit_code}\e[0m"
+          end
+          if @profile_dir
+            pdir = File.join(@profile_dir, s.name.to_s)
+            puts "  \e[2mprofile: #{pdir}\e[0m"
           end
           puts
         rescue Interrupt
@@ -758,7 +793,7 @@ module ActionsPin
         to_run.each do |s|
           print "  #{s.name} ... "
           begin
-            s.run(@binary)
+            s.run(@binary, profile_dir: @profile_dir)
             if s.failures.empty?
               puts "\e[32m✓\e[0m"
               passed += 1

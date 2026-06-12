@@ -388,6 +388,14 @@ tag_filter = "stub" if ARGV.delete("--stub")
 tag_filter = "smoke" if ARGV.delete("--smoke")
 tag_filter = "real_repo" if ARGV.delete("--real")
 
+# --profile [dir] enables trace/CPU/HTTP profiling per scenario
+profile_idx = ARGV.index("--profile")
+if profile_idx
+  ARGV.delete_at(profile_idx)
+  runner.profile_dir = File.expand_path(ARGV.delete_at(profile_idx) || "profiles")
+  FileUtils.mkdir_p(runner.profile_dir)
+end
+
 if ARGV.delete("--shell") || ARGV.delete("-i")
   runner.shell
 elsif ARGV.delete("--matrix")
