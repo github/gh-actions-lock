@@ -2,13 +2,17 @@
 
 # Integration scenarios for gh-actions-pin.
 #
-# Each scenario creates a temporary repo with workflow files and runs the
-# binary against it. Some scenarios use a stub HTTP server to simulate
-# GitHub API behavior (SSO enforcement, network errors, etc.).
+# Scenarios are defined in the shared catalog (test/scenarios/catalog.yml)
+# and hydrated here with stub server wiring and custom assertions. Both
+# the Ruby integration harness and the Go test suite consume the same
+# catalog, ensuring the scenario matrix stays in sync.
 #
 # Run:
 #   make build && ruby test/integration/run.rb
-#   ruby test/integration/run.rb sso   # filter by name
+#   ruby test/integration/run.rb sso          # filter by name
+#   ruby test/integration/run.rb --live       # live repo tests only
+#   ruby test/integration/run.rb --stub       # stub tests only
+#   ruby test/integration/run.rb --smoke      # smoke tests only
 
 require_relative "harness"
 
@@ -40,15 +44,6 @@ def multi_action_workflow(name:, actions:)
         runs-on: ubuntu-latest
         steps:
     #{steps}
-  YAML
-end
-
-# Standard lockfile entry for a pinned action.
-def lockfile_entry(workflow:, deps:)
-  lines = deps.map { |d| "        - '#{d}'" }.join("\n")
-  <<~YAML
-        '#{workflow}':
-    #{lines}
   YAML
 end
 
@@ -90,9 +85,88 @@ def sso_403_all(srv)
   end
 end
 
+# Register a catch-all that returns the given status with a JSON body.
+def error_all(srv, status, body)
+  [:GET, :POST].each do |method|
+    srv.on(method, /.*/) do |_req|
+      [
+        status,
+        { "Content-Type" => "application/json" },
+        JSON.generate(body)
+      ]
+    end
+  end
+end
+
+# Hydrate a scenario from catalog workflow fixtures.
+def hydrate_workflows(s, workflows)
+  return if workflows.nil? || workflows.empty?
+
+  workflows.each do |path, spec|
+    if spec.is_a?(Hash) && spec["raw"]
+      s.workflow(path, spec["raw"])
+    elsif spec.is_a?(Hash) && spec["actions"]
+      if spec["actions"].size == 1
+        s.workflow(path, simple_workflow(name: spec["name"] || "CI", action: spec["actions"].first))
+      else
+        s.workflow(path, multi_action_workflow(name: spec["name"] || "CI", actions: spec["actions"]))
+      end
+    end
+  end
+end
+
+# Hydrate assertions from catalog expect block.
+def hydrate_assertions(s, expect, needs_token: false)
+  if expect["exit"]
+    if expect["exit"] == 0
+      s.assert_success
+    else
+      s.assert_failure
+    end
+  end
+
+  if expect["exit_any"]
+    s.assert_custom do |r|
+      unless expect["exit_any"].include?(r.exit_code)
+        s.failures << "expected exit #{expect['exit_any'].inspect}, got #{r.exit_code}:\n#{r.output}"
+      end
+    end
+  end
+
+  if expect["output_contains"]
+    s.assert_output_contains(*expect["output_contains"])
+  end
+
+  if expect["output_excludes"]
+    s.assert_output_excludes(*expect["output_excludes"])
+  end
+
+  if expect["stdout_is_json"]
+    s.assert_custom do |r|
+      begin
+        JSON.parse(r.stdout)
+      rescue JSON::ParserError => e
+        s.failures << "stdout is not valid JSON: #{e.message}\n#{r.stdout.slice(0, 200)}"
+      end
+    end
+  end
+
+  if expect["stdout_contains"]
+    s.assert_stdout_contains(*expect["stdout_contains"])
+  end
+
+  if expect["lockfile_exists"]
+    s.assert_lockfile_exists
+  end
+
+  # Token-required scenarios skip gracefully without a token
+  if needs_token
+    s.needs_token(true)
+  end
+end
+
 # ── Fixture data ────────────────────────────────────────────────────────
 
-# Real-ish SHA stubs (40 hex chars).
 CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 SETUP_GO_SHA = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA    = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
@@ -105,319 +179,246 @@ SSO_ERROR_BODY = {
 
 SSO_HEADER_VALUE = 'required; url=https://github.com/orgs/actions/sso?authorization_request=ABCDEF123'
 
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Happy path — all actions resolve and pin successfully
-# ════════════════════════════════════════════════════════════════════════
+# ── Lockfile templates ──────────────────────────────────────────────────
 
-runner.scenario(:happy_path) do |s|
-  s.workflow "ci.yml", simple_workflow(name: "CI", action: "actions/checkout@v4")
-
-  # The binary needs real GitHub API access for this scenario.
-  # Skip if no token is available.
-  s.env("GH_TOKEN" => ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || "")
-
-  s.assert_custom do |r|
-    token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || ""
-    if token.empty?
-      # Can't run against real API without a token — skip gracefully.
-      nil
-    else
-      s.failures << "expected success" unless r.success?
-    end
-  end
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Already pinned, all valid — quick lockfile trust path
-# ════════════════════════════════════════════════════════════════════════
-
-runner.scenario(:already_pinned_all_valid) do |s|
-  # This scenario needs a real GitHub API with valid lockfile entries.
-  # The lockfile SHAs must match what the API returns, so it only works
-  # against the live API with a valid token. Skip otherwise.
-  s.workflow "ci.yml", simple_workflow(name: "CI", action: "actions/checkout@v4")
-
-  s.env("GH_TOKEN" => ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || "")
-
-  s.assert_custom do |r|
-    token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"] || ""
-    if token.empty?
-      nil # skip — no token
-    elsif !r.success?
-      # Even without a lockfile, first run should succeed by pinning
-      s.failures << "expected success, got exit #{r.exit_code}:\n#{r.output}"
-    end
-  end
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: SSO failure — actions org requires SAML authorization
-# ════════════════════════════════════════════════════════════════════════
-#
-# This is the core scenario from this session: a token lacking SSO
-# authorization for the "actions" org gets 403s with X-GitHub-SSO header.
-# The output should:
-#   - Use ✗ (error icon) for unresolved actions
-#   - Show the clean reason without "resolution failed:" prefix
-#   - Dedup identical SSO errors across multiple actions
-#   - Surface "Authorize in your web browser:  <url>" with the real
-#     authorization_request= URL from the X-GitHub-SSO header
-
-runner.scenario(:sso_auth_failure) do |s|
-  # Multiple actions from the same org — all will fail with SSO
-  s.workflow "ci.yml", multi_action_workflow(
-    name: "CI",
-    actions: [
-      "actions/checkout@v4",
-      "actions/setup-go@v5",
-      "actions/cache@v4"
-    ]
-  )
-
-  s.stub_server do |srv|
-    sso_403_all(srv)
-  end
-
-  s.assert_failure
-  s.assert_output_contains(
-    "could not be resolved",                           # error header
-    "actions/checkout",                                 # action listed
-    "actions/setup-go",                                 # action listed
-    "actions/cache",                                    # action listed
-    "SAML enforcement",                                 # clean reason from API body
-  )
-  s.assert_output_excludes(
-    "resolution failed:",                               # prefix should be stripped
-  )
-  # The SSO authorization URL from X-GitHub-SSO header should be surfaced
-  s.assert_output_contains(
-    "Authorize in your web browser",
-  )
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: SSO failure deduplication — many actions, same root cause
-# ════════════════════════════════════════════════════════════════════════
-#
-# 11 actions from the same org all fail with SSO enforcement. The output
-# should show the SSO reason exactly once, not 11 times.
-
-runner.scenario(:sso_dedup) do |s|
-  actions = %w[
-    actions/checkout@v4
-    actions/setup-go@v5
-    actions/cache@v4
-    actions/upload-artifact@v4
-    actions/download-artifact@v4
-    actions/setup-python@v5
-    actions/setup-dotnet@v4
-    actions/setup-node@v4
-    actions/create-github-app-token@v1
-    actions/github-script@v7
-    actions/stale@v9
-  ]
-
-  s.workflow "ci.yml", multi_action_workflow(name: "CI", actions: actions[0..5])
-  s.workflow "deploy.yml", multi_action_workflow(name: "Deploy", actions: actions[4..10])
-
-  s.stub_server do |srv|
-    sso_403_all(srv)
-  end
-
-  s.env("GH_TOKEN" => "gho_fake_sso_test_token")
-
-  s.assert_failure
-  # Reason should appear exactly once (deduped)
-  s.assert_custom do |r|
-    count = r.output.scan("SAML enforcement").size
-    if count > 1
-      s.failures << "SSO reason appeared #{count} times, expected 1 (dedup failed)\n#{r.output}"
-    elsif count == 0
-      s.failures << "SSO reason not found in output:\n#{r.output}"
-    end
-  end
-
-  # All actions should still be listed
-  s.assert_output_contains("actions/checkout", "actions/stale", "actions/github-script")
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Mixed failures — SSO + repo not found
-# ════════════════════════════════════════════════════════════════════════
-#
-# One action fails with SSO, another with a different error. They should
-# NOT be deduped together.
-
-runner.scenario(:mixed_failures) do |s|
-  s.workflow "ci.yml", multi_action_workflow(
-    name: "CI",
-    actions: [
-      "actions/checkout@v4",
-      "octo-org/private-action@v1"
-    ]
-  )
-
-  s.stub_server do |srv|
-    # GraphQL always returns SSO 403 (the resolve path starts with GQL)
-    srv.on(:POST, /.*/) do |_req|
-      [
-        403,
-        {
-          "Content-Type" => "application/json",
-          "X-GitHub-SSO" => SSO_HEADER_VALUE
-        },
-        JSON.generate(SSO_ERROR_BODY)
-      ]
-    end
-
-    # actions/* routes → SSO 403
-    srv.on(:GET, %r{/repos/actions/}) do |_req|
-      [
-        403,
-        {
-          "Content-Type" => "application/json",
-          "X-GitHub-SSO" => SSO_HEADER_VALUE
-        },
-        JSON.generate(SSO_ERROR_BODY)
-      ]
-    end
-
-    # octo-org/* routes → 404 not found
-    srv.on(:GET, %r{/repos/octo-org/}) do |_req|
-      [
-        404,
-        { "Content-Type" => "application/json" },
-        JSON.generate({ message: "Not Found" })
-      ]
-    end
-  end
-
-  s.env("GH_TOKEN" => "gho_fake_mixed_test_token")
-
-  s.assert_failure
-  s.assert_output_contains(
-    "could not be resolved",
-    "actions/checkout",
-    "octo-org/private-action",
-  )
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Rescan with inconclusive — should fail, not show "All valid"
-# ════════════════════════════════════════════════════════════════════════
-#
-# When --rescan is used and API calls fail (e.g. SSO), the reachability
-# check is inconclusive. The run should exit non-zero and NOT print
-# "✓ All N workflows valid".
-
-runner.scenario(:rescan_inconclusive_fails) do |s|
-  s.workflow "ci.yml", simple_workflow(name: "CI", action: "actions/checkout@v4")
-
-  s.lockfile build_lockfile(
-    workflows: {
-      ".github/workflows/ci.yml" => [
-        "actions/checkout@v4:sha1-#{CHECKOUT_SHA}"
-      ]
-    },
-    dependencies: {
-      "actions/checkout@v4:sha1-#{CHECKOUT_SHA}" => {
-        "tag" => "v4",
-        "branch" => "main",
-        "commit" => "sha1-#{CHECKOUT_SHA}",
-        "owner_id" => "44036562",
-        "repo_id" => "197814629"
+LOCKFILE_TEMPLATES = {
+  "pinned_checkout" => -> {
+    build_lockfile(
+      workflows: {
+        ".github/workflows/ci.yml" => [
+          "actions/checkout@v4:sha1-#{CHECKOUT_SHA}"
+        ]
+      },
+      dependencies: {
+        "actions/checkout@v4:sha1-#{CHECKOUT_SHA}" => {
+          "tag" => "v4",
+          "branch" => "main",
+          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "owner_id" => "44036562",
+          "repo_id" => "197814629"
+        }
       }
-    }
-  )
+    )
+  },
+  "future_version" => -> {
+    <<~YAML
+      # This file is machine-generated by `gh actions-pin`.
+      version: 'v99.99.99'
+      workflows: {}
+      dependencies: {}
+    YAML
+  }
+}
 
-  s.args("--rescan")
-
-  s.stub_server do |srv|
-    sso_403_all(srv)
-  end
-
-  s.env("GH_TOKEN" => "gho_fake_rescan_token")
-
-  s.assert_failure
-  s.assert_output_excludes("All", "valid")
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Unresolved uses error icon (✗), not warning (!)
-# ════════════════════════════════════════════════════════════════════════
-
-runner.scenario(:unresolved_uses_error_icon) do |s|
-  s.workflow "ci.yml", simple_workflow(name: "CI", action: "actions/checkout@v4")
-
-  s.stub_server do |srv|
-    sso_403_all(srv)
-  end
-
-  s.env("GH_TOKEN" => "gho_fake_icon_test_token")
-
-  # In headless mode (non-TTY), icons are stripped. We verify the error
-  # semantics by checking for the error-level "could not be resolved"
-  # phrasing (TermError) rather than the ✗ glyph.
-  s.assert_output_contains("could not be resolved")
-  s.assert_failure
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Resolution record path is shown
-# ════════════════════════════════════════════════════════════════════════
-
-runner.scenario(:resolution_record_shown) do |s|
-  s.workflow "ci.yml", simple_workflow(name: "CI", action: "actions/checkout@v4")
-
-  s.stub_server do |srv|
-    sso_403_all(srv)
-  end
-
-  s.env("GH_TOKEN" => "gho_fake_record_test_token")
-
-  # Should show the resolution record path with - prefix (skip icon)
-  s.assert_output_contains("Resolution record:")
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: No workflow files found — graceful error
-# ════════════════════════════════════════════════════════════════════════
-
-runner.scenario(:no_workflows) do |s|
-  # Don't add any workflow files — empty repo
-  s.env("GH_TOKEN" => "gho_fake_no_workflows_token")
-
-  s.assert_failure
-end
-
-# ════════════════════════════════════════════════════════════════════════
-# SCENARIO: Prefix stripping — "resolution failed: NWO@ref:" cleaned
-# ════════════════════════════════════════════════════════════════════════
+# ── Stub server wiring per scenario ────────────────────────────────────
 #
-# The raw error reason from the resolver wraps the message in
-# "resolution failed: actions/checkout@v4.3.1: <actual error>".
-# The CLI should strip these prefixes and show only the clean error.
-# This is validated by the unit tests, but we confirm end-to-end here.
+# Maps scenario names to blocks that wire up the stub server. Scenarios
+# not listed here either use no stub or rely on catalog-level config.
 
-runner.scenario(:prefix_stripping) do |s|
-  s.workflow "ci.yml", simple_workflow(name: "CI", action: "actions/checkout@v4")
+STUB_WIRING = {
+  # SSO scenarios: catch-all 403 with X-GitHub-SSO header
+  sso_auth_failure: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+  },
+  sso_dedup: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_sso_test_token")
+  },
+  mixed_failures: ->(s) {
+    s.stub_server do |srv|
+      srv.on(:POST, /.*/) do |_req|
+        [403, { "Content-Type" => "application/json", "X-GitHub-SSO" => SSO_HEADER_VALUE },
+         JSON.generate(SSO_ERROR_BODY)]
+      end
+      srv.on(:GET, %r{/repos/actions/}) do |_req|
+        [403, { "Content-Type" => "application/json", "X-GitHub-SSO" => SSO_HEADER_VALUE },
+         JSON.generate(SSO_ERROR_BODY)]
+      end
+      srv.on(:GET, %r{/repos/octo-org/}) do |_req|
+        [404, { "Content-Type" => "application/json" }, JSON.generate({ message: "Not Found" })]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_mixed_test_token")
+  },
+  rescan_inconclusive_fails: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_rescan_token")
+  },
 
-  s.stub_server do |srv|
-    sso_403_all(srv)
+  # Error icon / record / prefix scenarios: SSO 403 as a reliable failure trigger
+  unresolved_uses_error_icon: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_icon_test_token")
+  },
+  resolution_record_shown: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_record_test_token")
+  },
+  prefix_stripping: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_prefix_test_token")
+  },
+
+  # API error scenarios
+  api_404_not_found: ->(s) {
+    s.stub_server do |srv|
+      error_all(srv, 404, { message: "Not Found" })
+    end
+    s.env("GH_TOKEN" => "gho_fake_404_token")
+  },
+  api_rate_limit_429: ->(s) {
+    s.stub_server do |srv|
+      [:GET, :POST].each do |method|
+        srv.on(method, /.*/) do |_req|
+          [429, {
+            "Content-Type" => "application/json",
+            "Retry-After" => "1",
+            "X-RateLimit-Remaining" => "0",
+            "X-RateLimit-Reset" => (Time.now.to_i + 2).to_s
+          }, JSON.generate({ message: "API rate limit exceeded" })]
+        end
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_ratelimit_token")
+  },
+  api_server_error_500: ->(s) {
+    s.stub_server do |srv|
+      error_all(srv, 500, { message: "Internal Server Error" })
+    end
+    s.env("GH_TOKEN" => "gho_fake_500_token")
+  },
+  api_unauthorized_401: ->(s) {
+    s.stub_server do |srv|
+      error_all(srv, 401, { message: "Bad credentials" })
+    end
+    s.env("GH_TOKEN" => "gho_fake_401_token")
+  },
+
+  # JSON output scenarios (stub — deterministic output)
+  json_output_findings: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_json_token")
+  },
+  no_fix_json_combined: ->(s) {
+    s.stub_server { |srv| sso_403_all(srv) }
+    s.env("GH_TOKEN" => "gho_fake_json_combined_token")
+  },
+}
+
+# ── Custom assertion wiring ─────────────────────────────────────────────
+
+CUSTOM_ASSERTIONS = {
+  sso_dedup: ->(s) {
+    s.assert_custom do |r|
+      count = r.output.scan("SAML enforcement").size
+      if count > 1
+        s.failures << "SSO reason appeared #{count} times, expected 1 (dedup failed)\n#{r.output}"
+      elsif count == 0
+        s.failures << "SSO reason not found in output:\n#{r.output}"
+      end
+    end
+  },
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Load and hydrate scenarios from the shared catalog
+# ═══════════════════════════════════════════════════════════════════════
+
+catalog = ActionsPin::Integration::Catalog.load
+
+catalog["scenarios"].each do |spec|
+  name = spec["name"].to_sym
+  needs_token = spec["needs_token"]
+  needs_stub = spec["needs_stub"]
+  fixtures = spec["fixtures"] || {}
+  expect = spec["expect"] || {}
+  flags = spec["flags"] || []
+  live_repo = spec["live_repo"]
+
+  runner.scenario(name) do |s|
+    s.category = spec["category"] || "other"
+
+    # Hydrate workflow fixtures
+    hydrate_workflows(s, fixtures["workflows"])
+
+    # Hydrate lockfile
+    if fixtures["lockfile"]
+      s.lockfile(fixtures["lockfile"])
+    elsif fixtures["lockfile_template"]
+      tmpl = LOCKFILE_TEMPLATES[fixtures["lockfile_template"]]
+      s.lockfile(tmpl.call) if tmpl
+    end
+
+    # CLI flags
+    s.args(*flags) unless flags.empty?
+
+    # Token-required scenarios: use explicit GH_TOKEN if set, otherwise
+    # fall back to gh CLI auth (go-gh resolves this automatically).
+    # Only skip if neither is available.
+    if needs_token
+      token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
+      if token
+        s.env("GH_TOKEN" => token)
+      else
+        # Check gh CLI auth — the binary will use this automatically,
+        # but we need to verify it exists so we can skip gracefully.
+        gh_token = `gh auth token 2>/dev/null`.strip
+        if gh_token.empty?
+          # No auth at all — scenario will be skipped at run time
+        end
+        # Don't set GH_TOKEN — let go-gh resolve from gh CLI config
+      end
+    end
+
+    # Live repo scenarios clone and run against a real repo
+    if live_repo
+      s.live_repo(live_repo)
+    end
+
+    # Stub server wiring
+    if STUB_WIRING[name]
+      STUB_WIRING[name].call(s)
+    elsif needs_stub && !STUB_WIRING[name]
+      # Default stub: SSO 403 (reliable failure trigger)
+      s.stub_server { |srv| sso_403_all(srv) }
+      s.env("GH_TOKEN" => "gho_fake_default_stub_token")
+    end
+
+    # Custom assertions
+    CUSTOM_ASSERTIONS[name]&.call(s)
+
+    # Standard assertions from catalog
+    hydrate_assertions(s, expect, needs_token: needs_token)
   end
-
-  s.env("GH_TOKEN" => "gho_fake_prefix_test_token")
-
-  s.assert_failure
-  # The "resolution failed:" wrapper should NOT appear in output
-  s.assert_output_excludes("resolution failed:")
-  # The clean error should appear
-  s.assert_output_contains("SAML enforcement")
 end
 
 # ── Run ─────────────────────────────────────────────────────────────────
+
+tag_filter = nil
+tag_flags = []
+tag_flags << "live"      if ARGV.delete("--live")
+tag_flags << "stub"      if ARGV.delete("--stub")
+tag_flags << "smoke"     if ARGV.delete("--smoke")
+tag_flags << "real_repo" if ARGV.delete("--real")
+
+if tag_flags.size > 1
+  $stderr.puts "Error: only one tag filter allowed, got: #{tag_flags.map { |t| "--#{t}" }.join(', ')}"
+  exit 1
+end
+tag_filter = tag_flags.first
+
+# --profile [dir] enables trace/CPU/HTTP profiling per scenario
+profile_idx = ARGV.index("--profile")
+if profile_idx
+  ARGV.delete_at(profile_idx)
+  runner.profile_dir = File.expand_path(ARGV.delete_at(profile_idx) || "profiles")
+  FileUtils.mkdir_p(runner.profile_dir)
+end
+
 if ARGV.delete("--shell") || ARGV.delete("-i")
   runner.shell
+elsif ARGV.delete("--matrix")
+  runner.print_matrix(catalog)
 else
-  runner.run(filter: ARGV[0])
+  runner.run(filter: ARGV[0], tag_filter: tag_filter, catalog: catalog)
 end

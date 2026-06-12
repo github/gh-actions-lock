@@ -15,6 +15,8 @@ require "json"
 require "open3"
 require "openssl"
 require "pty"
+require "reline"
+require "set"
 require "shellwords"
 require "tmpdir"
 require "webrick"
@@ -23,6 +25,9 @@ require "yaml"
 
 module ActionsPin
   module Integration
+    # Raised to skip a scenario gracefully (e.g. missing token for live tests).
+    class SkipScenario < StandardError; end
+
     # ── Result ──────────────────────────────────────────────────────────
     Result = Struct.new(:stdout, :stderr, :status, :dir, keyword_init: true) do
       def exit_code; status.exitstatus; end
@@ -124,9 +129,19 @@ module ActionsPin
       end
     end
 
+    # ── Catalog ─────────────────────────────────────────────────────────
+    # Loads the shared scenario catalog from test/scenarios/catalog.yml.
+    class Catalog
+      def self.load
+        catalog_path = File.expand_path("../../scenarios/catalog.yml", __FILE__)
+        YAML.safe_load_file(catalog_path, permitted_classes: [Symbol])
+      end
+    end
+
     # ── Scenario ────────────────────────────────────────────────────────
     class Scenario
       attr_reader :name, :failures
+      attr_accessor :category
 
       def initialize(name)
         @name = name
@@ -138,6 +153,9 @@ module ActionsPin
         @assertions = []
         @failures = []
         @setup_blocks = []
+        @live_repo = nil
+        @needs_token = false
+        @tags = []
       end
 
       # ── DSL: fixtures ──────────────────────────────────────────────
@@ -170,6 +188,22 @@ module ActionsPin
 
       def setup(&block)
         @setup_blocks << block
+        self
+      end
+
+      def live_repo(nwo)
+        @live_repo = nwo
+        @needs_token = true
+        self
+      end
+
+      def needs_token(val = true)
+        @needs_token = val
+        self
+      end
+
+      def tags(*t)
+        @tags = t.flatten
         self
       end
 
@@ -234,7 +268,11 @@ module ActionsPin
       # ── Execution ──────────────────────────────────────────────────
 
       # Prepare fixtures without running. Returns a Context.
-      def prepare(binary)
+      def prepare(binary, profile_dir: nil)
+        if @live_repo
+          return prepare_live(binary, profile_dir: profile_dir)
+        end
+
         dir = Dir.mktmpdir("actions-pin-test-")
 
         @workflows.each do |path, content|
@@ -270,13 +308,56 @@ module ActionsPin
         @setup_blocks.each { |b| b.call(dir) }
         env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
 
-        Context.new(dir: dir, env: env, cmd: [binary] + @args,
+        cmd = [binary] + @args
+        if profile_dir
+          pdir = File.join(profile_dir, @name.to_s)
+          FileUtils.mkdir_p(pdir)
+          cmd += ["--profile", pdir]
+        end
+
+        Context.new(dir: dir, env: env, cmd: cmd,
                     server: server, scenario: self)
       end
 
+      # Prepare a live repo scenario: shallow-clone the real repo and run
+      # against its actual workflows. No stub server — hits real GitHub API.
+      def prepare_live(binary, profile_dir: nil)
+        dir = Dir.mktmpdir("actions-pin-live-")
+        nwo = @live_repo
+
+        $stderr.print "\e[2m  cloning #{nwo}…\e[0m "
+        $stderr.flush
+        system("git", "clone", "--depth=1", "--quiet",
+               "https://github.com/#{nwo}.git", dir,
+               exception: true)
+        $stderr.puts "\e[2mdone\e[0m"
+
+        env = @env.dup
+        @setup_blocks.each { |b| b.call(dir) }
+        env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
+
+        cmd = [binary] + @args
+        if profile_dir
+          pdir = File.join(profile_dir, @name.to_s)
+          FileUtils.mkdir_p(pdir)
+          cmd += ["--profile", pdir]
+        end
+
+        Context.new(dir: dir, env: env, cmd: cmd,
+                    server: nil, scenario: self, live_repo: nwo)
+      end
+
       # Batch mode: capture output, run assertions.
-      def run(binary)
-        ctx = prepare(binary)
+      def run(binary, profile_dir: nil)
+        if @needs_token || @live_repo
+          token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
+          if token.nil? || token.empty?
+            gh_token = `gh auth token 2>/dev/null`.strip
+            raise SkipScenario, "no GH_TOKEN or gh auth" if gh_token.empty?
+          end
+        end
+
+        ctx = prepare(binary, profile_dir: profile_dir)
         begin
           result = ctx.run_captured
           @assertions.each { |a| a.call(result) }
@@ -325,14 +406,15 @@ module ActionsPin
     # A prepared scenario environment. Supports captured runs (batch) and
     # PTY runs (interactive shell) so you see real ANSI output.
     class Context
-      attr_reader :dir, :env, :cmd, :server, :scenario
+      attr_reader :dir, :env, :cmd, :server, :scenario, :live_repo
 
-      def initialize(dir:, env:, cmd:, server:, scenario:)
+      def initialize(dir:, env:, cmd:, server:, scenario:, live_repo: nil)
         @dir = dir
         @env = env
         @cmd = cmd
         @server = server
         @scenario = scenario
+        @live_repo = live_repo
         @torn_down = false
       end
 
@@ -357,12 +439,20 @@ module ActionsPin
         begin
           PTY.spawn("/bin/bash", "-c", shell_cmd) do |reader, _writer, pid|
             begin
-              reader.each_char do |ch|
-                $stdout.print ch       # live to terminal
-                combined << ch
+              # Read in chunks so we flush once per available burst instead
+              # of once per byte. Eliminates flicker while keeping spinners
+              # responsive (readpartial returns as soon as data is available).
+              prev_sync = $stdout.sync
+              $stdout.sync = true
+              loop do
+                chunk = reader.readpartial(4096)
+                $stdout.write chunk
+                combined << chunk
               end
-            rescue Errno::EIO
+            rescue Errno::EIO, EOFError
               # PTY closed — normal on macOS when process exits
+            ensure
+              $stdout.sync = prev_sync
             end
             _, status = Process.wait2(pid)
             exit_code = status.exitstatus
@@ -393,10 +483,14 @@ module ActionsPin
     # ── Runner ──────────────────────────────────────────────────────────
     class Runner
       attr_reader :scenarios
+      attr_accessor :profile_dir
 
       def initialize(binary: nil)
         @binary = binary || find_binary
         @scenarios = []
+        @profile_dir = nil
+        @pause = false
+        @last_dir = nil
       end
 
       def scenario(name, &block)
@@ -408,17 +502,32 @@ module ActionsPin
 
       # ── Batch mode ─────────────────────────────────────────────────
 
-      def run(filter: nil)
-        to_run = filter ? @scenarios.select { |s| s.name.to_s.include?(filter) } : @scenarios
+      def run(filter: nil, tag_filter: nil, catalog: nil)
+        to_run = @scenarios.dup
+
+        # Name filter (positional arg)
+        to_run = to_run.select { |s| s.name.to_s.include?(filter) } if filter
+
+        # Tag filter (--live, --stub, --smoke, --real)
+        if tag_filter && catalog
+          tagged_names = catalog["scenarios"]
+            .select { |cs| (cs["tags"] || []).include?(tag_filter) }
+            .map { |cs| cs["name"] }
+            .to_set
+
+          to_run = to_run.select { |s| tagged_names.include?(s.name.to_s) }
+        end
+
         puts "Running #{to_run.size} integration scenario(s)...\n\n"
 
         passed = 0
         failed = 0
+        skipped = 0
 
         to_run.each do |s|
           print "  #{s.name} ... "
           begin
-            s.run(@binary)
+            s.run(@binary, profile_dir: @profile_dir)
             if s.failures.empty?
               puts "\e[32m✓\e[0m"
               passed += 1
@@ -427,6 +536,9 @@ module ActionsPin
               s.failures.each { |f| puts "    \e[31m#{f}\e[0m" }
               failed += 1
             end
+          rescue SkipScenario => e
+            puts "\e[33m⊘ skip\e[0m #{e.message}"
+            skipped += 1
           rescue => e
             puts "\e[31m✗ (exception)\e[0m"
             puts "    #{e.class}: #{e.message}"
@@ -435,8 +547,38 @@ module ActionsPin
           end
         end
 
-        puts "\n#{passed} passed, #{failed} failed"
+        parts = ["#{passed} passed", "#{failed} failed"]
+        parts << "#{skipped} skipped" if skipped > 0
+        puts "\n#{parts.join(', ')}"
         exit(failed > 0 ? 1 : 0)
+      end
+
+      # ── Matrix display ──────────────────────────────────────────────
+
+      def print_matrix(catalog)
+        puts "\e[1mScenario Matrix\e[0m\n\n"
+
+        categories = catalog["categories"] || []
+        scenarios = catalog["scenarios"] || []
+
+        categories.each do |cat|
+          cat_scenarios = scenarios.select { |s| s["category"] == cat["name"] }
+          next if cat_scenarios.empty?
+
+          puts "  \e[1m#{cat["name"]}\e[0m — #{cat["description"]}"
+          cat_scenarios.each do |cs|
+            tags = (cs["tags"] || []).map { |t| "\e[36m##{t}\e[0m" }.join(" ")
+            mode = cs["needs_stub"] ? "\e[33mstub\e[0m" : cs["needs_token"] ? "\e[32mlive\e[0m" : "\e[90mnone\e[0m"
+            registered = @scenarios.any? { |s| s.name.to_s == cs["name"] } ? "✓" : "✗"
+            puts "    #{registered} \e[37m%-35s\e[0m [#{mode}] #{tags}" % cs["name"]
+            puts "      #{cs['description']}"
+          end
+          puts
+        end
+
+        total = scenarios.size
+        registered = @scenarios.size
+        puts "#{registered}/#{total} scenarios registered"
       end
 
       # ── Interactive shell ──────────────────────────────────────────
@@ -444,40 +586,62 @@ module ActionsPin
       def shell
         puts "\e[1mgh-actions-pin integration shell\e[0m"
         puts "Binary: #{@binary}"
-        puts "Scenarios: #{@scenarios.map(&:name).join(', ')}"
-        puts
-        puts "Commands:"
-        puts "  \e[36mlist\e[0m                  Show all scenarios"
-        puts "  \e[36mrun <name>\e[0m            Run scenario with live PTY output"
-        puts "  \e[36mrun all\e[0m               Run all scenarios with live output"
-        puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
-        puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
-        puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
-        puts "  \e[36mquit\e[0m                  Exit"
+        puts "Scenarios: #{@scenarios.size} loaded"
+        puts "Type \e[36mhelp\e[0m for commands, \e[36mlist\e[0m for scenarios."
         puts
 
         active_ctx = nil
+        scenario_names = @scenarios.map { |s| s.name.to_s }
+        commands = %w[list ls run test inspect diff cd rerun build pause profile auth status clear help quit exit q]
+
+        # Tab completion: commands first, then scenario names for run/test/inspect/cd
+        Reline.completion_proc = proc do |input|
+          line = Reline.line_buffer
+          parts = line.split(/\s+/, 2)
+          if parts.size >= 2 && %w[run test inspect cd].include?(parts[0])
+            candidates = scenario_names + ["all"]
+            candidates.select { |n| n.start_with?(input) }
+          elsif parts.size <= 1
+            (commands + scenario_names).select { |c| c.start_with?(input) }
+          else
+            []
+          end
+        end
+
+        Reline.completion_append_character = " "
 
         loop do
           prompt = active_ctx ? "\e[33m#{active_ctx.scenario.name}\e[0m > " : "\e[35mpin-test\e[0m > "
-          print prompt
-          line = $stdin.gets
+          begin
+            line = Reline.readline(prompt, true)
+          rescue Interrupt
+            puts
+            next
+          end
           break if line.nil?
           line = line.strip
+
+          # Remove blank/duplicate entries from history
+          if line.empty? || (Reline::HISTORY.size > 1 && Reline::HISTORY[-2] == line)
+            Reline::HISTORY.pop
+          end
           next if line.empty?
 
           parts = line.split(/\s+/, 2)
           verb = parts[0]
           arg  = parts[1]
 
-          case verb
+          begin
+            case verb
           when "quit", "exit", "q"
             active_ctx&.teardown
             break
 
           when "list", "ls"
-            @scenarios.each_with_index do |s, i|
-              puts "  \e[36m#{s.name}\e[0m"
+            grouped = @scenarios.group_by { |s| s.respond_to?(:category) ? s.category : "other" }
+            grouped.each do |cat, scenarios|
+              puts "  \e[1m#{cat}\e[0m"
+              scenarios.each { |s| puts "    \e[36m#{s.name}\e[0m" }
             end
 
           when "run"
@@ -486,6 +650,8 @@ module ActionsPin
 
             if arg == "all"
               run_all_live
+            elsif arg && repo_nwo?(arg)
+              run_one_live(adhoc_scenario(arg))
             else
               s = find_scenario(arg)
               next unless s
@@ -499,7 +665,7 @@ module ActionsPin
           when "inspect"
             s = find_scenario(arg)
             next unless s
-            ctx = s.prepare(@binary)
+            ctx = s.prepare(@binary, profile_dir: @profile_dir)
             puts "\e[1mScenario:\e[0m #{s.name}"
             puts "\e[1mDir:\e[0m      #{ctx.dir}"
             puts "\e[1mCmd:\e[0m      #{ctx.cmd_string}"
@@ -520,7 +686,7 @@ module ActionsPin
             active_ctx&.teardown
             s = find_scenario(arg)
             next unless s
-            ctx = s.prepare(@binary)
+            ctx = s.prepare(@binary, profile_dir: @profile_dir)
             active_ctx = ctx
             puts "\e[1mPrepared:\e[0m #{s.name}"
             puts "\e[1mDir:\e[0m      #{ctx.dir}"
@@ -547,16 +713,150 @@ module ActionsPin
               puts "No active scenario. Use \e[36mrun <name>\e[0m first."
             end
 
+          when "profile"
+            if arg.nil? || arg == "on"
+              @profile_dir = File.expand_path("profiles")
+              FileUtils.mkdir_p(@profile_dir)
+              puts "Profiling \e[32mon\e[0m → #{@profile_dir}"
+            elsif arg == "off"
+              @profile_dir = nil
+              puts "Profiling \e[33moff\e[0m"
+            else
+              @profile_dir = File.expand_path(arg)
+              FileUtils.mkdir_p(@profile_dir)
+              puts "Profiling \e[32mon\e[0m → #{@profile_dir}"
+            end
+
+          when "pause"
+            @pause = !@pause
+            puts "Pause between scenarios: #{@pause ? "\e[32mon\e[0m" : "\e[33moff\e[0m"}"
+
+          when "diff"
+            dir = active_ctx&.dir || @last_dir
+            if dir && Dir.exist?(dir)
+              show_diff(dir)
+            else
+              puts "No scenario dir available. Run a scenario first."
+            end
+
+          when "auth"
+            show_auth
+
+          when "clear"
+            print "\033[2J\033[H"
+
+          when "build"
+            repo_root = File.expand_path("../..", __dir__)
+            print "  \e[2mbuilding…\e[0m "
+            $stdout.flush
+            t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            ok = system("go", "build", "-o", "gh-actions-pin", "./cmd/gh-actions-pin", chdir: repo_root)
+            elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+            if ok
+              puts "\e[32m✓\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
+              @binary = File.join(repo_root, "gh-actions-pin")
+            else
+              puts "\e[31m✗ build failed\e[0m"
+            end
+
+          when "help", "?"
+            print_help
+
+          when "status"
+            parts = []
+            parts << "pause: #{@pause ? "\e[32mon\e[0m" : "\e[33moff\e[0m"}"
+            parts << "profile: #{@profile_dir ? "\e[32m#{@profile_dir}\e[0m" : "\e[33moff\e[0m"}"
+            parts << "active: #{active_ctx ? "\e[36m#{active_ctx.scenario.name}\e[0m" : "\e[90mnone\e[0m"}"
+            puts "  " + parts.join("  ")
+
           else
-            puts "Unknown command: #{verb}. Type \e[36mlist\e[0m for scenarios."
+            # Bare scenario name or owner/repo → run it directly
+            if repo_nwo?(verb)
+              active_ctx&.teardown
+              active_ctx = nil
+              run_one_live(adhoc_scenario(verb))
+            else
+              s = @scenarios.find { |sc| sc.name.to_s == verb }
+              if s
+                active_ctx&.teardown
+                active_ctx = nil
+                run_one_live(s)
+              else
+                puts "Unknown command: #{verb}. Type \e[36mhelp\e[0m for commands."
+              end
+            end
+          end
+          rescue Interrupt
+            puts "\n  \e[33m⊘ interrupted\e[0m"
           end
         end
 
         active_ctx&.teardown
-        puts "Bye."
+        puts "\nBye."
       end
 
       private
+
+      def show_diff(dir)
+        return unless dir && Dir.exist?(dir)
+        diff = `cd #{Shellwords.shellescape(dir)} && git --no-pager diff --color 2>/dev/null`.strip
+        return if diff.empty?
+        puts
+        puts "  \e[1m── diff ──\e[0m"
+        diff.each_line { |l| puts "  #{l}" }
+      end
+
+      def print_help
+        puts "Commands:"
+        puts "  \e[36mlist\e[0m                  Show all scenarios (grouped by category)"
+        puts "  \e[36mrun <name>\e[0m            Run scenario with live PTY output"
+        puts "  \e[36mrun <owner/repo>\e[0m     Run ad-hoc against any GitHub repo"
+        puts "  \e[36mrun all\e[0m               Run all scenarios with live output"
+        puts "  \e[36m<name>\e[0m                Run scenario directly (shorthand for run)"
+        puts "  \e[36m<owner/repo>\e[0m          Run ad-hoc against any GitHub repo"
+        puts "  \e[36mtest [filter]\e[0m         Batch-test scenarios (captured, assertions)"
+        puts "  \e[36minspect <name>\e[0m        Show scenario fixtures without running"
+        puts "  \e[36mdiff\e[0m                  Show git diff from last run"
+        puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
+        puts "  \e[36mrerun\e[0m                 Re-run active scenario"
+        puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
+        puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
+        puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
+        puts "  \e[36mauth\e[0m                  Show current auth source"
+        puts "  \e[36mstatus\e[0m                Show current toggles"
+        puts "  \e[36mclear\e[0m                 Clear screen"
+        puts "  \e[36mhelp\e[0m                  Show this help"
+        puts "  \e[36mquit\e[0m                  Exit (or Ctrl+D)"
+      end
+
+      def show_auth
+        gh_token = ENV["GH_TOKEN"]
+        github_token = ENV["GITHUB_TOKEN"]
+        gh_cli = `gh auth token 2>/dev/null`.strip
+        gh_user = `gh auth status 2>&1`.lines.grep(/Logged in/).first&.strip
+
+        if gh_token && !gh_token.empty?
+          puts "  \e[32mGH_TOKEN\e[0m env var set (#{gh_token[0..7]}…)"
+        elsif github_token && !github_token.empty?
+          puts "  \e[32mGITHUB_TOKEN\e[0m env var set (#{github_token[0..7]}…)"
+        elsif !gh_cli.empty?
+          puts "  \e[32mgh CLI\e[0m auth (#{gh_cli[0..7]}…)"
+          puts "  #{gh_user}" if gh_user
+        else
+          puts "  \e[31mno auth\e[0m — live scenarios will be skipped"
+          puts "  Set GH_TOKEN or run: gh auth login"
+        end
+      end
+
+      def format_elapsed(seconds)
+        if seconds < 1
+          "#{(seconds * 1000).round}ms"
+        elsif seconds < 60
+          "%.1fs" % seconds
+        else
+          "%dm%02ds" % [seconds / 60, seconds % 60]
+        end
+      end
 
       def find_binary
         repo_bin = File.expand_path("../../../gh-actions-pin", __FILE__)
@@ -585,25 +885,57 @@ module ActionsPin
         matches.first
       end
 
+      # Build an ad-hoc live Scenario for any owner/repo.
+      def adhoc_scenario(nwo)
+        s = Scenario.new(:"adhoc_#{nwo.tr('/', '_')}")
+        s.live_repo(nwo)
+        s.args("--no-fix")
+        s.category = "adhoc"
+        s
+      end
+
+      def repo_nwo?(str)
+        str.match?(%r{\A[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z})
+      end
+
       def run_one_live(s)
         puts "\e[1m── #{s.name} ──\e[0m\n\n"
-        ctx = s.prepare(@binary)
+        ctx = s.prepare(@binary, profile_dir: @profile_dir)
+        keep = ENV["KEEP_FIXTURES"]
+        t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         begin
           result = ctx.run_pty
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
           puts
+          puts "  \e[2m#{"─" * 40}\e[0m"
           if result.success?
-            puts "  \e[32m✓ exit 0\e[0m"
+            puts "  \e[32m✓ exit 0\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
           else
-            puts "  \e[31m✗ exit #{result.exit_code}\e[0m"
+            puts "  \e[31m✗ exit #{result.exit_code}\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
           end
+          if @profile_dir
+            pdir = File.join(@profile_dir, s.name.to_s)
+            puts "  \e[2mprofile: #{pdir}\e[0m"
+          end
+          show_diff(ctx.dir)
+          @last_dir = ctx.dir
           puts
         ensure
-          ctx.teardown unless ENV["KEEP_FIXTURES"]
+          ctx.teardown unless keep
         end
       end
 
       def run_all_live
-        @scenarios.each { |s| run_one_live(s) }
+        @scenarios.each_with_index do |s, i|
+          run_one_live(s)
+          if @pause && i < @scenarios.size - 1
+            print "\e[2m  press Enter to continue (q to stop)…\e[0m "
+            input = $stdin.gets&.strip
+            break if input&.start_with?("q")
+          end
+        end
+      rescue Interrupt
+        puts "\n  \e[33m⊘ interrupted\e[0m"
       end
 
       def run_batch(to_run)
@@ -614,7 +946,7 @@ module ActionsPin
         to_run.each do |s|
           print "  #{s.name} ... "
           begin
-            s.run(@binary)
+            s.run(@binary, profile_dir: @profile_dir)
             if s.failures.empty?
               puts "\e[32m✓\e[0m"
               passed += 1
