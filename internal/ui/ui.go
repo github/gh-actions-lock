@@ -380,20 +380,27 @@ func (sw *spinnerWriter) Write(p []byte) (n int, err error) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
-	n, err = sw.w.Write(p)
-	if err != nil || len(p) == 0 || p[0] != '\r' {
+	if len(p) == 0 || p[0] != '\r' {
+		n, err = sw.w.Write(p)
 		return
 	}
-	sw.renderWorkersLocked()
+
+	// Combine the spinner frame and worker rows into a single
+	// synchronized write so the terminal never shows a partial frame.
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h") // begin synchronized output
+	buf.Write(p)
+	sw.buildWorkerFrameLocked(&buf)
+	buf.WriteString("\033[?2026l") // end synchronized output
+	_, err = sw.w.Write([]byte(buf.String()))
+	n = len(p)
 	return
 }
 
-// renderWorkersLocked redraws the worker rows below the spinner line, leaving
-// the cursor back on the spinner line. Caller must hold sw.mu and the cursor
-// must currently be on the spinner line. Glyph frames are picked from the wall
-// clock so animation continues even when triggered by the independent ticker
-// instead of by a spinner Write.
-func (sw *spinnerWriter) renderWorkersLocked() {
+// buildWorkerFrameLocked appends the escape sequences for worker rows into
+// buf, leaving the cursor back on the spinner line. Caller must hold sw.mu
+// and the cursor must currently be on the spinner line.
+func (sw *spinnerWriter) buildWorkerFrameLocked(buf *strings.Builder) {
 	step := int(time.Now().UnixNano() / int64(workerFrameInterval))
 	// Per-slot phase offset so rows visibly cascade instead of all hitting
 	// the same frame in lockstep — that lockstep was what made them look
@@ -452,22 +459,32 @@ func (sw *spinnerWriter) renderWorkersLocked() {
 		// is a no-op at the last row and the subsequent ESC[NA cursor-up
 		// would then overshoot, landing on (and clobbering) lines above
 		// the spinner — including the user's typed command line.
-		fmt.Fprintf(sw.w, "\n\r\033[2K%s", line)
+		fmt.Fprintf(buf, "\n\r\033[2K%s", line)
 	}
 	// Erase stale lines left over from a previous render that had more
 	// active workers. Without this, ghost "→ dep" rows from finished
 	// workers persist below the current set.
 	for i := nLines; i < sw.nRendered; i++ {
-		fmt.Fprintf(sw.w, "\n\r\033[2K")
+		buf.WriteString("\n\r\033[2K")
 	}
 	totalDown := nLines
 	if sw.nRendered > nLines {
 		totalDown = sw.nRendered
 	}
 	if totalDown > 0 {
-		fmt.Fprintf(sw.w, "\033[%dA\r", totalDown)
+		fmt.Fprintf(buf, "\033[%dA\r", totalDown)
 	}
 	sw.nRendered = nLines
+}
+
+// renderWorkersLocked redraws the worker rows below the spinner line as a
+// single synchronized write. Caller must hold sw.mu.
+func (sw *spinnerWriter) renderWorkersLocked() {
+	var buf strings.Builder
+	buf.WriteString("\033[?2026h") // begin synchronized output
+	sw.buildWorkerFrameLocked(&buf)
+	buf.WriteString("\033[?2026l") // end synchronized output
+	sw.w.Write([]byte(buf.String()))
 }
 
 // startAnimator launches a goroutine that periodically redraws the worker
@@ -589,17 +606,17 @@ func (u *UI) clearSpinnerLines() {
 		u.spinWriter.nRendered = 0
 		u.spinWriter.mu.Unlock()
 	}
-	// Erase the spinner's own line plus exactly the known worker lines
-	// below it, then move the cursor back up. Using targeted \033[2K
-	// per line instead of \033[J (erase-to-end-of-screen) avoids
-	// clobbering the shell prompt if it starts drawing before we exit.
-	fmt.Fprint(u.w, "\r\033[2K")
+	// Buffer the entire clear into a single write so the terminal
+	// never shows a partially erased frame.
+	var buf strings.Builder
+	buf.WriteString("\r\033[2K")
 	for i := 0; i < lines; i++ {
-		fmt.Fprint(u.w, "\n\033[2K")
+		buf.WriteString("\n\033[2K")
 	}
 	if lines > 0 {
-		fmt.Fprintf(u.w, "\033[%dA\r", lines)
+		fmt.Fprintf(&buf, "\033[%dA\r", lines)
 	}
+	fmt.Fprint(u.w, buf.String())
 	u.progHasDetail = false
 }
 
