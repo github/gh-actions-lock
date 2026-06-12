@@ -43,6 +43,25 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	assert.Contains(t, warnings[0], "expression-based")
 }
 
+func TestDiscoverWorkflowsIn(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ci.yml"), []byte("name: ci\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.yaml"), []byte("name: deploy\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# ignore\n"), 0o644))
+
+	paths, err := DiscoverWorkflowsIn(dir)
+	require.NoError(t, err)
+	assert.Len(t, paths, 2)
+	assert.Equal(t, filepath.Join(dir, "ci.yml"), paths[0])
+	assert.Equal(t, filepath.Join(dir, "deploy.yaml"), paths[1])
+}
+
+func TestDiscoverWorkflowsIn_MissingDir(t *testing.T) {
+	paths, err := DiscoverWorkflowsIn(filepath.Join(t.TempDir(), "nope"))
+	require.NoError(t, err)
+	assert.Nil(t, paths)
+}
+
 func TestExtractLocalCompositeRefs_RejectsPathTraversal(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
