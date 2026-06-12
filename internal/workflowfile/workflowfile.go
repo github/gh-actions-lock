@@ -90,7 +90,12 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 // DiscoverWorkflows finds all workflow files in .github/workflows/ relative to
 // the current directory. Returns nil if the directory doesn't exist.
 func DiscoverWorkflows() ([]string, error) {
-	dir := filepath.Join(".github", "workflows")
+	return DiscoverWorkflowsIn(filepath.Join(".github", "workflows"))
+}
+
+// DiscoverWorkflowsIn finds all workflow files (*.yml, *.yaml) in dir.
+// Returns nil if the directory doesn't exist.
+func DiscoverWorkflowsIn(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil

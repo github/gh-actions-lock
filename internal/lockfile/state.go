@@ -38,7 +38,7 @@ type MetadataResolver interface {
 // a single store instance without external synchronization.
 type State struct {
 	mu       sync.Mutex
-	repoRoot string
+	lockPath string // full path to actions.lock on disk
 	file     parserlock.File
 	meta     MetadataResolver
 	idCache  map[string][2]int64
@@ -48,8 +48,14 @@ type State struct {
 // LoadState reads the lockfile at repoRoot, returning an empty in-memory file
 // when none exists on disk.
 func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
-	full := filepath.Join(repoRoot, parserlock.Path)
-	contents, err := os.ReadFile(full)
+	return LoadStateAt(filepath.Join(repoRoot, parserlock.Path), meta)
+}
+
+// LoadStateAt reads the lockfile at the given path, returning an empty
+// in-memory file when none exists on disk. Use this when the lockfile
+// lives outside the standard .github/workflows/ location.
+func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
+	contents, err := os.ReadFile(lockfilePath)
 
 	var file parserlock.File
 	switch {
@@ -88,7 +94,7 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 	}
 
 	s := &State{
-		repoRoot: repoRoot,
+		lockPath: lockfilePath,
 		file:     file,
 		meta:     meta,
 		idCache:  map[string][2]int64{},
@@ -360,7 +366,7 @@ func (s *State) Save() error {
 		}
 	}
 
-	full := filepath.Join(s.repoRoot, parserlock.Path)
+	full := s.lockPath
 
 	if len(s.file.Dependencies) == 0 && len(s.file.Workflows) == 0 {
 		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {

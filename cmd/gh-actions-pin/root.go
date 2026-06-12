@@ -124,7 +124,8 @@ $ gh actions-pin --no-fix --json=valid,findings
 // from the existing lockfile so repeat scans short-circuit the per-branch
 // Compare walk. newResolver is the DI seam; pass nil for production wiring.
 func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc) ([]string, *resolve.Resolver, *lockfile.State, error) {
-	paths, err := discoverWorkflowPaths(workflowPaths)
+	workflowsDir := os.Getenv("GH_ACTIONS_PIN_WORKFLOWS_DIR")
+	paths, err := discoverWorkflowPaths(workflowPaths, workflowsDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -139,7 +140,12 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 		return nil, nil, nil, err
 	}
 
-	store, err := lockfile.LoadState(".", r)
+	var store *lockfile.State
+	if workflowsDir != "" {
+		store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), r)
+	} else {
+		store, err = lockfile.LoadState(".", r)
+	}
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
 	}
@@ -148,9 +154,20 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 	return paths, r, store, nil
 }
 
-func discoverWorkflowPaths(existing []string) ([]string, error) {
+func discoverWorkflowPaths(existing []string, workflowsDir string) ([]string, error) {
 	if len(existing) > 0 {
 		return expandWorkflowPaths(existing)
+	}
+
+	if workflowsDir != "" {
+		paths, err := workflowfile.DiscoverWorkflowsIn(workflowsDir)
+		if err != nil {
+			return nil, err
+		}
+		if len(paths) == 0 {
+			return nil, fmt.Errorf("no workflow files found in %s", workflowsDir)
+		}
+		return paths, nil
 	}
 
 	paths, err := workflowfile.DiscoverWorkflows()
