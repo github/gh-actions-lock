@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 // checkMisleadingSha emits MisleadingSHA when a uses: ref looks
@@ -107,7 +107,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Severity = SeverityWarning
 			f.Confidence = ConfidenceHigh
 			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.Hex))
-			f.Remediation = "re-run `gh actions-pin` to refresh the lock entry"
+			f.Remediation = "re-run `gh actions-lock` to refresh the lock entry"
 			out = append(out, f)
 			if imp, ok := liveRefImpostorFinding(pw, ref, sha, r); ok {
 				out = append(out, imp)

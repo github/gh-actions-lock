@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 )
 
 // TestMatchesSHA verifies a pin matches the tag's peeled commit SHA.

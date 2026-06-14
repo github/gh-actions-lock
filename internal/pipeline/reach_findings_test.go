@@ -4,10 +4,10 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
-	"github.com/github/gh-actions-pin/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 func reachResult(d dep.Dependency, status resolve.ReachabilityStatus, detail string) resolve.ReachabilityResult {

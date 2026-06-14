@@ -14,7 +14,7 @@ import (
 
 const (
 	schemaVersion  = "run-record/v1"
-	toolName       = "gh-actions-pin"
+	toolName       = "gh-actions-lock"
 	retentionAge   = 14 * 24 * time.Hour
 	retentionCount = 50
 )
@@ -220,7 +220,7 @@ func logDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "gh-actions-pin", "logs"), nil
+	return filepath.Join(base, "gh-actions-lock", "logs"), nil
 }
 
 func gcLogs(dir string) {

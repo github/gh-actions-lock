@@ -3,7 +3,7 @@ package ghapi
 import (
 	"context"
 
-	"github.com/github/gh-actions-pin/internal/profile"
+	"github.com/github/gh-actions-lock/internal/profile"
 )
 
 // tagObjectPeelQuery resolves both the type of the object at $oid and the

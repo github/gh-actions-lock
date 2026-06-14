@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 )
 
 // validJSONField reports whether name is a recognized --json output field.

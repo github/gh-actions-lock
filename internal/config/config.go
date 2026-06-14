@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/github/gh-actions-pin/internal/tag"
+	"github.com/github/gh-actions-lock/internal/tag"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,10 +20,10 @@ type Config struct {
 	// be excluded from upgrade suggestions.
 	Cooldown tag.CooldownConfig
 	// Workers is the concurrency limit for pool-parallelized phases.
-	// Defaults to 8; overridden by GH_ACTIONS_PIN_WORKERS.
+	// Defaults to 8; overridden by GH_ACTIONS_LOCK_WORKERS.
 	Workers int
 	// StallHintMS is the stall-detection threshold in milliseconds.
-	// 0 disables the watcher. Overridden by GH_ACTIONS_PIN_STALL_HINT_MS.
+	// 0 disables the watcher. Overridden by GH_ACTIONS_LOCK_STALL_HINT_MS.
 	StallHintMS int
 	// DebugProgress enables per-phase progress tracing.
 	DebugProgress bool
@@ -37,13 +37,13 @@ func Load() Config {
 		Path:          p,
 		Workers:       8,
 		StallHintMS:   -1, // sentinel: use pinpool default
-		DebugProgress: envBool("GH_ACTIONS_PIN_DEBUG_PROGRESS"),
+		DebugProgress: envBool("GH_ACTIONS_LOCK_DEBUG_PROGRESS"),
 	}
 
-	if v, err := strconv.Atoi(os.Getenv("GH_ACTIONS_PIN_WORKERS")); err == nil && v > 0 {
+	if v, err := strconv.Atoi(os.Getenv("GH_ACTIONS_LOCK_WORKERS")); err == nil && v > 0 {
 		c.Workers = v
 	}
-	if v := os.Getenv("GH_ACTIONS_PIN_STALL_HINT_MS"); v != "" {
+	if v := os.Getenv("GH_ACTIONS_LOCK_STALL_HINT_MS"); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {
 			c.StallHintMS = ms
 		}
@@ -92,14 +92,14 @@ func loadCooldownFromFile(path string) tag.CooldownConfig {
 }
 
 // configPath returns the path to the config file, respecting
-// GH_ACTIONS_PIN_CONFIG for testing/demos.
+// GH_ACTIONS_LOCK_CONFIG for testing/demos.
 func configPath() string {
-	if p := os.Getenv("GH_ACTIONS_PIN_CONFIG"); p != "" {
+	if p := os.Getenv("GH_ACTIONS_LOCK_CONFIG"); p != "" {
 		return p
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "gh-actions-pin", "config.yml")
+	return filepath.Join(home, ".config", "gh-actions-lock", "config.yml")
 }

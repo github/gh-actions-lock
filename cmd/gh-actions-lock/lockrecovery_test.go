@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/internal/ui"
 )
 
 type fakeConfirmer struct {

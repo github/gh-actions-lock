@@ -5,12 +5,12 @@ import (
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
-	"github.com/github/gh-actions-pin/internal/pin"
-	"github.com/github/gh-actions-pin/internal/pipeline"
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
-	"github.com/github/gh-actions-pin/internal/resolve"
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
+	"github.com/github/gh-actions-lock/internal/pin"
+	"github.com/github/gh-actions-lock/internal/pipeline"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/ui"
 )
 
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
@@ -48,7 +48,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	if allClean && onboardingRefused == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
-			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-pin --rescan` to re-verify reachability.",
+			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
 				skippedRescan, ui.Pluralize(skippedRescan, "workflow", "workflows"))
 		}
 		return nil

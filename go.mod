@@ -1,4 +1,4 @@
-module github.com/github/gh-actions-pin
+module github.com/github/gh-actions-lock
 
 go 1.25.8
 
@@ -13,7 +13,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/github/actions-lockfile/go v0.0.1
+require github.com/github/actions-lockfile/go v0.0.3
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7 // indirect

@@ -1,6 +1,6 @@
 package pipeline
 
-import "github.com/github/gh-actions-pin/internal/pipeline/checks"
+import "github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 // Documentation URLs for each finding Category.
 //

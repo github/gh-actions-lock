@@ -1,4 +1,4 @@
-// Package ui provides terminal-aware output formatting for gh-actions-pin.
+// Package ui provides terminal-aware output formatting for gh-actions-lock.
 // It respects NO_COLOR, CLICOLOR, and TTY detection on stderr (not stdout)
 // so that color works correctly even when stdout is piped (e.g. --json mode).
 package ui
@@ -98,12 +98,12 @@ func (u *UI) MarkHeadless() {
 	u.output = termenv.NewOutput(u.w, termenv.WithProfile(termenv.Ascii))
 }
 
-// progressTrace caches the result of GH_ACTIONS_PIN_DEBUG_PROGRESS once. When
+// progressTrace caches the result of GH_ACTIONS_LOCK_DEBUG_PROGRESS once. When
 // set, every UpdateLabel and SetWorkerStatus call writes a timestamped JSONL
 // line to a dedicated trace file so we can audit phase transitions and verify
 // the worker pool is actually fanning out without depending on visual
 // inspection of the spinner. The path is resolved from the env var: "1" or
-// "true" maps to $TMPDIR/gh-actions-pin-progress.log, anything else is treated
+// "true" maps to $TMPDIR/gh-actions-lock-progress.log, anything else is treated
 // as a literal path.
 var (
 	progressTraceMu   sync.Mutex
@@ -112,13 +112,13 @@ var (
 )
 
 func resolveProgressTracePath() string {
-	v := os.Getenv("GH_ACTIONS_PIN_DEBUG_PROGRESS")
+	v := os.Getenv("GH_ACTIONS_LOCK_DEBUG_PROGRESS")
 	switch v {
 	case "":
 		return ""
 	case "1", "true", "yes":
 		dir := os.TempDir()
-		return dir + "/gh-actions-pin-progress.log"
+		return dir + "/gh-actions-lock-progress.log"
 	default:
 		return v
 	}
@@ -150,7 +150,7 @@ func (u *UI) traceProgress(kind, payload string) {
 			return
 		}
 		progressTraceFile = f
-		fmt.Fprintf(f, "# gh-actions-pin progress trace %s\n", time.Now().Format(time.RFC3339))
+		fmt.Fprintf(f, "# gh-actions-lock progress trace %s\n", time.Now().Format(time.RFC3339))
 	}
 	rec := struct {
 		Time    string `json:"time"`

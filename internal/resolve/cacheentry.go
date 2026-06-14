@@ -6,7 +6,7 @@
 
 package resolve
 
-import "github.com/github/gh-actions-pin/internal/dep"
+import "github.com/github/gh-actions-lock/internal/dep"
 
 // resolvedEntry is the domain cache value for a resolved action ref.
 type resolvedEntry struct {

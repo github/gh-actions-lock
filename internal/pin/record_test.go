@@ -204,7 +204,7 @@ func TestRecord_MarshalJSON(t *testing.T) {
 	// Check tool info
 	var tool toolInfo
 	require.NoError(t, json.Unmarshal(raw["tool"], &tool))
-	assert.Equal(t, "gh-actions-pin", tool.Name)
+	assert.Equal(t, "gh-actions-lock", tool.Name)
 	assert.Equal(t, "1.2.3", tool.Version)
 
 	// Check actions are present

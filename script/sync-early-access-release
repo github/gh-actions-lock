@@ -5,10 +5,10 @@ usage() {
   cat <<'USAGE'
 Usage: script/sync-early-access-release [tag]
 
-Sync a gh-actions-pin release to the early-access distribution repository.
+Sync a gh-actions-lock release to the early-access distribution repository.
 
 Environment:
-  SOURCE_REPOSITORY   Source repository. Defaults to github/gh-actions-pin.
+  SOURCE_REPOSITORY   Source repository. Defaults to github/gh-actions-lock.
   TARGET_REPOSITORY   Target repository. Defaults to github-early-access/actions-locked-dependencies.
   SOURCE_TOKEN        Optional token for reading the source release.
   TARGET_TOKEN        Optional token for writing the target release.
@@ -33,7 +33,7 @@ require_command() {
 require_command gh
 require_command jq
 
-source_repository="${SOURCE_REPOSITORY:-github/gh-actions-pin}"
+source_repository="${SOURCE_REPOSITORY:-github/gh-actions-lock}"
 target_repository="${TARGET_REPOSITORY:-github-early-access/actions-locked-dependencies}"
 tag="${1:-${RELEASE_TAG:-}}"
 

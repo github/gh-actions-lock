@@ -3,9 +3,9 @@ package checks
 import (
 	"context"
 
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 // CheckResolver is the surface the resolver-bound checks need. The

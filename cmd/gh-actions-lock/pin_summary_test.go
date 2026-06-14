@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/pin"
-	"github.com/github/gh-actions-pin/internal/resolve"
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/internal/pin"
+	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/ui"
 )
 
 // A workflow shared between two different actions must still be listed under

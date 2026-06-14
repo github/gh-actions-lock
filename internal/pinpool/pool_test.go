@@ -258,7 +258,7 @@ func TestRunDefaultWorkersWhenNonPositive(t *testing.T) {
 // watcher must call SetWorkerHint with the stall text. Uses a small env-var
 // threshold so the test budget stays well under a second.
 func TestRunStallWatcherFiresHint(t *testing.T) {
-	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "30")
+	t.Setenv("GH_ACTIONS_LOCK_STALL_HINT_MS", "30")
 
 	ui := &fakeReporter{}
 	jobs := []int{1}
@@ -292,7 +292,7 @@ func TestRunStallWatcherFiresHint(t *testing.T) {
 // during one slow job has it cleared when the slot transitions to a new job
 // (or exits idle). Without this, "(still working…)" leaks across jobs.
 func TestRunStallWatcherClearsHintOnUpdate(t *testing.T) {
-	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "20")
+	t.Setenv("GH_ACTIONS_LOCK_STALL_HINT_MS", "20")
 
 	ui := &fakeReporter{}
 	jobs := []int{1, 2}
@@ -335,9 +335,9 @@ func TestRunStallWatcherClearsHintOnUpdate(t *testing.T) {
 }
 
 // TestRunStallWatcherDisabledByZeroThreshold confirms users can opt out by
-// setting GH_ACTIONS_PIN_STALL_HINT_MS=0 — no SetWorkerHint calls at all.
+// setting GH_ACTIONS_LOCK_STALL_HINT_MS=0 — no SetWorkerHint calls at all.
 func TestRunStallWatcherDisabledByZeroThreshold(t *testing.T) {
-	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "0")
+	t.Setenv("GH_ACTIONS_LOCK_STALL_HINT_MS", "0")
 
 	ui := &fakeReporter{}
 	jobs := []int{1}
@@ -364,7 +364,7 @@ func TestRunStallWatcherDisabledByZeroThreshold(t *testing.T) {
 // that completes before the threshold, then assert no hint events occurred
 // in a quiet window after Run returned.
 func TestRunStallWatcherStopsBeforeReturn(t *testing.T) {
-	t.Setenv("GH_ACTIONS_PIN_STALL_HINT_MS", "25")
+	t.Setenv("GH_ACTIONS_LOCK_STALL_HINT_MS", "25")
 
 	ui := &fakeReporter{}
 	jobs := []int{1}

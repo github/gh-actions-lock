@@ -6,12 +6,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/pinpool"
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
-	"github.com/github/gh-actions-pin/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/lockfile"
+	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 // DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.
@@ -82,7 +82,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 			Severity:     checks.SeverityError,
 			Confidence:   checks.ConfidenceHigh,
 			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
-			Remediation:  "fix or regenerate the dependencies: section with `gh actions-pin`",
+			Remediation:  "fix or regenerate the dependencies: section with `gh actions-lock`",
 			DocURL:       DocURLFor(checks.NotPinned),
 		})
 		return wr

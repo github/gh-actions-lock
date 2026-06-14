@@ -1,4 +1,4 @@
-// Command gh-actions-pin scans workflows and pins GitHub Actions to
+// Command gh-actions-lock scans workflows and pins GitHub Actions to
 // immutable commit SHAs.
 package main
 
@@ -14,16 +14,16 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
-	"github.com/github/gh-actions-pin/internal/config"
-	"github.com/github/gh-actions-pin/internal/pin"
-	"github.com/github/gh-actions-pin/internal/pinpool"
-	"github.com/github/gh-actions-pin/internal/pipeline"
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
-	"github.com/github/gh-actions-pin/internal/profile"
-	"github.com/github/gh-actions-pin/internal/resolve"
-	"github.com/github/gh-actions-pin/internal/tag"
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
+	"github.com/github/gh-actions-lock/internal/config"
+	"github.com/github/gh-actions-lock/internal/pin"
+	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/pipeline"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/profile"
+	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/tag"
+	"github.com/github/gh-actions-lock/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -70,7 +70,7 @@ func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 			--json selects the output format only — structured results on
 			stdout, progress on stderr — and is independent of --no-fix:
 
-			  gh actions-pin check --no-fix --json 2>/dev/null | jq .valid
+			  gh actions-lock check --no-fix --json 2>/dev/null | jq .valid
 
 			Issue types:
 			  ref-moved        - locked SHA no longer matches upstream (expected for mutable tags like v4)
@@ -95,16 +95,16 @@ func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 		`),
 		Example: heredoc.Doc(`
 			# Verify all workflows and fix what's fixable
-			$ gh actions-pin check
+			$ gh actions-lock check
 
 			# Verify a specific workflow
-			$ gh actions-pin check .github/workflows/ci.yml
+			$ gh actions-lock check .github/workflows/ci.yml
 
 			# Read-only check for CI (writes nothing, exits 1 if invalid)
-			$ gh actions-pin check --no-fix --json=valid,findings
+			$ gh actions-lock check --no-fix --json=valid,findings
 
 			# All fields as JSON
-			$ gh actions-pin check --json
+			$ gh actions-lock check --json
 		`),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -469,7 +469,7 @@ func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
 	}
 }
 
-// cliVersion returns the gh-actions-pin extension version embedded by the Go
+// cliVersion returns the gh-actions-lock extension version embedded by the Go
 // build system. Returns "(devel)" for local `go build` and a real version
 // like "v0.1.2" when installed via `gh extension install`.
 func cliVersion() string {

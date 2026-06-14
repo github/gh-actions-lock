@@ -8,10 +8,10 @@ import (
 	"time"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
-	"github.com/github/gh-actions-pin/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pinpool"
 )
 
 // seedCache populates r.cache with the supplied entries and returns r so it can

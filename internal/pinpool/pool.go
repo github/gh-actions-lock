@@ -18,7 +18,7 @@ const DefaultWorkers = 8
 
 // DefaultStallThreshold is how long a slot may sit on the same status before
 // the watcher tags it with a "(still working…)" hint. Tunable via the
-// GH_ACTIONS_PIN_STALL_HINT_MS env var; set to 0 to disable the watcher.
+// GH_ACTIONS_LOCK_STALL_HINT_MS env var; set to 0 to disable the watcher.
 const DefaultStallThreshold = 5 * time.Second
 
 // stallHintText is the dim suffix the watcher appends to a stalled slot. Kept
@@ -44,10 +44,10 @@ type Reporter interface {
 	UpdateLabel(label string)
 }
 
-// resolveStallThreshold reads GH_ACTIONS_PIN_STALL_HINT_MS. "0" disables; any
+// resolveStallThreshold reads GH_ACTIONS_LOCK_STALL_HINT_MS. "0" disables; any
 // other unparseable value falls back to the default. Parsed once per Run.
 func resolveStallThreshold() time.Duration {
-	v := os.Getenv("GH_ACTIONS_PIN_STALL_HINT_MS")
+	v := os.Getenv("GH_ACTIONS_LOCK_STALL_HINT_MS")
 	if v == "" {
 		return DefaultStallThreshold
 	}

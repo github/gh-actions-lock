@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/cli/go-gh/v2/pkg/prompter"
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/internal/ui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -67,7 +67,7 @@ type lockRecovery func(lockPath string, parseErr error) (recovered bool, err err
 func newLockRecovery(noInteractive bool, console *ui.UI, newConfirm confirmFactory, allowDelete bool) lockRecovery {
 	return func(lockPath string, parseErr error) (bool, error) {
 		if !allowDelete {
-			return false, fmt.Errorf("%w; run `gh actions-pin check` to rebuild it, or delete it by hand", parseErr)
+			return false, fmt.Errorf("%w; run `gh actions-lock check` to rebuild it, or delete it by hand", parseErr)
 		}
 		var (
 			confirm   confirmer

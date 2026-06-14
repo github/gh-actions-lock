@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/github/gh-actions-pin/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 )
 
 // ReachabilityStatus represents the result of a commit reachability check.
