@@ -926,6 +926,21 @@ scenarios:
         - expr: ".workflows[0].valid"
           equals: "true"
 
+      golden_json:
+        cli_version: (devel)
+        findings: []
+        lockfile_version: v0.0.1
+        valid: true
+        workflows:
+          - dependencies:
+              - direct: true
+                hash_algo: sha1
+                nwo: actions/checkout
+                ref: v4
+                sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
+            findings: []
+            path: .github/workflows/ci.yml
+            valid: true
   - name: dbot_fresh_refused
     category: dependabot
     description: "Fresh repo with --no-onboard — exit 0, onboarding-required/info finding (non-blocking skip)"
@@ -951,9 +966,34 @@ scenarios:
         - expr: ".findings[0].workflow"
           contains: "ci.yml"
 
+      golden_json:
+        cli_version: (devel)
+        findings:
+          - category: onboarding-required
+            confidence: high
+            dependency: actions/checkout@v4
+            detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            severity: info
+            workflow: .github/workflows/ci.yml
+        lockfile_version: v0.0.1
+        valid: true
+        workflows:
+          - findings:
+              - category: onboarding-required
+                confidence: high
+                dependency: actions/checkout@v4
+                detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                severity: info
+                workflow: .github/workflows/ci.yml
+            path: .github/workflows/ci.yml
+            valid: true
   - name: dbot_not_pinned
     category: dependabot
-    description: "Onboarded but action not in lockfile — not-pinned finding"
+    description: "Onboarded workflow with new action — onboarding-required under --no-onboard"
     needs_token: true
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=valid,findings,workflows"]
     fixtures:
@@ -963,16 +1003,47 @@ scenarios:
           actions: ["actions/checkout@v4", "actions/setup-node@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
       jq:
         - expr: ".valid"
-          equals: "false"
-        - expr: '.findings[] | select(.category == "not-pinned") | .severity'
-          equals: "error"
-        - expr: '.findings[] | select(.category == "not-pinned") | .dependency'
+          equals: "true"
+        - expr: '.findings[] | select(.category == "onboarding-required") | .severity'
+          equals: "info"
+        - expr: '.findings[] | select(.category == "onboarding-required") | .dependency'
           contains: "actions/setup-node"
 
+      golden_json:
+        cli_version: (devel)
+        findings:
+          - category: onboarding-required
+            confidence: high
+            dependency: actions/setup-node@v4
+            detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            severity: info
+            workflow: .github/workflows/ci.yml
+        lockfile_version: v0.0.1
+        valid: true
+        workflows:
+          - dependencies:
+              - direct: true
+                hash_algo: sha1
+                nwo: actions/checkout
+                ref: v4
+                sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
+            findings:
+              - category: onboarding-required
+                confidence: high
+                dependency: actions/setup-node@v4
+                detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                severity: info
+                workflow: .github/workflows/ci.yml
+            path: .github/workflows/ci.yml
+            valid: true
   - name: dbot_corrupt_lockfile_ci
     category: dependabot
     description: "Corrupt lockfile with --no-interactive — exit 2, engine error"
@@ -1002,14 +1073,64 @@ scenarios:
           actions: ["actions/checkout@v4", "actions/setup-node@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
       jq:
         - expr: ".workflows | length"
           equals: "2"
         - expr: '.workflows[] | select(.path | contains("deploy")) | .valid'
-          equals: "false"
+          equals: "true"
 
+      golden_json:
+        cli_version: (devel)
+        findings:
+          - category: onboarding-required
+            confidence: high
+            dependency: actions/checkout@v4
+            detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            severity: info
+            workflow: .github/workflows/deploy.yml
+          - category: onboarding-required
+            confidence: high
+            dependency: actions/setup-node@v4
+            detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            severity: info
+            workflow: .github/workflows/deploy.yml
+        lockfile_version: v0.0.1
+        valid: true
+        workflows:
+          - dependencies:
+              - direct: true
+                hash_algo: sha1
+                nwo: actions/checkout
+                ref: v4
+                sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
+            findings: []
+            path: .github/workflows/ci.yml
+            valid: true
+          - findings:
+              - category: onboarding-required
+                confidence: high
+                dependency: actions/checkout@v4
+                detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                severity: info
+                workflow: .github/workflows/deploy.yml
+              - category: onboarding-required
+                confidence: high
+                dependency: actions/setup-node@v4
+                detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
+                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                severity: info
+                workflow: .github/workflows/deploy.yml
+            path: .github/workflows/deploy.yml
+            valid: true
   - name: dbot_version_ref_suppressed
     category: dependabot
     description: "--no-narrow suppresses version-ref findings — not in JSON"
@@ -1028,9 +1149,14 @@ scenarios:
         - expr: '.findings[] | select(.category == "version-ref") | .category'
           equals: ""
 
+      golden_json:
+        cli_version: (devel)
+        findings: []
+        lockfile_version: v0.0.1
+        valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
-    description: "SSO 403 on a previously-pinned action produces not-pinned/error finding"
+    description: "SSO 403 on a previously-pinned action — pin retained, clean exit"
     needs_stub: true
     tags: [stub]
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
@@ -1041,16 +1167,19 @@ scenarios:
           actions: ["actions/checkout@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
       jq:
         - expr: '.valid'
-          equals: "false"
+          equals: "true"
         - expr: '.findings | length'
-          greater_than: 0
-        - expr: '.findings[] | select(.severity == "error") | .severity'
-          equals: "error"
+          equals: "0"
 
+      golden_json:
+        cli_version: (devel)
+        findings: []
+        lockfile_version: v0.0.1
+        valid: true
   - name: dbot_impostor_blocks
     category: dependabot
     description: "Impostor commit (unreachable SHA) produces impostor-commit/error finding"

@@ -141,7 +141,7 @@ module ActionsPin
     # ── Scenario ────────────────────────────────────────────────────────
     class Scenario
       attr_reader :name, :failures, :last_cmd, :tags, :last_diff
-      attr_accessor :category, :description, :expect_spec, :fixture_spec, :input_spec
+      attr_accessor :category, :description, :expect_spec, :fixture_spec, :input_spec, :skip_reason
 
       # Expose fixture state for display (read-only)
       def cli_args;        @args;      end
@@ -378,6 +378,8 @@ module ActionsPin
 
       # Batch mode: capture output, run assertions.
       def run(binary, profile_dir: nil)
+        raise SkipScenario, @skip_reason if @skip_reason
+
         if @needs_token || @live_repo
           token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
           if token.nil? || token.empty?
@@ -648,6 +650,243 @@ module ActionsPin
         total = scenarios.size
         registered = @scenarios.size
         puts "#{registered}/#{total} scenarios registered"
+      end
+
+      # ── Golden JSON capture ───────────────────────────────────────
+      #
+      # Runs scenarios in the given category, captures the literal
+      # --json stdout, and writes it back into catalog.yml under
+      # expect.golden_json. This makes the binary the source of truth
+      # for the integration contract — hand-authored jq assertions
+      # coexist for backward compatibility, but golden_json is the
+      # exact body consumers can rely on.
+
+      def golden_update(category:, catalog:)
+        catalog_path = File.expand_path("../../scenarios/catalog.yml", __FILE__)
+        cat_scenarios = catalog["scenarios"].select { |cs| cs["category"] == category }
+
+        if cat_scenarios.empty?
+          $stderr.puts "No scenarios in category #{category.inspect}"
+          exit 1
+        end
+
+        eligible = cat_scenarios.reject { |cs| cs["skip"] }
+        json_eligible = eligible.select { |cs| (cs["flags"] || []).any? { |f| f.start_with?("--json") } }
+
+        puts "\e[1mGolden update: #{category}\e[0m"
+        puts "  #{cat_scenarios.size} total, #{eligible.size} runnable, #{json_eligible.size} with --json"
+        puts
+
+        updated = 0
+        failed = 0
+        skipped = 0
+
+        json_eligible.each do |cs|
+          name = cs["name"]
+          scenario = @scenarios.find { |s| s.name.to_s == name }
+          unless scenario
+            puts "  #{name} ... \e[33m⊘ not registered\e[0m"
+            skipped += 1
+            next
+          end
+
+          print "  #{name} ... "
+          begin
+            result = scenario.run(@binary, profile_dir: nil)
+            stdout = result.stdout.strip
+
+            parsed = JSON.parse(stdout)
+
+            # Deep-sort keys for stable YAML output
+            normalized = deep_sort_keys(parsed)
+
+            cs["expect"] ||= {}
+            cs["expect"]["golden_json"] = normalized
+
+            puts "\e[32m✓ captured\e[0m"
+            updated += 1
+          rescue SkipScenario => e
+            puts "\e[33m⊘ skip\e[0m #{e.message}"
+            skipped += 1
+          rescue JSON::ParserError => e
+            # Exit 2 (engine error) scenarios produce no JSON — that's expected
+            if result && result.exit_code == 2
+              puts "\e[33m⊘ no JSON (exit 2)\e[0m"
+              skipped += 1
+            else
+              puts "\e[31m✗ not JSON\e[0m — #{e.message}"
+              failed += 1
+            end
+          rescue => e
+            puts "\e[31m✗ error\e[0m — #{e.class}: #{e.message}"
+            failed += 1
+          end
+        end
+
+        # Write back the full catalog with updated golden_json blocks
+        if updated > 0
+          write_golden_catalog(catalog_path, catalog)
+          puts "\n\e[32m#{updated} golden bodies written to catalog.yml\e[0m"
+        end
+
+        parts = ["#{updated} captured", "#{failed} failed"]
+        parts << "#{skipped} skipped" if skipped > 0
+        puts parts.join(", ")
+        exit(failed > 0 ? 1 : 0)
+      end
+
+      private
+
+      def deep_sort_keys(obj)
+        case obj
+        when Hash
+          obj.sort.to_h.transform_values { |v| deep_sort_keys(v) }
+        when Array
+          obj.map { |v| deep_sort_keys(v) }
+        else
+          obj
+        end
+      end
+
+      def write_golden_catalog(path, catalog)
+        # Re-serialize the full catalog. Use block style for readability.
+        yaml = YAML.dump(catalog)
+
+        # YAML.dump wraps strings in quotes and uses flow style for small
+        # arrays. The catalog is hand-authored with a specific style, so
+        # we do a targeted update instead: for each scenario with
+        # golden_json, find its expect block and insert/replace the
+        # golden_json sub-block.
+        lines = File.readlines(path)
+        catalog["scenarios"].each do |cs|
+          golden = cs.dig("expect", "golden_json")
+          next unless golden
+
+          # Find the scenario by name
+          name_line_idx = lines.index { |l| l.strip == "- name: #{cs['name']}" }
+          next unless name_line_idx
+
+          # Find the expect: line within this scenario
+          expect_idx = nil
+          (name_line_idx + 1...lines.size).each do |i|
+            break if lines[i] =~ /^\s{2}- name:/ && i > name_line_idx
+            if lines[i] =~ /^\s+expect:\s*$/
+              expect_idx = i
+              break
+            end
+          end
+          next unless expect_idx
+
+          # Determine the indentation of the expect block's children
+          expect_indent = lines[expect_idx][/^\s*/].length
+          child_indent = expect_indent + 2
+
+          # Find the end of the expect block (next sibling or next scenario)
+          expect_end = lines.size
+          (expect_idx + 1...lines.size).each do |i|
+            # A line at the same or lesser indent that isn't blank → end
+            if lines[i] =~ /\S/ && lines[i][/^\s*/].length <= expect_indent
+              expect_end = i
+              break
+            end
+          end
+
+          # Check if golden_json already exists in the expect block
+          golden_start = nil
+          golden_end = nil
+          (expect_idx + 1...expect_end).each do |i|
+            if lines[i] =~ /^#{' ' * child_indent}golden_json:/
+              golden_start = i
+              # Find end of golden_json sub-block
+              (i + 1...expect_end).each do |j|
+                if lines[j] =~ /\S/ && lines[j][/^\s*/].length <= child_indent
+                  golden_end = j
+                  break
+                end
+                golden_end = j + 1
+              end
+              break
+            end
+          end
+
+          # Format the golden_json as YAML lines
+          golden_yaml = format_golden_yaml(golden, child_indent)
+
+          if golden_start
+            lines[golden_start...golden_end] = golden_yaml
+          else
+            # Insert before the end of the expect block
+            insert_at = expect_end
+            lines.insert(insert_at, *golden_yaml)
+          end
+        end
+
+        File.write(path, lines.join)
+      end
+
+      def format_golden_yaml(obj, indent)
+        prefix = " " * indent
+        lines = ["#{prefix}golden_json:\n"]
+        format_yaml_value(obj, indent + 2, lines)
+        lines
+      end
+
+      def format_yaml_value(obj, indent, lines)
+        prefix = " " * indent
+        case obj
+        when Hash
+          obj.each do |k, v|
+            case v
+            when Hash, Array
+              lines << "#{prefix}#{k}:\n"
+              format_yaml_value(v, indent + 2, lines)
+            else
+              lines << "#{prefix}#{k}: #{yaml_scalar(v)}\n"
+            end
+          end
+        when Array
+          if obj.empty?
+            # Replace the last line's trailing newline with " []\n"
+            lines[-1] = lines[-1].chomp + " []\n"
+          else
+            obj.each do |item|
+              if item.is_a?(Hash)
+                first = true
+                item.each do |k, v|
+                  item_prefix = first ? "#{prefix}- " : "#{prefix}  "
+                  first = false
+                  case v
+                  when Hash, Array
+                    lines << "#{item_prefix}#{k}:\n"
+                    format_yaml_value(v, indent + 4, lines)
+                  else
+                    lines << "#{item_prefix}#{k}: #{yaml_scalar(v)}\n"
+                  end
+                end
+              else
+                lines << "#{prefix}- #{yaml_scalar(item)}\n"
+              end
+            end
+          end
+        end
+      end
+
+      def yaml_scalar(v)
+        case v
+        when true then "true"
+        when false then "false"
+        when nil then "null"
+        when Integer, Float then v.to_s
+        when String
+          # Quote strings that could be misinterpreted
+          if v.empty? || v =~ /^[\{\[\d]/ || v =~ /[:#]/ || %w[true false null yes no].include?(v.downcase)
+            v.inspect
+          else
+            v
+          end
+        else
+          v.inspect
+        end
       end
 
       # ── Interactive shell ──────────────────────────────────────────

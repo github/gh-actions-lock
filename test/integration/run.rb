@@ -226,9 +226,9 @@ def hydrate_assertions(s, expect, needs_token: false)
           end
         end
 
-        if check.key?("gt")
+        if check.key?("gt") || check.key?("greater_than")
           val = result.to_f
-          threshold = check["gt"].to_f
+          threshold = (check["gt"] || check["greater_than"]).to_f
           unless val > threshold
             s.failures << "jq '#{expr}' = #{result}, expected > #{threshold}"
           end
@@ -237,10 +237,65 @@ def hydrate_assertions(s, expect, needs_token: false)
     end
   end
 
+  if expect["golden_json"]
+    s.assert_custom do |r|
+      begin
+        actual = JSON.parse(r.stdout)
+      rescue JSON::ParserError => e
+        s.failures << "golden_json: stdout is not valid JSON: #{e.message}"
+        next
+      end
+
+      expected = expect["golden_json"]
+      diff = golden_json_diff(expected, actual, "")
+      diff.each { |d| s.failures << "golden_json mismatch: #{d}" }
+    end
+  end
+
   # Token-required scenarios skip gracefully without a token
   if needs_token
     s.needs_token(true)
   end
+end
+
+# Deep comparison for golden JSON bodies. Returns an array of diff
+# descriptions (empty = match). Compares structure and values but
+# ignores key order within objects. Array order IS significant.
+def golden_json_diff(expected, actual, path)
+  diffs = []
+  case expected
+  when Hash
+    unless actual.is_a?(Hash)
+      return ["#{path}: expected object, got #{actual.class.name.downcase}"]
+    end
+    (expected.keys | actual.keys).sort.each do |k|
+      child_path = path.empty? ? k : "#{path}.#{k}"
+      unless expected.key?(k)
+        diffs << "#{child_path}: unexpected key in actual"
+        next
+      end
+      unless actual.key?(k)
+        diffs << "#{child_path}: missing in actual"
+        next
+      end
+      diffs.concat(golden_json_diff(expected[k], actual[k], child_path))
+    end
+  when Array
+    unless actual.is_a?(Array)
+      return ["#{path}: expected array, got #{actual.class.name.downcase}"]
+    end
+    if expected.size != actual.size
+      diffs << "#{path}: expected #{expected.size} items, got #{actual.size}"
+    end
+    [expected.size, actual.size].min.times do |i|
+      diffs.concat(golden_json_diff(expected[i], actual[i], "#{path}[#{i}]"))
+    end
+  else
+    if expected != actual
+      diffs << "#{path}: expected #{expected.inspect}, got #{actual.inspect}"
+    end
+  end
+  diffs
 end
 
 # ── Fixture data ────────────────────────────────────────────────────────
@@ -448,6 +503,7 @@ catalog["scenarios"].each do |spec|
   name = spec["name"].to_sym
   needs_token = spec["needs_token"]
   needs_stub = spec["needs_stub"]
+  skip_reason = spec["skip"]
   fixtures = spec["fixtures"] || {}
   expect = spec["expect"] || {}
   flags = spec["flags"] || []
@@ -459,6 +515,7 @@ catalog["scenarios"].each do |spec|
     s.expect_spec = expect
     s.fixture_spec = fixtures
     s.input_spec = spec["input"]
+    s.skip_reason = skip_reason
 
     # Hydrate workflow fixtures
     hydrate_workflows(s, fixtures["workflows"])
@@ -537,10 +594,19 @@ if profile_idx
   FileUtils.mkdir_p(runner.profile_dir)
 end
 
+golden_category = nil
+golden_idx = ARGV.index("--golden-update")
+if golden_idx
+  ARGV.delete_at(golden_idx)
+  golden_category = ARGV.delete_at(golden_idx) || "dependabot"
+end
+
 if ARGV.delete("--shell") || ARGV.delete("-i")
   runner.shell
 elsif ARGV.delete("--matrix")
   runner.print_matrix(catalog)
+elsif golden_category
+  runner.golden_update(category: golden_category, catalog: catalog)
 else
   runner.run(filter: ARGV[0], tag_filter: tag_filter, catalog: catalog)
 end

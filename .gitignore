@@ -4,3 +4,4 @@
 # VHS demo recordings
 /demo/vhs/out/
 profiles/
+dist/
