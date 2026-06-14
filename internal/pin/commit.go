@@ -66,7 +66,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		wfKey := workflowfile.KeyFromPath(wfPath)
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
-		deps = retainImpostorPins(rec, store, wfPath, deps, directKeys)
+		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
 		if err := store.Set(ctx, wfKey, deps, parentMap, directKeys); err != nil {
 			return fmt.Errorf("updating lockfile for %s: %w", wfPath, err)
 		}
@@ -118,21 +118,25 @@ func groupPinnedByWorkflow(rec *Record) map[string][]dep.Dependency {
 	return result
 }
 
-// retainImpostorPins re-adds the workflow's existing on-disk pins for any
-// impostor-flagged dep so a co-located re-pin never silently drops them.
-func retainImpostorPins(rec *Record, store *lockfile.State, wfPath string, deps []dep.Dependency, directKeys map[string]bool) []dep.Dependency {
-	impostor := make(map[string]bool)
+// retainUnresolvablePins re-adds the workflow's existing on-disk pins for any
+// entry that cannot be resolved this run (impostor-flagged or transiently
+// unresolvable, e.g. 403/SSO). Without this a co-located re-pin silently
+// drops the existing pin.
+func retainUnresolvablePins(rec *Record, store *lockfile.State, wfPath string, deps []dep.Dependency, directKeys map[string]bool) []dep.Dependency {
+	retain := make(map[string]bool)
 	for _, e := range rec.Entries {
-		if e.Resolution != Investigate || e.Issue != string(checks.ImpostorCommit) {
+		shouldRetain := (e.Resolution == Investigate && e.Issue == string(checks.ImpostorCommit)) ||
+			e.Resolution == Unresolved
+		if !shouldRetain {
 			continue
 		}
 		for _, wf := range e.Workflows {
 			if wf == wfPath {
-				impostor[strings.ToLower(e.NWO+"@"+e.Ref)] = true
+				retain[strings.ToLower(e.NWO+"@"+e.Ref)] = true
 			}
 		}
 	}
-	if len(impostor) == 0 {
+	if len(retain) == 0 {
 		return deps
 	}
 	existing, err := store.Get(workflowfile.KeyFromPath(wfPath))
@@ -145,7 +149,7 @@ func retainImpostorPins(rec *Record, store *lockfile.State, wfPath string, deps 
 	}
 	for _, d := range existing {
 		k := strings.ToLower(d.NWO + "@" + d.Ref)
-		if impostor[k] && !have[k] {
+		if retain[k] && !have[k] {
 			deps = append(deps, d)
 			directKeys[d.Key()] = true
 			have[k] = true

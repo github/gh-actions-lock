@@ -22,7 +22,7 @@ func (fakeMeta) RepoIDs(_ context.Context, _, _ string) (int64, int64, error) {
 
 // A co-located bump forces a workflow rewrite; the impostor pin already on
 // disk must be retained, not silently dropped toward an empty pin list.
-func TestRetainImpostorPins_keepsExistingPinOnColocatedRepin(t *testing.T) {
+func TestRetainUnresolvablePins_keepsExistingPinOnColocatedRepin(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
 	wfPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
@@ -50,7 +50,7 @@ func TestRetainImpostorPins_keepsExistingPinOnColocatedRepin(t *testing.T) {
 	}
 	directKeys := map[string]bool{"actions/checkout@v5": true}
 
-	got := retainImpostorPins(rec, store, wfPath, deps, directKeys)
+	got := retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
 
 	require.Len(t, got, 2, "impostor pin must be re-added alongside the bumped pin")
 	assert.True(t, directKeys["bad/impostor@v1"], "retained impostor pin must stay direct")
@@ -72,7 +72,7 @@ func TestRetainImpostorPins_keepsExistingPinOnColocatedRepin(t *testing.T) {
 
 // With no co-located new pin, the impostor's workflow is untouched and there
 // is nothing to retain; the helper is a no-op on the deps it is handed.
-func TestRetainImpostorPins_noopWithoutImpostorFinding(t *testing.T) {
+func TestRetainUnresolvablePins_noopWithoutImpostorFinding(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
 	wfPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
@@ -86,6 +86,55 @@ func TestRetainImpostorPins_noopWithoutImpostorFinding(t *testing.T) {
 	deps := []dep.Dependency{{NWO: "actions/checkout", Ref: "v5"}}
 	directKeys := map[string]bool{"actions/checkout@v5": true}
 
-	got := retainImpostorPins(rec, store, wfPath, deps, directKeys)
+	got := retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
 	assert.Len(t, got, 1)
+}
+
+// Unresolved entries (403, transient errors) should also be retained so
+// a co-located re-pin doesn't silently drop the existing pin.
+func TestRetainUnresolvablePins_keepsUnresolvedPin(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	wfPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
+	wfKey := workflowfile.KeyFromPath(wfPath)
+
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+
+	seed := []dep.Dependency{
+		{NWO: "corp/private", Ref: "v2", Tag: "v2", Branch: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashAlgo: "sha1"},
+		{NWO: "actions/checkout", Ref: "v4", Tag: "v4", Branch: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashAlgo: "sha1"},
+	}
+	require.NoError(t, store.Set(context.Background(), wfKey, seed, nil, nil))
+	require.NoError(t, store.Save())
+
+	// Re-pin: checkout bumps (Pinned), private repo 403s (Unresolved).
+	rec := &Record{
+		Entries: []Entry{
+			{NWO: "actions/checkout", Ref: "v5", SHA: "cccccccccccccccccccccccccccccccccccccccc", Resolution: Pinned, Direct: true, OnBranch: "main", Workflows: []string{wfPath}},
+			{NWO: "corp/private", Ref: "v2", Resolution: Unresolved, Issue: "sso-required", Reason: "403 SSO authorization required", Workflows: []string{wfPath}},
+		},
+	}
+	deps := []dep.Dependency{
+		{NWO: "actions/checkout", Ref: "v5", Branch: "main", SHA: "cccccccccccccccccccccccccccccccccccccccc", HashAlgo: "sha1"},
+	}
+	directKeys := map[string]bool{"actions/checkout@v5": true}
+
+	got := retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
+
+	require.Len(t, got, 2, "unresolved pin must be retained alongside the bumped pin")
+	assert.True(t, directKeys["corp/private@v2"], "retained unresolved pin must stay direct")
+
+	// Verify it survives a write round-trip.
+	require.NoError(t, store.Set(context.Background(), wfKey, got, buildParentMap(rec, wfPath), directKeys))
+	require.NoError(t, store.Save())
+
+	after, err := store.Get(wfKey)
+	require.NoError(t, err)
+	names := map[string]bool{}
+	for _, d := range after {
+		names[d.NWO] = true
+	}
+	assert.True(t, names["corp/private"], "unresolved pin must survive the re-pin write")
+	assert.True(t, names["actions/checkout"], "bumped pin must be written")
 }
