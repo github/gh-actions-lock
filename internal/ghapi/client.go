@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/github/gh-actions-pin/internal/profile"
-	"github.com/github/gh-actions-pin/internal/syncmap"
+	"github.com/github/gh-actions-lock/internal/profile"
+	"github.com/github/gh-actions-lock/internal/syncmap"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -105,8 +105,8 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		apiOpts.LogIgnoreEnv = cfg.logIgnore
 	default:
 		base := http.DefaultTransport
-		// Integration tests: skip TLS verification when GH_ACTIONS_PIN_INSECURE is set.
-		if os.Getenv("GH_ACTIONS_PIN_INSECURE") != "" {
+		// Integration tests: skip TLS verification when GH_ACTIONS_LOCK_INSECURE is set.
+		if os.Getenv("GH_ACTIONS_LOCK_INSECURE") != "" {
 			base = &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // integration tests only
 			}

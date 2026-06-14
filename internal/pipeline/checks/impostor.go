@@ -4,10 +4,10 @@ import (
 	"context"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/pinpool"
-	"github.com/github/gh-actions-pin/internal/resolve"
-	"github.com/github/gh-actions-pin/internal/tag"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/tag"
 )
 
 // ReachabilityChecker is the subset of resolve.Resolver needed to verify

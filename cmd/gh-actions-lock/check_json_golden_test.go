@@ -1,6 +1,6 @@
 package main
 
-// Golden-file snapshot test for the `gh actions-pin check --json` contract.
+// Golden-file snapshot test for the `gh actions-lock check --json` contract.
 //
 // We promised Dependabot the JSON shape is additive-only: no field renames,
 // no removals, no type shifts. New optional fields are allowed. This test
@@ -8,7 +8,7 @@ package main
 //
 // To regenerate the golden after an intentional additive change:
 //
-//	UPDATE_GOLDEN=1 go test ./cmd/gh-actions-pin/ -run TestCheckCommand_JSONGolden
+//	UPDATE_GOLDEN=1 go test ./cmd/gh-actions-lock/ -run TestCheckCommand_JSONGolden
 //
 // CI runs without the env var, so any change to the JSON shape must be
 // intentional and committed alongside the code change.
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/stretchr/testify/require"
 )
 

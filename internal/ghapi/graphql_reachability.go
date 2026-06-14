@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/github/gh-actions-pin/internal/profile"
+	"github.com/github/gh-actions-lock/internal/profile"
 )
 
 // batchReachabilitySize is the maximum number of branches per GraphQL query.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 )
 
 // countingTransport is a RoundTripper that records how many times each URL

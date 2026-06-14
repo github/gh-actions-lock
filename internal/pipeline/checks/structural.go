@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
+	"github.com/github/gh-actions-lock/internal/dep"
 )
 
 // checkNotPinned emits NotPinned for any uses: ref that has no
@@ -33,7 +33,7 @@ func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[st
 		}
 		f := newRefFinding(pw, ref, NotPinned, SeverityError, ConfidenceHigh)
 		f.Detail = fmt.Sprintf("used in workflow but not pinned in lockfile (%s@%s)", formatUseName(ref.Owner, ref.Repo, ref.Path), ref.Ref)
-		f.Remediation = "pin with `gh actions-pin`"
+		f.Remediation = "pin with `gh actions-lock`"
 		out = append(out, f)
 	}
 	return out
@@ -98,7 +98,7 @@ func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 		p := candidates[0]
 		f := newRefFinding(pw, ref, RefChanged, SeverityError, ConfidenceHigh)
 		f.Detail = fmt.Sprintf("workflow uses ref %q but lockfile pins %q", ref.Ref, p.Ref)
-		f.Remediation = "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line"
+		f.Remediation = "re-run `gh actions-lock` to refresh the lockfile, or revert the uses: line"
 		f.Dependency = synthDep(ref, p.Hex)
 		out = append(out, f)
 	}
@@ -137,7 +137,7 @@ func checkStale(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 			Severity:     SeverityWarning,
 			Confidence:   ConfidenceHigh,
 			Detail:       fmt.Sprintf("lockfile pins %s@%s but no uses: in this workflow references it", nwoLower(p.Owner, p.Repo), p.Ref),
-			Remediation:  "remove the entry or re-run `gh actions-pin`",
+			Remediation:  "remove the entry or re-run `gh actions-lock`",
 			Dependency: &dep.Dependency{
 				NWO: strings.ToLower(p.NWO),
 				Ref: p.Ref,

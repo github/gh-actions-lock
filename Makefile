@@ -1,5 +1,5 @@
-BIN := gh-actions-pin
-EXT_NAME := gh-actions-pin
+BIN := gh-actions-lock
+EXT_NAME := gh-actions-lock
 # Honor XDG_DATA_HOME so this matches where gh actually resolves its data
 # dir; fall back to the documented default when it's unset.
 XDG_DATA_HOME ?= $(HOME)/.local/share
@@ -10,7 +10,7 @@ RUBY := $(shell command -v /opt/homebrew/opt/ruby/bin/ruby 2>/dev/null || echo r
 .PHONY: build test test-integration test-shell test-live test-matrix test-smoke test-stub test-real install reinstall uninstall
 
 build:
-	go build -o $(BIN) ./cmd/gh-actions-pin
+	go build -o $(BIN) ./cmd/gh-actions-lock
 
 test:
 	go test ./...

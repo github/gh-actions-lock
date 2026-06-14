@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 // Typed map keys for the test stub: a small struct per lookup tuple so

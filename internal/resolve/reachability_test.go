@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 )
 
 func TestCheckReachability_CacheHit(t *testing.T) {

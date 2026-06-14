@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
-	"github.com/github/gh-actions-pin/internal/pipeline"
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/internal/pipeline"
+	"github.com/github/gh-actions-lock/internal/ui"
 )
 
 // PresentResults renders human-readable output from a check report.
@@ -200,8 +200,8 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 				bareSHADeps = append(bareSHADeps, key)
 			}
 		case f.Category == checks.RefMoved:
-			// TODO: surface ref-moved warnings once the `gh actions-pin
-			// update` path exists. Today the guidance ("run gh actions-pin
+			// TODO: surface ref-moved warnings once the `gh actions-lock
+			// update` path exists. Today the guidance ("run gh actions-lock
 			// to update") is wrong — a plain re-run trusts the lockfile and
 			// repins nothing; only --rescan even detects the movement. Until
 			// there's a command that actually advances a moved ref, swallow
@@ -221,14 +221,14 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		if willRemediate {
 			out.TermDetail("↳ resolving below")
 		} else {
-			out.TermDetail("↳ run `gh actions-pin` to pin them")
+			out.TermDetail("↳ run `gh actions-lock` to pin them")
 		}
 	}
 	if len(bareSHADeps) > 0 && !willRemediate {
 		out.TermWarn("%d %s pinned to a bare SHA without a tag ref",
 			len(bareSHADeps),
 			ui.Pluralize(len(bareSHADeps), "action is", "actions are"))
-		out.TermDetail("↳ run `gh actions-pin` to pin to tagged releases")
+		out.TermDetail("↳ run `gh actions-lock` to pin to tagged releases")
 	}
 	for _, key := range otherDetailWarnings {
 		wg := warnMap[key]

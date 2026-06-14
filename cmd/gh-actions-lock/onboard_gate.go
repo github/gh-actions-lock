@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +33,7 @@ func gateNoOnboard(report *checks.Report) []string {
 			f.Category = checks.OnboardingRequired
 			f.Severity = checks.SeverityInfo
 			f.Detail = fmt.Sprintf("%s@%s has no lockfile entry; --no-onboard refuses to add new workflows or actions", ar.FullName(), ar.Ref)
-			f.Remediation = "onboard it first with `gh actions-pin check` (without --no-onboard)"
+			f.Remediation = "onboard it first with `gh actions-lock check` (without --no-onboard)"
 			refused = append(refused, fmt.Sprintf("%s@%s in %s", ar.FullName(), ar.Ref, wr.Path))
 		}
 		if len(refusedKeys) == 0 {

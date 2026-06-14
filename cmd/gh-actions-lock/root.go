@@ -13,11 +13,11 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/pinpool"
-	"github.com/github/gh-actions-pin/internal/resolve"
-	"github.com/github/gh-actions-pin/internal/ui"
-	"github.com/github/gh-actions-pin/internal/workflowfile"
+	"github.com/github/gh-actions-lock/internal/lockfile"
+	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/ui"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/spf13/cobra"
 )
 
@@ -58,13 +58,13 @@ func execute() int {
 
 type resolverFunc func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error)
 
-// newRootCmd returns the cobra command for the root `actions-pin` invocation.
+// newRootCmd returns the cobra command for the root `actions-lock` invocation.
 // newResolver supplies the resolver builder; pass nil for production wiring.
 func newRootCmd(newResolver resolverFunc) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
-		Use:           "actions-pin [<workflow-path>...]",
+		Use:           "actions-lock [<workflow-path>...]",
 		Args:          cobra.ArbitraryArgs,
 		Short:         "Lock and verify GitHub Actions dependencies",
 		SilenceErrors: true,
@@ -86,21 +86,21 @@ lockfile. Pass --no-fix for a read-only check that writes nothing.
 --json selects the output format only (independent of --no-fix);
 structured results go to stdout and progress to stderr:
 
-  gh actions-pin --no-fix --json 2>/dev/null | jq .valid
+  gh actions-lock --no-fix --json 2>/dev/null | jq .valid
 
 Commands:
 
-  gh actions-pin             Verify and fix the dependency lock
+  gh actions-lock             Verify and fix the dependency lock
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows and fix what's fixable
-$ gh actions-pin
+$ gh actions-lock
 
 # Verify a specific workflow
-$ gh actions-pin .github/workflows/ci.yml
+$ gh actions-lock .github/workflows/ci.yml
 
 # Read-only check for CI integration (writes nothing)
-$ gh actions-pin --no-fix --json=valid,findings
+$ gh actions-lock --no-fix --json=valid,findings
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -131,7 +131,7 @@ $ gh actions-pin --no-fix --json=valid,findings
 // from the existing lockfile so repeat scans short-circuit the per-branch
 // Compare walk. newResolver is the DI seam; pass nil for production wiring.
 func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc, onCorrupt lockRecovery) ([]string, *resolve.Resolver, *lockfile.State, error) {
-	workflowsDir := os.Getenv("GH_ACTIONS_PIN_WORKFLOWS_DIR")
+	workflowsDir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR")
 	paths, err := discoverWorkflowPaths(workflowPaths, workflowsDir)
 	if err != nil {
 		return nil, nil, nil, err

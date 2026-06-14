@@ -3,7 +3,7 @@ package resolve
 import (
 	"context"
 
-	"github.com/github/gh-actions-pin/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 )
 
 // PeelTagObject reports whether sha is an annotated tag object in owner/repo

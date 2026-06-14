@@ -19,7 +19,7 @@ jobs:
         with:
           generate_attestations: true
           go_version_file: go.mod
-          go_build_options: ./cmd/gh-actions-pin
+          go_build_options: ./cmd/gh-actions-lock
 
   sync-early-access-release:
     needs: release

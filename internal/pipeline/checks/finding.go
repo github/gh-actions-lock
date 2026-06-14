@@ -2,7 +2,7 @@ package checks
 
 import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
+	"github.com/github/gh-actions-lock/internal/dep"
 )
 
 // Finding represents a single diagnosed issue (or clean bill) for a workflow.

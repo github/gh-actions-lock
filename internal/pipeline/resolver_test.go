@@ -3,10 +3,10 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 // TestPrewarmedResolver_LockedAndLiveCoexist verifies that locked-SHA

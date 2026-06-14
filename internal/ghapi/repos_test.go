@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 )
 
 func TestOrderedBranches(t *testing.T) {

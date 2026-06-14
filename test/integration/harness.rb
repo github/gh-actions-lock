@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Integration test harness for gh-actions-pin.
+# Integration test harness for gh-actions-lock.
 #
 # Modes:
 #   Batch:       ruby test/integration/run.rb [filter]
@@ -302,7 +302,7 @@ module ActionsPin
           return prepare_live(binary, profile_dir: profile_dir)
         end
 
-        dir = Dir.mktmpdir("actions-pin-test-")
+        dir = Dir.mktmpdir("actions-lock-test-")
 
         @workflows.each do |path, content|
           full = File.join(dir, ".github", "workflows", path)
@@ -351,7 +351,7 @@ module ActionsPin
       # Prepare a live repo scenario: shallow-clone the real repo and run
       # against its actual workflows. No stub server — hits real GitHub API.
       def prepare_live(binary, profile_dir: nil)
-        dir = Dir.mktmpdir("actions-pin-live-")
+        dir = Dir.mktmpdir("actions-lock-live-")
         nwo = @live_repo
 
         $stderr.print "\e[2m  cloning #{nwo}…\e[0m "
@@ -892,7 +892,7 @@ module ActionsPin
       # ── Interactive shell ──────────────────────────────────────────
 
       def shell
-        puts "\e[1mgh-actions-pin integration shell\e[0m"
+        puts "\e[1mgh-actions-lock integration shell\e[0m"
         puts "Binary: #{@binary}"
         puts "Scenarios: #{@scenarios.size} loaded"
         puts "Type \e[36mhelp\e[0m for commands, \e[36mlist\e[0m for scenarios."
@@ -1089,11 +1089,11 @@ module ActionsPin
             print "  \e[2mbuilding…\e[0m "
             $stdout.flush
             t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            ok = system("go", "build", "-o", "gh-actions-pin", "./cmd/gh-actions-pin", chdir: repo_root)
+            ok = system("go", "build", "-o", "gh-actions-lock", "./cmd/gh-actions-lock", chdir: repo_root)
             elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
             if ok
               puts "\e[32m✓\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
-              @binary = File.join(repo_root, "gh-actions-pin")
+              @binary = File.join(repo_root, "gh-actions-lock")
             else
               puts "\e[31m✗ build failed\e[0m"
             end
@@ -1298,13 +1298,13 @@ module ActionsPin
       end
 
       def find_binary
-        repo_bin = File.expand_path("../../../gh-actions-pin", __FILE__)
+        repo_bin = File.expand_path("../../../gh-actions-lock", __FILE__)
         return repo_bin if File.executable?(repo_bin)
 
-        gobin = File.join(ENV["HOME"], "go", "bin", "gh-actions-pin")
+        gobin = File.join(ENV["HOME"], "go", "bin", "gh-actions-lock")
         return gobin if File.executable?(gobin)
 
-        raise "Cannot find gh-actions-pin binary. Run `make build` first."
+        raise "Cannot find gh-actions-lock binary. Run `make build` first."
       end
 
       def find_scenario(name)
@@ -1752,7 +1752,7 @@ module ActionsPin
         end
 
         # Write report file
-        report_path = "/tmp/actions-pin-review-#{Time.now.strftime('%Y%m%d-%H%M%S')}.md"
+        report_path = "/tmp/actions-lock-review-#{Time.now.strftime('%Y%m%d-%H%M%S')}.md"
         File.write(report_path, render_review_markdown(verdicts))
         puts "  \e[2mReport saved:\e[0m \e[36m#{report_path}\e[0m"
         puts
@@ -1761,7 +1761,7 @@ module ActionsPin
         print "  \e[34mUpload as gist?\e[0m \e[2m[y/N]\e[0m > "
         answer = $stdin.gets&.strip&.downcase
         if answer == "y"
-          desc = "gh-actions-pin review #{Time.now.strftime('%Y-%m-%d %H:%M')}"
+          desc = "gh-actions-lock review #{Time.now.strftime('%Y-%m-%d %H:%M')}"
           out = `gh gist create #{Shellwords.shellescape(report_path)} --desc #{Shellwords.shellescape(desc)} 2>&1`.strip
           if $?.success?
             puts "  \e[32m✓\e[0m #{out}"
@@ -1776,9 +1776,9 @@ module ActionsPin
         remaining = total - reviewed
         md = render_review_markdown(verdicts)
         md += "\n---\n_Partial report: #{reviewed}/#{total} reviewed, #{remaining} remaining._\n"
-        path = "/tmp/actions-pin-review-partial-#{Time.now.strftime('%Y%m%d-%H%M%S')}.md"
+        path = "/tmp/actions-lock-review-partial-#{Time.now.strftime('%Y%m%d-%H%M%S')}.md"
         File.write(path, md)
-        desc = "gh-actions-pin review (partial #{reviewed}/#{total}) #{Time.now.strftime('%Y-%m-%d %H:%M')}"
+        desc = "gh-actions-lock review (partial #{reviewed}/#{total}) #{Time.now.strftime('%Y-%m-%d %H:%M')}"
         out = `gh gist create #{Shellwords.shellescape(path)} --desc #{Shellwords.shellescape(desc)} 2>&1`.strip
         if $?.success?
           puts "    \e[32m✓ shared:\e[0m #{out}"

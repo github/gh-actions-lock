@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 )
 
 func TestPeelTagObject_Tag(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/github/gh-actions-pin
+module github.com/github/gh-actions-lock
 
 go 1.25.8
 

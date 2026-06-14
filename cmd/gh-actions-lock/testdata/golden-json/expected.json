@@ -47,7 +47,7 @@
       "dependency": "actions/cache@v3",
       "detail": "workflow uses ref \"v3\" but lockfile pins \"v4\"",
       "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-      "remediation": "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line",
+      "remediation": "re-run `gh actions-lock` to refresh the lockfile, or revert the uses: line",
       "severity": "error",
       "workflow": ".github/workflows/ci.yml"
     },
@@ -57,7 +57,7 @@
       "dependency": "old/dead@v1",
       "detail": "lockfile pins old/dead@v1 but no uses: in this workflow references it",
       "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-      "remediation": "remove the entry or re-run `gh actions-pin`",
+      "remediation": "remove the entry or re-run `gh actions-lock`",
       "severity": "warning",
       "workflow": ".github/workflows/ci.yml"
     }
@@ -113,7 +113,7 @@
           "dependency": "actions/cache@v3",
           "detail": "workflow uses ref \"v3\" but lockfile pins \"v4\"",
           "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-          "remediation": "re-run `gh actions-pin` to refresh the lockfile, or revert the uses: line",
+          "remediation": "re-run `gh actions-lock` to refresh the lockfile, or revert the uses: line",
           "severity": "error",
           "workflow": ".github/workflows/ci.yml"
         },
@@ -123,7 +123,7 @@
           "dependency": "old/dead@v1",
           "detail": "lockfile pins old/dead@v1 but no uses: in this workflow references it",
           "doc_url": "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions",
-          "remediation": "remove the entry or re-run `gh actions-pin`",
+          "remediation": "remove the entry or re-run `gh actions-lock`",
           "severity": "warning",
           "workflow": ".github/workflows/ci.yml"
         }

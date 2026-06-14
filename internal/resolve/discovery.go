@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/pinpool"
 )
 
 // LatestRef returns the highest stable tag for an action repository.

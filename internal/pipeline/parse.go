@@ -5,13 +5,13 @@ import (
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/lockfile"
-	"github.com/github/gh-actions-pin/internal/pinpool"
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
-	"github.com/github/gh-actions-pin/internal/resolve"
-	"github.com/github/gh-actions-pin/internal/workflowfile"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/lockfile"
+	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // Diagnose scans workflows and produces findings for each.

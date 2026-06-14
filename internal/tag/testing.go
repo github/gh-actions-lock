@@ -3,8 +3,8 @@ package tag
 import (
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 )
 
 // NewListerForTest builds a Lister wired to a mock registry.

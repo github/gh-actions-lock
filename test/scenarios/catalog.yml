@@ -1,4 +1,4 @@
-# Shared scenario catalog for gh-actions-pin integration tests.
+# Shared scenario catalog for gh-actions-lock integration tests.
 #
 # Both the Ruby integration harness (test/integration/) and the Go scenario
 # loader (test/scenarios/) consume this file. Each scenario describes:
@@ -974,7 +974,7 @@ scenarios:
             dependency: actions/checkout@v4
             detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
         lockfile_version: v0.0.1
@@ -986,7 +986,7 @@ scenarios:
                 dependency: actions/checkout@v4
                 detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/ci.yml
             path: .github/workflows/ci.yml
@@ -1021,7 +1021,7 @@ scenarios:
             dependency: actions/setup-node@v4
             detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
         lockfile_version: v0.0.1
@@ -1039,7 +1039,7 @@ scenarios:
                 dependency: actions/setup-node@v4
                 detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/ci.yml
             path: .github/workflows/ci.yml
@@ -1089,7 +1089,7 @@ scenarios:
             dependency: actions/checkout@v4
             detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
           - category: onboarding-required
@@ -1097,7 +1097,7 @@ scenarios:
             dependency: actions/setup-node@v4
             detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
         lockfile_version: v0.0.1
@@ -1118,7 +1118,7 @@ scenarios:
                 dependency: actions/checkout@v4
                 detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/deploy.yml
               - category: onboarding-required
@@ -1126,7 +1126,7 @@ scenarios:
                 dependency: actions/setup-node@v4
                 detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-pin check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/deploy.yml
             path: .github/workflows/deploy.yml

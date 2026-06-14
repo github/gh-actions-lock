@@ -7,8 +7,8 @@ import (
 	"time"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/ghapi"
-	"github.com/github/gh-actions-pin/internal/syncmap"
+	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/syncmap"
 	"golang.org/x/sync/singleflight"
 )
 

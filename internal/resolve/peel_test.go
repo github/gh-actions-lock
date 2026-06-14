@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 )
 
 func TestPeelTagObject_CachesPositive(t *testing.T) {

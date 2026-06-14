@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/github/gh-actions-pin/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
-	"github.com/github/gh-actions-pin/internal/ui"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ui"
 )
 
 // newTestUI returns a UI whose narration log sinks to io.Discard, mirroring
@@ -52,7 +52,7 @@ func TestPresentResults_WarningsReachTerminal(t *testing.T) {
 			notWanted: []string{
 				"moved upstream",
 				"compare/111111111111...222222222222",
-				"run `gh actions-pin` to update",
+				"run `gh actions-lock` to update",
 			},
 		},
 		{
@@ -176,7 +176,7 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 				Confidence:   checks.ConfidenceHigh,
 			}},
 			wantOutput: []string{"not yet pinned", "↳ resolving below"},
-			notWanted:  []string{"run `gh actions-pin`"},
+			notWanted:  []string{"run `gh actions-lock`"},
 		},
 		{
 			name:          "not-pinned shows manual hint when not remediating",
@@ -187,7 +187,7 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 				Severity:     checks.SeverityWarning,
 				Confidence:   checks.ConfidenceHigh,
 			}},
-			wantOutput: []string{"not yet pinned", "↳ run `gh actions-pin` to pin them"},
+			wantOutput: []string{"not yet pinned", "↳ run `gh actions-lock` to pin them"},
 			notWanted:  []string{"resolving below"},
 		},
 		{
@@ -225,7 +225,7 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 			}},
 			notWanted: []string{
 				"moved upstream",
-				"run `gh actions-pin` to update",
+				"run `gh actions-lock` to update",
 			},
 		},
 		{

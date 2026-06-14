@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-pin/internal/dep"
+	"github.com/github/gh-actions-lock/internal/dep"
 )
 
 // depToPin converts a dep.Dependency into a parserlock.Pin without any
