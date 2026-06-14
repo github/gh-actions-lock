@@ -16,9 +16,10 @@ func noOnboardFlag(cmd *cobra.Command) bool {
 }
 
 // gateNoOnboard rewrites per-workflow NotPinned findings to OnboardingRequired
-// and drops their refs so Plan never pins them. Returns refs refused.
-func gateNoOnboard(report *checks.Report) int {
-	refused := 0
+// and drops their refs so Plan never pins them. Returns the refused entry labels
+// (e.g. "actions/checkout@v4 in .github/workflows/ci.yml").
+func gateNoOnboard(report *checks.Report) []string {
+	var refused []string
 	for wi := range report.Workflows {
 		wr := &report.Workflows[wi]
 		refusedKeys := make(map[string]bool)
@@ -32,7 +33,7 @@ func gateNoOnboard(report *checks.Report) int {
 			f.Category = checks.OnboardingRequired
 			f.Detail = fmt.Sprintf("%s@%s has no lockfile entry; --no-onboard refuses to add new workflows or actions", ar.FullName(), ar.Ref)
 			f.Remediation = "onboard it first with `gh actions-pin check` (without --no-onboard)"
-			refused++
+			refused = append(refused, fmt.Sprintf("%s@%s in %s", ar.FullName(), ar.Ref, wr.Path))
 		}
 		if len(refusedKeys) == 0 {
 			continue

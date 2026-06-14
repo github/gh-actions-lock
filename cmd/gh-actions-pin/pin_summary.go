@@ -16,7 +16,7 @@ import (
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, onboardingRefused int, noNarrow bool) error {
+func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -43,6 +43,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		console.TermNeutral("No workflows to check")
 		return nil
 	}
+	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
 	if allClean && onboardingRefused == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
@@ -58,6 +59,9 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		console.TermCaution("%d onboarding-required %s skipped — re-run without --no-onboard to add %s",
 			onboardingRefused, ui.Pluralize(onboardingRefused, "entry", "entries"),
 			ui.Pluralize(onboardingRefused, "it", "them"))
+		for _, label := range refusedLabels {
+			console.TermDetail("  %s", console.TermYellow(label))
+		}
 	}
 
 	if len(investigated) > 0 || onboardingRefused > 0 || len(unresolvedEntries) > 0 {

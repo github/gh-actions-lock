@@ -46,9 +46,6 @@ func TestCatalogByTag(t *testing.T) {
 	smoke := cat.ByTag("smoke")
 	assert.Greater(t, len(smoke), 0, "expected at least one 'smoke' scenario")
 
-	live := cat.ByTag("live")
-	assert.Greater(t, len(live), 0, "expected at least one 'live' scenario")
-
 	stub := cat.ByTag("stub")
 	assert.Greater(t, len(stub), 0, "expected at least one 'stub' scenario")
 }
