@@ -1050,3 +1050,55 @@ scenarios:
           greater_than: 0
         - expr: '.findings[] | select(.severity == "error") | .severity'
           equals: "error"
+
+  - name: dbot_impostor_blocks
+    category: dependabot
+    description: "Impostor commit (unreachable SHA) produces impostor-commit/error finding"
+    needs_stub: true
+    skip: "stub infra not yet wired — requires multi-phase HTTP stubs (GraphQL + REST branch-contains + REST compare)"
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: '.valid'
+          equals: "false"
+        - expr: '.findings | length'
+          greater_than: 0
+        - expr: '.findings[] | select(.category == "impostor-commit") | .category'
+          equals: "impostor-commit"
+        - expr: '.findings[] | select(.category == "impostor-commit") | .severity'
+          equals: "error"
+
+  - name: dbot_forgery_blocks
+    category: dependabot
+    description: "Lockfile forgery (pin doesn't match resolved commit) produces lockfile-forgery/error finding"
+    needs_stub: true
+    skip: "stub infra not yet wired — requires multi-phase HTTP stubs (GraphQL + REST compare)"
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: '.valid'
+          equals: "false"
+        - expr: '.findings | length'
+          greater_than: 0
+        - expr: '.findings[] | select(.category == "lockfile-forgery") | .category'
+          equals: "lockfile-forgery"
+        - expr: '.findings[] | select(.category == "lockfile-forgery") | .severity'
+          equals: "error"
