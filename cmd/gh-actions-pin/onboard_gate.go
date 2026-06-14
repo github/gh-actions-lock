@@ -31,6 +31,7 @@ func gateNoOnboard(report *checks.Report) []string {
 			ar := f.ActionRef
 			refusedKeys[parserlock.IndexKey(ar.Owner, ar.Repo, ar.Ref)] = true
 			f.Category = checks.OnboardingRequired
+			f.Severity = checks.SeverityInfo
 			f.Detail = fmt.Sprintf("%s@%s has no lockfile entry; --no-onboard refuses to add new workflows or actions", ar.FullName(), ar.Ref)
 			f.Remediation = "onboard it first with `gh actions-pin check` (without --no-onboard)"
 			refused = append(refused, fmt.Sprintf("%s@%s in %s", ar.FullName(), ar.Ref, wr.Path))

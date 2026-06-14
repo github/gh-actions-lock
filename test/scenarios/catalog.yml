@@ -758,7 +758,7 @@ scenarios:
 
   - name: fresh_no_onboard_refused
     category: onboarding
-    description: "--no-onboard: new (not-yet-tracked) workflow refused — exit 1"
+    description: "--no-onboard: new (not-yet-tracked) workflow refused — exit 0 (non-blocking skip)"
     needs_token: true
     flags: ["--no-onboard"]
     fixtures:
@@ -767,7 +767,8 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit: 1
+      exit: 0
+      output_contains: ["onboarding-required"]
 
   - name: onboarded_no_onboard_repin
     category: onboarding
@@ -927,7 +928,7 @@ scenarios:
 
   - name: dbot_fresh_refused
     category: dependabot
-    description: "Fresh repo with --no-onboard — exit 1, onboarding-required finding"
+    description: "Fresh repo with --no-onboard — exit 0, onboarding-required/info finding (non-blocking skip)"
     needs_token: true
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings,workflows"]
     fixtures:
@@ -936,17 +937,17 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
       jq:
         - expr: ".valid"
-          equals: "false"
+          equals: "true"
         - expr: ".findings | length"
           greater_than: 0
         - expr: ".findings[0].category"
           equals: "onboarding-required"
         - expr: ".findings[0].severity"
-          equals: "error"
+          equals: "info"
         - expr: ".findings[0].workflow"
           contains: "ci.yml"
 

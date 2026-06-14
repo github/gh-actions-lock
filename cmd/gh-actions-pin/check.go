@@ -380,7 +380,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 			return err
 		}
-		if len(record.Investigated()) > 0 || onboardingRefused > 0 {
+		if len(record.Investigated()) > 0 {
 			return errSilent
 		}
 		return nil

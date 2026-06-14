@@ -64,7 +64,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		}
 	}
 
-	if len(investigated) > 0 || onboardingRefused > 0 || len(unresolvedEntries) > 0 {
+	if len(investigated) > 0 || len(unresolvedEntries) > 0 {
 		return errSilent
 	}
 	return nil
