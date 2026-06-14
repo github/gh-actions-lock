@@ -331,11 +331,11 @@ module ActionsPin
           env["GH_HOST"] = "127.0.0.1:#{server.port}"
           token = env.delete("GH_TOKEN") || "stub-token"
           env["GH_ENTERPRISE_TOKEN"] = token
-          env["GH_ACTIONS_PIN_INSECURE"] = "1"
+          env["GH_ACTIONS_LOCK_INSECURE"] = "1"
         end
 
         @setup_blocks.each { |b| b.call(dir) }
-        env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
+        env["GH_ACTIONS_LOCK_CACHE_DIR"] = File.join(dir, ".cache")
 
         cmd = [binary] + @args
         if profile_dir
@@ -363,7 +363,7 @@ module ActionsPin
 
         env = @env.dup
         @setup_blocks.each { |b| b.call(dir) }
-        env["GH_ACTIONS_PIN_CACHE_DIR"] = File.join(dir, ".cache")
+        env["GH_ACTIONS_LOCK_CACHE_DIR"] = File.join(dir, ".cache")
 
         cmd = [binary] + @args
         if profile_dir
