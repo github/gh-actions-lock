@@ -1026,3 +1026,26 @@ scenarios:
       jq:
         - expr: '.findings[] | select(.category == "version-ref") | .category'
           equals: ""
+
+  - name: dbot_transient_403_drops_pin
+    category: dependabot
+    description: "SSO 403 on a previously-pinned action produces not-pinned/error finding"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: '.valid'
+          equals: "false"
+        - expr: '.findings | length'
+          greater_than: 0
+        - expr: '.findings[] | select(.severity == "error") | .severity'
+          equals: "error"
