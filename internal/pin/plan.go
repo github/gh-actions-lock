@@ -69,7 +69,7 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		opts.prevImpreciseNWO = make(map[string]bool)
 		for _, d := range opts.Store.AllDeps() {
 			sv, ok := parserlock.ParseSemVer(d.Ref)
-			if !ok || !sv.IsFull() {
+			if ok && !sv.IsFull() {
 				opts.prevImpreciseNWO[strings.ToLower(d.NWO)] = true
 			}
 		}

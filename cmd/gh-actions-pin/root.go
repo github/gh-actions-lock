@@ -160,12 +160,19 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 		// is explicit and surfaces to the user.
 		if errors.Is(err, lockfile.ErrCorruptLockfile) && onCorrupt != nil {
 			lockPath := filepath.Join(".", parserlock.Path)
+			if workflowsDir != "" {
+				lockPath = filepath.Join(workflowsDir, "actions.lock")
+			}
 			recovered, rerr := onCorrupt(lockPath, err)
 			if rerr != nil {
 				return nil, nil, nil, rerr
 			}
 			if recovered {
-				store, err = lockfile.LoadState(".", r)
+				if workflowsDir != "" {
+					store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), r)
+				} else {
+					store, err = lockfile.LoadState(".", r)
+				}
 			}
 		}
 		if err != nil {

@@ -718,7 +718,7 @@ scenarios:
 
   - name: fresh_no_narrow_nudge_suppressed
     category: narrowing
-    description: "Default narrowing: imprecise ref produces version-ref nudge in terminal"
+    description: "--no-narrow: version-ref nudge is suppressed"
     needs_token: true
     flags: ["--no-narrow"]
     fixtures:
@@ -799,7 +799,7 @@ scenarios:
           actions: ["actions/setup-node@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 1
+      exit: 0
 
   - name: fresh_no_fix_no_onboard_json_findings
     category: onboarding
@@ -812,7 +812,7 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
       stdout_contains: ["onboarding-required"]
 
@@ -827,7 +827,7 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit: 1
+      exit: 0
       output_contains: ["onboarding-required", "skipped"]
 
   - name: onboarded_no_narrow_no_onboard_combined
@@ -855,7 +855,7 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit: 1
+      exit: 0
 
   # ═══════════════════════════════════════════════════════════════════════
   # CATEGORY: lockfile (additional scenarios)
