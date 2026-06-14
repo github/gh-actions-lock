@@ -13,11 +13,13 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-pin/cmd/gh-actions-pin/format"
 	"github.com/github/gh-actions-pin/internal/config"
 	"github.com/github/gh-actions-pin/internal/pin"
 	"github.com/github/gh-actions-pin/internal/pinpool"
 	"github.com/github/gh-actions-pin/internal/pipeline"
+	"github.com/github/gh-actions-pin/internal/pipeline/checks"
 	"github.com/github/gh-actions-pin/internal/profile"
 	"github.com/github/gh-actions-pin/internal/resolve"
 	"github.com/github/gh-actions-pin/internal/tag"
@@ -40,6 +42,10 @@ type checkOptions struct {
 	// rewriting workflows or updating the lockfile. Orthogonal to the
 	// renderer choice (--json).
 	noFix bool
+	// noNarrow disables tag narrowing: mutable version refs like "v4"
+	// are kept as-is in the lock comment instead of being resolved to
+	// the full patch tag (e.g. "v4.2.1").
+	noNarrow bool
 }
 
 func newCheckCmd(newResolver resolverFunc) *cobra.Command {
@@ -124,6 +130,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
+	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false, "Keep mutable version refs (e.g. v4) instead of narrowing to full patch tags (e.g. v4.2.1)")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
 
@@ -173,7 +180,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	endSetup := prof.Phase("setup (discover + lockfile)")
-	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver)
+	// check fix mode can rebuild a deleted lockfile, so interactive sessions
+	// may delete-and-recreate an unreadable one. --no-fix is read-only and
+	// must not delete; it fails instead.
+	recoverLock := newLockRecovery(noInteractiveFlag(cmd), console, confirmFactoryHook, !opts.noFix)
+	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver, recoverLock)
 	if err != nil {
 		return err
 	}
@@ -250,6 +261,20 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	valid := result.Valid
 	skippedRescan := result.SkippedRescan
 
+	// --no-onboard: refuse to onboard new workflows or actions. Rewrite the
+	// relevant not-pinned findings to onboarding-required and drop their refs
+	// so Plan/Commit never pins them; already-tracked refs that were bumped
+	// (ref-changed) are left to re-pin as usual.
+	onboardingRefused := 0
+	var refusedLabels []string
+	if noOnboardFlag(cmd) {
+		refusedLabels = gateNoOnboard(report)
+		onboardingRefused = len(refusedLabels)
+		if onboardingRefused > 0 {
+			valid = report.IsValid()
+		}
+	}
+
 	// Render the read-only diagnosis. --json selects the renderer; it does
 	// not decide whether fixes are applied. Terminal output is shown up front
 	// (the human narrative). JSON is emitted later, after any fixes land, so
@@ -272,6 +297,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if opts.jsonFields != "" {
 			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 				return err
+			}
+		}
+		// Surface SSO URL even in read-only mode — it's the actionable fix
+		// for SAML-gated repos and shouldn't require a --fix run to see.
+		if gc := r.GHClient(); gc != nil {
+			if ssoURL := gc.SSOURL(); ssoURL != "" {
+				console.TermBlank()
+				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
 			}
 		}
 		if !valid {
@@ -303,6 +336,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		RepoOwner: repoOwner,
 		RepoName:  repoName,
 		Version:   cliVersion(),
+		NoNarrow:  opts.noNarrow,
 	})
 	endPlan()
 	if planErr != nil {
@@ -320,6 +354,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endCommit()
 
 	console.StopProgress()
+
+	// Inject info-severity findings for non-semver refs so they appear
+	// in --json output. Suppressed when --no-narrow is set (user chose
+	// this deliberately).
+	if !opts.noNarrow {
+		injectVersionRefFindings(report, record)
+	}
 
 	// Write the run log.
 	record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.hostname)}
@@ -347,7 +388,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// Terminal summary.
 	hasInconclusive := opts.rescan && report.HasInconclusive()
-	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive)
+	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive, refusedLabels, opts.noNarrow)
 
 	// Surface the SAML SSO authorization URL if one was captured during
 	// the run, matching cli/cli's "Authorize in your web browser:" line.
@@ -372,6 +413,60 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return errSilent
 	}
 	return nil
+}
+
+// injectVersionRefFindings appends info-severity findings for entries pinned
+// with a non-full-semver ref (v4, v3.1, main, etc.). These surface in --json
+// output so machine consumers can detect imprecise refs.
+func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
+	// Index which workflows each non-semver dep appears in.
+	type depInfo struct {
+		nwo string
+		ref string
+		wfs map[string]bool
+	}
+	seen := map[string]*depInfo{} // NWO@Ref → info
+	for _, e := range record.Entries {
+		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
+			continue
+		}
+		sv, ok := parserlock.ParseSemVer(e.Ref)
+		if ok && sv.IsFull() {
+			continue
+		}
+		key := e.NWO + "@" + e.Ref
+		di, exists := seen[key]
+		if !exists {
+			di = &depInfo{nwo: e.NWO, ref: e.Ref, wfs: map[string]bool{}}
+			seen[key] = di
+		}
+		for _, wf := range e.Workflows {
+			di.wfs[wf] = true
+		}
+	}
+	if len(seen) == 0 {
+		return
+	}
+
+	// Append a finding to each affected workflow report.
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		for _, di := range seen {
+			if !di.wfs[wr.Path] {
+				continue
+			}
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: wr.Path,
+				Category:     checks.VersionRef,
+				Severity:     checks.SeverityInfo,
+				Confidence:   checks.ConfidenceHigh,
+				Detail: fmt.Sprintf(
+					"%s@%s: prefer a full semver ref (e.g. v4.2.1) — each patch tag resolves to exactly one commit",
+					di.nwo, di.ref,
+				),
+			})
+		}
+	}
 }
 
 // cliVersion returns the gh-actions-pin extension version embedded by the Go

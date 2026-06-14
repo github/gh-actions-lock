@@ -26,6 +26,17 @@ type PlanOptions struct {
 	RepoOwner string // for same-owner narrowing skip
 	RepoName  string
 	Version   string // CLI version for the record
+	// NoNarrow disables tag narrowing: mutable version refs (v4, v3.1)
+	// are kept as the lock comment instead of being resolved to full
+	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
+	NoNarrow bool
+
+	// prevImpreciseNWO is computed once in Plan() from the global lockfile
+	// state. It holds lowercased NWOs that are already recorded with a
+	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
+	// for these to respect the user's prior precision choice and avoid
+	// creating duplicate dep entries at different ref granularities.
+	prevImpreciseNWO map[string]bool
 
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
@@ -48,6 +59,20 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	items := make([]indexedWR, len(report.Workflows))
 	for i, wr := range report.Workflows {
 		items[i] = indexedWR{idx: i, wr: wr}
+	}
+
+	// Build set of NWOs globally recorded with a non-semver ref. Checked
+	// across all workflows (not per-WF) so two workflows referencing the
+	// same action settle on the same ref precision — avoiding duplicate
+	// dep entries in the lockfile.
+	if opts.prevImpreciseNWO == nil && opts.Store != nil {
+		opts.prevImpreciseNWO = make(map[string]bool)
+		for _, d := range opts.Store.AllDeps() {
+			sv, ok := parserlock.ParseSemVer(d.Ref)
+			if ok && !sv.IsFull() {
+				opts.prevImpreciseNWO[strings.ToLower(d.NWO)] = true
+			}
+		}
 	}
 
 	results := make([]planResult, len(report.Workflows))
@@ -88,14 +113,18 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	var entries []Entry
 	var wplans []WorkflowPlan
 
+	// Drop stale inventory entries so a re-pin converges: the orphan leaves
+	// workflows[path] and Save's GC removes its dependencies[] entry.
+	inventory := pruneStaleInventory(wr.Inventory, wr.Findings)
+
 	if !wr.NeedsAttention() {
-		entries = verifiedEntries(wr.Inventory, wr.Path)
+		entries = verifiedEntries(inventory, wr.Path)
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
 	// Per-dep trust: recorded deps skip the network path.
-	unrecordedRefs, inventorySHA := partitionByInventory(wr.Inventory, wr.ActionRefs)
-	entries = verifiedEntries(wr.Inventory, wr.Path)
+	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
+	entries = verifiedEntries(inventory, wr.Path)
 
 	if len(unrecordedRefs) == 0 {
 		return planResult{entries: entries, wplans: wplans}, nil
@@ -235,6 +264,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	for k, v := range autoFixRewrites {
 		rewrites[k] = v
 	}
+
 	if opts.Tagger != nil {
 		for i := range deps {
 			dep := &deps[i]
@@ -268,9 +298,15 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 
-			// Mutable version tags (v4, v3.1): narrow to patch release.
+			// Version tags without full semver (v4, v3.1): narrow to patch release.
+			// Skip if --no-narrow or if the lockfile already recorded this
+			// dep without a full semver ref (respect prior precision choice).
+			nwoLower := strings.ToLower(dep.NWO)
+			if opts.NoNarrow || opts.prevImpreciseNWO[nwoLower] {
+				continue
+			}
 			sv, ok := parserlock.ParseSemVer(dep.Ref)
-			if !ok || !sv.IsMutable() {
+			if !ok || sv.IsFull() {
 				continue
 			}
 			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
@@ -458,6 +494,31 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 		}
 	}
 	return unrecorded, shaSeen
+}
+
+// pruneStaleInventory drops inventory entries matching a stale finding (a pin
+// the workflow no longer references), so a fix-mode re-pin converges.
+func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding) []checks.InventoryEntry {
+	stale := make(map[string]bool)
+	for _, f := range findings {
+		if f.Category != checks.Stale || f.Dependency == nil {
+			continue
+		}
+		d := f.Dependency
+		stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
+	}
+	if len(stale) == 0 {
+		return inventory
+	}
+	out := make([]checks.InventoryEntry, 0, len(inventory))
+	for _, inv := range inventory {
+		key := strings.ToLower(inv.Dep.NWO + "@" + inv.Dep.Ref + ":" + inv.Dep.SHA)
+		if stale[key] {
+			continue
+		}
+		out = append(out, inv)
+	}
+	return out
 }
 
 // verifiedEntries builds Verified plan entries for every inventory item.

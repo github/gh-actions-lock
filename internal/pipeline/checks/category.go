@@ -52,12 +52,18 @@ const (
 	// Non-blocking diagnostic: surfaced so consumers can retry rather
 	// than treating the dep as verified.
 	ReachabilityUnknown Category = "reachability-unknown"
-	// OnboardingRequired means an `upgrade --no-onboard` run targeted
-	// a workflow that has no existing entry in `lockfile.workflows{}`.
-	// The CLI refuses to silently add it during a dependency-update
-	// run; the operator must onboard the workflow explicitly before
-	// re-running upgrade.
+	// OnboardingRequired means a `check --no-onboard` run encountered a
+	// workflow (or an action within one) that has no existing entry in the
+	// lockfile. Under --no-onboard the tool refuses to add new entries: the
+	// workflow/action is skipped and surfaced rather than silently pinned.
+	// Already-tracked entries are still re-pinned. The operator must onboard
+	// explicitly (run `gh actions-pin check` without --no-onboard) to add it.
 	OnboardingRequired Category = "onboarding-required"
+	// VersionRef is an informational nudge: a dependency is pinned with a
+	// ref that is not a full semver tag (e.g. v4, v3.1, main). Full semver
+	// tags (v4.2.1) each resolve to exactly one commit, making the lock
+	// comment durable across re-pins.
+	VersionRef Category = "version-ref"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

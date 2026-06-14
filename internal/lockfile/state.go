@@ -45,8 +45,17 @@ type State struct {
 	idSF     singleflight.Group
 }
 
+// ErrCorruptLockfile reports that a lockfile exists on disk but cannot be
+// parsed (malformed YAML, unknown fields, or a dependency entry missing a
+// required key). It is distinct from a missing lockfile (legitimately empty)
+// and from a future-version lockfile (ErrFutureVersion). Callers decide
+// recovery policy: prompt to delete and recreate, or fail loudly. Loading
+// must never silently discard an unreadable lockfile and overwrite it.
+var ErrCorruptLockfile = errors.New("lockfile is unreadable")
+
 // LoadState reads the lockfile at repoRoot, returning an empty in-memory file
-// when none exists on disk.
+// when none exists on disk. A lockfile that exists but cannot be parsed is
+// surfaced as ErrCorruptLockfile rather than being silently treated as empty.
 func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 	return LoadStateAt(filepath.Join(repoRoot, parserlock.Path), meta)
 }
@@ -64,9 +73,7 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 		if err != nil {
 			// A future-version lockfile (written by a newer binary) must
 			// surface to the user — silently overwriting it would destroy
-			// pins this binary cannot interpret. Other parse failures
-			// (corrupt YAML, unknown fields) are treated as empty so a
-			// recoverable lockfile can be rewritten.
+			// pins this binary cannot interpret.
 			//
 			// The standalone parser emits a tool-agnostic hint ("upgrade the
 			// tool that reads this lockfile"), so name the concrete command
@@ -74,8 +81,11 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 			if errors.Is(err, parserlock.ErrFutureVersion) {
 				return nil, fmt.Errorf("reading %s: %w; run `gh extension upgrade gh-actions-pin` to update", parserlock.Path, err)
 			}
-			// Corrupt or unrecognized lockfile — treat as empty and overwrite.
-			file = parserlock.File{Version: parserlock.Version}
+			// Any other parse failure (corrupt YAML, unknown fields, a
+			// dependency entry missing a required key) is surfaced, not
+			// swallowed. Treating it as empty here would silently discard
+			// the user's pins and overwrite them on the next save.
+			return nil, fmt.Errorf("%w: %s: %v", ErrCorruptLockfile, parserlock.Path, err)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		file = parserlock.File{Version: parserlock.Version}
@@ -250,15 +260,19 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 	// keyToPin: Dependency.Key() (NWO@Ref) → canonical pin (NWO@Ref:algo-hex).
 	keyToPin := make(map[string]string, len(deps))
 	for _, d := range deps {
-		if d.Branch == "" {
-			return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
-		}
 		pin, err := depToPin(d)
 		if err != nil {
 			return err
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
+		// The read path (parserlock.Pin) drops branch, so an unchanged carried
+		// dep arrives branchless; reuse the recorded branch. Only a new pin errors.
+		if d.Branch == "" {
+			if existing, ok := s.file.Dependencies[pinKey]; !ok || existing.Branch == "" {
+				return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-pin` to populate it", d.NWO, d.Ref)
+			}
+		}
 		keyToPin[d.Key()] = pinKey
 		var isDirect bool
 		if directKeys != nil {
@@ -319,9 +333,20 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			}
 			sort.Strings(uses)
 		}
+		// Preserve branch/tag from the existing entry for an unchanged branchless
+		// pin; a pin carrying its own branch (fresh/changed resolution) overrides.
+		branch, tag := d.Branch, d.Tag
+		if existing, ok := s.file.Dependencies[pinKey]; ok {
+			if branch == "" {
+				branch = existing.Branch
+			}
+			if tag == "" {
+				tag = existing.Tag
+			}
+		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
-			Tag:     d.Tag,
-			Branch:  d.Branch,
+			Tag:     tag,
+			Branch:  branch,
 			Commit:  pin.Algo + "-" + pin.Hex,
 			OwnerID: ids[0],
 			RepoID:  ids[1],

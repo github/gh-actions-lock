@@ -30,6 +30,7 @@ type Scenario struct {
 	Description string   `yaml:"description"`
 	NeedsToken  bool     `yaml:"needs_token"`
 	NeedsStub   bool     `yaml:"needs_stub"`
+	Skip        string   `yaml:"skip,omitempty"`
 	Tags        []string `yaml:"tags"`
 	Flags       []string `yaml:"flags"`
 	LiveRepo    string   `yaml:"live_repo"`
@@ -52,16 +53,28 @@ type WorkflowFixture struct {
 	Raw     string   `yaml:"raw"`
 }
 
+// JQCheck is a single jq-based assertion on JSON output.
+type JQCheck struct {
+	Expr        string `yaml:"expr"`
+	Equals      string `yaml:"equals,omitempty"`
+	Contains    string `yaml:"contains,omitempty"`
+	NotEquals   string `yaml:"not_equals,omitempty"`
+	Matches     string `yaml:"matches,omitempty"`
+	GreaterThan *int   `yaml:"greater_than,omitempty"`
+}
+
 // Expect declares assertions on the scenario outcome.
 type Expect struct {
-	Exit            *int     `yaml:"exit"`
-	ExitAny         []int    `yaml:"exit_any"`
-	OutputContains  []string `yaml:"output_contains"`
-	OutputExcludes  []string `yaml:"output_excludes"`
-	StdoutContains  []string `yaml:"stdout_contains"`
-	StdoutIsJSON    bool     `yaml:"stdout_is_json"`
-	LockfileExists  bool     `yaml:"lockfile_exists"`
-	Custom          string   `yaml:"custom"`
+	Exit            *int                   `yaml:"exit"`
+	ExitAny         []int                  `yaml:"exit_any"`
+	OutputContains  []string               `yaml:"output_contains"`
+	OutputExcludes  []string               `yaml:"output_excludes"`
+	StdoutContains  []string               `yaml:"stdout_contains"`
+	StdoutIsJSON    bool                   `yaml:"stdout_is_json"`
+	LockfileExists  bool                   `yaml:"lockfile_exists"`
+	Custom          string                 `yaml:"custom"`
+	JQ              []JQCheck              `yaml:"jq,omitempty"`
+	GoldenJSON      map[string]interface{} `yaml:"golden_json,omitempty"`
 }
 
 // HasTag reports whether the scenario has the given tag.
