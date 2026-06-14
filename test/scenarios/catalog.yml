@@ -169,7 +169,7 @@ scenarios:
 
   - name: sso_no_fix_single_url
     category: sso_auth
-    description: "--no-fix: SSO details absent — only shows 'Re-run without --no-fix' (known gap)"
+    description: "--no-fix: SSO authorization URL surfaces even in read-only mode"
     needs_stub: true
     tags: [stub]
     flags: ["--no-fix"]
@@ -180,7 +180,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
-      output_excludes: ["SAML enforcement"]
+      output_contains: ["Authorize in your web browser"]
 
   - name: mixed_failures
     category: sso_auth

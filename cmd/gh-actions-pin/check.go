@@ -266,8 +266,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// so Plan/Commit never pins them; already-tracked refs that were bumped
 	// (ref-changed) are left to re-pin as usual.
 	onboardingRefused := 0
+	var refusedLabels []string
 	if noOnboardFlag(cmd) {
-		onboardingRefused = gateNoOnboard(report)
+		refusedLabels = gateNoOnboard(report)
+		onboardingRefused = len(refusedLabels)
 		if onboardingRefused > 0 {
 			valid = report.IsValid()
 		}
@@ -295,6 +297,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if opts.jsonFields != "" {
 			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 				return err
+			}
+		}
+		// Surface SSO URL even in read-only mode — it's the actionable fix
+		// for SAML-gated repos and shouldn't require a --fix run to see.
+		if gc := r.GHClient(); gc != nil {
+			if ssoURL := gc.SSOURL(); ssoURL != "" {
+				console.TermBlank()
+				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
 			}
 		}
 		if !valid {
@@ -378,7 +388,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// Terminal summary.
 	hasInconclusive := opts.rescan && report.HasInconclusive()
-	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive, onboardingRefused, opts.noNarrow)
+	summaryErr := renderPinSummary(console, record, report, r, skippedRescan, hasInconclusive, refusedLabels, opts.noNarrow)
 
 	// Surface the SAML SSO authorization URL if one was captured during
 	// the run, matching cli/cli's "Authorize in your web browser:" line.
