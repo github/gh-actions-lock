@@ -464,11 +464,12 @@ module ActionsPin
       # input_prompts: optional array of {prompt:, response:} hashes.
       # When the accumulated output matches a prompt pattern, the
       # corresponding response is written to the PTY's stdin.
-      def run_pty(input_prompts: nil)
+      def run_pty(input_prompts: nil, extra_args: [])
+        cmd = @cmd + extra_args
         flat_env = @env.map { |k, v| "#{k}=#{Shellwords.shellescape(v)}" }
         shell_cmd = "cd #{Shellwords.shellescape(@dir)} && " +
                     flat_env.join(" ") + " " +
-                    @cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
+                    cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
 
         combined = String.new
         exit_code = nil
@@ -533,8 +534,8 @@ module ActionsPin
         @env.map { |k, v| "export #{k}=#{Shellwords.shellescape(v)}" }.join("\n")
       end
 
-      def cmd_string
-        @cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
+      def cmd_string(extra_args: [])
+        (@cmd + extra_args).map { |c| Shellwords.shellescape(c) }.join(" ")
       end
 
       def teardown
@@ -1053,11 +1054,14 @@ module ActionsPin
           when "rerun"
             if active_ctx
               w = 62
-              puts "\e[1;36m── re-running #{active_ctx.scenario.name} ──\e[0m"
-              puts "\e[2m$\e[0m #{active_ctx.cmd_string}"
+              rescan = (arg == "--rescan")
+              mode_label = rescan ? "re-scanning" : "re-running"
+              puts "\e[1;36m── #{mode_label} #{active_ctx.scenario.name} ──\e[0m"
+              extra = rescan ? ["--rescan"] : []
+              puts "\e[2m$\e[0m #{active_ctx.cmd_string(extra_args: extra)}"
               puts
               t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              result = active_ctx.run_pty(input_prompts: active_ctx.scenario.input_spec)
+              result = active_ctx.run_pty(input_prompts: active_ctx.scenario.input_spec, extra_args: extra)
               elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
               puts
 
@@ -1093,20 +1097,6 @@ module ActionsPin
               active_ctx.teardown
               active_ctx = nil
               puts "Tore down \e[36m#{name}\e[0m context."
-            else
-              puts "No active scenario."
-            end
-
-          when "rescan"
-            if active_ctx
-              w = 62
-              diff_text = `cd #{Shellwords.shellescape(active_ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
-              if diff_text.empty?
-                puts "\e[32m✓ no uncommitted changes\e[0m"
-              else
-                cache_diff(active_ctx.scenario.name.to_s, diff_text)
-                show_diff(active_ctx.dir, w, scenario_name: active_ctx.scenario.name.to_s)
-              end
             else
               puts "No active scenario."
             end
@@ -1326,7 +1316,7 @@ module ActionsPin
         puts "  \e[36mdiff <name>\e[0m           Show cached diff for a specific scenario"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mrerun\e[0m                 Re-run active scenario (keeps lockfile state)"
-        puts "  \e[36mrescan\e[0m                Show current diff in active scenario dir"
+        puts "  \e[36mrerun --rescan\e[0m        Re-run with --rescan flag"
         puts "  \e[36medit\e[0m                  Open active scenario dir in $EDITOR"
         puts "  \e[36mdone\e[0m                  Teardown active scenario context"
         puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
