@@ -1109,8 +1109,8 @@ module ActionsPin
                   end
             if dir
               editor = ENV["EDITOR"] || "code"
-              puts "\e[2m$ cd #{dir} && #{editor} .\e[0m"
-              Dir.chdir(dir) { system(editor, ".") }
+              puts "\e[2m$ pushd #{dir} && #{editor} . && popd\e[0m"
+              system("bash", "-c", "pushd #{Shellwords.shellescape(dir)} && #{editor} . && popd")
             else
               puts "No active scenario directory."
             end
