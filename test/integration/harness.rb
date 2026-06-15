@@ -1097,6 +1097,34 @@ module ActionsPin
               puts "No active scenario."
             end
 
+          when "rescan"
+            if active_ctx
+              w = 62
+              diff_text = `cd #{Shellwords.shellescape(active_ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
+              if diff_text.empty?
+                puts "\e[32m✓ no uncommitted changes\e[0m"
+              else
+                cache_diff(active_ctx.scenario.name.to_s, diff_text)
+                show_diff(active_ctx.dir, w, scenario_name: active_ctx.scenario.name.to_s)
+              end
+            else
+              puts "No active scenario."
+            end
+
+          when "edit"
+            dir = if active_ctx
+                    active_ctx.dir
+                  elsif @last_dir && File.directory?(@last_dir)
+                    @last_dir
+                  end
+            if dir
+              editor = ENV["EDITOR"] || "code"
+              puts "\e[2m$ #{editor} #{dir}\e[0m"
+              system(editor, dir)
+            else
+              puts "No active scenario directory."
+            end
+
           when "profile"
             if arg.nil? || arg == "on"
               @profile_dir = File.expand_path("profiles")
@@ -1298,6 +1326,8 @@ module ActionsPin
         puts "  \e[36mdiff <name>\e[0m           Show cached diff for a specific scenario"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mrerun\e[0m                 Re-run active scenario (keeps lockfile state)"
+        puts "  \e[36mrescan\e[0m                Show current diff in active scenario dir"
+        puts "  \e[36medit\e[0m                  Open active scenario dir in $EDITOR"
         puts "  \e[36mdone\e[0m                  Teardown active scenario context"
         puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
         puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
