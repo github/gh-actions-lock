@@ -387,6 +387,27 @@ scenarios:
     expect:
       exit: 0
 
+  - name: local_action_onboarded_error
+    category: workflow_parsing
+    description: "Onboarded workflow adds local path action — hard error"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./my-local-action
+                  - uses: actions/checkout@v4
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      output_contains: ["local path actions"]
+
   - name: sub_path_action
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"
