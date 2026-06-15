@@ -1108,9 +1108,9 @@ module ActionsPin
                     @last_dir
                   end
             if dir
-              editor = ENV["EDITOR"] || "code"
-              puts "\e[2m$ pushd #{dir} && #{editor} && popd\e[0m"
-              system("bash", "-c", "pushd #{Shellwords.shellescape(dir)} && #{editor} && popd")
+              editor_cmd = Shellwords.split(ENV["EDITOR"] || "code")
+              puts "\e[2m$ cd #{dir} && #{editor_cmd.join(' ')}\e[0m"
+              system(*editor_cmd, chdir: dir)
             else
               puts "No active scenario directory."
             end

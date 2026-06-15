@@ -124,7 +124,7 @@ func (f *Finding) IsWarning() bool {
 	case f.Category == RefMoved:
 		return true
 	case f.Category == LocalAction:
-		return true
+		return f.Severity != SeverityError
 	case f.Category.IsInconclusive():
 		return true
 	case f.Category == NotPinned && f.ActionRef == nil:

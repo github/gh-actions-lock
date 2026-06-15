@@ -607,11 +607,12 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 				continue
 			}
 		}
-		oldUses := e.NWO + "@" + e.Ref
+		oldRef := e.Ref
+		oldUses := e.NWO + "@" + oldRef
 		newUses := e.NWO + "@" + patchTag
 		rewrites[oldUses] = newUses
 		e.Ref = patchTag
-		e.AutoFixedRef = oldUses
+		e.AutoFixedRef = oldRef
 	}
 	if len(rewrites) == 0 {
 		return nil
