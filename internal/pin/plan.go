@@ -288,8 +288,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			// Bare-SHA refs: find a tag pointing at the same commit.
 			if parserlock.IsFullSha(dep.Ref) {
 				patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
-				if err != nil || patchTag == "" {
+				if err != nil {
 					continue
+				}
+				if patchTag == "" {
+					patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+					if err != nil || patchTag == "" {
+						continue
+					}
 				}
 				oldUses := dep.NWO + "@" + dep.Ref
 				newUses := dep.NWO + "@" + patchTag
@@ -312,8 +318,16 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			}
 
 			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
-			if err != nil || patchTag == "" {
+			if err != nil {
 				continue
+			}
+			// No exact tag match — if the repo publishes semver releases,
+			// walk back to the latest tag that's an ancestor of this SHA.
+			if patchTag == "" {
+				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+				if err != nil || patchTag == "" {
+					continue
+				}
 			}
 			oldUses := dep.NWO + "@" + dep.Ref
 			newUses := dep.NWO + "@" + patchTag
