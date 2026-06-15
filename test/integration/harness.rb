@@ -1062,8 +1062,17 @@ module ActionsPin
               puts
 
               diff_text = `cd #{Shellwords.shellescape(active_ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
-              cache_diff(active_ctx.scenario.name.to_s, diff_text)
-              show_diff(active_ctx.dir, w, scenario_name: active_ctx.scenario.name.to_s)
+              if diff_text.empty?
+                puts "\e[1;35m── DIFF #{"─" * (w - 8)}\e[0m"
+                puts "  \e[32m✓ no changes from previous run\e[0m"
+                puts
+              else
+                cache_diff(active_ctx.scenario.name.to_s, diff_text)
+                show_diff(active_ctx.dir, w, scenario_name: active_ctx.scenario.name.to_s)
+              end
+
+              # Checkpoint so the next rerun diff is also a delta
+              system("cd #{Shellwords.shellescape(active_ctx.dir)} && git add -A && git commit -q --allow-empty -m rerun-state >/dev/null 2>&1")
 
               if @profile_dir
                 pdir = File.join(@profile_dir, active_ctx.scenario.name.to_s)
@@ -1466,7 +1475,11 @@ module ActionsPin
           end
           @last_dir = ctx.dir
           puts
-          return ctx if keep_alive
+          if keep_alive
+            # Checkpoint working tree so rerun diff shows only the delta
+            system("cd #{Shellwords.shellescape(ctx.dir)} && git add -A && git commit -q --allow-empty -m pin-state >/dev/null 2>&1")
+            return ctx
+          end
         ensure
           ctx.teardown unless keep
         end
