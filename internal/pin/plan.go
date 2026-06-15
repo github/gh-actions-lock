@@ -298,7 +298,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 
-			// Version tags without full semver (v4, v3.1): narrow to patch release.
+			// Narrow to a full semver patch tag when possible. Covers
+			// partial semver (v4, v3.1) and non-semver refs (main, master).
 			// Skip if --no-narrow or if the lockfile already recorded this
 			// dep without a full semver ref (respect prior precision choice).
 			nwoLower := strings.ToLower(dep.NWO)
@@ -306,9 +307,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 			sv, ok := parserlock.ParseSemVer(dep.Ref)
-			if !ok || sv.IsFull() {
+			if ok && sv.IsFull() {
 				continue
 			}
+
 			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
 			if err != nil || patchTag == "" {
 				continue
