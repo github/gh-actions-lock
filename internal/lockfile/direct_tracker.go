@@ -38,6 +38,13 @@ func NewDirectTracker(refs []parserlock.ActionRef, deps []dep.Dependency) Direct
 	return DirectTracker{direct: direct}
 }
 
+// IsDirect reports whether the dep at index i is a workflow-direct use.
+// Out-of-range indices are treated as transitive (false) so callers can
+// gate ref-rewriting on directness without bounds-checking.
+func (t DirectTracker) IsDirect(i int) bool {
+	return i >= 0 && i < len(t.direct) && t.direct[i]
+}
+
 // Keys returns the set of workflow-direct NWO@Ref keys, reading each dep's
 // current (post-mutation) Key() from the supplied index-aligned slice.
 func (t DirectTracker) Keys(deps []dep.Dependency) map[string]bool {
