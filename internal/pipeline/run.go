@@ -58,6 +58,13 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	recordedKeys := make(map[string]bool)
 	if !opts.Rescan {
 		for i := range parsed {
+			// Local-path workflows are skipped at diagnose time; don't
+			// waste network calls resolving their refs.
+			if len(parsed[i].LocalPaths) > 0 {
+				parsed[i].Resolved = true
+				skippedRescan++
+				continue
+			}
 			recorded, unrecorded := parsed[i].PartitionRefs()
 			if len(parsed[i].Refs) == 0 || len(unrecorded) == 0 {
 				parsed[i].Resolved = true
