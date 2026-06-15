@@ -280,18 +280,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 
-			// Skip narrowing for same-owner internal repos.
-			isInternal := false
-			if opts.RepoOwner != "" && owner == opts.RepoOwner {
-				info, err := opts.Tagger.GetRepoInfo(ctx, owner, repo)
-				if err == nil && info.IsInternal() {
-					isInternal = true
-				}
-			}
-			if isInternal {
-				continue
-			}
-
 			// Bare-SHA refs: find a tag pointing at the same commit.
 			if parserlock.IsFullSha(dep.Ref) {
 				patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
@@ -602,13 +590,6 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		owner, repo := splitNWO(e.NWO)
 		if owner == "" {
 			continue
-		}
-		// Skip same-owner internal repos.
-		if opts.RepoOwner != "" && owner == opts.RepoOwner {
-			info, err := opts.Tagger.GetRepoInfo(ctx, owner, repo)
-			if err == nil && info.IsInternal() {
-				continue
-			}
 		}
 		// Already full semver — nothing to do.
 		sv, ok := parserlock.ParseSemVer(e.Ref)
