@@ -1087,6 +1087,16 @@ module ActionsPin
               puts "No active scenario. Use \e[36mrun <name>\e[0m first."
             end
 
+          when "done"
+            if active_ctx
+              name = active_ctx.scenario.name
+              active_ctx.teardown
+              active_ctx = nil
+              puts "Tore down \e[36m#{name}\e[0m context."
+            else
+              puts "No active scenario."
+            end
+
           when "profile"
             if arg.nil? || arg == "on"
               @profile_dir = File.expand_path("profiles")
@@ -1288,6 +1298,7 @@ module ActionsPin
         puts "  \e[36mdiff <name>\e[0m           Show cached diff for a specific scenario"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mrerun\e[0m                 Re-run active scenario (keeps lockfile state)"
+        puts "  \e[36mdone\e[0m                  Teardown active scenario context"
         puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
         puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
         puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
