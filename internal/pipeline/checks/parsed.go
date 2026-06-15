@@ -13,6 +13,7 @@ import (
 type ParsedWorkflow struct {
 	Path          string
 	Refs          []parserlock.ActionRef
+	LocalPaths    []string
 	ExistingDeps  []dep.Dependency
 	ParseWarnings []string
 	LoadErr       error

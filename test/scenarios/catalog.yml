@@ -370,7 +370,7 @@ scenarios:
 
   - name: local_action_skipped
     category: workflow_parsing
-    description: "Local action (./path) — skipped without warning"
+    description: "Local action (./path) — entire workflow skipped"
     needs_token: true
     fixtures:
       workflows:

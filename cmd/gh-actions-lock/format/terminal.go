@@ -187,11 +187,13 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	}
 
 	// Triage warnings into buckets.
-	var unpinnedWorkflows, bareSHADeps, otherDetailWarnings []string
+	var unpinnedWorkflows, localActionWorkflows, bareSHADeps, otherDetailWarnings []string
 	for _, key := range warnOrder {
 		wg := warnMap[key]
 		f := wg.finding
 		switch {
+		case f.Category == checks.LocalAction:
+			localActionWorkflows = append(localActionWorkflows, f.WorkflowPath)
 		case f.Category == checks.NotPinned && f.ActionRef == nil:
 			unpinnedWorkflows = append(unpinnedWorkflows, f.WorkflowPath)
 		case f.Category == checks.ShaAsRef:
@@ -214,6 +216,11 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		}
 	}
 
+	if len(localActionWorkflows) > 0 {
+		out.TermCaution("%d %s skipped — local path actions are not yet supported",
+			len(localActionWorkflows),
+			ui.Pluralize(len(localActionWorkflows), "workflow", "workflows"))
+	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",
 			len(unpinnedWorkflows),

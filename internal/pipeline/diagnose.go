@@ -64,6 +64,17 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	wr.ActionRefs = pw.Refs
 	wr.ParseWarnings = pw.ParseWarnings
 
+	if len(pw.LocalPaths) > 0 {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.LocalAction,
+			Severity:     checks.SeverityWarning,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
+		})
+		return wr
+	}
+
 	if len(pw.Refs) == 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
@@ -214,7 +225,7 @@ func hasIssues(ff []checks.Finding) bool {
 		if f.Category.IsInconclusive() {
 			continue
 		}
-		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Severity == checks.SeverityWarning {
+		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Category != checks.LocalAction && f.Severity == checks.SeverityWarning {
 			return true
 		}
 	}

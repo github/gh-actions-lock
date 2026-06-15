@@ -64,6 +64,11 @@ const (
 	// tags (v4.2.1) each resolve to exactly one commit, making the lock
 	// comment durable across re-pins.
 	VersionRef Category = "version-ref"
+	// LocalAction means the workflow uses at least one local path action
+	// (uses: ./some-path). Lockfile onboarding is not supported for
+	// workflows that reference local actions — the entire workflow is
+	// skipped.
+	LocalAction Category = "local-action"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that
