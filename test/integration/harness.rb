@@ -889,6 +889,8 @@ module ActionsPin
         end
       end
 
+      public
+
       # ── Interactive shell ──────────────────────────────────────────
 
       def shell
