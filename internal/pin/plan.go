@@ -119,6 +119,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if !wr.NeedsAttention() {
 		entries = verifiedEntries(inventory, wr.Path)
+		if rw := narrowVerifiedEntries(ctx, entries, opts); len(rw) > 0 {
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
+		}
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -127,6 +130,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = verifiedEntries(inventory, wr.Path)
 
 	if len(unrecordedRefs) == 0 {
+		if rw := narrowVerifiedEntries(ctx, entries, opts); len(rw) > 0 {
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
+		}
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -261,6 +267,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// to a symbolic tag when one exists.
 	status("pinning " + wr.Path)
 	rewrites := make(map[string]string)
+	narrowedNWOs := make(map[string]bool) // NWOs where narrowing chose a tag
 	for k, v := range autoFixRewrites {
 		rewrites[k] = v
 	}
@@ -273,32 +280,28 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 
-			// Skip narrowing for same-owner internal repos.
-			isInternal := false
-			if opts.RepoOwner != "" && owner == opts.RepoOwner {
-				info, err := opts.Tagger.GetRepoInfo(ctx, owner, repo)
-				if err == nil && info.IsInternal() {
-					isInternal = true
-				}
-			}
-			if isInternal {
-				continue
-			}
-
 			// Bare-SHA refs: find a tag pointing at the same commit.
 			if parserlock.IsFullSha(dep.Ref) {
 				patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
-				if err != nil || patchTag == "" {
+				if err != nil {
 					continue
+				}
+				if patchTag == "" {
+					patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+					if err != nil || patchTag == "" {
+						continue
+					}
 				}
 				oldUses := dep.NWO + "@" + dep.Ref
 				newUses := dep.NWO + "@" + patchTag
 				rewrites[oldUses] = newUses
 				dep.Ref = patchTag
+				narrowedNWOs[strings.ToLower(dep.NWO)] = true
 				continue
 			}
 
-			// Version tags without full semver (v4, v3.1): narrow to patch release.
+			// Narrow to a full semver patch tag when possible. Covers
+			// partial semver (v4, v3.1) and non-semver refs (main, master).
 			// Skip if --no-narrow or if the lockfile already recorded this
 			// dep without a full semver ref (respect prior precision choice).
 			nwoLower := strings.ToLower(dep.NWO)
@@ -306,17 +309,37 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				continue
 			}
 			sv, ok := parserlock.ParseSemVer(dep.Ref)
-			if !ok || sv.IsFull() {
+			if ok && sv.IsFull() {
 				continue
 			}
+
 			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
-			if err != nil || patchTag == "" {
+			if err != nil {
 				continue
+			}
+			// No exact tag match — if the repo publishes semver releases,
+			// walk back to the latest tag that's an ancestor of this SHA.
+			if patchTag == "" {
+				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+				if err != nil || patchTag == "" {
+					continue
+				}
 			}
 			oldUses := dep.NWO + "@" + dep.Ref
 			newUses := dep.NWO + "@" + patchTag
 			rewrites[oldUses] = newUses
 			dep.Ref = patchTag
+			narrowedNWOs[nwoLower] = true
+		}
+	}
+
+	// Save narrowed refs before ReverseLookup — it may overwrite dep.Ref
+	// with a branch name, but we want to keep the semver tag narrowing chose.
+	narrowedRefs := make(map[int]string)
+	for i := range deps {
+		nwo := strings.ToLower(deps[i].NWO)
+		if narrowedNWOs[nwo] {
+			narrowedRefs[i] = deps[i].Ref
 		}
 	}
 
@@ -337,7 +360,17 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		}
 		return planResult{}, fmt.Errorf("reverse lookup: %w", err)
 	}
+	// Restore narrowed refs that ReverseLookup may have overwritten.
+	for i, ref := range narrowedRefs {
+		deps[i].Ref = ref
+	}
 	for k, v := range normRewrites {
+		if at := strings.Index(k, "@"); at > 0 {
+			nwo := strings.ToLower(k[:at])
+			if narrowedNWOs[nwo] {
+				continue
+			}
+		}
 		rewrites[k] = v
 	}
 
@@ -360,6 +393,12 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Record workflow plan if there are rewrites.
+	// Also narrow any verified (already-recorded) entries that have imprecise refs.
+	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts); len(verifiedRW) > 0 {
+		for k, v := range verifiedRW {
+			rewrites[k] = v
+		}
+	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
 			Path:     wr.Path,
@@ -536,4 +575,56 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 		}
 	}
 	return out
+}
+
+// narrowVerifiedEntries upgrades already-recorded deps from imprecise refs
+// (main, v4, etc.) to full semver tags when possible. Returns rewrites for
+// the workflow YAML. Skipped when --no-narrow is set.
+func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions) map[string]string {
+	if opts.NoNarrow || opts.Tagger == nil {
+		return nil
+	}
+	rewrites := make(map[string]string)
+	for i := range entries {
+		e := &entries[i]
+		owner, repo := splitNWO(e.NWO)
+		if owner == "" {
+			continue
+		}
+		// Already full semver — nothing to do.
+		sv, ok := parserlock.ParseSemVer(e.Ref)
+		if ok && sv.IsFull() {
+			continue
+		}
+		// Try exact tag match, then ancestor fallback.
+		patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, e.SHA)
+		if err != nil {
+			continue
+		}
+		if patchTag == "" {
+			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, e.SHA)
+			if err != nil || patchTag == "" {
+				continue
+			}
+		}
+		oldRef := e.Ref
+		oldUses := e.NWO + "@" + oldRef
+		newUses := e.NWO + "@" + patchTag
+		rewrites[oldUses] = newUses
+		e.Ref = patchTag
+		e.AutoFixedRef = oldRef
+	}
+	if len(rewrites) == 0 {
+		return nil
+	}
+	return rewrites
+}
+
+// splitNWO splits "owner/repo" or "owner/repo/sub" into (owner, repo).
+func splitNWO(nwo string) (string, string) {
+	parts := strings.SplitN(nwo, "/", 3)
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }

@@ -370,7 +370,7 @@ scenarios:
 
   - name: local_action_skipped
     category: workflow_parsing
-    description: "Local action (./path) — skipped without warning"
+    description: "Local action (./path) — entire workflow skipped"
     needs_token: true
     fixtures:
       workflows:
@@ -386,6 +386,27 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+
+  - name: local_action_onboarded_error
+    category: workflow_parsing
+    description: "Onboarded workflow adds local path action — hard error"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./my-local-action
+                  - uses: actions/checkout@v4
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      output_contains: ["local path actions"]
 
   - name: sub_path_action
     category: workflow_parsing
@@ -631,9 +652,9 @@ scenarios:
       exit: 0
       lockfile_comment_matches: 'v4\.2\.0'
 
-  - name: fresh_branch_ref_skipped
+  - name: fresh_branch_ref_narrows
     category: narrowing
-    description: "Branch ref (main) is not a semver — narrowing skips it"
+    description: "Branch ref (main) on public action narrows to full semver"
     needs_token: true
     fixtures:
       workflows:
@@ -642,7 +663,54 @@ scenarios:
           actions: ["actions/checkout@main"]
     expect:
       exit: 0
+      lockfile_comment_matches: 'v\d+\.\d+\.\d+'
+
+  - name: fresh_branch_ref_no_narrow
+    category: narrowing
+    description: "--no-narrow: branch ref (main) stays as main"
+    needs_token: true
+    flags: ["--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+    expect:
+      exit: 0
       lockfile_comment_matches: 'main'
+
+  - name: onboarded_branch_ref_narrows
+    category: narrowing
+    description: "Onboarded workflow at @main — verified dep narrowing upgrades to full semver"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+      lockfile_template: pinned_checkout_main
+    expect:
+      exit: 0
+      lockfile_comment_matches: 'v\d+\.\d+\.\d+'
+
+  - name: local_action_only
+    category: workflow_parsing
+    description: "Workflow with only local path actions (no remote refs) — skipped cleanly"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/my-action
+                  - uses: ./.github/actions/other-action
+    expect:
+      exit: 0
 
   - name: fresh_no_narrow_keeps_major
     category: narrowing

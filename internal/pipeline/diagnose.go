@@ -12,6 +12,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.
@@ -63,6 +64,29 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 
 	wr.ActionRefs = pw.Refs
 	wr.ParseWarnings = pw.ParseWarnings
+
+	if len(pw.LocalPaths) > 0 {
+		wfKey := workflowfile.KeyFromPath(pw.Path)
+		if store != nil && store.HasWorkflow(wfKey) {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.LocalAction,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
+				Remediation:  "remove `uses: ./…` steps or move them to a separate workflow",
+			})
+		} else {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.LocalAction,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
+			})
+		}
+		return wr
+	}
 
 	if len(pw.Refs) == 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
@@ -214,7 +238,7 @@ func hasIssues(ff []checks.Finding) bool {
 		if f.Category.IsInconclusive() {
 			continue
 		}
-		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Severity == checks.SeverityWarning {
+		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Category != checks.LocalAction && f.Severity == checks.SeverityWarning {
 			return true
 		}
 	}

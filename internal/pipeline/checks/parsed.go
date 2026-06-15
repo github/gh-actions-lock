@@ -13,6 +13,7 @@ import (
 type ParsedWorkflow struct {
 	Path          string
 	Refs          []parserlock.ActionRef
+	LocalPaths    []string
 	ExistingDeps  []dep.Dependency
 	ParseWarnings []string
 	LoadErr       error
@@ -39,8 +40,8 @@ type ParsedWorkflow struct {
 }
 
 // PartitionRefs splits refs into recorded (matching a lockfile entry by
-// NWO@Ref) and unrecorded (need network resolution). When an error
-// prevented loading refs or deps, everything is unrecorded.
+// NWO@Ref or NWO@SHA) and unrecorded (need network resolution). When an
+// error prevented loading refs or deps, everything is unrecorded.
 func (pw ParsedWorkflow) PartitionRefs() (recorded, unrecorded []parserlock.ActionRef) {
 	if pw.LoadErr != nil || pw.DepsErr != nil {
 		return nil, pw.Refs
@@ -48,9 +49,13 @@ func (pw ParsedWorkflow) PartitionRefs() (recorded, unrecorded []parserlock.Acti
 	if len(pw.Refs) == 0 {
 		return nil, nil
 	}
-	haveDep := make(map[string]bool, len(pw.ExistingDeps))
+	haveDep := make(map[string]bool, len(pw.ExistingDeps)*2)
 	for _, d := range pw.ExistingDeps {
-		haveDep[strings.ToLower(d.NWO)+"@"+d.Ref] = true
+		nwo := strings.ToLower(d.NWO)
+		haveDep[nwo+"@"+d.Ref] = true
+		if d.SHA != "" {
+			haveDep[nwo+"@"+strings.ToLower(d.SHA)] = true
+		}
 	}
 	for _, r := range pw.Refs {
 		if haveDep[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] {
@@ -69,8 +74,8 @@ func (pw ParsedWorkflow) IsFullyRecorded() bool {
 	return len(pw.Refs) == 0 || len(unrecorded) == 0
 }
 
-// RecordedDeps returns the subset of ExistingDeps whose NWO@Ref matches
-// one of the given recorded refs.
+// RecordedDeps returns the subset of ExistingDeps whose NWO@Ref or
+// NWO@SHA matches one of the given recorded refs.
 func (pw ParsedWorkflow) RecordedDeps(recorded []parserlock.ActionRef) []dep.Dependency {
 	refKeys := make(map[string]bool, len(recorded))
 	for _, r := range recorded {
@@ -78,7 +83,8 @@ func (pw ParsedWorkflow) RecordedDeps(recorded []parserlock.ActionRef) []dep.Dep
 	}
 	var out []dep.Dependency
 	for _, d := range pw.ExistingDeps {
-		if refKeys[d.Key()] {
+		nwo := strings.ToLower(d.NWO)
+		if refKeys[nwo+"@"+d.Ref] || refKeys[nwo+"@"+strings.ToLower(d.SHA)] {
 			out = append(out, d)
 		}
 	}

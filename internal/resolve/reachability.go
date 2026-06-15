@@ -122,6 +122,9 @@ func (r *Resolver) checkReachabilityOnce(ctx context.Context, owner, repo, sha, 
 
 	if foundBranch != "" {
 		result.Status = Reachable
+		// Stash the discovered branch so DiscoverContaining can reuse it
+		// via branchHintBySHA, avoiding a redundant full-branch scan.
+		r.branchHintBySHA.Put(ghapi.ForNWOSha(owner, repo, sha), foundBranch)
 		if parserlock.IsFullSha(ref) {
 			result.Detail = fmt.Sprintf("pinned to a bare SHA; commit is on branch %s but origin cannot be verified at job runtime — prefer pinning to a tag", foundBranch)
 		} else {

@@ -100,6 +100,19 @@ func TestPartitionRefs(t *testing.T) {
 			wantRecordedLen: 2, // both sub-actions match the dep
 			wantUnrecordLen: 0,
 		},
+		{
+			name: "bare SHA ref matches by SHA",
+			pw: checks.ParsedWorkflow{
+				Refs: []parserlock.ActionRef{
+					ref("actions", "checkout", "", "de0fac2e4500dabe0009e67214ff5f5447ce83dd"),
+				},
+				ExistingDeps: []dep.Dependency{
+					mkDep("actions/checkout", "v6.0.2", "de0fac2e4500dabe0009e67214ff5f5447ce83dd"),
+				},
+			},
+			wantRecordedLen: 1,
+			wantUnrecordLen: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

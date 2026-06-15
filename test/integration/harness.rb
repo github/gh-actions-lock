@@ -464,11 +464,12 @@ module ActionsPin
       # input_prompts: optional array of {prompt:, response:} hashes.
       # When the accumulated output matches a prompt pattern, the
       # corresponding response is written to the PTY's stdin.
-      def run_pty(input_prompts: nil)
+      def run_pty(input_prompts: nil, extra_args: [])
+        cmd = @cmd + extra_args
         flat_env = @env.map { |k, v| "#{k}=#{Shellwords.shellescape(v)}" }
         shell_cmd = "cd #{Shellwords.shellescape(@dir)} && " +
                     flat_env.join(" ") + " " +
-                    @cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
+                    cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
 
         combined = String.new
         exit_code = nil
@@ -533,8 +534,8 @@ module ActionsPin
         @env.map { |k, v| "export #{k}=#{Shellwords.shellescape(v)}" }.join("\n")
       end
 
-      def cmd_string
-        @cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
+      def cmd_string(extra_args: [])
+        (@cmd + extra_args).map { |c| Shellwords.shellescape(c) }.join(" ")
       end
 
       def teardown
@@ -889,6 +890,8 @@ module ActionsPin
         end
       end
 
+      public
+
       # ── Interactive shell ──────────────────────────────────────────
 
       def shell
@@ -975,7 +978,7 @@ module ActionsPin
               end
             elsif arg && repo_nwo?(arg.split(/\s+--\s+/, 2)[0])
               nwo, extra = split_adhoc_args(arg)
-              run_one_live(adhoc_scenario(nwo, extra_args: extra))
+              active_ctx = run_one_live(adhoc_scenario(nwo, extra_args: extra), keep_alive: true)
             else
               s = find_scenario(arg)
               next unless s
@@ -1048,13 +1051,68 @@ module ActionsPin
             system(sub_env, ENV.fetch("SHELL", "/bin/bash"), chdir: ctx.dir)
             puts "\nBack in integration shell. Scenario dir still live at #{ctx.dir}"
 
-          when "rerun"
+          when "rerun", "rescan"
             if active_ctx
-              puts "\e[1;36m── re-running #{active_ctx.scenario.name} ──\e[0m\n\n"
-              active_ctx.run_pty(input_prompts: active_ctx.scenario.input_spec)
+              w = 62
+              rescan = (verb == "rescan" || arg == "--rescan")
+              mode_label = rescan ? "re-scanning" : "re-running"
+              puts "\e[1;36m── #{mode_label} #{active_ctx.scenario.name} ──\e[0m"
+              extra = rescan ? ["--rescan"] : []
+              puts "\e[2m$\e[0m #{active_ctx.cmd_string(extra_args: extra)}"
+              puts
+              t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              result = active_ctx.run_pty(input_prompts: active_ctx.scenario.input_spec, extra_args: extra)
+              elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+              puts
+
+              diff_text = `cd #{Shellwords.shellescape(active_ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
+              if diff_text.empty?
+                puts "\e[1;35m── DIFF #{"─" * (w - 8)}\e[0m"
+                puts "  \e[32m✓ no changes from previous run\e[0m"
+                puts
+              else
+                cache_diff(active_ctx.scenario.name.to_s, diff_text)
+                show_diff(active_ctx.dir, w, scenario_name: active_ctx.scenario.name.to_s)
+              end
+
+              # Checkpoint so the next rerun diff is also a delta
+              system("cd #{Shellwords.shellescape(active_ctx.dir)} && git add -A && git commit -q --allow-empty -m rerun-state >/dev/null 2>&1")
+
+              if @profile_dir
+                pdir = File.join(@profile_dir, active_ctx.scenario.name.to_s)
+                puts "  \e[2mprofile: #{pdir}\e[0m"
+              end
+              puts
+              status_color = result.exit_code == 0 ? "42" : "41"
+              status_icon  = result.exit_code == 0 ? "✓ PASS" : "✗ FAIL"
+              puts "\e[#{status_color};1;37m  #{status_icon}  \e[0m  exit #{result.exit_code}  \e[2m(#{format_elapsed(elapsed)})\e[0m"
               puts
             else
               puts "No active scenario. Use \e[36mrun <name>\e[0m first."
+            end
+
+          when "done"
+            if active_ctx
+              name = active_ctx.scenario.name
+              active_ctx.teardown
+              active_ctx = nil
+              puts "Tore down \e[36m#{name}\e[0m context."
+            else
+              puts "No active scenario."
+            end
+
+          when "edit"
+            dir = if active_ctx
+                    active_ctx.dir
+                  elsif @last_dir && File.directory?(@last_dir)
+                    @last_dir
+                  end
+            if dir
+              editor_cmd = Shellwords.split(ENV["EDITOR"] || "code")
+              puts "\e[2m$ cd #{dir} && #{editor_cmd.join(' ')}\e[0m"
+              system(*editor_cmd, chdir: dir)
+            else
+              puts "No active scenario directory."
             end
 
           when "profile"
@@ -1257,7 +1315,11 @@ module ActionsPin
         puts "  \e[36mdiff\e[0m                  Show full diff from last run (pager)"
         puts "  \e[36mdiff <name>\e[0m           Show cached diff for a specific scenario"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
-        puts "  \e[36mrerun\e[0m                 Re-run active scenario"
+        puts "  \e[36mrerun\e[0m                 Re-run active scenario (keeps lockfile state)"
+        puts "  \e[36mrerun --rescan\e[0m        Re-run with --rescan flag"
+        puts "  \e[36mrescan\e[0m                Shorthand for rerun --rescan"
+        puts "  \e[36medit\e[0m                  Open active scenario dir in $EDITOR"
+        puts "  \e[36mdone\e[0m                  Teardown active scenario context"
         puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
         puts "  \e[36mpause\e[0m                 Toggle pause between scenarios in run-all"
         puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
@@ -1350,7 +1412,7 @@ module ActionsPin
         str.match?(%r{\A[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z})
       end
 
-      def run_one_live(s)
+      def run_one_live(s, keep_alive: false)
         w = 62
 
         # ── TITLE ──
@@ -1406,7 +1468,7 @@ module ActionsPin
         puts "\e[1;35m── OUTPUT #{"─" * (w - 10)}\e[0m"
         puts "\e[2m$\e[0m #{ctx.cmd_string}"
         puts
-        keep = ENV["KEEP_FIXTURES"]
+        keep = ENV["KEEP_FIXTURES"] || keep_alive
         t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         begin
           result = ctx.run_pty(input_prompts: s.input_spec)
@@ -1445,9 +1507,15 @@ module ActionsPin
           end
           @last_dir = ctx.dir
           puts
+          if keep_alive
+            # Checkpoint working tree so rerun diff shows only the delta
+            system("cd #{Shellwords.shellescape(ctx.dir)} && git add -A && git commit -q --allow-empty -m pin-state >/dev/null 2>&1")
+            return ctx
+          end
         ensure
           ctx.teardown unless keep
         end
+        nil
       end
 
       def format_expect(spec)

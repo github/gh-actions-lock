@@ -47,7 +47,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			out = append(out, pw)
 			continue
 		}
-		pw.Refs, _, pw.ParseWarnings = wf.ExtractActionRefs()
+		pw.Refs, pw.LocalPaths, pw.ParseWarnings = wf.ExtractActionRefs()
 		if len(pw.Refs) > 0 {
 			wfKey := workflowfile.KeyFromPath(path)
 			deps, depsErr := store.Get(wfKey)

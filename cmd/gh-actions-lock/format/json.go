@@ -115,7 +115,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 		}
 		for _, wr := range report.Workflows {
 			for _, f := range wr.Findings {
-				if f.Category == checks.RunOnly || (f.Category == checks.Valid && f.Severity == checks.SeverityOK) {
+				if f.Category == checks.RunOnly || (f.Category == checks.LocalAction && f.Severity != checks.SeverityError) || (f.Category == checks.Valid && f.Severity == checks.SeverityOK) {
 					continue
 				}
 				allFindings = append(allFindings, findingFromReport(f))
@@ -185,7 +185,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 				Findings: []Finding{},
 			}
 			for _, f := range wr.Findings {
-				if f.Category == checks.RunOnly || (f.Category == checks.Valid && f.Severity == checks.SeverityOK) {
+				if f.Category == checks.RunOnly || (f.Category == checks.LocalAction && f.Severity != checks.SeverityError) || (f.Category == checks.Valid && f.Severity == checks.SeverityOK) {
 					continue
 				}
 				wf.Findings = append(wf.Findings, findingFromReport(f))

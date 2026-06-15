@@ -56,6 +56,44 @@ func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha strin
 	return best.Raw, nil
 }
 
+// BestAncestorTag returns the latest full-semver tag that is an ancestor of
+// the given SHA. Used when no tag points at the exact SHA but the repo
+// follows semver release conventions — we walk back to the nearest release.
+// Checks at most 3 candidate tags (latest first) to limit API calls.
+func (tl *Lister) BestAncestorTag(ctx context.Context, owner, repo, sha string) (string, error) {
+	all, err := tl.ListTags(ctx, owner, repo)
+	if err != nil {
+		return "", err
+	}
+
+	// Collect full-semver candidates, already sorted latest-first by ListTags.
+	var candidates []Info
+	for _, t := range all {
+		if t.IsMajor {
+			continue
+		}
+		sv, ok := parserlock.ParseSemVer(t.Name)
+		if !ok || !sv.IsFull() || sv.Rest != "" {
+			continue
+		}
+		candidates = append(candidates, t)
+		if len(candidates) >= 3 {
+			break
+		}
+	}
+
+	for _, t := range candidates {
+		isAncestor, err := tl.client.CompareCommits(ctx, owner, repo, t.SHA, sha)
+		if err != nil {
+			continue
+		}
+		if isAncestor {
+			return t.Name, nil
+		}
+	}
+	return "", nil
+}
+
 // UniquePatchTagForRef returns the sole full-semver patch tag that matches the
 // given ref's family, or "" if the choice is ambiguous (0 or 2+ candidates).
 // For "v9" it only considers v9.x.y tags; for "v4.2" only v4.2.x tags.
