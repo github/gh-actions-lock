@@ -335,7 +335,14 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 		}),
 	)
 
-	// Reverse-lookup stubs (branch + tag listing) for both repos.
+	// Reverse-lookup stubs for both repos: repo metadata (default branch),
+	// branch listing, and tag listing. Stubbing the repo-metadata call keeps
+	// DiscoverContaining on its representative path instead of the
+	// default-branch-unknown fallback.
+	reg.Register(
+		httpmock.REST("GET", `repos/comp/action$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+	)
 	reg.Register(
 		httpmock.REST("GET", `repos/comp/action/branches`),
 		httpmock.JSONResponse([]any{
@@ -347,6 +354,10 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 		httpmock.JSONResponse([]any{
 			map[string]any{"name": "v1.0.0", "commit": map[string]any{"sha": compSHA}},
 		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/trans/dep$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/trans/dep/branches`),
