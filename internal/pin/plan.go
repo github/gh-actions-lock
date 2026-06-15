@@ -275,6 +275,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if opts.Tagger != nil {
 		for i := range deps {
 			dep := &deps[i]
+			// Transitive deps come from a composite's action.yml; their ref
+			// is the composite author's choice and never appears in our
+			// workflow YAML. Narrowing it is pure churn and can invent refs
+			// the composite never declared, so leave it verbatim.
+			if !directTracker.IsDirect(i) {
+				continue
+			}
 			owner, repo := dep.OwnerRepo()
 			if owner == "" {
 				continue
@@ -343,6 +350,17 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		}
 	}
 
+	// Preserve transitive deps' declared refs across ReverseLookup. We still
+	// want the tag/branch metadata it populates (the lockfile write requires
+	// a branch), but the ref itself must stay exactly as the composite's
+	// action.yml declares it — we don't own it and must not rewrite it.
+	transitiveRefs := make(map[int]string)
+	for i := range deps {
+		if !directTracker.IsDirect(i) {
+			transitiveRefs[i] = deps[i].Ref
+		}
+	}
+
 	// ReverseLookup: SHA → containing tag/branch. Rewrites refs to canonical form.
 	normRewrites, err := opts.Resolver.ReverseLookup(ctx, deps)
 	if err != nil {
@@ -364,7 +382,17 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	for i, ref := range narrowedRefs {
 		deps[i].Ref = ref
 	}
+	// Restore transitive deps' declared refs and suppress any rewrite
+	// ReverseLookup produced for them — keyed by the declared NWO@ref.
+	transitiveRewriteKeys := make(map[string]bool, len(transitiveRefs))
+	for i, ref := range transitiveRefs {
+		deps[i].Ref = ref
+		transitiveRewriteKeys[deps[i].NWO+"@"+ref] = true
+	}
 	for k, v := range normRewrites {
+		if transitiveRewriteKeys[k] {
+			continue
+		}
 		if at := strings.Index(k, "@"); at > 0 {
 			nwo := strings.ToLower(k[:at])
 			if narrowedNWOs[nwo] {
@@ -579,7 +607,9 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 
 // narrowVerifiedEntries upgrades already-recorded deps from imprecise refs
 // (main, v4, etc.) to full semver tags when possible. Returns rewrites for
-// the workflow YAML. Skipped when --no-narrow is set.
+// the workflow YAML. Skipped when --no-narrow is set. Only direct entries
+// are narrowed: a transitive dep's ref belongs to the composite that
+// declares it and never appears in our workflow YAML.
 func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions) map[string]string {
 	if opts.NoNarrow || opts.Tagger == nil {
 		return nil
@@ -587,6 +617,9 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 	rewrites := make(map[string]string)
 	for i := range entries {
 		e := &entries[i]
+		if !e.Direct {
+			continue
+		}
 		owner, repo := splitNWO(e.NWO)
 		if owner == "" {
 			continue

@@ -11,6 +11,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,4 +287,133 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 		assert.Equal(t, Unresolved, e.Resolution, "expected %s to be Unresolved", e.NWO)
 		assert.Contains(t, e.Reason, "not found")
 	}
+}
+
+// TestPlanWorkflow_DoesNotNarrowTransitiveDeps verifies that a transitive
+// dependency discovered from a composite action's action.yml keeps the ref the
+// composite author declared, even when a narrower full-semver tag exists at the
+// same commit. We only own (and may narrow) refs that literally appear in a
+// workflow `uses:` line; rewriting a composite's internal refs is churn and can
+// invent refs the composite never declared.
+func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	compSHA := "1111111111111111111111111111111111111111"
+	transSHA := "2222222222222222222222222222222222222222"
+
+	// Depth 0: the direct composite. Its action.yml uses trans/dep@v2.
+	reg.Register(
+		httpmock.GraphQLForRepo("comp", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "comp/action",
+					"object": map[string]any{
+						"oid": compSHA,
+						"file": map[string]any{"object": map[string]any{
+							"text": "name: Comp\nruns:\n  using: composite\n  steps:\n    - uses: trans/dep@v2\n",
+						}},
+					},
+				},
+			},
+		}),
+	)
+	// Depth 1: the transitive leaf.
+	reg.Register(
+		httpmock.GraphQLForRepo("trans", "dep"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "trans/dep",
+					"object": map[string]any{
+						"oid":  transSHA,
+						"file": map[string]any{"object": map[string]any{"text": "name: Trans\nruns:\n  using: node20\n"}},
+					},
+				},
+			},
+		}),
+	)
+
+	// Reverse-lookup stubs (branch + tag listing) for both repos.
+	reg.Register(
+		httpmock.REST("GET", `repos/comp/action/branches`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "main", "commit": map[string]any{"sha": compSHA}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/comp/action/tags`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "v1.0.0", "commit": map[string]any{"sha": compSHA}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/trans/dep/branches`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "main", "commit": map[string]any{"sha": transSHA}},
+		}),
+	)
+	// trans/dep publishes a narrower full-semver tag at the same commit. If
+	// narrowing were (wrongly) applied to this transitive dep, the Tagger would
+	// rewrite v2 -> v2.3.4. The gate must prevent that.
+	reg.Register(
+		httpmock.REST("GET", `repos/trans/dep/tags`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "v2", "commit": map[string]any{"sha": transSHA}},
+			map[string]any{"name": "v2.3.4", "commit": map[string]any{"sha": transSHA}},
+		}),
+	)
+
+	pool := pinpool.New(2, nil)
+	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
+		return resolve.Reachable, "test stub"
+	}
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
+		resolve.WithCheckReachabilityFunc(reachFn))
+	require.NoError(t, err)
+
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/test.yml",
+		Findings: []checks.Finding{
+			{
+				ActionRef:  &parserlock.ActionRef{Owner: "comp", Repo: "action", Ref: "v1.0.0"},
+				Category:   "unpinned",
+				Severity:   checks.SeverityWarning,
+				Confidence: checks.ConfidenceHigh,
+			},
+		},
+		ActionRefs: []parserlock.ActionRef{
+			{Owner: "comp", Repo: "action", Ref: "v1.0.0"},
+		},
+	}
+
+	opts := PlanOptions{
+		Resolver: resolver,
+		Pool:     pool,
+		// A real Tagger makes the narrowing path live; the gate, not the
+		// absence of a Tagger, is what must spare the transitive dep.
+		Tagger: tag.NewListerForTest(t, reg),
+	}
+
+	result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
+	require.NoError(t, err)
+
+	byNWO := make(map[string]Entry, len(result.entries))
+	for _, e := range result.entries {
+		byNWO[e.NWO] = e
+	}
+
+	trans, ok := byNWO["trans/dep"]
+	require.True(t, ok, "transitive dep should be pinned")
+	assert.Equal(t, "v2", trans.Ref, "transitive ref must stay as the composite declared it")
+	assert.NotEqual(t, "v2.3.4", trans.Ref, "transitive dep must not be narrowed")
+	assert.Equal(t, transSHA, trans.SHA)
+	assert.False(t, trans.Direct, "transitive dep must not be marked Direct")
+	assert.Contains(t, trans.RequiredBy, "comp/action@v1.0.0")
+
+	comp, ok := byNWO["comp/action"]
+	require.True(t, ok, "direct composite should be pinned")
+	assert.Equal(t, "v1.0.0", comp.Ref)
+	assert.True(t, comp.Direct, "composite is a direct workflow use")
 }
