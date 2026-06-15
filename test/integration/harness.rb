@@ -1051,10 +1051,10 @@ module ActionsPin
             system(sub_env, ENV.fetch("SHELL", "/bin/bash"), chdir: ctx.dir)
             puts "\nBack in integration shell. Scenario dir still live at #{ctx.dir}"
 
-          when "rerun"
+          when "rerun", "rescan"
             if active_ctx
               w = 62
-              rescan = (arg == "--rescan")
+              rescan = (verb == "rescan" || arg == "--rescan")
               mode_label = rescan ? "re-scanning" : "re-running"
               puts "\e[1;36m── #{mode_label} #{active_ctx.scenario.name} ──\e[0m"
               extra = rescan ? ["--rescan"] : []
@@ -1317,6 +1317,7 @@ module ActionsPin
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mrerun\e[0m                 Re-run active scenario (keeps lockfile state)"
         puts "  \e[36mrerun --rescan\e[0m        Re-run with --rescan flag"
+        puts "  \e[36mrescan\e[0m                Shorthand for rerun --rescan"
         puts "  \e[36medit\e[0m                  Open active scenario dir in $EDITOR"
         puts "  \e[36mdone\e[0m                  Teardown active scenario context"
         puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"
