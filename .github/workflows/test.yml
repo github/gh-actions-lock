@@ -63,7 +63,7 @@ jobs:
       GOPRIVATE: ''
       GONOPROXY: ''
       GONOSUMDB: github.com/github/*
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: OIDC Setup for goproxy
         uses: github/setup-goproxy@v1.1.0
