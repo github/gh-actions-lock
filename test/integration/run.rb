@@ -247,6 +247,10 @@ def hydrate_assertions(s, expect, needs_token: false)
       end
 
       expected = expect["golden_json"]
+      # cli_version is a build-time stamp that varies between
+      # `go build` (devel) and module-aware builds (v0.0.0-...).
+      # Ignore it so CI and local runs compare identically.
+      [expected, actual].each { |h| h.delete("cli_version") if h.is_a?(Hash) }
       diff = golden_json_diff(expected, actual, "")
       diff.each { |d| s.failures << "golden_json mismatch: #{d}" }
     end
