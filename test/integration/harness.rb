@@ -473,6 +473,9 @@ module ActionsPin
       def run_pty(input_prompts: nil, extra_args: [])
         cmd = @cmd + extra_args
         flat_env = @env.map { |k, v| "#{k}=#{Shellwords.shellescape(v)}" }
+        # Unset CI so the binary's interactive prompt isn't suppressed
+        # (GitHub Actions always exports CI=true).
+        flat_env.unshift("CI=")
         shell_cmd = "cd #{Shellwords.shellescape(@dir)} && " +
                     flat_env.join(" ") + " " +
                     cmd.map { |c| Shellwords.shellescape(c) }.join(" ")
