@@ -391,7 +391,13 @@ module ActionsPin
         ctx = prepare(binary, profile_dir: profile_dir)
         @last_cmd = ctx.cmd_string
         begin
-          result = ctx.run_captured
+          # Scenarios with interactive prompts need a PTY so the binary
+          # sees a real terminal and renders the confirm dialog.
+          if @input_spec && !@input_spec.empty?
+            result = ctx.run_pty(input_prompts: @input_spec)
+          else
+            result = ctx.run_captured
+          end
           @last_diff = `cd #{Shellwords.shellescape(ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
           @assertions.each { |a| a.call(result) }
           result
