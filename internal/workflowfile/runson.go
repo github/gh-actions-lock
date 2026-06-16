@@ -6,13 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// hostedRunnerLabels is the set of GitHub-hosted runner labels that are
-// valid runs-on values. Sourced from github/hosted-compute-core
-// imageconfigs/imageconfigs.go (the ImageConfigs map). This list has a
-// short shelf life — update it when new images ship or old ones EOL.
-//
-// Excludes staff-only, canary, and beta labels. Includes firewall
-// tech-preview labels since they're available to flagged customers.
+// hostedRunnerLabels is a temporary restriction — only workflows running
+// entirely on these labels are eligible for lockfile onboarding.
 var hostedRunnerLabels = map[string]bool{
 	// Linux x64
 	"ubuntu-latest": true,
