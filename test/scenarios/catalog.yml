@@ -834,6 +834,19 @@ scenarios:
       lockfile_comment_matches: 'actions/setup-go@v5:'
       lockfile_comment_excludes: 'actions/setup-go@v5\.\d+\.\d+'
 
+  - name: transitive_version_ref_nudge_suppressed
+    category: narrowing
+    description: "Transitive deps with imprecise refs do not trigger the version-ref nudge — user cannot change composite-internal refs"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["cli/gh-extension-precompile@v2.1.0"]
+    expect:
+      exit: 0
+      output_excludes: ["pinned without a full semver tag"]
+
   - name: transitive_provenance_ref_not_narrowed
     category: narrowing
     description: "Second-hop transitive dep (actions/attest-build-provenance@v1, pulled in via cli/gh-extension-precompile) keeps its declared major ref — not narrowed to v1.x.y. This dep also declares a bare-SHA subpath internally, which must stay verbatim rather than being reverse-looked-up into a malformed ref."

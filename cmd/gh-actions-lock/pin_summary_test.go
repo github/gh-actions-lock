@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/pin"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/ui"
 )
@@ -420,6 +421,86 @@ func TestRenderInvestigationAlerts_MixedIssuesFallbackHeader(t *testing.T) {
 	}
 	if !strings.Contains(out, "investigation") {
 		t.Errorf("expected investigation header for mixed issues, got:\n%s", out)
+	}
+}
+
+func TestRenderVersionRefNudge_SkipsTransitiveDeps(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			// Direct dep with imprecise ref → should appear in the nudge.
+			{NWO: "actions/checkout", Ref: "v6", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			// Transitive dep with imprecise ref → should NOT appear.
+			{NWO: "actions/setup-go", Ref: "v6", SHA: "bbb", Resolution: pin.Pinned, Direct: false, Workflows: []string{"ci.yml"}},
+			// Transitive dep pinned to a bare SHA → should NOT appear.
+			{NWO: "golangci/golangci-lint-action", Ref: "1e7e51e771db61008b38414a730f564565cf7c20", SHA: "1e7e51e771db61008b38414a730f564565cf7c20", Resolution: pin.Pinned, Direct: false, Workflows: []string{"ci.yml"}},
+			// Direct dep with full semver → should NOT appear (already precise).
+			{NWO: "actions/cache", Ref: "v4.2.1", SHA: "ccc", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderVersionRefNudge(console, record)
+	out := buf.String()
+
+	if !strings.Contains(out, "actions/checkout@v6") {
+		t.Errorf("expected direct imprecise dep in nudge, got:\n%s", out)
+	}
+	if strings.Contains(out, "actions/setup-go") {
+		t.Errorf("transitive dep should be excluded from nudge, got:\n%s", out)
+	}
+	if strings.Contains(out, "golangci/golangci-lint-action") {
+		t.Errorf("transitive dep should be excluded from nudge, got:\n%s", out)
+	}
+	if strings.Contains(out, "actions/cache") {
+		t.Errorf("full semver dep should be excluded from nudge, got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 action") {
+		t.Errorf("expected '1 action' count (only the direct imprecise dep), got:\n%s", out)
+	}
+}
+
+func TestRenderVersionRefNudge_AllTransitive_NoOutput(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "actions/checkout", Ref: "v6", SHA: "aaa", Resolution: pin.Pinned, Direct: false, Workflows: []string{"ci.yml"}},
+			{NWO: "actions/setup-go", Ref: "v6", SHA: "bbb", Resolution: pin.Verified, Direct: false, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderVersionRefNudge(console, record)
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no output when all imprecise deps are transitive, got:\n%s", buf.String())
+	}
+}
+
+func TestInjectVersionRefFindings_SkipsTransitiveDeps(t *testing.T) {
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			{Path: "ci.yml"},
+		},
+	}
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "actions/checkout", Ref: "v6", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "actions/setup-go", Ref: "v6", SHA: "bbb", Resolution: pin.Pinned, Direct: false, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	injectVersionRefFindings(report, record)
+
+	findings := report.Workflows[0].Findings
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding (direct only), got %d", len(findings))
+	}
+	if !strings.Contains(findings[0].Detail, "actions/checkout@v6") {
+		t.Errorf("expected finding for direct dep, got: %s", findings[0].Detail)
+	}
+	if strings.Contains(findings[0].Detail, "actions/setup-go") {
+		t.Errorf("transitive dep should not produce a finding, got: %s", findings[0].Detail)
 	}
 }
 
