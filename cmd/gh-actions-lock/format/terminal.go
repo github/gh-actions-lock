@@ -227,7 +227,7 @@ func extractBracketedLabels(s string) []string {
 
 // isExpression reports whether s is a GitHub Actions template expression.
 func isExpression(s string) bool {
-	return strings.Contains(s, "${{")
+	return strings.Contains(s, "${")
 }
 
 type warningGroup struct {

@@ -93,7 +93,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		// Split labels into expressions vs literal non-hosted labels.
 		var exprLabels, literalLabels []string
 		for _, l := range pw.NonHostedLabels {
-			if strings.Contains(l, "${{") {
+			if strings.Contains(l, "${") {
 				exprLabels = append(exprLabels, l)
 			} else {
 				literalLabels = append(literalLabels, l)
