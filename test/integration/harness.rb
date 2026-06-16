@@ -391,7 +391,13 @@ module ActionsPin
         ctx = prepare(binary, profile_dir: profile_dir)
         @last_cmd = ctx.cmd_string
         begin
-          result = ctx.run_captured
+          # Scenarios with interactive prompts need a PTY so the binary
+          # sees a real terminal and renders the confirm dialog.
+          if @input_spec && !@input_spec.empty?
+            result = ctx.run_pty(input_prompts: @input_spec)
+          else
+            result = ctx.run_captured
+          end
           @last_diff = `cd #{Shellwords.shellescape(ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
           @assertions.each { |a| a.call(result) }
           result
@@ -467,6 +473,9 @@ module ActionsPin
       def run_pty(input_prompts: nil, extra_args: [])
         cmd = @cmd + extra_args
         flat_env = @env.map { |k, v| "#{k}=#{Shellwords.shellescape(v)}" }
+        # Unset CI so the binary's interactive prompt isn't suppressed
+        # (GitHub Actions always exports CI=true).
+        flat_env.unshift("CI=")
         shell_cmd = "cd #{Shellwords.shellescape(@dir)} && " +
                     flat_env.join(" ") + " " +
                     cmd.map { |c| Shellwords.shellescape(c) }.join(" ")

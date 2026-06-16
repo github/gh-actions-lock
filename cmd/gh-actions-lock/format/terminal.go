@@ -97,6 +97,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 		checks.LockfileForgery,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction,
+		checks.SelfHostedRunner,
 		checks.Stale, checks.MisleadingSHA, checks.ImpostorCommit,
 	} {
 		if n, ok := catCounts[cat]; ok {
@@ -188,13 +189,15 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	}
 
 	// Triage warnings into buckets.
-	var unpinnedWorkflows, localActionWorkflows, bareSHADeps, otherDetailWarnings []string
+	var unpinnedWorkflows, localActionWorkflows, selfHostedRunnerWorkflows, bareSHADeps, otherDetailWarnings []string
 	for _, key := range warnOrder {
 		wg := warnMap[key]
 		f := wg.finding
 		switch {
 		case f.Category == checks.LocalAction:
 			localActionWorkflows = append(localActionWorkflows, f.WorkflowPath)
+		case f.Category == checks.SelfHostedRunner:
+			selfHostedRunnerWorkflows = append(selfHostedRunnerWorkflows, f.WorkflowPath)
 		case f.Category == checks.NotPinned && f.ActionRef == nil:
 			unpinnedWorkflows = append(unpinnedWorkflows, f.WorkflowPath)
 		case f.Category == checks.ShaAsRef:
@@ -221,6 +224,11 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		out.TermCaution("%d %s skipped — local path actions are not yet supported",
 			len(localActionWorkflows),
 			ui.Pluralize(len(localActionWorkflows), "workflow", "workflows"))
+	}
+	if len(selfHostedRunnerWorkflows) > 0 {
+		out.TermCaution("%d %s skipped — non-hosted runner labels are not supported",
+			len(selfHostedRunnerWorkflows),
+			ui.Pluralize(len(selfHostedRunnerWorkflows), "workflow", "workflows"))
 	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",

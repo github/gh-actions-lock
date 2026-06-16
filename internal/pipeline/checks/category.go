@@ -69,6 +69,11 @@ const (
 	// workflows that reference local actions — the entire workflow is
 	// skipped.
 	LocalAction Category = "local-action"
+	// SelfHostedRunner means at least one job in the workflow uses a
+	// non-GitHub-hosted runner label (self-hosted, custom label, runner
+	// group, or expression-based runs-on). Lockfile onboarding is limited
+	// to workflows that run entirely on GitHub-hosted runners.
+	SelfHostedRunner Category = "self-hosted-runner"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

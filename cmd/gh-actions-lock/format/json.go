@@ -10,6 +10,23 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 )
 
+// skipFindingInJSON reports whether a finding should be omitted from JSON
+// output. Run-only and valid-OK workflows are noise; local-action and
+// self-hosted-runner warnings are informational skips (errors are kept
+// because they mean an already-tracked workflow became ineligible).
+func skipFindingInJSON(f checks.Finding) bool {
+	if f.Category == checks.RunOnly {
+		return true
+	}
+	if f.Category == checks.Valid && f.Severity == checks.SeverityOK {
+		return true
+	}
+	if (f.Category == checks.LocalAction || f.Category == checks.SelfHostedRunner) && f.Severity != checks.SeverityError {
+		return true
+	}
+	return false
+}
+
 // validJSONField reports whether name is a recognized --json output field.
 func validJSONField(name string) bool {
 	switch name {
@@ -115,7 +132,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 		}
 		for _, wr := range report.Workflows {
 			for _, f := range wr.Findings {
-				if f.Category == checks.RunOnly || (f.Category == checks.LocalAction && f.Severity != checks.SeverityError) || (f.Category == checks.Valid && f.Severity == checks.SeverityOK) {
+				if skipFindingInJSON(f) {
 					continue
 				}
 				allFindings = append(allFindings, findingFromReport(f))
@@ -185,7 +202,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 				Findings: []Finding{},
 			}
 			for _, f := range wr.Findings {
-				if f.Category == checks.RunOnly || (f.Category == checks.LocalAction && f.Severity != checks.SeverityError) || (f.Category == checks.Valid && f.Severity == checks.SeverityOK) {
+				if skipFindingInJSON(f) {
 					continue
 				}
 				wf.Findings = append(wf.Findings, findingFromReport(f))

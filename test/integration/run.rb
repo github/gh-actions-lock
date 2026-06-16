@@ -247,6 +247,10 @@ def hydrate_assertions(s, expect, needs_token: false)
       end
 
       expected = expect["golden_json"]
+      # cli_version is a build-time stamp that varies between
+      # `go build` (devel) and module-aware builds (v0.0.0-...).
+      # Ignore it so CI and local runs compare identically.
+      [expected, actual].each { |h| h.delete("cli_version") if h.is_a?(Hash) }
       diff = golden_json_diff(expected, actual, "")
       diff.each { |d| s.failures << "golden_json mismatch: #{d}" }
     end
@@ -300,9 +304,12 @@ end
 
 # ── Fixture data ────────────────────────────────────────────────────────
 
-CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
-SETUP_GO_SHA = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
-CACHE_SHA    = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
+CHECKOUT_SHA      = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
+CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
+MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FORGERY_LIVE_SHA  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+FORGERY_MERGE_BASE = "cccccccccccccccccccccccccccccccccccccccc"
 
 SSO_ERROR_BODY = {
   message: "Resource protected by organization SAML enforcement. " \
@@ -403,6 +410,97 @@ LOCKFILE_TEMPLATES = {
   }
 }
 
+# ── Shared stub helpers for detection scenarios ────────────────────────
+
+# Wire common REST routes for actions/checkout repo metadata.
+def checkout_repo_rest(srv)
+  # GET /api/v3/repos/actions/checkout — repo metadata
+  srv.on(:GET, %r{/repos/actions/checkout$}) do |_req|
+    [200, { "Content-Type" => "application/json" },
+     JSON.generate({
+       default_branch: "main",
+       visibility: "public",
+       pushed_at: "2024-01-01T00:00:00Z",
+       id: 197_814_629,
+       owner: { id: 44_036_562 }
+     })]
+  end
+
+  # GET .../git/ref/heads/main — branch head SHA
+  srv.on(:GET, %r{/repos/actions/checkout/git/ref/heads/main$}) do |_req|
+    [200, { "Content-Type" => "application/json" },
+     JSON.generate({ ref: "refs/heads/main", object: { sha: MAIN_BRANCH_SHA, type: "commit" } })]
+  end
+
+  # GET .../branches?protected=true — no protected branches
+  srv.on(:GET, %r{/repos/actions/checkout/branches\?protected=true}) do |_req|
+    [200, { "Content-Type" => "application/json" }, "[]"]
+  end
+
+  # GET .../branches — only main
+  srv.on(:GET, %r{/repos/actions/checkout/branches}) do |_req|
+    [200, { "Content-Type" => "application/json" },
+     JSON.generate([{ name: "main", commit: { sha: MAIN_BRANCH_SHA }, protected: false }])]
+  end
+
+  # GET .../git/matching-refs/heads/* — no release branches
+  srv.on(:GET, %r{/repos/actions/checkout/git/matching-refs/}) do |_req|
+    [200, { "Content-Type" => "application/json" }, "[]"]
+  end
+end
+
+# GraphQL handler that resolves actions/checkout@v4 to the given SHA
+# and returns DIVERGED for all reachability checks.
+def checkout_graphql_impostor(srv)
+  srv.on(:POST, %r{/graphql$}) do |req|
+    body = JSON.parse(req.body) rescue {}
+    query = body["query"] || ""
+
+    if query.include?("expression")
+      # ResolveActionFiles — return the locked SHA (no ref-moved)
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate({ data: { a0: {
+         nameWithOwner: "actions/checkout",
+         object: { oid: CHECKOUT_SHA, file: { object: { text: "name: Checkout\ndescription: Checkout\n" } } }
+       } } })]
+    elsif query.include?("compare")
+      # BatchBranchContains — all branches report DIVERGED (unreachable)
+      repo_data = {}
+      query.scan(/b(\d+):/).flatten.each { |i| repo_data["b#{i}"] = { compare: { status: "DIVERGED" } } }
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate({ data: { repo: repo_data } })]
+    else
+      [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
+    end
+  end
+end
+
+# GraphQL handler that resolves actions/checkout@v4 to a DIFFERENT SHA
+# (simulating ref-moved), so the forgery ancestry check kicks in.
+def checkout_graphql_forgery(srv)
+  srv.on(:POST, %r{/graphql$}) do |req|
+    body = JSON.parse(req.body) rescue {}
+    query = body["query"] || ""
+
+    if query.include?("expression")
+      # ResolveActionFiles — return a different SHA (ref moved)
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate({ data: { a0: {
+         nameWithOwner: "actions/checkout",
+         object: { oid: FORGERY_LIVE_SHA, file: { object: { text: "name: Checkout\ndescription: Checkout\n" } } }
+       } } })]
+    elsif query.include?("compare")
+      # Reachability — irrelevant for forgery path but keep it working
+      repo_data = {}
+      query.scan(/b(\d+):/).flatten.each { |i| repo_data["b#{i}"] = { compare: { status: "BEHIND" } } }
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate({ data: { repo: repo_data } })]
+    else
+      [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
+    end
+  end
+end
+
 # ── Stub server wiring per scenario ────────────────────────────────────
 #
 # Maps scenario names to blocks that wire up the stub server. Scenarios
@@ -495,6 +593,32 @@ STUB_WIRING = {
   no_fix_json_combined: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
     s.env("GH_TOKEN" => "gho_fake_json_combined_token")
+  },
+
+  # Detection scenarios: impostor commit (SHA unreachable from any branch)
+  dbot_impostor_blocks: ->(s) {
+    s.stub_server do |srv|
+      checkout_graphql_impostor(srv)
+      checkout_repo_rest(srv)
+    end
+    s.env("GH_TOKEN" => "gho_fake_impostor_token")
+  },
+
+  # Detection scenarios: lockfile forgery (pinned SHA not ancestor of live SHA)
+  dbot_forgery_blocks: ->(s) {
+    s.stub_server do |srv|
+      checkout_graphql_forgery(srv)
+      checkout_repo_rest(srv)
+      # Compare API: merge_base != pinned SHA → forgery
+      srv.on(:GET, %r{/repos/actions/checkout/compare/}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({
+           status: "diverged",
+           merge_base_commit: { sha: FORGERY_MERGE_BASE }
+         })]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_forgery_token")
   },
 }
 
@@ -624,7 +748,9 @@ end
 if ARGV.delete("--shell") || ARGV.delete("-i")
   runner.shell
 elsif ARGV.delete("--matrix")
-  runner.print_matrix(catalog)
+  # removed — was only a read-only matrix view, not a test runner
+  $stderr.puts "Error: --matrix was removed. Use `make test-integration` or `make test-stub`."
+  exit 1
 elsif golden_category
   runner.golden_update(category: golden_category, catalog: catalog)
 else

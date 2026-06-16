@@ -712,6 +712,82 @@ scenarios:
     expect:
       exit: 0
 
+  - name: self_hosted_runner_skipped
+    category: workflow_parsing
+    description: "Workflow with self-hosted runner label — skipped cleanly"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: [self-hosted, linux]
+                steps:
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+
+  - name: self_hosted_runner_onboarded_error
+    category: workflow_parsing
+    description: "Onboarded workflow switches to self-hosted runner — hard error"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: [self-hosted, linux]
+                steps:
+                  - uses: actions/checkout@v4
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      output_contains: ["non-hosted runner labels"]
+
+  - name: custom_runner_label_skipped
+    category: workflow_parsing
+    description: "Workflow with custom runner label — skipped cleanly"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: my-custom-runner
+                steps:
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+
+  - name: runner_group_skipped
+    category: workflow_parsing
+    description: "Workflow with runner group — skipped cleanly"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on:
+                  group: my-runner-group
+                  labels: [linux]
+                steps:
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+
   - name: fresh_no_narrow_keeps_major
     category: narrowing
     description: "--no-narrow: splat ref v4 stays v4 in lockfile (not narrowed to v4.x.y)"
@@ -1293,9 +1369,8 @@ scenarios:
     category: dependabot
     description: "Impostor commit (unreachable SHA) produces impostor-commit/error finding"
     needs_stub: true
-    skip: "stub infra not yet wired — requires multi-phase HTTP stubs (GraphQL + REST branch-contains + REST compare)"
     tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
     fixtures:
       workflows:
         ci.yml:
@@ -1319,9 +1394,8 @@ scenarios:
     category: dependabot
     description: "Lockfile forgery (pin doesn't match resolved commit) produces lockfile-forgery/error finding"
     needs_stub: true
-    skip: "stub infra not yet wired — requires multi-phase HTTP stubs (GraphQL + REST compare)"
     tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
     fixtures:
       workflows:
         ci.yml:

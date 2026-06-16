@@ -13,6 +13,28 @@ import (
 	"github.com/github/gh-actions-lock/internal/ui"
 )
 
+// reportHasUnfixableErrors returns true when the report contains error-
+// severity findings that the autofix cannot resolve. Pinning resolves
+// not-pinned findings, so those are expected in the pre-fix report and
+// don't count. LocalAction, SelfHostedRunner, ImpostorCommit, and
+// LockfileForgery errors are unfixable — the workflow or lockfile must
+// be investigated.
+func reportHasUnfixableErrors(report *checks.Report) bool {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Severity != checks.SeverityError {
+				continue
+			}
+			switch f.Category {
+			case checks.LocalAction, checks.SelfHostedRunner,
+				checks.ImpostorCommit, checks.LockfileForgery:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
@@ -45,7 +67,8 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
-	if allClean && onboardingRefused == 0 && !hasInconclusive {
+	hasUnfixable := reportHasUnfixableErrors(report)
+	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
@@ -64,7 +87,18 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 		}
 	}
 
-	if len(investigated) > 0 || len(unresolvedEntries) > 0 {
+	// Surface error-severity findings that the autofix can't resolve
+	// (local-action or self-hosted-runner on an already-onboarded
+	// workflow). PresentResults already rendered these during the
+	// diagnose phase, but the narration log was attached (discarded in
+	// terminal mode) so they didn't reach stderr. Temporarily detach
+	// the log so the findings surface on the terminal.
+	if hasUnfixable {
+		console.SetLog(nil)
+		format.PresentResults(console, report, false, false)
+	}
+
+	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {
 		return errSilent
 	}
 	return nil
