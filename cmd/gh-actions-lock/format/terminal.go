@@ -108,7 +108,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 		checks.LockfileForgery,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction,
-		checks.SelfHostedRunner,
+		checks.SelfHostedRunner, checks.ExpressionRunner,
 		checks.Stale, checks.MisleadingSHA, checks.ImpostorCommit,
 	} {
 		if n, ok := catCounts[cat]; ok {
@@ -266,7 +266,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	}
 
 	// Triage warnings into buckets.
-	var unpinnedWorkflows, localActionWorkflows, selfHostedRunnerWorkflows, bareSHADeps, otherDetailWarnings []string
+	var unpinnedWorkflows, localActionWorkflows, selfHostedRunnerWorkflows, expressionRunnerWorkflows, bareSHADeps, otherDetailWarnings []string
 	for _, key := range warnOrder {
 		wg := warnMap[key]
 		f := wg.finding
@@ -275,6 +275,8 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			localActionWorkflows = append(localActionWorkflows, f.WorkflowPath)
 		case f.Category == checks.SelfHostedRunner:
 			selfHostedRunnerWorkflows = append(selfHostedRunnerWorkflows, f.WorkflowPath)
+		case f.Category == checks.ExpressionRunner:
+			expressionRunnerWorkflows = append(expressionRunnerWorkflows, f.WorkflowPath)
 		case f.Category == checks.NotPinned && f.ActionRef == nil:
 			unpinnedWorkflows = append(unpinnedWorkflows, f.WorkflowPath)
 		case f.Category == checks.ShaAsRef:
@@ -328,6 +330,18 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		} else {
 			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label>")
 		}
+	}
+	if len(expressionRunnerWorkflows) > 0 {
+		out.TermCaution("%d %s skipped — runs-on uses expressions that can't be resolved statically",
+			len(expressionRunnerWorkflows),
+			ui.Pluralize(len(expressionRunnerWorkflows), "workflow", "workflows"))
+		var wfNames []string
+		for _, p := range expressionRunnerWorkflows {
+			wfNames = append(wfNames, workflowName(p))
+		}
+		sort.Strings(wfNames)
+		out.TermDetail("↳ %s — if the matrix resolves to hosted runners, pin manually",
+			strings.Join(wfNames, ", "))
 	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",

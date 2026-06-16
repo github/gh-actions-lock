@@ -127,6 +127,8 @@ func (f *Finding) IsWarning() bool {
 		return f.Severity != SeverityError
 	case f.Category == SelfHostedRunner:
 		return f.Severity != SeverityError
+	case f.Category == ExpressionRunner:
+		return true
 	case f.Category.IsInconclusive():
 		return true
 	case f.Category == NotPinned && f.ActionRef == nil:

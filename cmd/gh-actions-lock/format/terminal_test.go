@@ -357,6 +357,58 @@ func TestPresentResults_SelfHostedRunnerHintExcludesExpressions(t *testing.T) {
 	}
 }
 
+// TestPresentResults_ExpressionRunnerWarning verifies that expression-only
+// workflows get their own distinct warning with workflow names and guidance.
+func TestPresentResults_ExpressionRunnerWarning(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			{
+				Path: ".github/workflows/ci.yaml",
+				Findings: []checks.Finding{{
+					WorkflowPath: ".github/workflows/ci.yaml",
+					Category:     checks.ExpressionRunner,
+					Severity:     checks.SeverityWarning,
+					Confidence:   checks.ConfidenceHigh,
+					Detail:       "runs-on uses expressions [${{ matrix.os }}] that can't be resolved statically",
+				}},
+			},
+			{
+				Path: ".github/workflows/maccloud-unified.yml",
+				Findings: []checks.Finding{{
+					WorkflowPath: ".github/workflows/maccloud-unified.yml",
+					Category:     checks.ExpressionRunner,
+					Severity:     checks.SeverityWarning,
+					Confidence:   checks.ConfidenceHigh,
+					Detail:       "runs-on uses expressions [${{ matrix.runner }}] that can't be resolved statically",
+				}},
+			},
+		},
+	}
+	PresentResults(u, report, true, false)
+
+	got := buf.String()
+	if !strings.Contains(got, "2 workflows skipped") {
+		t.Errorf("should show count of expression-runner workflows:\n%s", got)
+	}
+	if !strings.Contains(got, "expressions that can't be resolved statically") {
+		t.Errorf("should show expression-specific message:\n%s", got)
+	}
+	if !strings.Contains(got, "ci.yaml") {
+		t.Errorf("should list affected workflow names:\n%s", got)
+	}
+	if !strings.Contains(got, "maccloud-unified.yml") {
+		t.Errorf("should list affected workflow names:\n%s", got)
+	}
+	if !strings.Contains(got, "pin manually") {
+		t.Errorf("should show manual pinning guidance:\n%s", got)
+	}
+	// Should NOT show the --allow-runners hint (that's for real non-hosted labels).
+	if strings.Contains(got, "--allow-runners") {
+		t.Errorf("expression-runner warning should not suggest --allow-runners:\n%s", got)
+	}
+}
+
 func TestExtractBracketedLabels(t *testing.T) {
 	tests := []struct {
 		name string

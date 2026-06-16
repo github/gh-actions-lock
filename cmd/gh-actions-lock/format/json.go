@@ -21,7 +21,7 @@ func skipFindingInJSON(f checks.Finding) bool {
 	if f.Category == checks.Valid && f.Severity == checks.SeverityOK {
 		return true
 	}
-	if (f.Category == checks.LocalAction || f.Category == checks.SelfHostedRunner) && f.Severity != checks.SeverityError {
+	if (f.Category == checks.LocalAction || f.Category == checks.SelfHostedRunner || f.Category == checks.ExpressionRunner) && f.Severity != checks.SeverityError {
 		return true
 	}
 	return false

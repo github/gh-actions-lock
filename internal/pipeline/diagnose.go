@@ -90,7 +90,30 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 
 	if pw.NonHostedRunner {
-		labelList := strings.Join(pw.NonHostedLabels, ", ")
+		// Split labels into expressions vs literal non-hosted labels.
+		var exprLabels, literalLabels []string
+		for _, l := range pw.NonHostedLabels {
+			if strings.Contains(l, "${{") {
+				exprLabels = append(exprLabels, l)
+			} else {
+				literalLabels = append(literalLabels, l)
+			}
+		}
+
+		// If all non-hosted labels are expressions, use ExpressionRunner.
+		if len(literalLabels) == 0 {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.ExpressionRunner,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("runs-on uses expressions [%s] that can't be resolved statically", strings.Join(exprLabels, ", ")),
+			})
+			return wr
+		}
+
+		// Otherwise report as self-hosted (include only literal labels in detail).
+		labelList := strings.Join(literalLabels, ", ")
 		wfKey := workflowfile.KeyFromPath(pw.Path)
 		if store != nil && store.HasWorkflow(wfKey) {
 			wr.Findings = append(wr.Findings, checks.Finding{
