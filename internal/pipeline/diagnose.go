@@ -88,6 +88,29 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		return wr
 	}
 
+	if pw.NonHostedRunner {
+		wfKey := workflowfile.KeyFromPath(pw.Path)
+		if store != nil && store.HasWorkflow(wfKey) {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.SelfHostedRunner,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "workflow uses non-hosted runner labels which are not supported; use GitHub-hosted runners to continue using the lockfile",
+				Remediation:  "switch to GitHub-hosted runner labels or move self-hosted jobs to a separate workflow",
+			})
+		} else {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.SelfHostedRunner,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "workflow uses non-hosted runner labels; lockfile onboarding is not supported",
+			})
+		}
+		return wr
+	}
+
 	if len(pw.Refs) == 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
@@ -238,7 +261,7 @@ func hasIssues(ff []checks.Finding) bool {
 		if f.Category.IsInconclusive() {
 			continue
 		}
-		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Category != checks.LocalAction && f.Severity == checks.SeverityWarning {
+		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Category != checks.LocalAction && f.Category != checks.SelfHostedRunner && f.Severity == checks.SeverityWarning {
 			return true
 		}
 	}

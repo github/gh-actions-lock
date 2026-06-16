@@ -37,6 +37,11 @@ type ParsedWorkflow struct {
 	// this false when --rescan or an equivalent "verify everything" flag
 	// is in effect.
 	SkipReachWhenUnchanged bool
+	// NonHostedRunner is true when at least one job in the workflow
+	// uses a runs-on label that is not a known GitHub-hosted runner
+	// (self-hosted, custom label, runner group, or expression). These
+	// workflows are skipped from onboarding.
+	NonHostedRunner bool
 }
 
 // PartitionRefs splits refs into recorded (matching a lockfile entry by

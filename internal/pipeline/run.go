@@ -65,6 +65,12 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 				skippedRescan++
 				continue
 			}
+			// Non-hosted-runner workflows are skipped at diagnose time.
+			if parsed[i].NonHostedRunner {
+				parsed[i].Resolved = true
+				skippedRescan++
+				continue
+			}
 			recorded, unrecorded := parsed[i].PartitionRefs()
 			if len(parsed[i].Refs) == 0 || len(unrecorded) == 0 {
 				parsed[i].Resolved = true

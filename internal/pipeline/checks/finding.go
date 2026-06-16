@@ -78,7 +78,7 @@ func (r *WorkflowReport) NeedsAttention() bool {
 			continue
 		}
 		switch f.Category {
-		case Valid, RunOnly, LocalAction, MisleadingSHA, RefMoved, VersionRef:
+		case Valid, RunOnly, LocalAction, SelfHostedRunner, MisleadingSHA, RefMoved, VersionRef:
 			continue
 		default:
 			return true
@@ -107,7 +107,7 @@ func (f *Finding) IsValid() bool {
 		return true
 	}
 	switch f.Category {
-	case Valid, RunOnly, LocalAction, ShaAsRef, RefMoved, VersionRef, OnboardingRequired:
+	case Valid, RunOnly, LocalAction, SelfHostedRunner, ShaAsRef, RefMoved, VersionRef, OnboardingRequired:
 		return true
 	case NotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
@@ -124,6 +124,8 @@ func (f *Finding) IsWarning() bool {
 	case f.Category == RefMoved:
 		return true
 	case f.Category == LocalAction:
+		return f.Severity != SeverityError
+	case f.Category == SelfHostedRunner:
 		return f.Severity != SeverityError
 	case f.Category.IsInconclusive():
 		return true

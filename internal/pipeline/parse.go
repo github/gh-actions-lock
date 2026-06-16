@@ -48,6 +48,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			continue
 		}
 		pw.Refs, pw.LocalPaths, pw.ParseWarnings = wf.ExtractActionRefs()
+		pw.NonHostedRunner = wf.HasNonHostedRunnerLabels()
 		if len(pw.Refs) > 0 {
 			wfKey := workflowfile.KeyFromPath(path)
 			deps, depsErr := store.Get(wfKey)
