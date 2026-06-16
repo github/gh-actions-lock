@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
@@ -89,6 +90,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 
 	if pw.NonHostedRunner {
+		labelList := strings.Join(pw.NonHostedLabels, ", ")
 		wfKey := workflowfile.KeyFromPath(pw.Path)
 		if store != nil && store.HasWorkflow(wfKey) {
 			wr.Findings = append(wr.Findings, checks.Finding{
@@ -96,7 +98,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 				Category:     checks.SelfHostedRunner,
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
-				Detail:       "workflow uses non-hosted runner labels which are not supported; use GitHub-hosted runners to continue using the lockfile",
+				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; use GitHub-hosted runners to continue using the lockfile", labelList),
 				Remediation:  "switch to GitHub-hosted runner labels or move self-hosted jobs to a separate workflow",
 			})
 		} else {
@@ -105,7 +107,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 				Category:     checks.SelfHostedRunner,
 				Severity:     checks.SeverityWarning,
 				Confidence:   checks.ConfidenceHigh,
-				Detail:       "workflow uses non-hosted runner labels; lockfile onboarding is not supported",
+				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; lockfile onboarding is not supported", labelList),
 			})
 		}
 		return wr

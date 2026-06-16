@@ -40,6 +40,22 @@ func TestIsHostedRunnerLabel(t *testing.T) {
 	}
 }
 
+func TestRegisterOrgHostedLabels(t *testing.T) {
+	// "ubuntu-latest-xl" is not in the built-in list.
+	assert.False(t, IsHostedRunnerLabel("ubuntu-latest-xl"))
+
+	RegisterOrgHostedLabels([]string{"ubuntu-latest-xl", "Ubuntu-Latest-2XL"})
+	t.Cleanup(func() {
+		orgHostedMu.Lock()
+		orgHostedLabels = nil
+		orgHostedMu.Unlock()
+	})
+
+	assert.True(t, IsHostedRunnerLabel("ubuntu-latest-xl"))
+	assert.True(t, IsHostedRunnerLabel("Ubuntu-Latest-XL")) // case-insensitive
+	assert.True(t, IsHostedRunnerLabel("ubuntu-latest-2xl"))
+}
+
 func TestExtractRunsOnLabels_Scalar(t *testing.T) {
 	wf, err := Parse("ci.yml", []byte(`
 name: ci
@@ -237,6 +253,78 @@ on: push
 			wf, err := Parse("ci.yml", []byte(tt.yaml))
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantNon, wf.HasNonHostedRunnerLabels())
+		})
+	}
+}
+
+func TestNonHostedRunnerLabels(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{
+			name: "returns non-hosted labels",
+			yaml: `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: [self-hosted, linux]
+    steps:
+      - run: echo hi
+`,
+			want: []string{"self-hosted", "linux"},
+		},
+		{
+			name: "deduplicates case-insensitively preserving first casing",
+			yaml: `
+name: ci
+on: push
+jobs:
+  a:
+    runs-on: My-Runner
+    steps:
+      - run: echo a
+  b:
+    runs-on: my-runner
+    steps:
+      - run: echo b
+`,
+			want: []string{"My-Runner"},
+		},
+		{
+			name: "includes expression labels",
+			yaml: `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: echo hi
+`,
+			want: []string{"${{ matrix.os }}"},
+		},
+		{
+			name: "empty when all hosted",
+			yaml: `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+`,
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wf, err := Parse("ci.yml", []byte(tt.yaml))
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, wf.NonHostedRunnerLabels())
 		})
 	}
 }

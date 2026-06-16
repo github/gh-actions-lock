@@ -24,6 +24,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/spf13/cobra"
 )
 
@@ -46,6 +47,10 @@ type checkOptions struct {
 	// are kept as-is in the lock comment instead of being resolved to
 	// the full patch tag (e.g. "v4.2.1").
 	noNarrow bool
+	// allowRunners lists additional runner labels to treat as hosted.
+	// Use when org-provisioned larger runners (e.g. ubuntu-latest-xl)
+	// are flagged as self-hosted but you know they are GitHub-hosted.
+	allowRunners []string
 }
 
 func newCheckCmd(newResolver resolverFunc) *cobra.Command {
@@ -103,6 +108,9 @@ func newCheckCmd(newResolver resolverFunc) *cobra.Command {
 			# Read-only check for CI (writes nothing, exits 1 if invalid)
 			$ gh actions-lock check --no-fix --json=valid,findings
 
+			# Treat org larger runners as hosted
+			$ gh actions-lock --allow-runners ubuntu-latest-xl,ubuntu-latest-2xl
+
 			# All fields as JSON
 			$ gh actions-lock check --json
 		`),
@@ -131,6 +139,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false, "Keep mutable version refs (e.g. v4) instead of narrowing to full patch tags (e.g. v4.2.1)")
+	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Additional runner `labels` to treat as GitHub-hosted (e.g. ubuntu-latest-xl)")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
 
@@ -172,6 +181,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Shared worker pool for all concurrent phases.
 	pool := pinpool.New(0, console) // 0 → DefaultWorkers
 
+	// Register user-supplied runner labels as hosted before parsing.
+	if len(opts.allowRunners) > 0 {
+		workflowfile.RegisterOrgHostedLabels(opts.allowRunners)
+	}
+
 	// If profiling, use a profiled resolver that logs HTTP calls.
 	if prof != nil && newResolver == nil {
 		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
@@ -197,6 +211,17 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		r.SeedFromLockfile(store.AllDeps())
 	}
 	endSetup()
+
+	// Fetch org-level hosted runner labels so larger runners aren't flagged
+	// as self-hosted. Best-effort: 403 is silently ignored.
+	if gc := r.GHClient(); gc != nil {
+		if currentRepo, err := repository.Current(); err == nil {
+			if labels, err := gc.OrgHostedRunnerNames(ctx, currentRepo.Owner); err == nil && len(labels) > 0 {
+				workflowfile.RegisterOrgHostedLabels(labels)
+			}
+		}
+	}
+
 	opts.workflowPaths = paths
 
 	// Detailed narration is suppressed from the terminal during the run so the

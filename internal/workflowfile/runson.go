@@ -2,6 +2,7 @@ package workflowfile
 
 import (
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,16 +61,41 @@ var hostedRunnerLabels = map[string]bool{
 	"macos-latest-xlarge": true,
 }
 
-// IsHostedRunnerLabel reports whether label is a known GitHub-hosted
-// runner label. Matches case-insensitively against the label set from
-// github/hosted-compute-core imageconfigs.
-func IsHostedRunnerLabel(label string) bool {
-	return hostedRunnerLabels[strings.ToLower(label)]
+// orgHostedLabels extends the built-in set with labels from --allow-runners
+// or the org hosted-runners API.
+var (
+	orgHostedMu     sync.RWMutex
+	orgHostedLabels map[string]bool
+)
+
+// RegisterOrgHostedLabels adds labels to the hosted runner allowlist.
+// Call before ParseAll; safe to call multiple times.
+func RegisterOrgHostedLabels(labels []string) {
+	if len(labels) == 0 {
+		return
+	}
+	orgHostedMu.Lock()
+	defer orgHostedMu.Unlock()
+	if orgHostedLabels == nil {
+		orgHostedLabels = make(map[string]bool, len(labels))
+	}
+	for _, l := range labels {
+		orgHostedLabels[strings.ToLower(strings.TrimSpace(l))] = true
+	}
 }
 
-// ExtractRunsOnLabels returns the set of runs-on labels across all jobs
-// in the workflow. Each distinct label appears once (case-preserved).
-// Expression-based labels (containing "${") are returned as-is.
+// IsHostedRunnerLabel reports whether label is a known GitHub-hosted runner.
+func IsHostedRunnerLabel(label string) bool {
+	lower := strings.ToLower(label)
+	if hostedRunnerLabels[lower] {
+		return true
+	}
+	orgHostedMu.RLock()
+	defer orgHostedMu.RUnlock()
+	return orgHostedLabels[lower]
+}
+
+// ExtractRunsOnLabels returns the deduplicated runs-on labels across all jobs.
 func (f *File) ExtractRunsOnLabels() []string {
 	seen := make(map[string]bool)
 	var labels []string
@@ -87,26 +113,29 @@ func (f *File) ExtractRunsOnLabels() []string {
 	return labels
 }
 
-// HasNonHostedRunnerLabels reports whether any job in the workflow uses a
-// runs-on label that is not a known GitHub-hosted runner. Returns false
-// when the workflow has no jobs or no runs-on keys (run-only workflows
-// have no action refs to pin, so they are excluded separately).
+// HasNonHostedRunnerLabels reports whether any job uses a non-hosted runner label.
 func (f *File) HasNonHostedRunnerLabels() bool {
-	found := false
+	return len(f.NonHostedRunnerLabels()) > 0
+}
+
+// NonHostedRunnerLabels returns distinct non-hosted labels across all jobs.
+func (f *File) NonHostedRunnerLabels() []string {
+	seen := make(map[string]bool)
+	var labels []string
+
 	walkJobs(&f.root, func(runsOnNode *yaml.Node) {
 		for _, label := range runsOnLabels(runsOnNode) {
-			if strings.Contains(label, "${") {
-				// Expression labels are opaque; treat as non-hosted to be safe.
-				found = true
-				return
+			lower := strings.ToLower(label)
+			if seen[lower] {
+				continue
 			}
-			if !IsHostedRunnerLabel(label) {
-				found = true
-				return
+			if strings.Contains(label, "${") || !IsHostedRunnerLabel(label) {
+				seen[lower] = true
+				labels = append(labels, label)
 			}
 		}
 	})
-	return found
+	return labels
 }
 
 // walkJobs iterates over the top-level `jobs:` mapping and calls fn with
@@ -120,7 +149,6 @@ func walkJobs(root *yaml.Node, fn func(runsOnNode *yaml.Node)) {
 		return
 	}
 
-	// Find the "jobs" key.
 	var jobsNode *yaml.Node
 	for i := 0; i < len(doc.Content)-1; i += 2 {
 		if doc.Content[i].Kind == yaml.ScalarNode && doc.Content[i].Value == "jobs" {
@@ -132,7 +160,6 @@ func walkJobs(root *yaml.Node, fn func(runsOnNode *yaml.Node)) {
 		return
 	}
 
-	// Iterate jobs.
 	for i := 0; i < len(jobsNode.Content)-1; i += 2 {
 		jobVal := jobsNode.Content[i+1]
 		if jobVal.Kind != yaml.MappingNode {

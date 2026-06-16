@@ -2,6 +2,7 @@ package format
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -84,11 +85,21 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 			continue
 		}
 
+		// Self-hosted-runner findings share the same empty dep key;
+		// render them as a deduplicated group showing affected workflows.
+		var selfHostedFindings []checks.Finding
 		for _, f := range dg.findings {
 			if f.Category == checks.NotPinned {
 				continue
 			}
+			if f.Category == checks.SelfHostedRunner {
+				selfHostedFindings = append(selfHostedFindings, f)
+				continue
+			}
 			renderFindingDetail(out, f, dep)
+		}
+		if len(selfHostedFindings) > 0 {
+			renderSelfHostedGroup(out, selfHostedFindings)
 		}
 	}
 
@@ -124,11 +135,11 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	if f.Category == checks.LockfileForgery && f.Dependency != nil {
 		owner, repo := f.Dependency.OwnerRepo()
 		if owner != "" {
-			out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
+			out.Detail("  ↳ %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
 		}
 	}
 	if IsAlertedCategory(f.Category) && f.Remediation != "" {
-		out.Detail("  %s %s", out.Bold("⚠"), f.Remediation)
+		out.Detail("  %s %s", ui.IconWarning, f.Remediation)
 	}
 	if f.RecommendedTag != "" {
 		nwo := ""
@@ -139,12 +150,12 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 		if len(sha) > 7 {
 			sha = sha[:7]
 		}
-		out.Detail("  %s Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
-			out.Bold("→"), nwo, f.RecommendedTag, sha)
+		out.Detail("  ↳ Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
+			nwo, f.RecommendedTag, sha)
 	}
 	if f.Category == checks.ImpostorCommit {
-		out.Detail("  %s %s", out.Yellow("!"), pipeline.ImpostorCommitContext)
-		out.Detail("  %s %s", out.Bold("→"), pipeline.PublisherEscalationCopy)
+		out.Detail("  %s %s", ui.IconWarning, pipeline.ImpostorCommitContext)
+		out.Detail("  ↳ %s", pipeline.PublisherEscalationCopy)
 		out.Detail("  see: %s", out.DocLink(pipeline.PublisherTagReleasesDocURL))
 	}
 	if f.DocURL != "" {
@@ -152,7 +163,66 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	}
 }
 
-// warningGroup deduplicates warnings by dep key across workflows.
+// renderSelfHostedGroup prints a deduplicated block for self-hosted-runner
+// findings, listing each affected workflow and its non-hosted labels.
+func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
+	label := "SELF-HOSTED-RUNNER"
+	icon := "!"
+	if IsAlertedCategory(checks.SelfHostedRunner) {
+		icon = "✗"
+	}
+	out.Detail("%s %s", icon, out.Dim(label))
+	for _, f := range findings {
+		wfName := workflowName(f.WorkflowPath)
+		out.Detail("  %s: %s", out.Bold(wfName), f.Detail)
+	}
+	if IsAlertedCategory(checks.SelfHostedRunner) && findings[0].Remediation != "" {
+		out.Detail("  %s %s", ui.IconWarning, findings[0].Remediation)
+	}
+	labelSet := map[string]bool{}
+	for _, f := range findings {
+		for _, l := range extractBracketedLabels(f.Detail) {
+			labelSet[l] = true
+		}
+	}
+	if len(labelSet) > 0 {
+		var labels []string
+		for l := range labelSet {
+			labels = append(labels, l)
+		}
+		sort.Strings(labels)
+		out.Detail("  ↳ re-run with --allow-runners %s", strings.Join(labels, ","))
+	}
+}
+
+// workflowName extracts the workflow filename from a path like
+// ".github/workflows/ci.yml".
+func workflowName(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// extractBracketedLabels pulls comma-separated items from the first
+// [...] group in s. Returns nil if no brackets are found.
+func extractBracketedLabels(s string) []string {
+	start := strings.Index(s, "[")
+	end := strings.Index(s, "]")
+	if start < 0 || end <= start {
+		return nil
+	}
+	inner := s[start+1 : end]
+	var labels []string
+	for _, l := range strings.Split(inner, ",") {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			labels = append(labels, l)
+		}
+	}
+	return labels
+}
+
 type warningGroup struct {
 	finding   checks.Finding
 	count     int
@@ -229,6 +299,28 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		out.TermCaution("%d %s skipped — non-hosted runner labels are not supported",
 			len(selfHostedRunnerWorkflows),
 			ui.Pluralize(len(selfHostedRunnerWorkflows), "workflow", "workflows"))
+		// Collect distinct labels from findings for the remediation hint.
+		labelSet := map[string]bool{}
+		for _, key := range warnOrder {
+			wg := warnMap[key]
+			if wg.finding.Category != checks.SelfHostedRunner {
+				continue
+			}
+			for _, l := range extractBracketedLabels(wg.finding.Detail) {
+				labelSet[l] = true
+			}
+		}
+		if len(labelSet) > 0 {
+			var labels []string
+			for l := range labelSet {
+				labels = append(labels, l)
+			}
+			sort.Strings(labels)
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s",
+				strings.Join(labels, ","))
+		} else {
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label>")
+		}
 	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",
