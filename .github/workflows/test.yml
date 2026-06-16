@@ -25,3 +25,26 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
+
+  integration-stub:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GOPROXY: https://goproxy.githubapp.com/mod,https://proxy.golang.org,direct
+      GOPRIVATE: ''
+      GONOPROXY: ''
+      GONOSUMDB: github.com/github/*
+    steps:
+      - name: OIDC Setup for goproxy
+        uses: github/setup-goproxy@v1.1.0
+      - uses: actions/checkout@v5.0.1
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - run: make build
+      - run: make test-stub

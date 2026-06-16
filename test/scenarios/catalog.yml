@@ -1369,9 +1369,8 @@ scenarios:
     category: dependabot
     description: "Impostor commit (unreachable SHA) produces impostor-commit/error finding"
     needs_stub: true
-    skip: "stub infra not yet wired — requires multi-phase HTTP stubs (GraphQL + REST branch-contains + REST compare)"
     tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
     fixtures:
       workflows:
         ci.yml:
@@ -1395,9 +1394,8 @@ scenarios:
     category: dependabot
     description: "Lockfile forgery (pin doesn't match resolved commit) produces lockfile-forgery/error finding"
     needs_stub: true
-    skip: "stub infra not yet wired — requires multi-phase HTTP stubs (GraphQL + REST compare)"
     tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
     fixtures:
       workflows:
         ci.yml:

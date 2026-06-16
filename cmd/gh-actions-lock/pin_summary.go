@@ -16,8 +16,9 @@ import (
 // reportHasUnfixableErrors returns true when the report contains error-
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
-// don't count. LocalAction and SelfHostedRunner errors on already-
-// onboarded workflows are unfixable — the workflow must be edited.
+// don't count. LocalAction, SelfHostedRunner, ImpostorCommit, and
+// LockfileForgery errors are unfixable — the workflow or lockfile must
+// be investigated.
 func reportHasUnfixableErrors(report *checks.Report) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
@@ -25,7 +26,8 @@ func reportHasUnfixableErrors(report *checks.Report) bool {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.SelfHostedRunner:
+			case checks.LocalAction, checks.SelfHostedRunner,
+				checks.ImpostorCommit, checks.LockfileForgery:
 				return true
 			}
 		}
