@@ -2,6 +2,7 @@ package workflowfile
 
 import (
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,11 +61,41 @@ var hostedRunnerLabels = map[string]bool{
 	"macos-latest-xlarge": true,
 }
 
+// orgHostedLabels holds additional labels registered at runtime from the
+// org's hosted-runners API. Protected by orgHostedMu for safe concurrent access.
+var (
+	orgHostedMu     sync.RWMutex
+	orgHostedLabels map[string]bool
+)
+
+// RegisterOrgHostedLabels records additional runner labels as hosted (from
+// the /orgs/{org}/actions/hosted-runners API). Call this before ParseAll so
+// workflows using org-provisioned larger runners are not flagged as
+// self-hosted. Safe to call multiple times; labels accumulate.
+func RegisterOrgHostedLabels(labels []string) {
+	if len(labels) == 0 {
+		return
+	}
+	orgHostedMu.Lock()
+	defer orgHostedMu.Unlock()
+	if orgHostedLabels == nil {
+		orgHostedLabels = make(map[string]bool, len(labels))
+	}
+	for _, l := range labels {
+		orgHostedLabels[strings.ToLower(l)] = true
+	}
+}
+
 // IsHostedRunnerLabel reports whether label is a known GitHub-hosted
-// runner label. Matches case-insensitively against the label set from
-// github/hosted-compute-core imageconfigs.
+// runner label. Checks both the built-in set and any org-registered labels.
 func IsHostedRunnerLabel(label string) bool {
-	return hostedRunnerLabels[strings.ToLower(label)]
+	lower := strings.ToLower(label)
+	if hostedRunnerLabels[lower] {
+		return true
+	}
+	orgHostedMu.RLock()
+	defer orgHostedMu.RUnlock()
+	return orgHostedLabels[lower]
 }
 
 // ExtractRunsOnLabels returns the set of runs-on labels across all jobs

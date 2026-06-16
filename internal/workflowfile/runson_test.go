@@ -40,6 +40,22 @@ func TestIsHostedRunnerLabel(t *testing.T) {
 	}
 }
 
+func TestRegisterOrgHostedLabels(t *testing.T) {
+	// "ubuntu-latest-xl" is not in the built-in list.
+	assert.False(t, IsHostedRunnerLabel("ubuntu-latest-xl"))
+
+	RegisterOrgHostedLabels([]string{"ubuntu-latest-xl", "Ubuntu-Latest-2XL"})
+
+	assert.True(t, IsHostedRunnerLabel("ubuntu-latest-xl"))
+	assert.True(t, IsHostedRunnerLabel("Ubuntu-Latest-XL")) // case-insensitive
+	assert.True(t, IsHostedRunnerLabel("ubuntu-latest-2xl"))
+
+	// Clean up for other tests in the same process.
+	orgHostedMu.Lock()
+	orgHostedLabels = nil
+	orgHostedMu.Unlock()
+}
+
 func TestExtractRunsOnLabels_Scalar(t *testing.T) {
 	wf, err := Parse("ci.yml", []byte(`
 name: ci

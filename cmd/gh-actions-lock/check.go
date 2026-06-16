@@ -24,6 +24,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/spf13/cobra"
 )
 
@@ -197,6 +198,17 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		r.SeedFromLockfile(store.AllDeps())
 	}
 	endSetup()
+
+	// Fetch org-level hosted runner labels so larger runners aren't flagged
+	// as self-hosted. Best-effort: 403 is silently ignored.
+	if gc := r.GHClient(); gc != nil {
+		if currentRepo, err := repository.Current(); err == nil {
+			if labels, err := gc.OrgHostedRunnerNames(ctx, currentRepo.Owner); err == nil && len(labels) > 0 {
+				workflowfile.RegisterOrgHostedLabels(labels)
+			}
+		}
+	}
+
 	opts.workflowPaths = paths
 
 	// Detailed narration is suppressed from the terminal during the run so the
