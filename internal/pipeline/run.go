@@ -32,7 +32,7 @@ type RunOptions struct {
 type RunResult struct {
 	Report        *checks.Report
 	Valid         bool
-	SkippedRescan int
+	SkippedRescan int // already-pinned workflows trusted without network calls
 }
 
 // Run executes the full diagnostic pipeline: parse → trust-check →
@@ -62,13 +62,11 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			// waste network calls resolving their refs.
 			if len(parsed[i].LocalPaths) > 0 {
 				parsed[i].Resolved = true
-				skippedRescan++
 				continue
 			}
 			// Non-hosted-runner workflows are skipped at diagnose time.
 			if parsed[i].NonHostedRunner {
 				parsed[i].Resolved = true
-				skippedRescan++
 				continue
 			}
 			recorded, unrecorded := parsed[i].PartitionRefs()

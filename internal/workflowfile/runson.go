@@ -90,7 +90,7 @@ func (f *File) ExtractRunsOnLabels() []string {
 // HasNonHostedRunnerLabels reports whether any job in the workflow uses a
 // runs-on label that is not a known GitHub-hosted runner. Returns false
 // when the workflow has no jobs or no runs-on keys (run-only workflows
-// are not excluded by this check — they have no runner labels at all).
+// have no action refs to pin, so they are excluded separately).
 func (f *File) HasNonHostedRunnerLabels() bool {
 	found := false
 	walkJobs(&f.root, func(runsOnNode *yaml.Node) {
