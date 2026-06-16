@@ -179,6 +179,20 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 	if IsAlertedCategory(checks.SelfHostedRunner) && findings[0].Remediation != "" {
 		out.Detail("  %s %s", out.Bold("⚠"), findings[0].Remediation)
 	}
+	// Collect distinct labels for actionable hint.
+	labelSet := map[string]bool{}
+	for _, f := range findings {
+		for _, l := range extractBracketedLabels(f.Detail) {
+			labelSet[l] = true
+		}
+	}
+	if len(labelSet) > 0 {
+		var labels []string
+		for l := range labelSet {
+			labels = append(labels, l)
+		}
+		out.Detail("  %s re-run with --allow-runners %s", out.Bold("→"), strings.Join(labels, ","))
+	}
 }
 
 // workflowName extracts the workflow filename from a path like
@@ -189,6 +203,26 @@ func workflowName(path string) string {
 	}
 	return path
 }
+
+// extractBracketedLabels pulls comma-separated items from the first
+// [...] group in s. Returns nil if no brackets are found.
+func extractBracketedLabels(s string) []string {
+	start := strings.Index(s, "[")
+	end := strings.Index(s, "]")
+	if start < 0 || end <= start {
+		return nil
+	}
+	inner := s[start+1 : end]
+	var labels []string
+	for _, l := range strings.Split(inner, ",") {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			labels = append(labels, l)
+		}
+	}
+	return labels
+}
+
 type warningGroup struct {
 	finding   checks.Finding
 	count     int
@@ -265,6 +299,27 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		out.TermCaution("%d %s skipped — non-hosted runner labels are not supported",
 			len(selfHostedRunnerWorkflows),
 			ui.Pluralize(len(selfHostedRunnerWorkflows), "workflow", "workflows"))
+		// Collect distinct labels from findings for the remediation hint.
+		labelSet := map[string]bool{}
+		for _, key := range warnOrder {
+			wg := warnMap[key]
+			if wg.finding.Category != checks.SelfHostedRunner {
+				continue
+			}
+			for _, l := range extractBracketedLabels(wg.finding.Detail) {
+				labelSet[l] = true
+			}
+		}
+		if len(labelSet) > 0 {
+			var labels []string
+			for l := range labelSet {
+				labels = append(labels, l)
+			}
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s",
+				strings.Join(labels, ","))
+		} else {
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label>")
+		}
 	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",
