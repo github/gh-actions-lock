@@ -430,6 +430,11 @@ func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
 			continue
 		}
+		// Transitive deps come from a composite's action.yml; the user
+		// cannot change their ref, so the nudge is not actionable.
+		if !e.Direct {
+			continue
+		}
 		sv, ok := parserlock.ParseSemVer(e.Ref)
 		if ok && sv.IsFull() {
 			continue
