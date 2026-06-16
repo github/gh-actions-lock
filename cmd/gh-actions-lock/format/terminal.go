@@ -2,6 +2,7 @@ package format
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -189,6 +190,7 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 		for l := range labelSet {
 			labels = append(labels, l)
 		}
+		sort.Strings(labels)
 		out.Detail("  ↳ re-run with --allow-runners %s", strings.Join(labels, ","))
 	}
 }
@@ -313,6 +315,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			for l := range labelSet {
 				labels = append(labels, l)
 			}
+			sort.Strings(labels)
 			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s",
 				strings.Join(labels, ","))
 		} else {

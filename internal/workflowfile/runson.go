@@ -80,7 +80,7 @@ func RegisterOrgHostedLabels(labels []string) {
 		orgHostedLabels = make(map[string]bool, len(labels))
 	}
 	for _, l := range labels {
-		orgHostedLabels[strings.ToLower(l)] = true
+		orgHostedLabels[strings.ToLower(strings.TrimSpace(l))] = true
 	}
 }
 
