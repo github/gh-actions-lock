@@ -13,6 +13,26 @@ import (
 	"github.com/github/gh-actions-lock/internal/ui"
 )
 
+// reportHasUnfixableErrors returns true when the report contains error-
+// severity findings that the autofix cannot resolve. Pinning resolves
+// not-pinned findings, so those are expected in the pre-fix report and
+// don't count. LocalAction and SelfHostedRunner errors on already-
+// onboarded workflows are unfixable — the workflow must be edited.
+func reportHasUnfixableErrors(report *checks.Report) bool {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Severity != checks.SeverityError {
+				continue
+			}
+			switch f.Category {
+			case checks.LocalAction, checks.SelfHostedRunner:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
@@ -45,8 +65,8 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	}
 	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
-	reportValid := report.IsValid()
-	if allClean && reportValid && onboardingRefused == 0 && !hasInconclusive {
+	hasUnfixable := reportHasUnfixableErrors(report)
+	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
@@ -71,12 +91,12 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	// diagnose phase, but the narration log was attached (discarded in
 	// terminal mode) so they didn't reach stderr. Temporarily detach
 	// the log so the findings surface on the terminal.
-	if !reportValid {
+	if hasUnfixable {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false)
 	}
 
-	if len(investigated) > 0 || len(unresolvedEntries) > 0 || !reportValid {
+	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {
 		return errSilent
 	}
 	return nil

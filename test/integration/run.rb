@@ -624,7 +624,9 @@ end
 if ARGV.delete("--shell") || ARGV.delete("-i")
   runner.shell
 elsif ARGV.delete("--matrix")
-  runner.print_matrix(catalog)
+  # removed — was only a read-only matrix view, not a test runner
+  $stderr.puts "Error: --matrix was removed. Use `make test-integration` or `make test-stub`."
+  exit 1
 elsif golden_category
   runner.golden_update(category: golden_category, catalog: catalog)
 else
