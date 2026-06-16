@@ -134,11 +134,11 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	if f.Category == checks.LockfileForgery && f.Dependency != nil {
 		owner, repo := f.Dependency.OwnerRepo()
 		if owner != "" {
-			out.Detail("  → %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
+			out.Detail("  ↳ %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
 		}
 	}
 	if IsAlertedCategory(f.Category) && f.Remediation != "" {
-		out.Detail("  %s %s", out.Bold("⚠"), f.Remediation)
+		out.Detail("  %s %s", ui.IconWarning, f.Remediation)
 	}
 	if f.RecommendedTag != "" {
 		nwo := ""
@@ -149,12 +149,12 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 		if len(sha) > 7 {
 			sha = sha[:7]
 		}
-		out.Detail("  %s Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
-			out.Bold("→"), nwo, f.RecommendedTag, sha)
+		out.Detail("  ↳ Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
+			nwo, f.RecommendedTag, sha)
 	}
 	if f.Category == checks.ImpostorCommit {
-		out.Detail("  %s %s", out.Yellow("!"), pipeline.ImpostorCommitContext)
-		out.Detail("  %s %s", out.Bold("→"), pipeline.PublisherEscalationCopy)
+		out.Detail("  %s %s", ui.IconWarning, pipeline.ImpostorCommitContext)
+		out.Detail("  ↳ %s", pipeline.PublisherEscalationCopy)
 		out.Detail("  see: %s", out.DocLink(pipeline.PublisherTagReleasesDocURL))
 	}
 	if f.DocURL != "" {
@@ -177,7 +177,7 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 	}
 	// Show remediation from first finding (they share the same remediation).
 	if IsAlertedCategory(checks.SelfHostedRunner) && findings[0].Remediation != "" {
-		out.Detail("  %s %s", out.Bold("⚠"), findings[0].Remediation)
+		out.Detail("  %s %s", ui.IconWarning, findings[0].Remediation)
 	}
 	// Collect distinct labels for actionable hint.
 	labelSet := map[string]bool{}
@@ -191,7 +191,7 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 		for l := range labelSet {
 			labels = append(labels, l)
 		}
-		out.Detail("  %s re-run with --allow-runners %s", out.Bold("→"), strings.Join(labels, ","))
+		out.Detail("  ↳ re-run with --allow-runners %s", strings.Join(labels, ","))
 	}
 }
 
