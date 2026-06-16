@@ -9,9 +9,17 @@ import (
 
 func TestIsHostedRunnerLabel(t *testing.T) {
 	hosted := []string{
-		"ubuntu-latest", "ubuntu-22.04", "ubuntu-24.04",
-		"macos-latest", "macos-14", "macos-13-xlarge",
-		"windows-latest", "windows-2022",
+		"ubuntu-latest", "ubuntu-22.04", "ubuntu-24.04", "ubuntu-26.04",
+		"ubuntu-22.04-arm", "ubuntu-24.04-arm", "ubuntu-26.04-arm",
+		"ubuntu-slim",
+		"ubuntu-24.04-firewall", "ubuntu-latest-firewall",
+		"windows-latest", "windows-2022", "windows-2025", "windows-2025-vs2026",
+		"windows-11-arm", "windows-11-vs2026-arm",
+		"macos-latest", "macos-14", "macos-15", "macos-26",
+		"macos-15-intel", "macos-26-intel",
+		"macos-14-large", "macos-15-large", "macos-26-large", "macos-latest-large",
+		"macos-14-xlarge", "macos-15-xlarge", "macos-26-xlarge", "macos-latest-xlarge",
+		"codespaces-prebuild",
 		"Ubuntu-Latest", // case-insensitive
 	}
 	for _, l := range hosted {
@@ -21,6 +29,12 @@ func TestIsHostedRunnerLabel(t *testing.T) {
 	notHosted := []string{
 		"self-hosted", "linux", "my-custom-runner",
 		"gpu", "ARM64",
+		"ubuntu-20.04",  // EOL, not in map
+		"macos-13",      // removed
+		"macos-12",      // removed
+		"macos-11",      // removed
+		"windows-2019",  // removed
+		"ubuntu-18.04",  // removed
 	}
 	for _, l := range notHosted {
 		assert.False(t, IsHostedRunnerLabel(l), "expected non-hosted: %s", l)

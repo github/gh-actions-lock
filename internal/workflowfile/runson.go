@@ -6,26 +6,73 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// hostedRunnerPrefixes are the label prefixes used by GitHub-hosted runners.
-// A runs-on label that starts with any of these (case-insensitive) is
-// considered hosted. The list covers standard runners and larger runners.
-var hostedRunnerPrefixes = []string{
-	"ubuntu-",
-	"macos-",
-	"windows-",
+// hostedRunnerLabels is the set of GitHub-hosted runner labels that are
+// valid runs-on values. Sourced from github/hosted-compute-core
+// imageconfigs/imageconfigs.go (the ImageConfigs map). This list has a
+// short shelf life — update it when new images ship or old ones EOL.
+//
+// Excludes staff-only, canary, and beta labels. Includes firewall
+// tech-preview labels since they're available to flagged customers.
+var hostedRunnerLabels = map[string]bool{
+	// Linux x64
+	"ubuntu-latest": true,
+	"ubuntu-22.04":  true,
+	"ubuntu-24.04":  true,
+	"ubuntu-26.04":  true,
+
+	// Linux ARM64
+	"ubuntu-22.04-arm": true,
+	"ubuntu-24.04-arm": true,
+	"ubuntu-26.04-arm": true,
+
+	// Linux slim
+	"ubuntu-slim": true,
+
+	// Linux firewall (feature-flagged)
+	"ubuntu-24.04-firewall": true,
+	"ubuntu-latest-firewall": true,
+
+	// Windows x64
+	"windows-latest":       true,
+	"windows-2022":         true,
+	"windows-2025":         true,
+	"windows-2025-vs2026":  true,
+
+	// Windows ARM64
+	"windows-11-arm":          true,
+	"windows-11-vs2026-arm":   true,
+
+	// macOS (Apple Silicon / arm64)
+	"macos-latest": true,
+	"macos-14":     true,
+	"macos-15":     true,
+	"macos-26":     true,
+
+	// macOS Intel (x64)
+	"macos-15-intel": true,
+	"macos-26-intel": true,
+
+	// macOS large (Intel xl)
+	"macos-14-large":     true,
+	"macos-15-large":     true,
+	"macos-26-large":     true,
+	"macos-latest-large": true,
+
+	// macOS xlarge (Apple Silicon xl)
+	"macos-14-xlarge":     true,
+	"macos-15-xlarge":     true,
+	"macos-26-xlarge":     true,
+	"macos-latest-xlarge": true,
+
+	// Codespaces
+	"codespaces-prebuild": true,
 }
 
-// IsHostedRunnerLabel reports whether label is a known GitHub-hosted runner
-// label. Labels are matched case-insensitively against the known hosted
-// runner prefixes (ubuntu-*, macos-*, windows-*).
+// IsHostedRunnerLabel reports whether label is a known GitHub-hosted
+// runner label. Matches case-insensitively against the label set from
+// github/hosted-compute-core imageconfigs.
 func IsHostedRunnerLabel(label string) bool {
-	lower := strings.ToLower(label)
-	for _, prefix := range hostedRunnerPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	return false
+	return hostedRunnerLabels[strings.ToLower(label)]
 }
 
 // ExtractRunsOnLabels returns the set of runs-on labels across all jobs
