@@ -58,9 +58,6 @@ var hostedRunnerLabels = map[string]bool{
 	"macos-15-xlarge":     true,
 	"macos-26-xlarge":     true,
 	"macos-latest-xlarge": true,
-
-	// Codespaces
-	"codespaces-prebuild": true,
 }
 
 // IsHostedRunnerLabel reports whether label is a known GitHub-hosted

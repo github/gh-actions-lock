@@ -19,7 +19,6 @@ func TestIsHostedRunnerLabel(t *testing.T) {
 		"macos-15-intel", "macos-26-intel",
 		"macos-14-large", "macos-15-large", "macos-26-large", "macos-latest-large",
 		"macos-14-xlarge", "macos-15-xlarge", "macos-26-xlarge", "macos-latest-xlarge",
-		"codespaces-prebuild",
 		"Ubuntu-Latest", // case-insensitive
 	}
 	for _, l := range hosted {
