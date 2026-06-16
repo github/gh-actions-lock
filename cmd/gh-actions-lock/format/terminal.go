@@ -175,11 +175,9 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 		wfName := workflowName(f.WorkflowPath)
 		out.Detail("  %s: %s", out.Bold(wfName), f.Detail)
 	}
-	// Show remediation from first finding (they share the same remediation).
 	if IsAlertedCategory(checks.SelfHostedRunner) && findings[0].Remediation != "" {
 		out.Detail("  %s %s", ui.IconWarning, findings[0].Remediation)
 	}
-	// Collect distinct labels for actionable hint.
 	labelSet := map[string]bool{}
 	for _, f := range findings {
 		for _, l := range extractBracketedLabels(f.Detail) {

@@ -6,9 +6,8 @@ import (
 	"net/http"
 )
 
-// OrgHostedRunnerNames fetches the names (runs-on labels) of all
-// GitHub-hosted runners configured for the given org. Returns nil on
-// permission errors (403) so callers can fall back to the static list.
+// OrgHostedRunnerNames fetches runs-on labels of org-hosted runners.
+// Returns nil on 403 so callers fall back to the static list.
 func (c *Client) OrgHostedRunnerNames(ctx context.Context, org string) ([]string, error) {
 	var names []string
 	page := 1
