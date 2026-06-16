@@ -327,6 +327,84 @@ func TestPresentResults_ParseWarningsSurface(t *testing.T) {
 	}
 }
 
+// TestPresentResults_SelfHostedRunnerHintExcludesExpressions verifies that
+// template expressions like ${{ matrix.os }} are excluded from the
+// --allow-runners remediation hint shown for self-hosted-runner warnings.
+func TestPresentResults_SelfHostedRunnerHintExcludesExpressions(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{
+				{
+					WorkflowPath: ".github/workflows/ci.yml",
+					Category:     checks.SelfHostedRunner,
+					Severity:     checks.SeverityWarning,
+					Confidence:   checks.ConfidenceHigh,
+					Detail:       "non-hosted runner labels [${{ matrix.os }}, internal-runner]",
+				},
+			},
+		}},
+	}
+	PresentResults(u, report, true, false)
+
+	got := buf.String()
+	if strings.Contains(got, "matrix.os") {
+		t.Errorf("--allow-runners hint should not contain matrix expressions:\n%s", got)
+	}
+	if !strings.Contains(got, "internal-runner") {
+		t.Errorf("--allow-runners hint should contain literal labels:\n%s", got)
+	}
+}
+
+func TestExtractBracketedLabels(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want []string
+	}{
+		{
+			name: "plain labels",
+			s:    "non-hosted runner labels [internal-runner, ubuntu-22.04-32core]",
+			want: []string{"internal-runner", "ubuntu-22.04-32core"},
+		},
+		{
+			name: "matrix expression filtered",
+			s:    "non-hosted runner labels [${{ matrix.os }}, internal-runner]",
+			want: []string{"internal-runner"},
+		},
+		{
+			name: "only expressions returns nil",
+			s:    "non-hosted runner labels [${{ matrix.os }}]",
+			want: nil,
+		},
+		{
+			name: "no brackets",
+			s:    "no brackets here",
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractBracketedLabels(tt.s)
+			if len(tt.want) == 0 {
+				if len(got) != 0 {
+					t.Errorf("got %v, want nil/empty", got)
+				}
+			} else {
+				if len(got) != len(tt.want) {
+					t.Fatalf("got %v, want %v", got, tt.want)
+				}
+				for i := range tt.want {
+					if got[i] != tt.want[i] {
+						t.Errorf("got[%d] = %q, want %q", i, got[i], tt.want[i])
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestPresentResults_RepoFindingsSurface guards repo-level warnings
 // (e.g. non-immutable releases) reach the terminal.
 func TestPresentResults_RepoFindingsSurface(t *testing.T) {

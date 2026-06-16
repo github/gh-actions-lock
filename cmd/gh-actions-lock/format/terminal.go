@@ -206,6 +206,8 @@ func workflowName(path string) string {
 
 // extractBracketedLabels pulls comma-separated items from the first
 // [...] group in s. Returns nil if no brackets are found.
+// Template expressions like ${{ matrix.os }} are excluded — they can't
+// be passed as literal --allow-runners values.
 func extractBracketedLabels(s string) []string {
 	start := strings.Index(s, "[")
 	end := strings.Index(s, "]")
@@ -216,11 +218,16 @@ func extractBracketedLabels(s string) []string {
 	var labels []string
 	for _, l := range strings.Split(inner, ",") {
 		l = strings.TrimSpace(l)
-		if l != "" {
+		if l != "" && !isExpression(l) {
 			labels = append(labels, l)
 		}
 	}
 	return labels
+}
+
+// isExpression reports whether s is a GitHub Actions template expression.
+func isExpression(s string) bool {
+	return strings.Contains(s, "${{")
 }
 
 type warningGroup struct {
