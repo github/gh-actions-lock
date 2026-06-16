@@ -12,11 +12,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      GOPROXY: https://goproxy.githubapp.com/mod,https://proxy.golang.org,direct
-      GOPRIVATE: ''
-      GONOPROXY: ''
-      GONOSUMDB: github.com/github/*
     steps:
       - name: OIDC Setup for goproxy
         uses: github/setup-goproxy@v1.1.0
@@ -31,11 +26,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      GOPROXY: https://goproxy.githubapp.com/mod,https://proxy.golang.org,direct
-      GOPRIVATE: ''
-      GONOPROXY: ''
-      GONOSUMDB: github.com/github/*
     steps:
       - name: OIDC Setup for goproxy
         uses: github/setup-goproxy@v1.1.0
@@ -59,10 +49,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      GOPROXY: https://goproxy.githubapp.com/mod,https://proxy.golang.org,direct
-      GOPRIVATE: ''
-      GONOPROXY: ''
-      GONOSUMDB: github.com/github/*
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: OIDC Setup for goproxy
