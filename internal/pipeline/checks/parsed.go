@@ -42,6 +42,9 @@ type ParsedWorkflow struct {
 	// (self-hosted, custom label, runner group, or expression). These
 	// workflows are skipped from onboarding.
 	NonHostedRunner bool
+	// NonHostedLabels holds the specific non-hosted runner labels found
+	// in the workflow (populated only when NonHostedRunner is true).
+	NonHostedLabels []string
 }
 
 // PartitionRefs splits refs into recorded (matching a lockfile entry by

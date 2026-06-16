@@ -84,11 +84,21 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 			continue
 		}
 
+		// Self-hosted-runner findings share the same empty dep key;
+		// render them as a deduplicated group showing affected workflows.
+		var selfHostedFindings []checks.Finding
 		for _, f := range dg.findings {
 			if f.Category == checks.NotPinned {
 				continue
 			}
+			if f.Category == checks.SelfHostedRunner {
+				selfHostedFindings = append(selfHostedFindings, f)
+				continue
+			}
 			renderFindingDetail(out, f, dep)
+		}
+		if len(selfHostedFindings) > 0 {
+			renderSelfHostedGroup(out, selfHostedFindings)
 		}
 	}
 
@@ -152,7 +162,33 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	}
 }
 
-// warningGroup deduplicates warnings by dep key across workflows.
+// renderSelfHostedGroup prints a deduplicated block for self-hosted-runner
+// findings, listing each affected workflow and its non-hosted labels.
+func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
+	label := "SELF-HOSTED-RUNNER"
+	icon := "!"
+	if IsAlertedCategory(checks.SelfHostedRunner) {
+		icon = "✗"
+	}
+	out.Detail("%s %s", icon, out.Dim(label))
+	for _, f := range findings {
+		wfName := workflowName(f.WorkflowPath)
+		out.Detail("  %s: %s", out.Bold(wfName), f.Detail)
+	}
+	// Show remediation from first finding (they share the same remediation).
+	if IsAlertedCategory(checks.SelfHostedRunner) && findings[0].Remediation != "" {
+		out.Detail("  %s %s", out.Bold("⚠"), findings[0].Remediation)
+	}
+}
+
+// workflowName extracts the workflow filename from a path like
+// ".github/workflows/ci.yml".
+func workflowName(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
 type warningGroup struct {
 	finding   checks.Finding
 	count     int

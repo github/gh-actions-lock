@@ -92,21 +92,30 @@ func (f *File) ExtractRunsOnLabels() []string {
 // when the workflow has no jobs or no runs-on keys (run-only workflows
 // have no action refs to pin, so they are excluded separately).
 func (f *File) HasNonHostedRunnerLabels() bool {
-	found := false
+	return len(f.NonHostedRunnerLabels()) > 0
+}
+
+// NonHostedRunnerLabels returns the distinct non-hosted runner labels
+// found across all jobs. Expression labels (containing "${") are
+// returned as-is. The result is deduplicated case-insensitively but
+// preserves original casing.
+func (f *File) NonHostedRunnerLabels() []string {
+	seen := make(map[string]bool)
+	var labels []string
+
 	walkJobs(&f.root, func(runsOnNode *yaml.Node) {
 		for _, label := range runsOnLabels(runsOnNode) {
-			if strings.Contains(label, "${") {
-				// Expression labels are opaque; treat as non-hosted to be safe.
-				found = true
-				return
+			lower := strings.ToLower(label)
+			if seen[lower] {
+				continue
 			}
-			if !IsHostedRunnerLabel(label) {
-				found = true
-				return
+			if strings.Contains(label, "${") || !IsHostedRunnerLabel(label) {
+				seen[lower] = true
+				labels = append(labels, label)
 			}
 		}
 	})
-	return found
+	return labels
 }
 
 // walkJobs iterates over the top-level `jobs:` mapping and calls fn with

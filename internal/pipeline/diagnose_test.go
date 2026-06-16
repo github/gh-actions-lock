@@ -52,12 +52,14 @@ func TestDiagnoseOneParsed_SelfHostedRunner_NotOnboarded(t *testing.T) {
 	pw := checks.ParsedWorkflow{
 		Path:            ".github/workflows/ci.yml",
 		NonHostedRunner: true,
+		NonHostedLabels: []string{"self-hosted", "linux"},
 	}
 	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
 
 	assert.Len(t, wr.Findings, 1)
 	assert.Equal(t, checks.SelfHostedRunner, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityWarning, wr.Findings[0].Severity)
+	assert.Contains(t, wr.Findings[0].Detail, "self-hosted, linux")
 }
 
 func TestDiagnoseOneParsed_SelfHostedRunner_AlreadyOnboarded(t *testing.T) {
@@ -71,6 +73,7 @@ func TestDiagnoseOneParsed_SelfHostedRunner_AlreadyOnboarded(t *testing.T) {
 	pw := checks.ParsedWorkflow{
 		Path:            wfKey,
 		NonHostedRunner: true,
+		NonHostedLabels: []string{"self-hosted"},
 	}
 	wr := diagnoseOneParsed(context.Background(), pw, nil, store, nil)
 
