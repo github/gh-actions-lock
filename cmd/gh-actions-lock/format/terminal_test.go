@@ -457,6 +457,95 @@ func TestExtractBracketedLabels(t *testing.T) {
 	}
 }
 
+// TestPresentResults_ExcludeCategoriesSkipsImpostor verifies that excluded
+// categories are not rendered in the error findings block. This prevents
+// duplication when renderInvestigationAlerts already surfaced the same
+// findings (e.g. impostor-commit).
+func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
+	var buf bytes.Buffer
+	u := ui.NewPlain(&buf)
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			{
+				Path: ".github/workflows/ci.yml",
+				Findings: []checks.Finding{
+					{
+						WorkflowPath: ".github/workflows/ci.yml",
+						Category:     checks.ImpostorCommit,
+						Severity:     checks.SeverityError,
+						Confidence:   checks.ConfidenceHigh,
+						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
+						Detail:       "commit aaaa not found on any branch",
+					},
+					{
+						WorkflowPath: ".github/workflows/ci.yml",
+						Category:     checks.NotPinned,
+						Severity:     checks.SeverityError,
+						Confidence:   checks.ConfidenceHigh,
+						Dependency:   &dep.Dependency{NWO: "actions/checkout", Ref: "v4", SHA: "bbbb"},
+						Detail:       "not pinned",
+					},
+				},
+			},
+		},
+	}
+
+	PresentResults(u, report, false, false, checks.ImpostorCommit)
+	got := buf.String()
+
+	if strings.Contains(got, "IMPOSTOR-COMMIT") {
+		t.Errorf("excluded impostor-commit should not appear:\n%s", got)
+	}
+	if strings.Contains(got, "not found on any branch") {
+		t.Errorf("excluded impostor detail should not appear:\n%s", got)
+	}
+	// The summary line should not count the excluded category.
+	if strings.Contains(got, "impostor-commit") {
+		t.Errorf("excluded category should not appear in summary:\n%s", got)
+	}
+}
+
+// TestPresentResults_ExcludeKeepsOtherFindings verifies that non-excluded
+// categories still render when some categories are excluded.
+func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
+	var buf bytes.Buffer
+	u := ui.NewPlain(&buf)
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			{
+				Path: ".github/workflows/ci.yml",
+				Findings: []checks.Finding{
+					{
+						WorkflowPath: ".github/workflows/ci.yml",
+						Category:     checks.ImpostorCommit,
+						Severity:     checks.SeverityError,
+						Confidence:   checks.ConfidenceHigh,
+						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
+						Detail:       "commit aaaa not found on any branch",
+					},
+					{
+						WorkflowPath: ".github/workflows/ci.yml",
+						Category:     checks.LocalAction,
+						Severity:     checks.SeverityError,
+						Confidence:   checks.ConfidenceHigh,
+						Detail:       "local action ./my-action",
+					},
+				},
+			},
+		},
+	}
+
+	PresentResults(u, report, false, false, checks.ImpostorCommit)
+	got := buf.String()
+
+	if strings.Contains(got, "IMPOSTOR-COMMIT") {
+		t.Errorf("excluded impostor-commit should not appear:\n%s", got)
+	}
+	if !strings.Contains(got, "LOCAL-ACTION") {
+		t.Errorf("non-excluded local-action should still appear:\n%s", got)
+	}
+}
+
 // TestPresentResults_RepoFindingsSurface guards repo-level warnings
 // (e.g. non-immutable releases) reach the terminal.
 func TestPresentResults_RepoFindingsSurface(t *testing.T) {

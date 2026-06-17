@@ -93,9 +93,13 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	// diagnose phase, but the narration log was attached (discarded in
 	// terminal mode) so they didn't reach stderr. Temporarily detach
 	// the log so the findings surface on the terminal.
+	//
+	// Exclude impostor-commit and lockfile-forgery — those are already
+	// rendered by renderInvestigationAlerts above.
 	if hasUnfixable {
 		console.SetLog(nil)
-		format.PresentResults(console, report, false, false)
+		format.PresentResults(console, report, false, false,
+			checks.ImpostorCommit, checks.LockfileForgery)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {
