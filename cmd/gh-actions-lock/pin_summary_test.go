@@ -576,3 +576,28 @@ func TestRenderPinnedEntries_AutoFixNoteAfterWorkflows(t *testing.T) {
 		t.Errorf("expected '!' icon on auto-fix line, got:\n%s", out)
 	}
 }
+
+func TestRenderPinnedEntries_TransitiveWorkflowMerge(t *testing.T) {
+	// A dep that is direct in reusable-build.yml and transitive in
+	// happy-path.yml (via composite expansion) should show both workflows.
+	pinned := []pin.Entry{
+		{NWO: "nodeselector/fixtures", Ref: "main", SHA: "aaa", Direct: true, Workflows: []string{"reusable-build.yml"}},
+		{NWO: "nodeselector/fixtures", Ref: "main", SHA: "aaa", Direct: false, Workflows: []string{"happy-path.yml"}},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderPinnedEntries(console, pinned)
+	out := buf.String()
+
+	if !strings.Contains(out, "reusable-build.yml") {
+		t.Errorf("expected direct workflow in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "happy-path.yml") {
+		t.Errorf("expected transitive workflow merged into output, got:\n%s", out)
+	}
+	// Should count as 1 action, not 2.
+	if !strings.Contains(out, "1 action") {
+		t.Errorf("expected '1 action' count, got:\n%s", out)
+	}
+}

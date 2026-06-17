@@ -143,6 +143,7 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 	var groupWFs []map[string]bool // per-group workflow dedup
 	directCount := 0
 	workflowSet := map[string]bool{} // distinct workflows, for the header count
+	// First pass: collect direct entries into groups.
 	for _, e := range pinned {
 		if !e.Direct {
 			continue
@@ -155,6 +156,26 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 			grouped = append(grouped, groupedEntry{Entry: e})
 			groupWFs = append(groupWFs, map[string]bool{})
 			directCount++
+		}
+		for _, wf := range e.Workflows {
+			if !groupWFs[idx][wf] {
+				groupWFs[idx][wf] = true
+				grouped[idx].workflows = append(grouped[idx].workflows, wf)
+			}
+			workflowSet[wf] = true
+		}
+	}
+	// Second pass: merge workflow attributions from transitive entries whose
+	// NWO@Ref matches an existing direct group. This ensures that a dep
+	// discovered via composite expansion shows the consuming workflow.
+	for _, e := range pinned {
+		if e.Direct {
+			continue
+		}
+		key := e.NWO + "@" + e.Ref
+		idx, ok := seen[key]
+		if !ok {
+			continue // purely transitive, no direct counterpart
 		}
 		for _, wf := range e.Workflows {
 			if !groupWFs[idx][wf] {
