@@ -10,8 +10,7 @@ gh extension install github/gh-actions-lock
 
 ## Usage
 
-Scan every workflow under `.github/workflows/` and pin what it can -- pinning
-each resolvable action to a SHA and updating the lockfile:
+Scan every workflow under .github/workflows/ directory, pin each resolvable action to a SHA, and update the lockfile:
 
 ```bash
 gh actions-lock
