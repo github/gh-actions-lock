@@ -35,6 +35,26 @@ func reportHasUnfixableErrors(report *checks.Report) bool {
 	return false
 }
 
+// reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
+// but only matches categories that renderInvestigationAlerts does NOT
+// handle (LocalAction, SelfHostedRunner). Use this to gate the
+// PresentResults call so impostor-commit / lockfile-forgery findings
+// don't trigger a redundant (and stale) error summary.
+func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Severity != checks.SeverityError {
+				continue
+			}
+			switch f.Category {
+			case checks.LocalAction, checks.SelfHostedRunner:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
@@ -94,9 +114,11 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	// terminal mode) so they didn't reach stderr. Temporarily detach
 	// the log so the findings surface on the terminal.
 	//
-	// Exclude impostor-commit and lockfile-forgery — those are already
-	// rendered by renderInvestigationAlerts above.
-	if hasUnfixable {
+	// Only trigger for categories NOT already rendered by
+	// renderInvestigationAlerts (which handles impostor-commit and
+	// lockfile-forgery). Without this gate PresentResults would also
+	// emit a stale summary line counting pre-fix not-pinned findings.
+	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,
 			checks.ImpostorCommit, checks.LockfileForgery)
