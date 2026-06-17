@@ -30,7 +30,7 @@ Finally, locked actions must have a branch that the commit being locked exists w
 
 ## Limitations
 
-There are currently limitations that limit workflows that can be onboarded to lockfiles:
+There are currently eligibility limitations for workflows that can be onboarded to lockfiles:
 - Workflows in the lockfile must use a hosted runner. In the meantime, we will skip onboarding self-hosted runners. Discerning a self-hosted runner from a Larger runner requires the `manage_runners:org` which users are unlikely to have on their CLI in the typical case, if workflows are skipped during onboarding, the cli will output the command to run to allow onboarding those workflows. The requirement for hosted runners is enforced at runtime. This is a short-term gap.
 - Workflows in the lockfile cannot use local-path actions, these will be skipped for onboarding. This is also a short-term gap.
 
