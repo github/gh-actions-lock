@@ -428,3 +428,162 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	assert.Equal(t, "v1.0.0", comp.Ref)
 	assert.True(t, comp.Direct, "composite is a direct workflow use")
 }
+
+// TestPlanWorkflow_CrossRefTransitiveClosure verifies that a composite at
+// ref "updated" whose action.yml references a sibling subpath at ref "main"
+// produces the full transitive closure: the sibling (same NWO, different
+// ref) and the sibling's cross-repo transitive dep all appear as entries.
+func TestPlanWorkflow_CrossRefTransitiveClosure(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	nestedSHA := "1111111111111111111111111111111111111111"
+	simpleSHA := "2222222222222222222222222222222222222222"
+	crossSHA := "3333333333333333333333333333333333333333"
+
+	// Depth 0: nested-composite@updated. Its action.yml uses simple-composite@main.
+	reg.Register(
+		httpmock.GraphQLForRepo("org", "fixtures"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "org/fixtures",
+					"object": map[string]any{
+						"oid": nestedSHA,
+						"file": map[string]any{"object": map[string]any{
+							"text": "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-composite@main\n",
+						}},
+					},
+				},
+			},
+		}),
+	)
+	// Depth 1: simple-composite@main. Its action.yml uses cross/dep@main.
+	reg.Register(
+		httpmock.GraphQLForRepo("org", "fixtures"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "org/fixtures",
+					"object": map[string]any{
+						"oid": simpleSHA,
+						"file": map[string]any{"object": map[string]any{
+							"text": "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: cross/dep@main\n",
+						}},
+					},
+				},
+			},
+		}),
+	)
+	// Depth 2: cross/dep@main — leaf node.
+	reg.Register(
+		httpmock.GraphQLForRepo("cross", "dep"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "cross/dep",
+					"object": map[string]any{
+						"oid":  crossSHA,
+						"file": map[string]any{"object": map[string]any{"text": "name: Cross\nruns:\n  using: node20\n"}},
+					},
+				},
+			},
+		}),
+	)
+
+	// Reverse lookup stubs — one set per unique NWO.
+	// org/fixtures: branches include both "updated" and "main" tips.
+	reg.Register(
+		httpmock.REST("GET", `repos/org/fixtures$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/org/fixtures/branches`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "main", "commit": map[string]any{"sha": simpleSHA}},
+			map[string]any{"name": "updated", "commit": map[string]any{"sha": nestedSHA}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/org/fixtures/tags`),
+		httpmock.JSONResponse([]any{}),
+	)
+	// cross/dep
+	reg.Register(
+		httpmock.REST("GET", `repos/cross/dep$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/cross/dep/branches`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "main", "commit": map[string]any{"sha": crossSHA}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/cross/dep/tags`),
+		httpmock.JSONResponse([]any{}),
+	)
+
+	pool := pinpool.New(2, nil)
+	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
+		return resolve.Reachable, "test stub"
+	}
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
+		resolve.WithCheckReachabilityFunc(reachFn))
+	require.NoError(t, err)
+
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/happy-path.yml",
+		Findings: []checks.Finding{
+			{
+				ActionRef:  &parserlock.ActionRef{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "updated"},
+				Category:   "unpinned",
+				Severity:   checks.SeverityWarning,
+				Confidence: checks.ConfidenceHigh,
+			},
+		},
+		ActionRefs: []parserlock.ActionRef{
+			{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "updated"},
+		},
+	}
+
+	opts := PlanOptions{
+		Resolver: resolver,
+		Pool:     pool,
+	}
+
+	result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
+	require.NoError(t, err)
+
+	// Collect all entries by NWO@Ref.
+	byKey := make(map[string]Entry, len(result.entries))
+	for _, e := range result.entries {
+		byKey[e.NWO+"@"+e.Ref] = e
+	}
+
+	// 1. org/fixtures@updated (direct, from nested-composite)
+	nested, ok := byKey["org/fixtures@updated"]
+	require.True(t, ok, "direct nested-composite should be pinned; got keys: %v", keys(byKey))
+	assert.True(t, nested.Direct)
+	assert.Equal(t, nestedSHA, nested.SHA)
+
+	// 2. org/fixtures@main (transitive, from simple-composite — same NWO, different ref)
+	simple, ok := byKey["org/fixtures@main"]
+	require.True(t, ok, "transitive simple-composite@main should be pinned; got keys: %v", keys(byKey))
+	assert.False(t, simple.Direct)
+	assert.Equal(t, simpleSHA, simple.SHA)
+
+	// 3. cross/dep@main (transitive, 2 levels deep — cross-repo)
+	cross, ok := byKey["cross/dep@main"]
+	require.True(t, ok, "2-levels-deep transitive cross/dep@main should be pinned; got keys: %v", keys(byKey))
+	assert.False(t, cross.Direct)
+	assert.Equal(t, crossSHA, cross.SHA)
+}
+
+func keys(m map[string]Entry) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

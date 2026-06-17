@@ -601,3 +601,31 @@ func TestRenderPinnedEntries_TransitiveWorkflowMerge(t *testing.T) {
 		t.Errorf("expected '1 action' count, got:\n%s", out)
 	}
 }
+
+func TestRenderPinnedEntries_PurelyTransitiveShown(t *testing.T) {
+	// A dep that is only transitive (no direct counterpart) must still
+	// appear in the output so the user can see the full closure.
+	pinned := []pin.Entry{
+		{NWO: "org/composite", Ref: "v1", SHA: "aaa", Direct: true, Workflows: []string{"ci.yml"}},
+		{NWO: "org/transitive", Ref: "main", SHA: "bbb", Direct: false,
+			Workflows: []string{"ci.yml"}, RequiredBy: []string{"org/composite@v1"}},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderPinnedEntries(console, pinned)
+	out := buf.String()
+
+	if !strings.Contains(out, "org/transitive@main") {
+		t.Errorf("expected purely transitive dep in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "via org/composite@v1") {
+		t.Errorf("expected 'via' parent attribution, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(+ 1 transitive)") {
+		t.Errorf("expected transitive count in header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 action") {
+		t.Errorf("expected '1 action' direct count, got:\n%s", out)
+	}
+}

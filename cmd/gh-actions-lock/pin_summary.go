@@ -168,28 +168,52 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 	// Second pass: merge workflow attributions from transitive entries whose
 	// NWO@Ref matches an existing direct group. This ensures that a dep
 	// discovered via composite expansion shows the consuming workflow.
+	// Collect purely transitive entries (no direct counterpart) separately.
+	type transitiveEntry struct {
+		pin.Entry
+		parentLabel string
+	}
+	var purelyTransitive []transitiveEntry
+	transitiveKeys := map[string]bool{}
 	for _, e := range pinned {
 		if e.Direct {
 			continue
 		}
 		key := e.NWO + "@" + e.Ref
 		idx, ok := seen[key]
-		if !ok {
-			continue // purely transitive, no direct counterpart
-		}
-		for _, wf := range e.Workflows {
-			if !groupWFs[idx][wf] {
-				groupWFs[idx][wf] = true
-				grouped[idx].workflows = append(grouped[idx].workflows, wf)
+		if ok {
+			for _, wf := range e.Workflows {
+				if !groupWFs[idx][wf] {
+					groupWFs[idx][wf] = true
+					grouped[idx].workflows = append(grouped[idx].workflows, wf)
+				}
+				workflowSet[wf] = true
 			}
-			workflowSet[wf] = true
+			continue
 		}
+		if transitiveKeys[key] {
+			continue
+		}
+		transitiveKeys[key] = true
+		parent := ""
+		if len(e.RequiredBy) > 0 {
+			parent = e.RequiredBy[0]
+		}
+		purelyTransitive = append(purelyTransitive, transitiveEntry{
+			Entry:       e,
+			parentLabel: parent,
+		})
 	}
-	if directCount == 0 {
+	if directCount == 0 && len(purelyTransitive) == 0 {
 		return
 	}
-	console.TermSuccess("Pinned %d %s across %d %s",
+	transitiveLabel := ""
+	if len(purelyTransitive) > 0 {
+		transitiveLabel = fmt.Sprintf(" (+ %d transitive)", len(purelyTransitive))
+	}
+	console.TermSuccess("Pinned %d %s%s across %d %s",
 		directCount, ui.Pluralize(directCount, "action", "actions"),
+		transitiveLabel,
 		len(workflowSet), ui.Pluralize(len(workflowSet), "workflow", "workflows"))
 	for _, g := range grouped {
 		short := g.SHA
@@ -212,6 +236,21 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 			console.TermDetail("    %s re-pinned from unreachable %s to %s",
 				console.TermYellow("!"), console.TermDim(prev), console.TermBold(g.Ref))
 		}
+	}
+	for _, te := range purelyTransitive {
+		short := te.SHA
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		label := te.NWO + "@" + te.Ref
+		if short != "" {
+			label = fmt.Sprintf("%s (%s)", label, short)
+		}
+		via := ""
+		if te.parentLabel != "" {
+			via = fmt.Sprintf(" via %s", te.parentLabel)
+		}
+		console.TermDetail("  %s%s", console.TermDim(label), console.TermDim(via))
 	}
 }
 

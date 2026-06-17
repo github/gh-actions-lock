@@ -296,6 +296,69 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	}
 }
 
+// TestResolveAllRecursiveCrossRefTransitive verifies that when a composite at
+// ref "updated" references a sibling subpath at a DIFFERENT ref "main", the
+// BFS discovers the full transitive closure through the second composite.
+// This mirrors nodeselector/actions-test-fixtures where:
+//   nested-composite@updated → simple-composite@main → (simple-node@main + fixtures-b/simple-echo@main)
+func TestResolveAllRecursiveCrossRefTransitive(t *testing.T) {
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("org", "fixtures", "nested-composite", "updated"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "nested-composite", Ref: "updated", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-composite@main\n",
+		},
+		ghapi.ForActionRef("org", "fixtures", "simple-composite", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "simple-composite", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-node@main\n    - uses: org/fixtures-b/simple-echo@main\n",
+		},
+		ghapi.ForActionRef("org", "fixtures", "simple-node", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "simple-node", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Node\nruns:\n  using: node20\n",
+		},
+		ghapi.ForActionRef("org", "fixtures-b", "simple-echo", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures-b", Path: "simple-echo", Ref: "main", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			actionYML: "name: Echo\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, pm, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "updated"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive error: %v", err)
+	}
+
+	keys := map[string]bool{}
+	for _, d := range deps {
+		keys[d.Key()] = true
+	}
+
+	// We expect 3 unique deps (by Key = NWO@Ref):
+	//   org/fixtures@updated  (from nested-composite)
+	//   org/fixtures@main     (from simple-composite + simple-node, same tarball)
+	//   org/fixtures-b@main   (from simple-echo, cross-repo transitive)
+	want := []string{"org/fixtures@updated", "org/fixtures@main", "org/fixtures-b@main"}
+	for _, w := range want {
+		if !keys[w] {
+			t.Errorf("missing expected dep %s; got keys: %v", w, keys)
+		}
+	}
+	if len(deps) != len(want) {
+		t.Errorf("expected %d unique deps, got %d: %+v", len(want), len(deps), deps)
+	}
+
+	// org/fixtures@main's parent is org/fixtures@updated
+	if got := pm["org/fixtures@main"]; len(got) != 1 || got[0] != "org/fixtures@updated" {
+		t.Errorf("expected org/fixtures@main parent = [org/fixtures@updated], got %v", got)
+	}
+	// org/fixtures-b@main's parent is org/fixtures@main
+	if got := pm["org/fixtures-b@main"]; len(got) != 1 || got[0] != "org/fixtures@main" {
+		t.Errorf("expected org/fixtures-b@main parent = [org/fixtures@main], got %v", got)
+	}
+}
+
 // TestResolveAllRecursiveTerminatesOnCycle verifies that a mutual A→B→A cycle
 // is handled gracefully: the BFS terminates via the seen set, both nodes are
 // resolved, and the parentMap reflects the edges without infinite recursion.
