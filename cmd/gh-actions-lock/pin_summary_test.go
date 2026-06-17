@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
@@ -438,13 +440,26 @@ func TestRenderVersionRefNudge_SkipsTransitiveDeps(t *testing.T) {
 		},
 	}
 
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "repos/actions/checkout/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "v6.1.2", "commit": map[string]string{"sha": "ddd"}},
+		{"name": "v6", "commit": map[string]string{"sha": "ddd"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var buf bytes.Buffer
 	console := ui.NewPlain(&buf)
-	renderVersionRefNudge(console, record)
+	renderVersionRefNudge(context.Background(), console, record, r)
 	out := buf.String()
 
 	if !strings.Contains(out, "actions/checkout@v6") {
 		t.Errorf("expected direct imprecise dep in nudge, got:\n%s", out)
+	}
+	if !strings.Contains(out, "v6.1.2") {
+		t.Errorf("expected latest tag suggestion, got:\n%s", out)
 	}
 	if strings.Contains(out, "actions/setup-go") {
 		t.Errorf("transitive dep should be excluded from nudge, got:\n%s", out)
@@ -470,10 +485,35 @@ func TestRenderVersionRefNudge_AllTransitive_NoOutput(t *testing.T) {
 
 	var buf bytes.Buffer
 	console := ui.NewPlain(&buf)
-	renderVersionRefNudge(console, record)
+	renderVersionRefNudge(context.Background(), console, record, nil)
 
 	if buf.Len() > 0 {
 		t.Errorf("expected no output when all imprecise deps are transitive, got:\n%s", buf.String())
+	}
+}
+
+func TestRenderVersionRefNudge_SkipsReposWithoutSemverTags(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/no-releases", Ref: "main", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "repos/octo/no-releases/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "nightly", "commit": map[string]string{"sha": "aaa"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderVersionRefNudge(context.Background(), console, record, r)
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no output for repo without semver releases, got:\n%s", buf.String())
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -58,7 +59,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -68,7 +69,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 
 	renderFullScanWarnings(console, pinned)
 	if !noNarrow {
-		renderVersionRefNudge(console, record)
+		renderVersionRefNudge(ctx, console, record, r)
 	}
 
 	if len(investigated) > 0 {
@@ -476,16 +477,22 @@ func stripNWORefPrefix(s string) string {
 // renderVersionRefNudge prints an informational nudge when entries are pinned
 // with refs that are not full semver tags (v4.2.1). Full semver tags each
 // resolve to exactly one commit, making the lock comment durable across
-// re-pins.
-func renderVersionRefNudge(console *ui.UI, record *pin.Record) {
-	var nonSemverDeps []string
+// re-pins. Only shown for repos that actually have semver releases.
+func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Record, r *resolve.Resolver) {
+	type nudgeEntry struct {
+		key    string // NWO@Ref
+		latest string // best full-semver tag, e.g. v1.2.3
+	}
+
 	seen := map[string]bool{}
+	// Cache per-repo so we don't call ListTags twice for the same repo.
+	repoLatest := map[string]string{} // NWO → latest full semver (or "" if none)
+	var entries []nudgeEntry
+
 	for _, e := range record.Entries {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
 			continue
 		}
-		// Transitive deps come from a composite's action.yml; the user
-		// cannot change their ref, so nudging about it is noise.
 		if !e.Direct {
 			continue
 		}
@@ -498,18 +505,63 @@ func renderVersionRefNudge(console *ui.UI, record *pin.Record) {
 			continue
 		}
 		seen[key] = true
-		nonSemverDeps = append(nonSemverDeps, key)
+
+		latest, cached := repoLatest[e.NWO]
+		if !cached {
+			latest = latestFullSemverTag(ctx, r, e.NWO)
+			repoLatest[e.NWO] = latest
+		}
+		if latest == "" {
+			continue // no semver releases — nothing to suggest
+		}
+		entries = append(entries, nudgeEntry{key: key, latest: latest})
 	}
-	if len(nonSemverDeps) == 0 {
+	if len(entries) == 0 {
 		return
 	}
 	console.TermBlank()
 	console.TermWarn("%d %s pinned without a full semver tag",
-		len(nonSemverDeps), ui.Pluralize(len(nonSemverDeps), "action", "actions"))
-	for _, dep := range nonSemverDeps {
-		console.TermDetail("  %s", console.TermYellow(dep))
+		len(entries), ui.Pluralize(len(entries), "action", "actions"))
+	for _, ne := range entries {
+		console.TermDetail("  %s %s latest: %s",
+			console.TermYellow(ne.key),
+			console.TermBold("→"),
+			console.TermYellow(ne.latest))
 	}
-	console.TermDetail("  Prefer full semver refs (e.g. v4.2.1) — each patch tag resolves to")
-	console.TermDetail("  exactly one commit, making the lock comment durable across re-pins.")
 	console.TermDetail("  Run without --no-narrow to upgrade.")
+}
+
+// latestFullSemverTag returns the highest full semver tag (vX.Y.Z) for
+// the given NWO, or "" if the repo has no semver releases or the lookup
+// fails.
+func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo string) string {
+	if r == nil {
+		return ""
+	}
+	owner, repo, _ := parserlock.SplitNWO(nwo)
+	if owner == "" {
+		return ""
+	}
+	tags, err := r.ListTagsForRepo(ctx, owner, repo)
+	if err != nil {
+		return ""
+	}
+	type semverTriple struct{ major, minor, patch int }
+	var best semverTriple
+	bestTag := ""
+	for _, t := range tags {
+		sv, ok := parserlock.ParseSemVer(t.Name)
+		if !ok || !sv.IsFull() || !sv.IsStable() {
+			continue
+		}
+		cur := semverTriple{sv.Major, sv.Minor, sv.Patch}
+		if bestTag == "" ||
+			cur.major > best.major ||
+			(cur.major == best.major && cur.minor > best.minor) ||
+			(cur.major == best.major && cur.minor == best.minor && cur.patch > best.patch) {
+			best = cur
+			bestTag = sv.Raw
+		}
+	}
+	return bestTag
 }
