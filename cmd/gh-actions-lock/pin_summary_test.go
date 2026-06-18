@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
@@ -438,13 +440,26 @@ func TestRenderVersionRefNudge_SkipsTransitiveDeps(t *testing.T) {
 		},
 	}
 
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "repos/actions/checkout/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "v6.1.2", "commit": map[string]string{"sha": "ddd"}},
+		{"name": "v6", "commit": map[string]string{"sha": "ddd"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var buf bytes.Buffer
 	console := ui.NewPlain(&buf)
-	renderVersionRefNudge(console, record)
+	renderVersionRefNudge(context.Background(), console, record, r)
 	out := buf.String()
 
 	if !strings.Contains(out, "actions/checkout@v6") {
 		t.Errorf("expected direct imprecise dep in nudge, got:\n%s", out)
+	}
+	if !strings.Contains(out, "v6.1.2") {
+		t.Errorf("expected latest tag suggestion, got:\n%s", out)
 	}
 	if strings.Contains(out, "actions/setup-go") {
 		t.Errorf("transitive dep should be excluded from nudge, got:\n%s", out)
@@ -470,10 +485,35 @@ func TestRenderVersionRefNudge_AllTransitive_NoOutput(t *testing.T) {
 
 	var buf bytes.Buffer
 	console := ui.NewPlain(&buf)
-	renderVersionRefNudge(console, record)
+	renderVersionRefNudge(context.Background(), console, record, nil)
 
 	if buf.Len() > 0 {
 		t.Errorf("expected no output when all imprecise deps are transitive, got:\n%s", buf.String())
+	}
+}
+
+func TestRenderVersionRefNudge_SkipsReposWithoutSemverTags(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/no-releases", Ref: "main", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "repos/octo/no-releases/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "nightly", "commit": map[string]string{"sha": "aaa"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderVersionRefNudge(context.Background(), console, record, r)
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no output for repo without semver releases, got:\n%s", buf.String())
 	}
 }
 
@@ -534,5 +574,58 @@ func TestRenderPinnedEntries_AutoFixNoteAfterWorkflows(t *testing.T) {
 	// Yellow ! icon on the auto-fix line.
 	if !strings.Contains(out, "! re-pinned") {
 		t.Errorf("expected '!' icon on auto-fix line, got:\n%s", out)
+	}
+}
+
+func TestRenderPinnedEntries_TransitiveWorkflowMerge(t *testing.T) {
+	// A dep that is direct in reusable-build.yml and transitive in
+	// happy-path.yml (via composite expansion) should show both workflows.
+	pinned := []pin.Entry{
+		{NWO: "nodeselector/fixtures", Ref: "main", SHA: "aaa", Direct: true, Workflows: []string{"reusable-build.yml"}},
+		{NWO: "nodeselector/fixtures", Ref: "main", SHA: "aaa", Direct: false, Workflows: []string{"happy-path.yml"}},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderPinnedEntries(console, pinned)
+	out := buf.String()
+
+	if !strings.Contains(out, "reusable-build.yml") {
+		t.Errorf("expected direct workflow in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "happy-path.yml") {
+		t.Errorf("expected transitive workflow merged into output, got:\n%s", out)
+	}
+	// Should count as 1 action, not 2.
+	if !strings.Contains(out, "1 action") {
+		t.Errorf("expected '1 action' count, got:\n%s", out)
+	}
+}
+
+func TestRenderPinnedEntries_PurelyTransitiveShown(t *testing.T) {
+	// A dep that is only transitive (no direct counterpart) must still
+	// appear in the output so the user can see the full closure.
+	pinned := []pin.Entry{
+		{NWO: "org/composite", Ref: "v1", SHA: "aaa", Direct: true, Workflows: []string{"ci.yml"}},
+		{NWO: "org/transitive", Ref: "main", SHA: "bbb", Direct: false,
+			Workflows: []string{"ci.yml"}, RequiredBy: []string{"org/composite@v1"}},
+	}
+
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+	renderPinnedEntries(console, pinned)
+	out := buf.String()
+
+	if !strings.Contains(out, "org/transitive@main") {
+		t.Errorf("expected purely transitive dep in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "via org/composite@v1") {
+		t.Errorf("expected 'via' parent attribution, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(+ 1 transitive)") {
+		t.Errorf("expected transitive count in header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 action") {
+		t.Errorf("expected '1 action' direct count, got:\n%s", out)
 	}
 }

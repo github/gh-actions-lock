@@ -1561,6 +1561,7 @@ module ActionsPin
         lines << "lockfile matches /#{spec['lockfile_comment_matches']}/" if spec["lockfile_comment_matches"]
         lines << "lockfile excludes /#{spec['lockfile_comment_excludes']}/" if spec["lockfile_comment_excludes"]
         lines << "lockfile exists" if spec["lockfile_exists"]
+        lines << "lockfile == golden #{spec['lockfile_golden']}" if spec["lockfile_golden"]
         if spec["jq"]
           spec["jq"].each do |check|
             op = if check.key?("equals")
@@ -1634,6 +1635,10 @@ module ActionsPin
         if spec["lockfile_exists"]
           ok = !failures.any? { |f| f.include?("lockfile exists") }
           checks << ["lockfile exists", ok]
+        end
+        if spec["lockfile_golden"]
+          ok = !failures.any? { |f| f.include?("lockfile does not match golden") }
+          checks << ["lockfile matches golden #{spec["lockfile_golden"]}", ok]
         end
         if spec["jq"]
           spec["jq"].each do |check|

@@ -296,6 +296,69 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	}
 }
 
+// TestResolveAllRecursiveCrossRefTransitive verifies that when a composite at
+// ref "updated" references a sibling subpath at a DIFFERENT ref "main", the
+// BFS discovers the full transitive closure through the second composite.
+// This mirrors nodeselector/actions-test-fixtures where:
+//   nested-composite@updated → simple-composite@main → (simple-node@main + fixtures-b/simple-echo@main)
+func TestResolveAllRecursiveCrossRefTransitive(t *testing.T) {
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("org", "fixtures", "nested-composite", "updated"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "nested-composite", Ref: "updated", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-composite@main\n",
+		},
+		ghapi.ForActionRef("org", "fixtures", "simple-composite", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "simple-composite", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures/simple-node@main\n    - uses: org/fixtures-b/simple-echo@main\n",
+		},
+		ghapi.ForActionRef("org", "fixtures", "simple-node", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "simple-node", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Node\nruns:\n  using: node20\n",
+		},
+		ghapi.ForActionRef("org", "fixtures-b", "simple-echo", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures-b", Path: "simple-echo", Ref: "main", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			actionYML: "name: Echo\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, pm, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "updated"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive error: %v", err)
+	}
+
+	keys := map[string]bool{}
+	for _, d := range deps {
+		keys[d.Key()] = true
+	}
+
+	// We expect 3 unique deps (by Key = NWO@Ref):
+	//   org/fixtures@updated  (from nested-composite)
+	//   org/fixtures@main     (from simple-composite + simple-node, same tarball)
+	//   org/fixtures-b@main   (from simple-echo, cross-repo transitive)
+	want := []string{"org/fixtures@updated", "org/fixtures@main", "org/fixtures-b@main"}
+	for _, w := range want {
+		if !keys[w] {
+			t.Errorf("missing expected dep %s; got keys: %v", w, keys)
+		}
+	}
+	if len(deps) != len(want) {
+		t.Errorf("expected %d unique deps, got %d: %+v", len(want), len(deps), deps)
+	}
+
+	// org/fixtures@main's parent is org/fixtures@updated
+	if got := pm["org/fixtures@main"]; len(got) != 1 || got[0] != "org/fixtures@updated" {
+		t.Errorf("expected org/fixtures@main parent = [org/fixtures@updated], got %v", got)
+	}
+	// org/fixtures-b@main's parent is org/fixtures@main
+	if got := pm["org/fixtures-b@main"]; len(got) != 1 || got[0] != "org/fixtures@main" {
+		t.Errorf("expected org/fixtures-b@main parent = [org/fixtures@main], got %v", got)
+	}
+}
+
 // TestResolveAllRecursiveTerminatesOnCycle verifies that a mutual A→B→A cycle
 // is handled gracefully: the BFS terminates via the seen set, both nodes are
 // resolved, and the parentMap reflects the edges without infinite recursion.
@@ -824,5 +887,90 @@ func TestNew_NilOptionsSafe(t *testing.T) {
 	}
 	if r.sleepFn == nil {
 		t.Fatal("sleepFn should not be nil after WithSleepFn(nil)")
+	}
+}
+
+// TestResolveAllRecursivePartialFailureBFSContinues verifies that when one ref
+// in a batch fails (e.g. SSO/403), the BFS still discovers transitive deps
+// from composite actions that DID resolve. Before the fix, the early return on
+// error skipped the BFS loop entirely.
+func TestResolveAllRecursivePartialFailureBFSContinues(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// Batch contains two refs: a0=my/composite resolves as a composite with
+	// a transitive dep on other/action@main. a1=sso/blocked returns null.
+	reg.Register(
+		httpmock.GraphQLForRepo("my", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "my/composite",
+					"object": map[string]any{
+						"oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						"file": map[string]any{"object": map[string]any{
+							"text": "name: MyComposite\nruns:\n  using: composite\n  steps:\n    - uses: other/action@main\n",
+						}},
+					},
+				},
+				"a1": nil,
+			},
+		}),
+	)
+
+	// Transitive dep: other/action@main resolves as a node action (leaf).
+	reg.Register(
+		httpmock.GraphQLForRepo("other", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "other/action",
+					"object": map[string]any{
+						"oid":  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						"file": map[string]any{"object": map[string]any{"text": "name: OtherAction\nruns:\n  using: node20\n"}},
+					},
+				},
+			},
+		}),
+	)
+
+	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	deps, pm, resolveErr := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "my", Repo: "composite", Ref: "v1"},
+		{Owner: "sso", Repo: "blocked", Ref: "v4"},
+	})
+
+	// Must return an error (sso/blocked failed).
+	if resolveErr == nil {
+		t.Fatal("expected error for inaccessible repo, got nil")
+	}
+
+	// Must return BOTH the composite and its transitive dep.
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 deps (composite + transitive), got %d: %+v", len(deps), deps)
+	}
+
+	nwos := map[string]bool{}
+	for _, d := range deps {
+		nwos[d.NWO] = true
+	}
+	if !nwos["my/composite"] {
+		t.Error("missing my/composite in deps")
+	}
+	if !nwos["other/action"] {
+		t.Error("missing transitive dep other/action in deps")
+	}
+
+	// ParentMap should record the transitive edge.
+	parents, ok := pm["other/action@main"]
+	if !ok || len(parents) == 0 {
+		t.Fatalf("expected parentMap entry for other/action@main, got %v", pm)
+	}
+	if parents[0] != "my/composite@v1" {
+		t.Fatalf("expected parent my/composite@v1, got %q", parents[0])
 	}
 }

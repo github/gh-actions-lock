@@ -20,7 +20,11 @@ import (
 // use narration helpers — both are re-rendered by check.go's
 // post-remediation Term* summary, so we'd duplicate output if we
 // surfaced them here too.
-func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate bool) {
+func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate bool, excludeCategories ...checks.Category) {
+	exclude := make(map[checks.Category]bool, len(excludeCategories))
+	for _, c := range excludeCategories {
+		exclude[c] = true
+	}
 	for _, f := range report.RepoFindings {
 		out.TermWarn("%s", f.Detail)
 		if f.DocURL != "" {
@@ -39,7 +43,7 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 	checked := validCount + failedCount
 
 	if !valid && checked > 0 {
-		renderErrorFindings(out, report, failedCount, checked)
+		renderErrorFindings(out, report, failedCount, checked, exclude)
 	}
 
 	renderWarnings(out, report, willRemediate)
@@ -47,7 +51,7 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 
 // renderErrorFindings groups error-level findings by dependency and prints
 // per-dep detail lines followed by a category-count summary.
-func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked int) {
+func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked int, exclude map[checks.Category]bool) {
 	type depGroup struct {
 		dep      string
 		findings []checks.Finding
@@ -74,14 +78,17 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 	for _, dep := range depOrder {
 		dg := depMap[dep]
 
-		allNotPinned := true
+		allSkip := true
 		for _, f := range dg.findings {
+			if exclude[f.Category] {
+				continue
+			}
 			catCounts[f.Category]++
 			if f.Category != checks.NotPinned {
-				allNotPinned = false
+				allSkip = false
 			}
 		}
-		if allNotPinned {
+		if allSkip {
 			continue
 		}
 
@@ -89,7 +96,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 		// render them as a deduplicated group showing affected workflows.
 		var selfHostedFindings []checks.Finding
 		for _, f := range dg.findings {
-			if f.Category == checks.NotPinned {
+			if f.Category == checks.NotPinned || exclude[f.Category] {
 				continue
 			}
 			if f.Category == checks.SelfHostedRunner {

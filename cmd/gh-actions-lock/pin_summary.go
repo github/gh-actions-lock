@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -35,10 +36,30 @@ func reportHasUnfixableErrors(report *checks.Report) bool {
 	return false
 }
 
+// reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
+// but only matches categories that renderInvestigationAlerts does NOT
+// handle (LocalAction, SelfHostedRunner). Use this to gate the
+// PresentResults call so impostor-commit / lockfile-forgery findings
+// don't trigger a redundant (and stale) error summary.
+func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Severity != checks.SeverityError {
+				continue
+			}
+			switch f.Category {
+			case checks.LocalAction, checks.SelfHostedRunner:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -48,7 +69,7 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 
 	renderFullScanWarnings(console, pinned)
 	if !noNarrow {
-		renderVersionRefNudge(console, record)
+		renderVersionRefNudge(ctx, console, record, r)
 	}
 
 	if len(investigated) > 0 {
@@ -93,9 +114,15 @@ func renderPinSummary(console *ui.UI, record *pin.Record, report *checks.Report,
 	// diagnose phase, but the narration log was attached (discarded in
 	// terminal mode) so they didn't reach stderr. Temporarily detach
 	// the log so the findings surface on the terminal.
-	if hasUnfixable {
+	//
+	// Only trigger for categories NOT already rendered by
+	// renderInvestigationAlerts (which handles impostor-commit and
+	// lockfile-forgery). Without this gate PresentResults would also
+	// emit a stale summary line counting pre-fix not-pinned findings.
+	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
-		format.PresentResults(console, report, false, false)
+		format.PresentResults(console, report, false, false,
+			checks.ImpostorCommit, checks.LockfileForgery)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {
@@ -116,6 +143,7 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 	var groupWFs []map[string]bool // per-group workflow dedup
 	directCount := 0
 	workflowSet := map[string]bool{} // distinct workflows, for the header count
+	// First pass: collect direct entries into groups.
 	for _, e := range pinned {
 		if !e.Direct {
 			continue
@@ -137,11 +165,55 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 			workflowSet[wf] = true
 		}
 	}
-	if directCount == 0 {
+	// Second pass: merge workflow attributions from transitive entries whose
+	// NWO@Ref matches an existing direct group. This ensures that a dep
+	// discovered via composite expansion shows the consuming workflow.
+	// Collect purely transitive entries (no direct counterpart) separately.
+	type transitiveEntry struct {
+		pin.Entry
+		parentLabel string
+	}
+	var purelyTransitive []transitiveEntry
+	transitiveKeys := map[string]bool{}
+	for _, e := range pinned {
+		if e.Direct {
+			continue
+		}
+		key := e.NWO + "@" + e.Ref
+		idx, ok := seen[key]
+		if ok {
+			for _, wf := range e.Workflows {
+				if !groupWFs[idx][wf] {
+					groupWFs[idx][wf] = true
+					grouped[idx].workflows = append(grouped[idx].workflows, wf)
+				}
+				workflowSet[wf] = true
+			}
+			continue
+		}
+		if transitiveKeys[key] {
+			continue
+		}
+		transitiveKeys[key] = true
+		parent := ""
+		if len(e.RequiredBy) > 0 {
+			parent = e.RequiredBy[0]
+		}
+		purelyTransitive = append(purelyTransitive, transitiveEntry{
+			Entry:       e,
+			parentLabel: parent,
+		})
+	}
+	if directCount == 0 && len(purelyTransitive) == 0 {
 		return
 	}
-	console.TermSuccess("Pinned %d %s across %d %s",
+	transitiveLabel := ""
+	if len(purelyTransitive) > 0 {
+		transitiveLabel = fmt.Sprintf(" (+ %d transitive)", len(purelyTransitive))
+	}
+	console.TermSuccess("Pinned %d %s%s across %d %s",
 		directCount, ui.Pluralize(directCount, "action", "actions"),
+		transitiveLabel,
 		len(workflowSet), ui.Pluralize(len(workflowSet), "workflow", "workflows"))
 	for _, g := range grouped {
 		short := g.SHA
@@ -164,6 +236,21 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 			console.TermDetail("    %s re-pinned from unreachable %s to %s",
 				console.TermYellow("!"), console.TermDim(prev), console.TermBold(g.Ref))
 		}
+	}
+	for _, te := range purelyTransitive {
+		short := te.SHA
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		label := te.NWO + "@" + te.Ref
+		if short != "" {
+			label = fmt.Sprintf("%s (%s)", label, short)
+		}
+		via := ""
+		if te.parentLabel != "" {
+			via = fmt.Sprintf(" via %s", te.parentLabel)
+		}
+		console.TermDetail("  %s%s", console.TermDim(label), console.TermDim(via))
 	}
 }
 
@@ -450,16 +537,22 @@ func stripNWORefPrefix(s string) string {
 // renderVersionRefNudge prints an informational nudge when entries are pinned
 // with refs that are not full semver tags (v4.2.1). Full semver tags each
 // resolve to exactly one commit, making the lock comment durable across
-// re-pins.
-func renderVersionRefNudge(console *ui.UI, record *pin.Record) {
-	var nonSemverDeps []string
+// re-pins. Only shown for repos that actually have semver releases.
+func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Record, r *resolve.Resolver) {
+	type nudgeEntry struct {
+		key    string // NWO@Ref
+		latest string // best full-semver tag, e.g. v1.2.3
+	}
+
 	seen := map[string]bool{}
+	// Cache per-repo so we don't call ListTags twice for the same repo.
+	repoLatest := map[string]string{} // NWO → latest full semver (or "" if none)
+	var entries []nudgeEntry
+
 	for _, e := range record.Entries {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
 			continue
 		}
-		// Transitive deps come from a composite's action.yml; the user
-		// cannot change their ref, so nudging about it is noise.
 		if !e.Direct {
 			continue
 		}
@@ -472,18 +565,63 @@ func renderVersionRefNudge(console *ui.UI, record *pin.Record) {
 			continue
 		}
 		seen[key] = true
-		nonSemverDeps = append(nonSemverDeps, key)
+
+		latest, cached := repoLatest[e.NWO]
+		if !cached {
+			latest = latestFullSemverTag(ctx, r, e.NWO)
+			repoLatest[e.NWO] = latest
+		}
+		if latest == "" {
+			continue // no semver releases — nothing to suggest
+		}
+		entries = append(entries, nudgeEntry{key: key, latest: latest})
 	}
-	if len(nonSemverDeps) == 0 {
+	if len(entries) == 0 {
 		return
 	}
 	console.TermBlank()
 	console.TermWarn("%d %s pinned without a full semver tag",
-		len(nonSemverDeps), ui.Pluralize(len(nonSemverDeps), "action", "actions"))
-	for _, dep := range nonSemverDeps {
-		console.TermDetail("  %s", console.TermYellow(dep))
+		len(entries), ui.Pluralize(len(entries), "action", "actions"))
+	for _, ne := range entries {
+		console.TermDetail("  %s %s latest: %s",
+			console.TermYellow(ne.key),
+			console.TermBold("→"),
+			console.TermYellow(ne.latest))
 	}
-	console.TermDetail("  Prefer full semver refs (e.g. v4.2.1) — each patch tag resolves to")
-	console.TermDetail("  exactly one commit, making the lock comment durable across re-pins.")
 	console.TermDetail("  Run without --no-narrow to upgrade.")
+}
+
+// latestFullSemverTag returns the highest full semver tag (vX.Y.Z) for
+// the given NWO, or "" if the repo has no semver releases or the lookup
+// fails.
+func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo string) string {
+	if r == nil {
+		return ""
+	}
+	owner, repo, _ := parserlock.SplitNWO(nwo)
+	if owner == "" {
+		return ""
+	}
+	tags, err := r.ListTagsForRepo(ctx, owner, repo)
+	if err != nil {
+		return ""
+	}
+	type semverTriple struct{ major, minor, patch int }
+	var best semverTriple
+	bestTag := ""
+	for _, t := range tags {
+		sv, ok := parserlock.ParseSemVer(t.Name)
+		if !ok || !sv.IsFull() || !sv.IsStable() {
+			continue
+		}
+		cur := semverTriple{sv.Major, sv.Minor, sv.Patch}
+		if bestTag == "" ||
+			cur.major > best.major ||
+			(cur.major == best.major && cur.minor > best.minor) ||
+			(cur.major == best.major && cur.minor == best.minor && cur.patch > best.patch) {
+			best = cur
+			bestTag = sv.Raw
+		}
+	}
+	return bestTag
 }

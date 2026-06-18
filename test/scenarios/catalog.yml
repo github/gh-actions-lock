@@ -576,6 +576,18 @@ scenarios:
     expect:
       exit: 0
 
+  - name: transitive_closure_cross_repo
+    category: multi_workflow
+    description: "Composite actions produce full transitive closure in lockfile — cross-repo deps and uses: chains preserved even when a shared dep appears in multiple workflows"
+    needs_token: true
+    tags: [real_repo]
+    live_repo: nodeselector/actions-test-fixtures
+    expect:
+      exit: 1
+      lockfile_golden: transitive_closure_cross_repo.lock
+      output_contains:
+        - "transitive"
+
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════════ security ════════════════════════════════║
   # ╚═════════════════════════════════════════════════════════════════════════╝
