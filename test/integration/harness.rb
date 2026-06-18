@@ -1635,6 +1635,10 @@ module ActionsPin
           ok = !failures.any? { |f| f.include?("lockfile exists") }
           checks << ["lockfile exists", ok]
         end
+        if spec["lockfile_golden"]
+          ok = !failures.any? { |f| f.include?("lockfile does not match golden") }
+          checks << ["lockfile matches golden #{spec["lockfile_golden"]}", ok]
+        end
         if spec["jq"]
           spec["jq"].each do |check|
             expr = check["expr"]
