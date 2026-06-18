@@ -9,6 +9,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEnsureSentinel(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "adds sentinel to plain workflow",
+			input: "name: ci\non: push\n",
+			want:  SentinelComment + "\n\nname: ci\non: push\n",
+		},
+		{
+			name:  "adds sentinel before existing comment",
+			input: "# my workflow\nname: ci\n",
+			want:  SentinelComment + "\n# my workflow\nname: ci\n",
+		},
+		{
+			name:  "idempotent when sentinel already present",
+			input: SentinelComment + "\n\nname: ci\n",
+			want:  SentinelComment + "\n\nname: ci\n",
+		},
+		{
+			name:  "empty content",
+			input: "",
+			want:  SentinelComment + "\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EnsureSentinel([]byte(tt.input))
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+}
+
 func TestSubpathRewriteLookup(t *testing.T) {
 	replacements := map[string]string{
 		"actions/cache@27d5ce7": "actions/cache@v5.0.5",

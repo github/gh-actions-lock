@@ -92,6 +92,7 @@ func rewriteWorkflow(wp WorkflowPlan) error {
 	if err != nil {
 		return fmt.Errorf("applying rewrites: %w", err)
 	}
+	content = workflowfile.EnsureSentinel(content)
 	return os.WriteFile(wp.Path, content, 0o644)
 }
 
