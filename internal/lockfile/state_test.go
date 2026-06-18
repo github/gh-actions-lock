@@ -793,3 +793,60 @@ func TestState_SaveFormatIsStable(t *testing.T) {
 		t.Fatalf("serialized lockfile format drifted from golden.\n--- got ---\n%s\n--- want ---\n%s", raw, golden)
 	}
 }
+
+// TestState_SetMergesUsesAcrossWorkflows verifies that when two workflows
+// share a dep, Set merges uses: lists instead of clobbering. Workflow A has
+// dep X as a parent (uses: [Y]), workflow B has dep X as a direct leaf.
+// The final entry for X must retain uses: [Y].
+func TestState_SetMergesUsesAcrossWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+
+	ctx := context.Background()
+	sharedDep := dep.Dependency{
+		NWO: "my/action", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		HashAlgo: "sha1", Branch: "main",
+	}
+	transitiveDep := dep.Dependency{
+		NWO: "other/leaf", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		HashAlgo: "sha1", Branch: "main",
+	}
+
+	// Workflow A: sharedDep is a parent of transitiveDep.
+	parentMapA := map[string][]string{
+		"other/leaf@main": {"my/action@main"},
+	}
+	directKeysA := map[string]bool{"my/action@main": true}
+	if err := store.Set(ctx, workflowfile.KeyFromPath("wf-a.yml"),
+		[]dep.Dependency{sharedDep, transitiveDep}, parentMapA, directKeysA); err != nil {
+		t.Fatalf("Set wf-a: %v", err)
+	}
+
+	// Workflow B: sharedDep is direct, no transitive deps.
+	directKeysB := map[string]bool{"my/action@main": true}
+	if err := store.Set(ctx, workflowfile.KeyFromPath("wf-b.yml"),
+		[]dep.Dependency{sharedDep}, nil, directKeysB); err != nil {
+		t.Fatalf("Set wf-b: %v", err)
+	}
+
+	// The uses: list from wf-a must survive wf-b's Set.
+	file := store.File()
+	pinKey := "my/action@main:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	action, ok := file.Dependencies[pinKey]
+	if !ok {
+		t.Fatalf("missing dep entry for %s", pinKey)
+	}
+	if len(action.Uses) != 1 {
+		t.Fatalf("expected uses: [other/leaf@main:...], got %v", action.Uses)
+	}
+	if !strings.Contains(action.Uses[0], "other/leaf@main") {
+		t.Fatalf("expected uses entry for other/leaf@main, got %q", action.Uses[0])
+	}
+}

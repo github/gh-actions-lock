@@ -325,16 +325,16 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		if !ok {
 			return fmt.Errorf("resolving repo IDs for %s/%s: not in cache after pre-resolve", pin.Owner, pin.Repo)
 		}
-		var uses []string
-		if children, ok := parentToChildren[pinKey]; ok && len(children) > 0 {
-			uses = make([]string, 0, len(children))
+		// Merge uses: each workflow contributes its own transitive edges.
+		// A dep that is a parent in one workflow but direct (no children)
+		// in another must not clobber the first workflow's uses list.
+		usesSet := make(map[string]bool)
+		if children, ok := parentToChildren[pinKey]; ok {
 			for c := range children {
-				uses = append(uses, c)
+				usesSet[c] = true
 			}
-			sort.Strings(uses)
 		}
-		// Preserve branch/tag from the existing entry for an unchanged branchless
-		// pin; a pin carrying its own branch (fresh/changed resolution) overrides.
+		// Preserve branch/tag and existing uses from prior Set calls.
 		branch, tag := d.Branch, d.Tag
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
 			if branch == "" {
@@ -343,6 +343,17 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			if tag == "" {
 				tag = existing.Tag
 			}
+			for _, u := range existing.Uses {
+				usesSet[u] = true
+			}
+		}
+		var uses []string
+		if len(usesSet) > 0 {
+			uses = make([]string, 0, len(usesSet))
+			for c := range usesSet {
+				uses = append(uses, c)
+			}
+			sort.Strings(uses)
 		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
 			Tag:     tag,
