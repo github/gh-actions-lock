@@ -12,10 +12,10 @@ import (
 const SentinelComment = "# This workflow is managed by gh actions-lock."
 
 // EnsureSentinel prepends the sentinel comment to the workflow content if it
-// is not already present. The comment is placed before any existing content
-// with a blank line separating it from the rest of the file.
+// is not already present at the top of the file. The comment is placed before
+// any existing content with a blank line separating it from the YAML body.
 func EnsureSentinel(content []byte) []byte {
-	if bytes.Contains(content, []byte(SentinelComment)) {
+	if bytes.HasPrefix(content, []byte(SentinelComment)) {
 		return content
 	}
 

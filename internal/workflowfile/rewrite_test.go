@@ -35,6 +35,11 @@ func TestEnsureSentinel(t *testing.T) {
 			input: "",
 			want:  SentinelComment + "\n",
 		},
+		{
+			name:  "sentinel buried in file still prepends",
+			input: "name: ci\n# This workflow is managed by gh actions-lock.\non: push\n",
+			want:  SentinelComment + "\n\nname: ci\n# This workflow is managed by gh actions-lock.\non: push\n",
+		},
 	}
 
 	for _, tt := range tests {
