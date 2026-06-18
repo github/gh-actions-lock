@@ -889,3 +889,88 @@ func TestNew_NilOptionsSafe(t *testing.T) {
 		t.Fatal("sleepFn should not be nil after WithSleepFn(nil)")
 	}
 }
+
+// TestResolveAllRecursivePartialFailureBFSContinues verifies that when one ref
+// in a batch fails (e.g. SSO/403), the BFS still discovers transitive deps
+// from composite actions that DID resolve. Before the fix, the early return on
+// error skipped the BFS loop entirely.
+func TestResolveAllRecursivePartialFailureBFSContinues(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	// Batch contains two refs: a0=my/composite resolves as a composite with
+	// a transitive dep on other/action@main. a1=sso/blocked returns null.
+	reg.Register(
+		httpmock.GraphQLForRepo("my", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "my/composite",
+					"object": map[string]any{
+						"oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						"file": map[string]any{"object": map[string]any{
+							"text": "name: MyComposite\nruns:\n  using: composite\n  steps:\n    - uses: other/action@main\n",
+						}},
+					},
+				},
+				"a1": nil,
+			},
+		}),
+	)
+
+	// Transitive dep: other/action@main resolves as a node action (leaf).
+	reg.Register(
+		httpmock.GraphQLForRepo("other", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "other/action",
+					"object": map[string]any{
+						"oid":  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						"file": map[string]any{"object": map[string]any{"text": "name: OtherAction\nruns:\n  using: node20\n"}},
+					},
+				},
+			},
+		}),
+	)
+
+	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	deps, pm, resolveErr := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "my", Repo: "composite", Ref: "v1"},
+		{Owner: "sso", Repo: "blocked", Ref: "v4"},
+	})
+
+	// Must return an error (sso/blocked failed).
+	if resolveErr == nil {
+		t.Fatal("expected error for inaccessible repo, got nil")
+	}
+
+	// Must return BOTH the composite and its transitive dep.
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 deps (composite + transitive), got %d: %+v", len(deps), deps)
+	}
+
+	nwos := map[string]bool{}
+	for _, d := range deps {
+		nwos[d.NWO] = true
+	}
+	if !nwos["my/composite"] {
+		t.Error("missing my/composite in deps")
+	}
+	if !nwos["other/action"] {
+		t.Error("missing transitive dep other/action in deps")
+	}
+
+	// ParentMap should record the transitive edge.
+	parents, ok := pm["other/action@main"]
+	if !ok || len(parents) == 0 {
+		t.Fatalf("expected parentMap entry for other/action@main, got %v", pm)
+	}
+	if parents[0] != "my/composite@v1" {
+		t.Fatalf("expected parent my/composite@v1, got %q", parents[0])
+	}
+}

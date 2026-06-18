@@ -94,6 +94,8 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		}
 	}
 
+	var resolveErr error
+
 	for len(pending) > 0 {
 		if depth >= r.MaxRecursionDepth {
 			return allDeps, parentMap, fmt.Errorf("composite action recursion exceeded max depth %d", r.MaxRecursionDepth)
@@ -119,10 +121,11 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		// Keep partial results: per-ref failures are surfaced via err, but
 		// successful resolutions in `deps` should not be discarded — downstream
 		// renderers degrade gracefully per-ref instead of marking everything
-		// unresolved.
+		// unresolved. Continue BFS so transitive deps of successful refs are
+		// still discovered.
 		allDeps = append(allDeps, deps...)
 		if err != nil {
-			return dep.Dedup(allDeps), parentMap, err
+			resolveErr = errors.Join(resolveErr, err)
 		}
 
 		var nextPending []parserlock.ActionRef
@@ -184,7 +187,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		depth++
 	}
 
-	return dep.Dedup(allDeps), parentMap, nil
+	return dep.Dedup(allDeps), parentMap, resolveErr
 }
 
 // resolveWithActionYMLParallel resolves refs one-per-worker via the shared pool
