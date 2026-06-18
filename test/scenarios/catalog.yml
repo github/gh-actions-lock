@@ -584,10 +584,7 @@ scenarios:
     live_repo: nodeselector/actions-test-fixtures
     expect:
       exit: 1
-      lockfile_exists: true
-      lockfile_contains:
-        - "nodeselector/actions-test-fixtures-b@main"
-        - "uses:"
+      lockfile_golden: transitive_closure_cross_repo.lock
       output_contains:
         - "transitive"
 

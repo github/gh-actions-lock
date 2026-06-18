@@ -176,6 +176,18 @@ def hydrate_assertions(s, expect, needs_token: false)
     s.assert_lockfile_contains(*expect["lockfile_contains"])
   end
 
+  if expect["lockfile_golden"]
+    golden_path = File.expand_path("../../scenarios/testdata/#{expect["lockfile_golden"]}", __FILE__)
+    s.assert_custom do |r|
+      lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+      got = File.read(lockpath) rescue ""
+      want = File.read(golden_path)
+      if got != want
+        s.failures << "lockfile does not match golden #{expect["lockfile_golden"]}\n--- got ---\n#{got}\n--- want ---\n#{want}"
+      end
+    end
+  end
+
   if expect["stdout_excludes"]
     expect["stdout_excludes"].each do |pat|
       s.assert_custom do |r|
