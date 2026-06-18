@@ -172,6 +172,10 @@ def hydrate_assertions(s, expect, needs_token: false)
     s.assert_lockfile_comment_excludes(expect["lockfile_comment_excludes"])
   end
 
+  if expect["lockfile_contains"]
+    s.assert_lockfile_contains(*expect["lockfile_contains"])
+  end
+
   if expect["stdout_excludes"]
     expect["stdout_excludes"].each do |pat|
       s.assert_custom do |r|
