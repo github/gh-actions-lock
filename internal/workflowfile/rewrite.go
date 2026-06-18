@@ -1,10 +1,36 @@
 package workflowfile
 
 import (
+	"bytes"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// SentinelComment is prepended to workflow files managed by gh actions-lock
+// so users can tell at a glance that the file's action refs are locked.
+const SentinelComment = "# This workflow is managed by gh actions-lock."
+
+// EnsureSentinel prepends the sentinel comment to the workflow content if it
+// is not already present at the top of the file. The comment is placed before
+// any existing content with a blank line separating it from the YAML body.
+func EnsureSentinel(content []byte) []byte {
+	if bytes.HasPrefix(content, []byte(SentinelComment)) {
+		return content
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(SentinelComment)
+	buf.WriteByte('\n')
+
+	// If the file doesn't start with a comment or blank line, add a
+	// separator so the sentinel stands apart from the YAML body.
+	if len(content) > 0 && content[0] != '#' && content[0] != '\n' {
+		buf.WriteByte('\n')
+	}
+	buf.Write(content)
+	return buf.Bytes()
+}
 
 // RewriteActionRefs rewrites targeted uses: refs in the original workflow
 // content while preserving the surrounding formatting and comments.

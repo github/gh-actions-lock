@@ -1,6 +1,7 @@
 package pin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -81,16 +82,22 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 }
 
 func rewriteWorkflow(wp WorkflowPlan) error {
-	if len(wp.Rewrites) == 0 {
-		return nil
-	}
 	wf, err := workflowfile.Load(wp.Path)
 	if err != nil {
 		return err
 	}
-	content, _, err := wf.RewriteActionRefs(wp.Rewrites)
-	if err != nil {
-		return fmt.Errorf("applying rewrites: %w", err)
+
+	content := wf.Content
+	if len(wp.Rewrites) > 0 {
+		content, _, err = wf.RewriteActionRefs(wp.Rewrites)
+		if err != nil {
+			return fmt.Errorf("applying rewrites: %w", err)
+		}
+	}
+
+	content = workflowfile.EnsureSentinel(content)
+	if bytes.Equal(content, wf.Content) {
+		return nil
 	}
 	return os.WriteFile(wp.Path, content, 0o644)
 }

@@ -119,9 +119,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if !wr.NeedsAttention() {
 		entries = verifiedEntries(inventory, wr.Path)
-		if rw := narrowVerifiedEntries(ctx, entries, opts); len(rw) > 0 {
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
-		}
+		rw := narrowVerifiedEntries(ctx, entries, opts)
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -130,9 +129,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = verifiedEntries(inventory, wr.Path)
 
 	if len(unrecordedRefs) == 0 {
-		if rw := narrowVerifiedEntries(ctx, entries, opts); len(rw) > 0 {
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
-		}
+		rw := narrowVerifiedEntries(ctx, entries, opts)
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -172,6 +170,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			})
 		}
 		if len(deps) == 0 {
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 			return planResult{entries: entries, wplans: wplans}, nil
 		}
 		// Fall through with partial deps to pin what we can.
@@ -241,6 +240,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if len(badKeys) > 0 {
 		deps, parentMap = dropDeps(deps, parentMap, badKeys)
 		if len(deps) == 0 {
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 			return planResult{entries: entries, wplans: wplans}, nil
 		}
 	}
@@ -374,6 +374,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				Reason:     imp.Error(),
 				Workflows:  []string{wr.Path},
 			})
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 			return planResult{entries: entries, wplans: wplans}, nil
 		}
 		return planResult{}, fmt.Errorf("reverse lookup: %w", err)
@@ -432,6 +433,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			Path:     wr.Path,
 			Rewrites: rewrites,
 		})
+	} else if len(wplans) == 0 {
+		// No rewrites and no plan entry yet — still include the workflow
+		// so EnsureSentinel can be applied during commit.
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 	}
 
 	// Load existing lockfile state so re-runs are noops for unchanged deps.
