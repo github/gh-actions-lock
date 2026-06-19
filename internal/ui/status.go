@@ -3,7 +3,7 @@ package ui
 import "fmt"
 
 // Icons used in status-prefixed output. These always appear regardless of
-// color setting — PRimer says don't rely solely on color.
+// color setting — Primer says don't rely solely on color.
 const (
 	IconSuccess = "✓"
 	IconError   = "✗"
