@@ -274,11 +274,9 @@ func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.Act
 	return out
 }
 
-// reachabilityGate classifies resolved deps by reachability. Unreachable deps
-// are auto-repinned in place to a recommended release when one exists (keeping
-// them in the pipeline) or recorded for investigation; reachability-unknown
-// deps are skipped. It returns the entries to emit, the dep keys to drop, the
-// auto-fixed newKey->originalRef map, and the old->new YAML rewrites.
+// reachabilityGate classifies resolved deps: unreachable deps are auto-repinned
+// to a recommended release when one exists, else dropped for investigation;
+// reachability-unknown deps are dropped. badKeys lists the dropped dep keys.
 func reachabilityGate(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, deps []dep.Dependency, reachResults []resolve.ReachabilityResult) (entries []Entry, badKeys map[string]bool, autoFixed, autoFixRewrites map[string]string) {
 	badKeys = make(map[string]bool)
 	autoFixed = make(map[string]string)       // new dep key -> original ref
@@ -356,11 +354,9 @@ func collectFullScanDeps(reachResults []resolve.ReachabilityResult, badKeys map[
 	return fullScanDeps
 }
 
-// narrowDirectDeps rewrites direct deps' mutable refs to precise tags: a bare
-// SHA to a tag at the same commit, a partial or non-semver ref to a full patch
-// tag. Transitive deps are left verbatim - their ref belongs to the composite
-// that declares it. Each rewrite mutates deps[i].Ref in place, records the
-// old->new uses in rewrites, and notes the narrowed NWO in narrowedNWOs.
+// narrowDirectDeps rewrites direct deps' mutable refs to precise tags (bare SHA
+// or partial/non-semver ref -> full patch tag), leaving transitive deps verbatim.
+// Each rewrite mutates deps[i].Ref and records the old->new uses and narrowed NWO.
 func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string, narrowedNWOs map[string]bool) {
 	if opts.Tagger == nil {
 		return
@@ -432,12 +428,9 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 	}
 }
 
-// reverseLookupRewrites canonicalizes each dep's ref via ReverseLookup
-// (SHA -> containing tag/branch) while preserving the tags narrowing already
-// chose and transitive deps' author-declared refs. It mutates deps' refs back
-// to those preserved values and returns the rewrites to merge for the workflow
-// YAML. If ReverseLookup surfaces an impostor commit it returns a non-nil entry
-// and no error so the caller can end the workflow early.
+// reverseLookupRewrites canonicalizes dep refs via ReverseLookup (SHA -> tag/
+// branch), restoring refs that narrowing or a transitive dep already fixed. A
+// non-nil *Entry signals an impostor commit (err stays nil) so the caller bails.
 func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, *Entry, error) {
 	// Save narrowed refs before ReverseLookup - it may overwrite dep.Ref
 	// with a branch name, but we want to keep the semver tag narrowing chose.

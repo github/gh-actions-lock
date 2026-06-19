@@ -87,25 +87,6 @@ lockfile. Pass --no-fix for a read-only check that writes nothing.
 structured results go to stdout and progress to stderr:
 
   gh actions-lock --no-fix --json 2>/dev/null | jq .valid
-
-Issue types:
-  ref-moved        - locked SHA no longer matches upstream (expected for mutable tags like v4)
-  not-pinned       - action in workflow has no lock entry
-  stale            - lock entry references an action no longer in the workflow
-  ref-changed      - workflow ref was edited; lock needs updating
-  misleading-sha   - ref looks like a SHA but resolves to a different commit
-  impostor-commit  - locked SHA is not reachable from any branch in the upstream repo
-  lockfile-forgery - pinned SHA is not an ancestor of the upstream ref it claims
-
-Exit status:
-  0  read-only run that found everything valid, or a fix run where
-     every finding was resolved automatically.
-  1  blocking findings remain — under --no-fix, any invalid finding;
-     otherwise, findings that can't be auto-fixed (impostor commit
-     or lockfile forgery) and need manual review. Output is
-     well-formed when --json is set.
-  2  the tool itself failed (bad flag, IO error, network failure,
-     malformed lockfile, etc.).
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows and fix what's fixable

@@ -16,10 +16,9 @@ import (
 	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
-// DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.
-// Assumes the resolver caches have already been warmed (calls into the
-// resolver will hit cache and stay silent). Returns a checks.Report aggregating per-
-// workflow findings in input order.
+// DiagnoseParsed runs engine diagnostics for each pre-parsed workflow, assuming
+// the resolver caches are warm (calls hit cache and stay silent). Returns a
+// checks.Report aggregating per-workflow findings in input order.
 func DiagnoseParsed(ctx context.Context, parsed []checks.ParsedWorkflow, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
 	type indexedPW struct {
 		idx int
@@ -131,11 +130,9 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	return wr
 }
 
-// precheckWorkflow handles the terminal preconditions that stop a workflow
-// from being diagnosed normally: a load error, local-path actions, a
-// non-hosted runner, no action refs, or an unreadable dependencies block. It
-// returns the report plus true when one fired; otherwise it returns a report
-// seeded with ActionRefs/ParseWarnings and false.
+// precheckWorkflow handles terminal preconditions (load error, local-path
+// actions, non-hosted runner, no refs, unreadable deps). It returns true when
+// one fired; otherwise the report is seeded with ActionRefs/ParseWarnings.
 func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.WorkflowReport, bool) {
 	wr := checks.WorkflowReport{Path: pw.Path}
 
@@ -252,11 +249,9 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	return wr, false
 }
 
-// reachabilitySweeps runs the three independent reachability passes over a
-// workflow's deps: the locked-SHA sweep (split into trusted vs needs-check),
-// the tag-moved live-SHA sweep, and the pin-time parity sweep for live SHAs
-// the other two miss. Each pass returns its own result set so their
-// (NWO, Ref, SHA) keys stay unmixed downstream.
+// reachabilitySweeps runs three independent reachability passes: the locked-SHA
+// sweep, the tag-moved live-SHA sweep, and the pin-time parity sweep. Each pass
+// returns its own set so their (NWO, Ref, SHA) keys stay unmixed downstream.
 func reachabilitySweeps(ctx context.Context, pw checks.ParsedWorkflow, r *resolve.Resolver, liveDeps []dep.Dependency) (reach, liveMovedReach, liveDirectReach []resolve.ReachabilityResult) {
 	if r != nil && len(pw.ExistingDeps) > 0 {
 		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
