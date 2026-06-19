@@ -88,9 +88,24 @@ structured results go to stdout and progress to stderr:
 
   gh actions-lock --no-fix --json 2>/dev/null | jq .valid
 
-Commands:
+Issue types:
+  ref-moved        - locked SHA no longer matches upstream (expected for mutable tags like v4)
+  not-pinned       - action in workflow has no lock entry
+  stale            - lock entry references an action no longer in the workflow
+  ref-changed      - workflow ref was edited; lock needs updating
+  misleading-sha   - ref looks like a SHA but resolves to a different commit
+  impostor-commit  - locked SHA is not reachable from any branch in the upstream repo
+  lockfile-forgery - pinned SHA is not an ancestor of the upstream ref it claims
 
-  gh actions-lock             Verify and fix the dependency lock
+Exit status:
+  0  read-only run that found everything valid, or a fix run where
+     every finding was resolved automatically.
+  1  blocking findings remain — under --no-fix, any invalid finding;
+     otherwise, findings that can't be auto-fixed (impostor commit
+     or lockfile forgery) and need manual review. Output is
+     well-formed when --json is set.
+  2  the tool itself failed (bad flag, IO error, network failure,
+     malformed lockfile, etc.).
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows and fix what's fixable
@@ -99,8 +114,14 @@ $ gh actions-lock
 # Verify a specific workflow
 $ gh actions-lock .github/workflows/ci.yml
 
-# Read-only check for CI integration (writes nothing)
+# Read-only check for CI integration (writes nothing, exits 1 if invalid)
 $ gh actions-lock --no-fix --json=valid,findings
+
+# Treat org larger runners as hosted
+$ gh actions-lock --allow-runners ubuntu-latest-xl,ubuntu-latest-2xl
+
+# All fields as JSON
+$ gh actions-lock --json
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -120,7 +141,6 @@ $ gh actions-lock --no-fix --json=valid,findings
 	// Dependabot so a relock never silently adds an entry it didn't ask for.
 	cmd.PersistentFlags().Bool("no-onboard", false, "Refuse to onboard new workflows or actions; only re-pin already-tracked entries")
 	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts")
-	cmd.AddCommand(newCheckCmd(newResolver))
 
 	return cmd
 }

@@ -55,7 +55,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -274,7 +274,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
@@ -326,7 +326,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
 
@@ -376,7 +376,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "unknown reachability should not fail the check")
 
@@ -436,7 +436,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -502,7 +502,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
@@ -564,7 +564,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -622,7 +622,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -701,7 +701,7 @@ jobs:
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--rescan", "--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -776,7 +776,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--rescan", "--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -827,7 +827,7 @@ jobs:
 
 	// --json with no value should use the default fields (valid,findings,workflows)
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json", workflowPath,
+		"--rescan", "--no-fix", "--json", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -893,7 +893,7 @@ jobs:
 
 	// Run WITHOUT --rescan so SeedFromLockfile is active.
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--no-fix", "--json=valid,findings",
+		"--no-fix", "--json=valid,findings",
 		".github/workflows/workflow.yml",
 	)
 	// setup-go is resolved but not yet pinned → "not-pinned" finding → errSilent.
@@ -969,7 +969,7 @@ jobs:
 	// Terminal mode (no --json), read-only. setup-go is unpinned → !valid →
 	// errSilent.
 	_, _, runErr := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--no-fix", ".github/workflows/workflow.yml",
+		"--no-fix", ".github/workflows/workflow.yml",
 	)
 	require.ErrorIs(t, runErr, errSilent)
 
@@ -1054,7 +1054,7 @@ jobs:
 
 	// Bare --json: renderer only, autofix still runs.
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings",
+		"--json=valid,findings",
 		".github/workflows/workflow.yml",
 	)
 	require.NoError(t, err)
@@ -1117,7 +1117,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	// ref-moved is a warning (valid=true), not an error.
 	require.NoError(t, err, "ref-moved is a warning, should not error")
@@ -1190,7 +1190,7 @@ jobs:
 	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 
 	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--no-fix", "--json=dependencies", wf1, wf2Path,
+		"--no-fix", "--json=dependencies", wf1, wf2Path,
 	)
 	require.NoError(t, err)
 
@@ -1247,7 +1247,7 @@ func TestCheckCommand_JSONLoadErrorIsInvalid(t *testing.T) {
 	defer reg.Verify(t)
 
 	missingPath := filepath.Join(t.TempDir(), "missing.yml")
-	stdout, _, err := runCommandWithHTTP(t, reg, "check", "--no-fix", "--json=valid,findings", missingPath)
+	stdout, _, err := runCommandWithHTTP(t, reg, "--no-fix", "--json=valid,findings", missingPath)
 	require.ErrorIs(t, err, errSilent)
 
 	var payload struct {

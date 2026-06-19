@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
@@ -53,85 +52,7 @@ type checkOptions struct {
 	allowRunners []string
 }
 
-func newCheckCmd(newResolver resolverFunc) *cobra.Command {
-	opts := &checkOptions{}
-
-	cmd := &cobra.Command{
-		Use:   "check [<workflow-path>...]",
-		Args:  cobra.ArbitraryArgs,
-		Short: "Verify the dependency lock and fix issues",
-		Long: heredoc.Doc(`
-			Verify that every action dependency in your workflows is locked to
-			an immutable commit SHA and that the lock is still valid.
-
-			Scans all workflows under .github/workflows/ by default, or pass
-			specific paths. Checks both direct and transitive dependencies
-			(composite actions that reference other actions).
-
-			By default this writes: every resolvable action is pinned and the
-			lockfile is updated in place. Pass --no-fix for a read-only check
-			that reports findings and changes nothing on disk (the CI gate).
-
-			--json selects the output format only — structured results on
-			stdout, progress on stderr — and is independent of --no-fix:
-
-			  gh actions-lock check --no-fix --json 2>/dev/null | jq .valid
-
-			Issue types:
-			  ref-moved        - locked SHA no longer matches upstream (expected for mutable tags like v4)
-			  not-pinned       - action in workflow has no lock entry
-			  stale            - lock entry references an action no longer in the workflow
-			  ref-changed      - workflow ref was edited; lock needs updating
-			  misleading-sha   - ref looks like a SHA but resolves to a different commit
-			  impostor-commit  - locked SHA is not reachable from any branch in the upstream repo
-			  lockfile-forgery - pinned SHA is not an ancestor of the upstream ref it claims
-
-			Exit status:
-			  0  read-only run that found everything valid, or a fix run where
-			     every finding was resolved automatically.
-			  1  blocking findings remain — under --no-fix, any invalid finding;
-			     otherwise, findings that can't be auto-fixed (impostor commit
-			     or lockfile forgery) and need manual review. Output is
-			     well-formed when --json is set.
-			  2  the tool itself failed (bad flag, IO error, network failure,
-			     malformed lockfile, etc.).
-			With --json, parse stdout and branch on .valid (the pre-fix
-			diagnosis) regardless of exit code.
-		`),
-		Example: heredoc.Doc(`
-			# Verify all workflows and fix what's fixable
-			$ gh actions-lock check
-
-			# Verify a specific workflow
-			$ gh actions-lock check .github/workflows/ci.yml
-
-			# Read-only check for CI (writes nothing, exits 1 if invalid)
-			$ gh actions-lock check --no-fix --json=valid,findings
-
-			# Treat org larger runners as hosted
-			$ gh actions-lock --allow-runners ubuntu-latest-xl,ubuntu-latest-2xl
-
-			# All fields as JSON
-			$ gh actions-lock check --json
-		`),
-		PreRunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.workflowPaths = args
-			}
-			return opts.validateOutputFlags()
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCheck(cmd, opts, newResolver)
-		},
-	}
-
-	bindCheckFlags(cmd, opts)
-	return cmd
-}
-
-// bindCheckFlags registers the flags shared by the root command and the
-// explicit `check` subcommand. Root is just the default check invocation, so
-// both bind the identical surface from one place.
+// bindCheckFlags registers the run flags on the root command.
 func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"

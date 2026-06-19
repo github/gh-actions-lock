@@ -67,7 +67,7 @@ type lockRecovery func(lockPath string, parseErr error) (recovered bool, err err
 func newLockRecovery(noInteractive bool, console *ui.UI, newConfirm confirmFactory, allowDelete bool) lockRecovery {
 	return func(lockPath string, parseErr error) (bool, error) {
 		if !allowDelete {
-			return false, fmt.Errorf("%w; run `gh actions-lock check` to rebuild it, or delete it by hand", parseErr)
+			return false, fmt.Errorf("%w; run `gh actions-lock` to rebuild it, or delete it by hand", parseErr)
 		}
 		var (
 			confirm   confirmer
