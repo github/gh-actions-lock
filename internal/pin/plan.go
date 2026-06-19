@@ -138,37 +138,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
-		// Partial failure: some refs resolved (in deps), others didn't.
-		// Build a set of resolved NWO@Ref keys so we can continue with
-		// the successful ones and only mark the failures as unresolved.
-		resolved := make(map[string]bool, len(deps))
-		for _, d := range deps {
-			resolved[strings.ToLower(d.NWO+"@"+d.Ref)] = true
-		}
-		// Only mark findings as unresolved if they were actually attempted
-		// (i.e., part of unrecordedRefs). Recorded refs were never sent to
-		// ResolveAllRecursive and should not be marked as failures.
-		attempted := make(map[string]bool, len(unrecordedRefs))
-		for _, ref := range unrecordedRefs {
-			attempted[strings.ToLower(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
-		}
-		for _, f := range wr.Findings {
-			if f.ActionRef == nil {
-				continue
-			}
-			key := strings.ToLower(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
-			if !attempted[key] || resolved[key] {
-				continue
-			}
-			entries = append(entries, Entry{
-				NWO:        f.ActionRef.Owner + "/" + f.ActionRef.Repo,
-				Ref:        f.ActionRef.Ref,
-				Resolution: Unresolved,
-				Issue:      string(f.Category),
-				Reason:     fmt.Sprintf("resolution failed: %s", resolveErr),
-				Workflows:  []string{wr.Path},
-			})
-		}
+		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
 		if len(deps) == 0 {
 			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 			return planResult{entries: entries, wplans: wplans}, nil
@@ -179,63 +149,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Reachability gate — drop impostors, auto-fix when a sane release exists.
 	status("verifying " + wr.Path)
 	reachResults := opts.Resolver.CheckReachabilityAll(ctx, deps)
-	badKeys := make(map[string]bool)
-	autoFixed := make(map[string]string)       // new dep key → original ref
-	autoFixRewrites := make(map[string]string) // old uses → new uses (for YAML rewrite)
-	for _, rr := range reachResults {
-		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
-		switch rr.Status {
-		case resolve.Unreachable:
-			// Look for a recommended release to auto-repin.
-			var recTag, recSHA string
-			if f := findFinding(wr.Findings, rr.Owner+"/"+rr.Repo, rr.Ref); f != nil && f.RecommendedTag != "" {
-				recTag, recSHA = f.RecommendedTag, f.RecommendedSHA
-			} else if opts.Tagger != nil {
-				recTag, recSHA = checks.FindRecommendedRelease(ctx, opts.Tagger, opts.Resolver, opts.Pool, rr.Owner, rr.Repo)
-			}
-
-			if recTag != "" {
-				// Rewrite the dep in place to the recommended release so it
-				// stays in the pinning pipeline instead of being dropped.
-				nwo := rr.Owner + "/" + rr.Repo
-				newKey := nwo + "@" + recTag
-				autoFixed[newKey] = rr.Ref
-				autoFixRewrites[nwo+"@"+rr.Ref] = nwo + "@" + recTag
-				for i := range deps {
-					if deps[i].Key() == depKey {
-						deps[i].Ref = recTag
-						if recSHA != "" {
-							deps[i].SHA = recSHA
-						}
-						break
-					}
-				}
-				continue // don't mark as bad — dep stays in pipeline
-			}
-
-			entries = append(entries, Entry{
-				NWO:        rr.Owner + "/" + rr.Repo,
-				Ref:        rr.Ref,
-				SHA:        rr.SHA,
-				Resolution: Investigate,
-				Issue:      string(checks.ImpostorCommit),
-				Reason:     rr.Detail,
-				Workflows:  []string{wr.Path},
-			})
-			badKeys[depKey] = true
-		case resolve.ReachabilityUnknown:
-			entries = append(entries, Entry{
-				NWO:        rr.Owner + "/" + rr.Repo,
-				Ref:        rr.Ref,
-				SHA:        rr.SHA,
-				Resolution: Skipped,
-				Issue:      "reachability_unknown",
-				Reason:     rr.Detail,
-				Workflows:  []string{wr.Path},
-			})
-			badKeys[depKey] = true
-		}
-	}
+	gateEntries, badKeys, autoFixed, autoFixRewrites := reachabilityGate(ctx, wr, opts, deps, reachResults)
+	entries = append(entries, gateEntries...)
 
 	if len(badKeys) > 0 {
 		deps, parentMap = dropDeps(deps, parentMap, badKeys)
@@ -246,16 +161,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Track reachability metadata for pinned entries.
-	fullScanDeps := make(map[string]bool)
-	for _, rr := range reachResults {
-		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
-		if badKeys[depKey] {
-			continue
-		}
-		if rr.FullScanUsed {
-			fullScanDeps[depKey] = true
-		}
-	}
+	fullScanDeps := collectFullScanDeps(reachResults, badKeys)
 
 	// Snapshot direct-dep matching before narrowing/ReverseLookup mutate
 	// dep.Ref — the tracker records index-aligned booleans at construction,
@@ -272,134 +178,21 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		rewrites[k] = v
 	}
 
-	if opts.Tagger != nil {
-		for i := range deps {
-			dep := &deps[i]
-			// Transitive deps come from a composite's action.yml; their ref
-			// is the composite author's choice and never appears in our
-			// workflow YAML. Narrowing it is pure churn and can invent refs
-			// the composite never declared, so leave it verbatim.
-			if !directTracker.IsDirect(i) {
-				continue
-			}
-			owner, repo := dep.OwnerRepo()
-			if owner == "" {
-				continue
-			}
+	narrowDirectDeps(ctx, opts, deps, directTracker, rewrites, narrowedNWOs)
 
-			// Bare-SHA refs: find a tag pointing at the same commit.
-			if parserlock.IsFullSha(dep.Ref) {
-				patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
-				if err != nil {
-					continue
-				}
-				if patchTag == "" {
-					patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
-					if err != nil || patchTag == "" {
-						continue
-					}
-				}
-				oldUses := dep.NWO + "@" + dep.Ref
-				newUses := dep.NWO + "@" + patchTag
-				rewrites[oldUses] = newUses
-				dep.Ref = patchTag
-				narrowedNWOs[strings.ToLower(dep.NWO)] = true
-				continue
-			}
-
-			// Narrow to a full semver patch tag when possible. Covers
-			// partial semver (v4, v3.1) and non-semver refs (main, master).
-			// Skip if --no-narrow or if the lockfile already recorded this
-			// dep without a full semver ref (respect prior precision choice).
-			nwoLower := strings.ToLower(dep.NWO)
-			if opts.NoNarrow || opts.prevImpreciseNWO[nwoLower] {
-				continue
-			}
-			sv, ok := parserlock.ParseSemVer(dep.Ref)
-			if ok && sv.IsFull() {
-				continue
-			}
-
-			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
-			if err != nil {
-				continue
-			}
-			// No exact tag match — if the repo publishes semver releases,
-			// walk back to the latest tag that's an ancestor of this SHA.
-			if patchTag == "" {
-				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
-				if err != nil || patchTag == "" {
-					continue
-				}
-			}
-			oldUses := dep.NWO + "@" + dep.Ref
-			newUses := dep.NWO + "@" + patchTag
-			rewrites[oldUses] = newUses
-			dep.Ref = patchTag
-			narrowedNWOs[nwoLower] = true
-		}
-	}
-
-	// Save narrowed refs before ReverseLookup — it may overwrite dep.Ref
-	// with a branch name, but we want to keep the semver tag narrowing chose.
-	narrowedRefs := make(map[int]string)
-	for i := range deps {
-		nwo := strings.ToLower(deps[i].NWO)
-		if narrowedNWOs[nwo] {
-			narrowedRefs[i] = deps[i].Ref
-		}
-	}
-
-	// Preserve transitive deps' declared refs across ReverseLookup. We still
-	// want the tag/branch metadata it populates (the lockfile write requires
-	// a branch), but the ref itself must stay exactly as the composite's
-	// action.yml declares it — we don't own it and must not rewrite it.
-	transitiveRefs := make(map[int]string)
-	for i := range deps {
-		if !directTracker.IsDirect(i) {
-			transitiveRefs[i] = deps[i].Ref
-		}
-	}
-
-	// ReverseLookup: SHA → containing tag/branch. Rewrites refs to canonical form.
-	normRewrites, err := opts.Resolver.ReverseLookup(ctx, deps)
+	// ReverseLookup canonicalizes each dep's ref while preserving the tags
+	// narrowing chose and transitive deps' declared refs. An impostor commit
+	// surfaced here ends the workflow early.
+	rlRewrites, impostorEntry, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
 	if err != nil {
-		var imp *resolve.ImpostorError
-		if errors.As(err, &imp) {
-			entries = append(entries, Entry{
-				NWO:        imp.NWO,
-				Ref:        imp.Ref,
-				Resolution: Investigate,
-				Issue:      string(checks.ImpostorCommit),
-				Reason:     imp.Error(),
-				Workflows:  []string{wr.Path},
-			})
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
-			return planResult{entries: entries, wplans: wplans}, nil
-		}
-		return planResult{}, fmt.Errorf("reverse lookup: %w", err)
+		return planResult{}, err
 	}
-	// Restore narrowed refs that ReverseLookup may have overwritten.
-	for i, ref := range narrowedRefs {
-		deps[i].Ref = ref
+	if impostorEntry != nil {
+		entries = append(entries, *impostorEntry)
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
+		return planResult{entries: entries, wplans: wplans}, nil
 	}
-	// Restore transitive deps' declared refs and suppress any rewrite
-	// ReverseLookup produced for them — keyed by the declared NWO@ref.
-	transitiveRewriteKeys := make(map[string]bool, len(transitiveRefs))
-	for i, ref := range transitiveRefs {
-		deps[i].Ref = ref
-		transitiveRewriteKeys[deps[i].NWO+"@"+ref] = true
-	}
-	for k, v := range normRewrites {
-		if transitiveRewriteKeys[k] {
-			continue
-		}
-		if at := strings.Index(k, "@"); at > 0 {
-			nwo := strings.ToLower(k[:at])
-			if narrowedNWOs[nwo] {
-				continue
-			}
-		}
+	for k, v := range rlRewrites {
 		rewrites[k] = v
 	}
 
@@ -439,8 +232,283 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 	}
 
+	// Build entries for all pinned deps (skip any already emitted from inventory).
+	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, directTracker, inventorySHA, autoFixed, fullScanDeps)...)
+
+	// Record findings that are informational (ref-moved, misleading-sha).
+	entries = append(entries, informationalEntries(wr)...)
+
+	return planResult{entries: entries, wplans: wplans}, nil
+}
+
+// unresolvedEntries flags findings whose refs were attempted but failed to
+// resolve. On a partial failure deps holds the refs that did resolve, so only
+// the genuine misses (attempted and not in deps) are marked Unresolved.
+func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.ActionRef, deps []dep.Dependency, resolveErr error) []Entry {
+	resolved := make(map[string]bool, len(deps))
+	for _, d := range deps {
+		resolved[strings.ToLower(d.NWO+"@"+d.Ref)] = true
+	}
+	attempted := make(map[string]bool, len(unrecordedRefs))
+	for _, ref := range unrecordedRefs {
+		attempted[strings.ToLower(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
+	}
+	var out []Entry
+	for _, f := range wr.Findings {
+		if f.ActionRef == nil {
+			continue
+		}
+		key := strings.ToLower(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
+		if !attempted[key] || resolved[key] {
+			continue
+		}
+		out = append(out, Entry{
+			NWO:        f.ActionRef.Owner + "/" + f.ActionRef.Repo,
+			Ref:        f.ActionRef.Ref,
+			Resolution: Unresolved,
+			Issue:      string(f.Category),
+			Reason:     fmt.Sprintf("resolution failed: %s", resolveErr),
+			Workflows:  []string{wr.Path},
+		})
+	}
+	return out
+}
+
+// reachabilityGate classifies resolved deps by reachability. Unreachable deps
+// are auto-repinned in place to a recommended release when one exists (keeping
+// them in the pipeline) or recorded for investigation; reachability-unknown
+// deps are skipped. It returns the entries to emit, the dep keys to drop, the
+// auto-fixed newKey->originalRef map, and the old->new YAML rewrites.
+func reachabilityGate(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, deps []dep.Dependency, reachResults []resolve.ReachabilityResult) (entries []Entry, badKeys map[string]bool, autoFixed, autoFixRewrites map[string]string) {
+	badKeys = make(map[string]bool)
+	autoFixed = make(map[string]string)       // new dep key -> original ref
+	autoFixRewrites = make(map[string]string) // old uses -> new uses (for YAML rewrite)
+	for _, rr := range reachResults {
+		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
+		switch rr.Status {
+		case resolve.Unreachable:
+			// Look for a recommended release to auto-repin.
+			var recTag, recSHA string
+			if f := findFinding(wr.Findings, rr.Owner+"/"+rr.Repo, rr.Ref); f != nil && f.RecommendedTag != "" {
+				recTag, recSHA = f.RecommendedTag, f.RecommendedSHA
+			} else if opts.Tagger != nil {
+				recTag, recSHA = checks.FindRecommendedRelease(ctx, opts.Tagger, opts.Resolver, opts.Pool, rr.Owner, rr.Repo)
+			}
+
+			if recTag != "" {
+				// Rewrite the dep in place to the recommended release so it
+				// stays in the pinning pipeline instead of being dropped.
+				nwo := rr.Owner + "/" + rr.Repo
+				newKey := nwo + "@" + recTag
+				autoFixed[newKey] = rr.Ref
+				autoFixRewrites[nwo+"@"+rr.Ref] = nwo + "@" + recTag
+				for i := range deps {
+					if deps[i].Key() == depKey {
+						deps[i].Ref = recTag
+						if recSHA != "" {
+							deps[i].SHA = recSHA
+						}
+						break
+					}
+				}
+				continue // don't mark as bad - dep stays in pipeline
+			}
+
+			entries = append(entries, Entry{
+				NWO:        rr.Owner + "/" + rr.Repo,
+				Ref:        rr.Ref,
+				SHA:        rr.SHA,
+				Resolution: Investigate,
+				Issue:      string(checks.ImpostorCommit),
+				Reason:     rr.Detail,
+				Workflows:  []string{wr.Path},
+			})
+			badKeys[depKey] = true
+		case resolve.ReachabilityUnknown:
+			entries = append(entries, Entry{
+				NWO:        rr.Owner + "/" + rr.Repo,
+				Ref:        rr.Ref,
+				SHA:        rr.SHA,
+				Resolution: Skipped,
+				Issue:      "reachability_unknown",
+				Reason:     rr.Detail,
+				Workflows:  []string{wr.Path},
+			})
+			badKeys[depKey] = true
+		}
+	}
+	return entries, badKeys, autoFixed, autoFixRewrites
+}
+
+// collectFullScanDeps returns the set of still-pinned dep keys whose
+// reachability check required a full commit scan.
+func collectFullScanDeps(reachResults []resolve.ReachabilityResult, badKeys map[string]bool) map[string]bool {
+	fullScanDeps := make(map[string]bool)
+	for _, rr := range reachResults {
+		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
+		if badKeys[depKey] {
+			continue
+		}
+		if rr.FullScanUsed {
+			fullScanDeps[depKey] = true
+		}
+	}
+	return fullScanDeps
+}
+
+// narrowDirectDeps rewrites direct deps' mutable refs to precise tags: a bare
+// SHA to a tag at the same commit, a partial or non-semver ref to a full patch
+// tag. Transitive deps are left verbatim - their ref belongs to the composite
+// that declares it. Each rewrite mutates deps[i].Ref in place, records the
+// old->new uses in rewrites, and notes the narrowed NWO in narrowedNWOs.
+func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string, narrowedNWOs map[string]bool) {
+	if opts.Tagger == nil {
+		return
+	}
+	for i := range deps {
+		dep := &deps[i]
+		// Transitive deps come from a composite's action.yml; their ref
+		// is the composite author's choice and never appears in our
+		// workflow YAML. Narrowing it is pure churn and can invent refs
+		// the composite never declared, so leave it verbatim.
+		if !directTracker.IsDirect(i) {
+			continue
+		}
+		owner, repo := dep.OwnerRepo()
+		if owner == "" {
+			continue
+		}
+
+		// Bare-SHA refs: find a tag pointing at the same commit.
+		if parserlock.IsFullSha(dep.Ref) {
+			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
+			if err != nil {
+				continue
+			}
+			if patchTag == "" {
+				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+				if err != nil || patchTag == "" {
+					continue
+				}
+			}
+			oldUses := dep.NWO + "@" + dep.Ref
+			newUses := dep.NWO + "@" + patchTag
+			rewrites[oldUses] = newUses
+			dep.Ref = patchTag
+			narrowedNWOs[strings.ToLower(dep.NWO)] = true
+			continue
+		}
+
+		// Narrow to a full semver patch tag when possible. Covers
+		// partial semver (v4, v3.1) and non-semver refs (main, master).
+		// Skip if --no-narrow or if the lockfile already recorded this
+		// dep without a full semver ref (respect prior precision choice).
+		nwoLower := strings.ToLower(dep.NWO)
+		if opts.NoNarrow || opts.prevImpreciseNWO[nwoLower] {
+			continue
+		}
+		sv, ok := parserlock.ParseSemVer(dep.Ref)
+		if ok && sv.IsFull() {
+			continue
+		}
+
+		patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
+		if err != nil {
+			continue
+		}
+		// No exact tag match - if the repo publishes semver releases,
+		// walk back to the latest tag that's an ancestor of this SHA.
+		if patchTag == "" {
+			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+			if err != nil || patchTag == "" {
+				continue
+			}
+		}
+		oldUses := dep.NWO + "@" + dep.Ref
+		newUses := dep.NWO + "@" + patchTag
+		rewrites[oldUses] = newUses
+		dep.Ref = patchTag
+		narrowedNWOs[nwoLower] = true
+	}
+}
+
+// reverseLookupRewrites canonicalizes each dep's ref via ReverseLookup
+// (SHA -> containing tag/branch) while preserving the tags narrowing already
+// chose and transitive deps' author-declared refs. It mutates deps' refs back
+// to those preserved values and returns the rewrites to merge for the workflow
+// YAML. If ReverseLookup surfaces an impostor commit it returns a non-nil entry
+// and no error so the caller can end the workflow early.
+func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, *Entry, error) {
+	// Save narrowed refs before ReverseLookup - it may overwrite dep.Ref
+	// with a branch name, but we want to keep the semver tag narrowing chose.
+	narrowedRefs := make(map[int]string)
+	for i := range deps {
+		nwo := strings.ToLower(deps[i].NWO)
+		if narrowedNWOs[nwo] {
+			narrowedRefs[i] = deps[i].Ref
+		}
+	}
+
+	// Preserve transitive deps' declared refs across ReverseLookup. We still
+	// want the tag/branch metadata it populates (the lockfile write requires
+	// a branch), but the ref itself must stay exactly as the composite's
+	// action.yml declares it - we don't own it and must not rewrite it.
+	transitiveRefs := make(map[int]string)
+	for i := range deps {
+		if !directTracker.IsDirect(i) {
+			transitiveRefs[i] = deps[i].Ref
+		}
+	}
+
+	// ReverseLookup: SHA -> containing tag/branch. Rewrites refs to canonical form.
+	normRewrites, err := opts.Resolver.ReverseLookup(ctx, deps)
+	if err != nil {
+		var imp *resolve.ImpostorError
+		if errors.As(err, &imp) {
+			return nil, &Entry{
+				NWO:        imp.NWO,
+				Ref:        imp.Ref,
+				Resolution: Investigate,
+				Issue:      string(checks.ImpostorCommit),
+				Reason:     imp.Error(),
+				Workflows:  []string{wr.Path},
+			}, nil
+		}
+		return nil, nil, fmt.Errorf("reverse lookup: %w", err)
+	}
+	// Restore narrowed refs that ReverseLookup may have overwritten.
+	for i, ref := range narrowedRefs {
+		deps[i].Ref = ref
+	}
+	// Restore transitive deps' declared refs and suppress any rewrite
+	// ReverseLookup produced for them - keyed by the declared NWO@ref.
+	transitiveRewriteKeys := make(map[string]bool, len(transitiveRefs))
+	for i, ref := range transitiveRefs {
+		deps[i].Ref = ref
+		transitiveRewriteKeys[deps[i].NWO+"@"+ref] = true
+	}
+	rewrites := make(map[string]string)
+	for k, v := range normRewrites {
+		if transitiveRewriteKeys[k] {
+			continue
+		}
+		if at := strings.Index(k, "@"); at > 0 {
+			nwo := strings.ToLower(k[:at])
+			if narrowedNWOs[nwo] {
+				continue
+			}
+		}
+		rewrites[k] = v
+	}
+	return rewrites, nil, nil
+}
+
+// buildPinnedEntries emits an entry for every resolved dep, marking it Verified
+// when the lockfile already records the same SHA and Pinned otherwise. Deps
+// already emitted from inventory (by NWO:SHA) are skipped.
+func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap, directTracker lockfile.DirectTracker, inventorySHA map[string]bool, autoFixed map[string]string, fullScanDeps map[string]bool) []Entry {
 	// Load existing lockfile state so re-runs are noops for unchanged deps.
-	existingSHA := make(map[string]string) // NWO@Ref → SHA
+	existingSHA := make(map[string]string) // NWO@Ref -> SHA
 	if opts.Store != nil {
 		wfKey := workflowfile.KeyFromPath(wr.Path)
 		if existing, err := opts.Store.Get(wfKey); err == nil {
@@ -450,8 +518,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		}
 	}
 
-	// Build entries for all pinned deps (skip any already emitted from inventory).
 	directKeys := directTracker.Keys(deps)
+	var out []Entry
 	for _, dep := range deps {
 		nwoSHA := strings.ToLower(dep.NWO) + ":" + strings.ToLower(dep.SHA)
 		if inventorySHA[nwoSHA] {
@@ -480,10 +548,15 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			entry.Direct = true       // auto-fixed deps are always direct uses
 			entry.Resolution = Pinned // auto-fix is always a new pin
 		}
-		entries = append(entries, entry)
+		out = append(out, entry)
 	}
+	return out
+}
 
-	// Record findings that are informational (ref-moved, misleading-sha).
+// informationalEntries records ref-moved and misleading-sha findings as
+// Investigate entries.
+func informationalEntries(wr checks.WorkflowReport) []Entry {
+	var out []Entry
 	for _, f := range wr.Findings {
 		switch f.Category {
 		case checks.MisleadingSHA, checks.RefMoved:
@@ -493,7 +566,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 				nwo = f.ActionRef.Owner + "/" + f.ActionRef.Repo
 				ref = f.ActionRef.Ref
 			}
-			entries = append(entries, Entry{
+			out = append(out, Entry{
 				NWO:         nwo,
 				Ref:         ref,
 				ObservedSHA: f.ObservedSHA,
@@ -504,8 +577,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			})
 		}
 	}
-
-	return planResult{entries: entries, wplans: wplans}, nil
+	return out
 }
 
 func findFinding(findings []checks.Finding, nwo, ref string) *checks.Finding {
