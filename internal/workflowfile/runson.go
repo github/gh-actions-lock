@@ -25,18 +25,18 @@ var hostedRunnerLabels = map[string]bool{
 	"ubuntu-slim": true,
 
 	// Linux firewall (feature-flagged)
-	"ubuntu-24.04-firewall": true,
+	"ubuntu-24.04-firewall":  true,
 	"ubuntu-latest-firewall": true,
 
 	// Windows x64
-	"windows-latest":       true,
-	"windows-2022":         true,
-	"windows-2025":         true,
-	"windows-2025-vs2026":  true,
+	"windows-latest":      true,
+	"windows-2022":        true,
+	"windows-2025":        true,
+	"windows-2025-vs2026": true,
 
 	// Windows ARM64
-	"windows-11-arm":          true,
-	"windows-11-vs2026-arm":   true,
+	"windows-11-arm":        true,
+	"windows-11-vs2026-arm": true,
 
 	// macOS (Apple Silicon / arm64)
 	"macos-latest": true,

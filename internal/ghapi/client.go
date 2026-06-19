@@ -179,7 +179,7 @@ func (t *ssoTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 type retryTransport struct {
 	inner      http.RoundTripper
 	maxRetries int
-	sleepFn func(context.Context, time.Duration) // for testing; defaults to DefaultSleep
+	sleepFn    func(context.Context, time.Duration) // for testing; defaults to DefaultSleep
 }
 
 func newRetryTransport(t http.RoundTripper, maxRetries int) http.RoundTripper {

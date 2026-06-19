@@ -863,12 +863,12 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 	if err := store.Set(ctx, ".github/workflows/workflow-a.yml",
 		[]dep.Dependency{checkout, compositeA, compositeB, leaf, compositeC, external},
 		map[string][]string{
-			"my-org/composite-b@v2":  {"my-org/composite-a@v1", "my-org/composite-c@v1"},
-			"other-org/external@v1":  {"my-org/composite-a@v1"},
-			"my-org/leaf@main":       {"my-org/composite-b@v2"},
+			"my-org/composite-b@v2": {"my-org/composite-a@v1", "my-org/composite-c@v1"},
+			"other-org/external@v1": {"my-org/composite-a@v1"},
+			"my-org/leaf@main":      {"my-org/composite-b@v2"},
 		},
 		map[string]bool{
-			"actions/checkout@v4":    true,
+			"actions/checkout@v4":   true,
 			"my-org/composite-a@v1": true,
 			"my-org/composite-c@v1": true,
 		},
@@ -885,7 +885,7 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 		[]dep.Dependency{checkout, compositeB},
 		nil,
 		map[string]bool{
-			"actions/checkout@v4":    true,
+			"actions/checkout@v4":   true,
 			"my-org/composite-b@v2": true,
 		},
 	); err != nil {

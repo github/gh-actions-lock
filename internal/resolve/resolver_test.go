@@ -300,7 +300,8 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 // ref "updated" references a sibling subpath at a DIFFERENT ref "main", the
 // BFS discovers the full transitive closure through the second composite.
 // This mirrors nodeselector/actions-test-fixtures where:
-//   nested-composite@updated → simple-composite@main → (simple-node@main + fixtures-b/simple-echo@main)
+//
+//	nested-composite@updated → simple-composite@main → (simple-node@main + fixtures-b/simple-echo@main)
 func TestResolveAllRecursiveCrossRefTransitive(t *testing.T) {
 	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,

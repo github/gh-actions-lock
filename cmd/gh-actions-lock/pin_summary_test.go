@@ -365,7 +365,6 @@ func TestRenderUnresolvedWarnings_MixedReasonsNotDeduped(t *testing.T) {
 	}
 }
 
-
 func TestRenderUnresolvedWarnings_PlainErrorNoHint(t *testing.T) {
 	entries := []pin.Entry{
 		{
