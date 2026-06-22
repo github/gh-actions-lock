@@ -1,17 +1,17 @@
 version: 'v0.0.1'
 dependencies:
   'actions/cache@v4:sha1-cccccccccccccccccccccccccccccccccccccccc':
-    branch: 'main'
+    ref: 'main'
     commit: 'sha1-cccccccccccccccccccccccccccccccccccccccc'
     owner_id: 3
     repo_id: 3
   'actions/checkout@v6:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa':
-    branch: 'main'
+    ref: 'main'
     commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     owner_id: 1
     repo_id: 1
   'actions/setup-go@v6:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb':
-    branch: 'main'
+    ref: 'main'
     commit: 'sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     owner_id: 2
     repo_id: 2
@@ -19,12 +19,12 @@ dependencies:
       - 'actions/cache@v4:sha1-cccccccccccccccccccccccccccccccccccccccc'
       - 'helper/only-transitive@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
   'helper/only-transitive@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee':
-    branch: 'main'
+    ref: 'main'
     commit: 'sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
     owner_id: 5
     repo_id: 5
   'old/dead@v1:sha1-dddddddddddddddddddddddddddddddddddddddd':
-    branch: 'main'
+    ref: 'main'
     commit: 'sha1-dddddddddddddddddddddddddddddddddddddddd'
     owner_id: 4
     repo_id: 4

@@ -41,25 +41,34 @@ func pickPreferred(candidates []string, hintRef, defaultPick string) string {
 }
 
 // pickPreferredTag selects the canonical tag from the set of tags pointing at
-// a SHA. Prefers hintRef, then highest semver, then lexicographic first.
+// a SHA. Priority: hintRef (if present), then full semver (v1.2.3 — no splat),
+// then any semver (including major-only like v4), then lexicographic first.
 func pickPreferredTag(candidates []string, hintRef string) string {
 	if hit := hintMatch(candidates, hintRef); hit != "" {
 		return hit
 	}
-	var best string
-	var bestVer parserlock.SemVer
-	haveSemver := false
+	var bestFull string
+	var bestFullVer parserlock.SemVer
+	var bestAny string
+	var bestAnyVer parserlock.SemVer
+	haveFull, haveAny := false, false
 	for _, c := range candidates {
 		sv, ok := parserlock.ParseSemVer(c)
 		if !ok {
 			continue
 		}
-		if !haveSemver || sv.Greater(bestVer) {
-			best, bestVer, haveSemver = c, sv, true
+		if sv.IsFull() && (!haveFull || sv.Greater(bestFullVer)) {
+			bestFull, bestFullVer, haveFull = c, sv, true
+		}
+		if !haveAny || sv.Greater(bestAnyVer) {
+			bestAny, bestAnyVer, haveAny = c, sv, true
 		}
 	}
-	if haveSemver {
-		return best
+	if haveFull {
+		return bestFull
+	}
+	if haveAny {
+		return bestAny
 	}
 	return pickPreferred(candidates, hintRef, "")
 }

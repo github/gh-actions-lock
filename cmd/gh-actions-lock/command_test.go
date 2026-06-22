@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -143,8 +144,13 @@ func writeTempLockfile(t *testing.T, repoDir, wfName string, pinStrings []string
 	t.Helper()
 	var sb strings.Builder
 	sb.WriteString("version: 'v0.0.1'\ndependencies:\n")
-	for _, pin := range pinStrings {
-		sb.WriteString("  '" + pin + "':\n    branch: 'main'\n    commit: 'sha1-deadbeef'\n    owner_id: 1\n    repo_id: 1\n")
+	for _, raw := range pinStrings {
+		pin, ok := parserlock.ParsePin(raw)
+		if !ok {
+			t.Fatalf("writeTempLockfile: invalid pin %q", raw)
+		}
+		commit := pin.Algo + "-" + pin.Hex
+		sb.WriteString("  '" + raw + "':\n    ref: 'main'\n    commit: '" + commit + "'\n    owner_id: 1\n    repo_id: 1\n")
 	}
 	sb.WriteString("workflows:\n  '.github/workflows/" + wfName + "':\n")
 	for _, pin := range pinStrings {
@@ -861,7 +867,7 @@ jobs:
 	// Lockfile records ONLY checkout — setup-go is "new".
 	lockYAML := "version: 'v0.0.1'\ndependencies:\n" +
 		"  'actions/checkout@v6:sha1-" + checkoutSHA + "':\n" +
-		"    branch: 'main'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"    ref: 'main'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  '.github/workflows/workflow.yml':\n" +
 		"    - 'actions/checkout@v6:sha1-" + checkoutSHA + "'\n"
@@ -930,7 +936,7 @@ jobs:
 
 	lockYAML := "version: 'v0.0.1'\ndependencies:\n" +
 		"  'actions/checkout@v6:sha1-" + checkoutSHA + "':\n" +
-		"    branch: 'main'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"    ref: 'main'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  '.github/workflows/workflow.yml':\n" +
 		"    - 'actions/checkout@v6:sha1-" + checkoutSHA + "'\n"
@@ -1158,7 +1164,7 @@ jobs:
 	lockYAML := "version: v0.0.1\n" +
 		"dependencies:\n" +
 		"  actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd:\n" +
-		"    branch: main\n    commit: sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n    owner_id: 1\n    repo_id: 1\n" +
+		"    ref: main\n    commit: sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  .github/workflows/workflow.yml:\n" +
 		"    - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n" +

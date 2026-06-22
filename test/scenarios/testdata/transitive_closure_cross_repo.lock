@@ -13,26 +13,24 @@ workflows:
         - 'nodeselector/actions-test-fixtures@main:sha1-e67943468a2f9790006afa217db1ea22c71433a4'
 dependencies:
     'actions/checkout@v4.3.1:sha1-34e114876b0b11c390a56381ad16ebd13914f8d5':
-        tag: 'v4.3.1'
-        branch: 'releases/v4'
+        ref: 'v4.3.1'
         commit: 'sha1-34e114876b0b11c390a56381ad16ebd13914f8d5'
         owner_id: 44036562
         repo_id: 197814629
     'nodeselector/actions-test-fixtures-b@main:sha1-92b7b0058bc223c6e9dd4e19ef9247c934ba7637':
-        branch: 'main'
+        ref: 'main'
         commit: 'sha1-92b7b0058bc223c6e9dd4e19ef9247c934ba7637'
         owner_id: 29457092
         repo_id: 1205442499
     'nodeselector/actions-test-fixtures@main:sha1-e67943468a2f9790006afa217db1ea22c71433a4':
-        branch: 'main'
+        ref: 'main'
         commit: 'sha1-e67943468a2f9790006afa217db1ea22c71433a4'
         owner_id: 29457092
         repo_id: 1203329948
         uses:
             - 'nodeselector/actions-test-fixtures-b@main:sha1-92b7b0058bc223c6e9dd4e19ef9247c934ba7637'
     'nodeselector/actions-test-fixtures@updated:sha1-ea53476fdc172d8552df5af9658a45a367e4f41d':
-        tag: 'updated'
-        branch: 'updated'
+        ref: 'updated'
         commit: 'sha1-ea53476fdc172d8552df5af9658a45a367e4f41d'
         owner_id: 29457092
         repo_id: 1203329948

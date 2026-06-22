@@ -189,9 +189,9 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 }
 
 // AllDeps returns every action entry in the lockfile as a Dependency,
-// populated with Tag and Branch from the action metadata block. Order is
-// undefined. Intended for callers that need the union of recorded pins
-// across all workflows (e.g. seeding resolver caches on startup).
+// populated with Tag and Branch inferred from the action's ref field.
+// Order is undefined. Intended for callers that need the union of recorded
+// pins across all workflows (e.g. seeding resolver caches on startup).
 func (s *State) AllDeps() []dep.Dependency {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,8 +202,7 @@ func (s *State) AllDeps() []dep.Dependency {
 			continue
 		}
 		d := pinToDep(pin)
-		d.Tag = action.Tag
-		d.Branch = action.Branch
+		d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
 		out = append(out, d)
 	}
 	return out
@@ -266,13 +265,6 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
-		// The read path (parserlock.Pin) drops branch, so an unchanged carried
-		// dep arrives branchless; reuse the recorded branch. Only a new pin errors.
-		if d.Branch == "" {
-			if existing, ok := s.file.Dependencies[pinKey]; !ok || existing.Branch == "" {
-				return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-lock` to populate it", d.NWO, d.Ref)
-			}
-		}
 		keyToPin[d.Key()] = pinKey
 		var isDirect bool
 		if directKeys != nil {
@@ -334,14 +326,13 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				usesSet[c] = true
 			}
 		}
-		// Preserve branch/tag and existing uses from prior Set calls.
-		branch, tag := d.Branch, d.Tag
+		// Compute the best ref for this dep: tag > branch. Preserve
+		// existing ref from prior Set calls when the dep arrives without
+		// discovery metadata (carried unchanged from a previous lockfile).
+		ref := parserlock.BestRef(d.Tag, d.Branch)
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
-			if branch == "" {
-				branch = existing.Branch
-			}
-			if tag == "" {
-				tag = existing.Tag
+			if ref == "" {
+				ref = existing.Ref
 			}
 			for _, u := range existing.Uses {
 				usesSet[u] = true
@@ -356,8 +347,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			sort.Strings(uses)
 		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
-			Tag:     tag,
-			Branch:  branch,
+			Ref:     ref,
 			Commit:  pin.Algo + "-" + pin.Hex,
 			OwnerID: ids[0],
 			RepoID:  ids[1],

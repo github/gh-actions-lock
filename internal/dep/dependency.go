@@ -11,10 +11,9 @@ import (
 
 // Dependency is the resolver's in-memory view of a single pinned action:
 // the lockfile-grammar pin (NWO@Ref:Algo-SHA) plus the discovered Tag /
-// Branch / sub-action Path that the lockfile-on-disk format does not
-// carry. It is the working shape between `uses:` parsing, resolver
-// traversal, and lockfile serialization — never persisted on disk and
-// not part of any public API.
+// Branch / sub-action Path. It is the working shape between `uses:` parsing,
+// resolver traversal, and lockfile serialization — never persisted on disk
+// and not part of any public API.
 type Dependency struct {
 	NWO string // owner/repo (no path)
 	// Path is the optional sub-action subpath as written in `uses:`
@@ -31,9 +30,9 @@ type Dependency struct {
 	// Tag is the discovered release/tag pointing at SHA, if any. Optional.
 	// Populated by the pin-time discovery pass; not read from `uses:`.
 	Tag string
-	// Branch is the discovered branch containing SHA. Required at write
-	// time — a commit not on any branch is an impostor / fork-network
-	// signal. Populated by the pin-time discovery pass.
+	// Branch is the discovered branch containing SHA. Optional. Populated
+	// by the pin-time discovery pass. Used for branch-hint seeding and
+	// resolver caches; serialized as the lockfile `ref` when no tag exists.
 	Branch string
 }
 

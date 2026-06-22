@@ -246,9 +246,10 @@ func (r *Resolver) LikelyBranches(ctx context.Context, owner, repo, sha, ref, de
 
 // ReverseLookup performs a reverse lookup (SHA → containing tag/branch)
 // for every entry in deps via DiscoverContaining, populates dep.Tag and
-// dep.Branch, and computes the canonical @ref. When the canonical ref
-// differs from dep.Ref the change is recorded in the returned rewrites
-// map and dep.Ref is updated in place.
+// dep.Branch, and computes the canonical @ref. The ref priority is:
+// tag (semver-ish release) > protected branch > default branch > any branch.
+// When the canonical ref differs from dep.Ref the change is recorded in
+// the returned rewrites map and dep.Ref is updated in place.
 func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (map[string]string, error) {
 	rewrites := map[string]string{}
 	for i := range deps {
