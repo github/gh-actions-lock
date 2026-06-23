@@ -148,4 +148,3 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		SkippedRescan: skippedRescan,
 	}, nil
 }
-

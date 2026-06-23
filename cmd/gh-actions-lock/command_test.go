@@ -306,7 +306,7 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1=sha1-" + pinnedSHA,
+		"example/action@v1=sha1-"+pinnedSHA,
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
@@ -368,7 +368,7 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1=sha1-" + pinnedSHA,
+		"example/action@v1=sha1-"+pinnedSHA,
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
@@ -426,7 +426,7 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1=sha1-" + pinnedSHA,
+		"example/action@v1=sha1-"+pinnedSHA,
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
@@ -921,7 +921,7 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1=sha1-" + staleSHA,
+		"example/action@v1=sha1-"+staleSHA,
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,

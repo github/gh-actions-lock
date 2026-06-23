@@ -22,7 +22,6 @@ import (
 //     branches in the same tier order.
 //   - branch is REQUIRED to be non-empty; an error is returned otherwise
 
-//
 // hintRef may be empty (e.g. for bare-SHA pins). The repo's default branch
 // is discovered automatically via GET /repos/{owner}/{repo} (cached).
 func (r *Resolver) DiscoverContaining(ctx context.Context, owner, repo, sha, hintRef string) (tag, branch string, err error) {
