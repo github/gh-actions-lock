@@ -438,6 +438,17 @@ def checkout_repo_rest(srv)
      })]
   end
 
+  # GET .../tags — tag list for narrowing/reverse lookup
+  srv.on(:GET, %r{/repos/actions/checkout/tags}) do |_req|
+    [200, { "Content-Type" => "application/json" },
+     JSON.generate([
+       { name: "v4", commit: { sha: CHECKOUT_SHA } },
+       { name: "v4.2.2", commit: { sha: CHECKOUT_SHA } },
+       { name: "v4.2.1", commit: { sha: "1111111111111111111111111111111111111111" } },
+       { name: "v3", commit: { sha: "2222222222222222222222222222222222222222" } }
+     ])]
+  end
+
   # GET .../git/ref/heads/main — branch head SHA
   srv.on(:GET, %r{/repos/actions/checkout/git/ref/heads/main$}) do |_req|
     [200, { "Content-Type" => "application/json" },
@@ -708,6 +719,14 @@ catalog["scenarios"].each do |spec|
     # Live repo scenarios clone and run against a real repo
     if live_repo
       s.live_repo(live_repo)
+    end
+
+    # Delete lockfile before running (for migration/schema tests)
+    if fixtures["delete_lockfile"]
+      s.setup do |dir|
+        lockpath = File.join(dir, ".github", "workflows", "actions.lock")
+        File.delete(lockpath) if File.exist?(lockpath)
+      end
     end
 
     # Stub server wiring

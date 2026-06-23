@@ -582,6 +582,8 @@ scenarios:
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    fixtures:
+      delete_lockfile: true
     expect:
       exit: 1
       lockfile_golden: transitive_closure_cross_repo.lock
@@ -1372,6 +1374,12 @@ scenarios:
         - expr: '.findings | length'
           equals: "0"
 
+      lockfile_contains:
+        - "version: 'v0.0.2'"
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd'"
+
       golden_json:
         cli_version: (devel)
         findings: []
@@ -1402,6 +1410,25 @@ scenarios:
         - expr: '.findings[] | select(.category == "impostor-commit") | .severity'
           equals: "error"
 
+      golden_json:
+        cli_version: (devel)
+        lockfile_version: v0.0.2
+        valid: false
+        findings:
+          - category: impostor-commit
+            confidence: high
+            dependency: actions/checkout@v4
+            detail: "locked de0fac2e4500 is not reachable from v4 \u2014 classic fork-network impostor-commit shape"
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: "investigate immediately \u2014 the lockfile entry may have been injected"
+            severity: error
+            workflow: .github/workflows/ci.yml
+
+      lockfile_contains:
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-"
+
   - name: dbot_forgery_blocks
     category: dependabot
     description: "Lockfile forgery (pin doesn't match resolved commit) produces lockfile-forgery/error finding"
@@ -1426,3 +1453,42 @@ scenarios:
           equals: "lockfile-forgery"
         - expr: '.findings[] | select(.category == "lockfile-forgery") | .severity'
           equals: "error"
+
+      golden_json:
+        cli_version: (devel)
+        lockfile_version: v0.0.2
+        valid: false
+        findings:
+          - category: lockfile-forgery
+            confidence: high
+            dependency: actions/checkout@v4
+            detail: "pinned de0fac2e4500 is not an ancestor of bbbbbbbbbbbb \u2014 lockfile may have been tampered with"
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: "investigate immediately \u2014 verify the lockfile entry against upstream history"
+            severity: error
+            workflow: .github/workflows/ci.yml
+
+      lockfile_contains:
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-"
+
+  - name: onboard_roundtrip_v002
+    category: onboarding
+    description: "Fresh onboard writes a v0.0.2 lockfile with correct key format, ref field, and commit field"
+    needs_token: true
+    tags: [real_repo]
+    live_repo: nodeselector/actions-test-fixtures
+    fixtures:
+      delete_lockfile: true
+    expect:
+      exit: 1
+      lockfile_exists: true
+      lockfile_contains:
+        - "version: 'v0.0.2'"
+        - "ref:"
+        - "commit: 'sha1-"
+        - "owner_id:"
+        - "repo_id:"
+      lockfile_comment_excludes: '^\s+tag:'
+      lockfile_comment_matches: "ref: '"

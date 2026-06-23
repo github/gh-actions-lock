@@ -24,7 +24,7 @@ dependencies:
         repo_id: 1205442499
     'nodeselector/actions-test-fixtures@main':
         ref: 'main'
-        commit: 'sha1-e67943468a2f9790006afa217db1ea22c71433a4'
+        commit: 'sha1-a132be34de3441f8d2970a3fd6b8a7a86bdbbd0c'
         owner_id: 29457092
         repo_id: 1203329948
         uses:
