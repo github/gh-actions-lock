@@ -261,6 +261,13 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 			return nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
 		}
 		if tag == "" && branch == "" {
+			// When the user wrote a bare SHA (uses: org/repo@<sha>), not
+			// finding a containing ref is expected — just keep it pinned
+			// as-is. Only error for symbolic refs where we resolved a SHA
+			// that nothing points to.
+			if looksLikeSHA(d.Ref) {
+				continue
+			}
 			return nil, fmt.Errorf("%s@%s: commit %s is not reachable from any ref (tag or branch) — orphaned commit",
 				d.NWO, d.Ref, parserlock.ShortSHA(d.SHA))
 		}
@@ -280,4 +287,19 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		d.Ref = newRef
 	}
 	return rewrites, nil
+}
+
+// looksLikeSHA returns true when ref is a hex string of SHA-1 (40) or
+// SHA-256 (64) length — i.e. the user wrote a bare commit hash.
+func looksLikeSHA(ref string) bool {
+	n := len(ref)
+	if n != 40 && n != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
