@@ -244,9 +244,16 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 		if len(short) > 7 {
 			short = short[:7]
 		}
-		label := te.NWO + "@" + te.Ref
-		if short != "" {
-			label = fmt.Sprintf("%s (%s)", label, short)
+		// When the ref IS the full SHA (composite actions pin by commit),
+		// just show NWO@short instead of the redundant full-sha (short).
+		var label string
+		if te.Ref == te.SHA || (len(te.Ref) >= 40 && te.Ref == te.SHA[:len(te.Ref)]) {
+			label = te.NWO + "@" + short
+		} else {
+			label = te.NWO + "@" + te.Ref
+			if short != "" {
+				label = fmt.Sprintf("%s (%s)", label, short)
+			}
 		}
 		via := ""
 		if te.parentLabel != "" {
