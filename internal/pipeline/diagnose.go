@@ -93,10 +93,9 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 
-	reach, liveMovedReach, liveDirectReach := reachabilitySweeps(ctx, pw, r, liveDeps)
 	var checkR checks.CheckResolver
 	if r != nil && liveDeps != nil {
-		checkR = checks.NewPrewarmedResolver(r, liveDeps, reach, liveMovedReach, liveDirectReach)
+		checkR = checks.NewPrewarmedResolver(r, liveDeps)
 	}
 	rawFindings := checks.RunChecks(ctx, pw, store.File(), checkR)
 
@@ -108,13 +107,6 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		attachParent(&f, depByKey, directNWOs, parentMap)
 		f.DocURL = DocURLFor(f.Category)
 		wr.Findings = append(wr.Findings, f)
-	}
-
-	if len(reach) > 0 {
-		wr.Findings = append(wr.Findings, reachabilityComplementFindings(pw.Path, reach, pw.ExistingDeps, directNWOs, parentMap, wr.Findings)...)
-	}
-	if len(liveDirectReach) > 0 {
-		wr.Findings = append(wr.Findings, liveReachImpostorFindings(pw.Path, liveDirectReach, liveDeps, directNWOs, parentMap, wr.Findings)...)
 	}
 
 	if !hasIssues(wr.Findings) {
@@ -247,43 +239,6 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	}
 
 	return wr, false
-}
-
-// reachabilitySweeps runs three independent reachability passes: the locked-SHA
-// sweep, the tag-moved live-SHA sweep, and the pin-time parity sweep. Each pass
-// returns its own set so their (NWO, Ref, SHA) keys stay unmixed downstream.
-func reachabilitySweeps(ctx context.Context, pw checks.ParsedWorkflow, r *resolve.Resolver, liveDeps []dep.Dependency) (reach, liveMovedReach, liveDirectReach []resolve.ReachabilityResult) {
-	if r != nil && len(pw.ExistingDeps) > 0 {
-		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
-		reach = trusted
-		if len(toCheck) > 0 {
-			reach = append(reach, r.CheckReachabilityAll(ctx, toCheck)...)
-		}
-	}
-	// Independent sweep for LIVE SHAs whose tag has moved: the
-	// tag-hijacked-to-fork-network shape is invisible to the locked-SHA
-	// sweep above (the lockfile entry is still legitimate; the live
-	// SHA is the impostor). Kept separate so the result map's
-	// (NWO, Ref, SHA) keys don't shadow the lockfile sweep — they
-	// share NWO@Ref dep keys, which would confuse
-	// reachabilityComplementFindings if mixed into `reach`.
-	if r != nil && len(liveDeps) > 0 && len(pw.ExistingDeps) > 0 {
-		if moved := liveMovedDeps(pw.ExistingDeps, liveDeps); len(moved) > 0 {
-			liveMovedReach = r.CheckReachabilityAll(ctx, moved)
-		}
-	}
-	// Pin-time parity sweep: any (NWO, Ref, LIVE SHA) that neither the
-	// locked-SHA sweep nor the tag-moved sweep covers gets a fresh reach
-	// check here. Catches the NotPinned-direct impostor case and any
-	// transitive composite live dep that isn't in the lockfile yet. With
-	// this in place, applyPin's reach-loop Unreachable branch becomes a
-	// fail-loud invariant rather than a primary detection path.
-	if r != nil && len(liveDeps) > 0 {
-		if extra := liveDirectReachDeps(pw, liveDeps); len(extra) > 0 {
-			liveDirectReach = r.CheckReachabilityAll(ctx, extra)
-		}
-	}
-	return reach, liveMovedReach, liveDirectReach
 }
 
 func indexDeps(deps []dep.Dependency) map[string]dep.Dependency {

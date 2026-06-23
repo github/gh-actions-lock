@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
@@ -15,115 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestFindFinding(t *testing.T) {
-	ref := func(owner, repo, ref string) *parserlock.ActionRef {
-		return &parserlock.ActionRef{Owner: owner, Repo: repo, Ref: ref}
-	}
-
-	ff := []checks.Finding{
-		{ActionRef: ref("actions", "checkout", "v4"), Category: "unpinned"},
-		{ActionRef: ref("actions", "cache", "v3"), Category: "impostor", RecommendedTag: "v3.4.0", RecommendedSHA: "abc"},
-		{ActionRef: ref("actions", "cache", "v3"), Category: "unpinned"},
-		{Dependency: &dep.Dependency{NWO: "other/dep", Ref: "v2"}, Category: "ref-moved"},
-		{Dependency: &dep.Dependency{NWO: "other/dep", Ref: "v2"}, Category: "sane", RecommendedTag: "v2.1.0"},
-	}
-
-	t.Run("matches by ActionRef NWO and ref", func(t *testing.T) {
-		f := findFinding(ff, "actions/checkout", "v4")
-		require.NotNil(t, f)
-		assert.Equal(t, checks.Category("unpinned"), f.Category)
-	})
-
-	t.Run("prefers finding with RecommendedTag", func(t *testing.T) {
-		f := findFinding(ff, "actions/cache", "v3")
-		require.NotNil(t, f)
-		assert.Equal(t, "v3.4.0", f.RecommendedTag)
-		assert.Equal(t, "abc", f.RecommendedSHA)
-	})
-
-	t.Run("matches by Dependency NWO and ref", func(t *testing.T) {
-		f := findFinding(ff, "other/dep", "v2")
-		require.NotNil(t, f)
-		assert.Equal(t, "v2.1.0", f.RecommendedTag)
-	})
-
-	t.Run("returns nil for no match", func(t *testing.T) {
-		f := findFinding(ff, "nonexistent/action", "v1")
-		assert.Nil(t, f)
-	})
-
-	t.Run("returns best match without RecommendedTag", func(t *testing.T) {
-		onlyBasic := []checks.Finding{
-			{ActionRef: ref("a", "b", "v1"), Category: "first"},
-			{ActionRef: ref("a", "b", "v1"), Category: "second"},
-		}
-		f := findFinding(onlyBasic, "a/b", "v1")
-		require.NotNil(t, f)
-		assert.Equal(t, checks.Category("first"), f.Category, "should return the first match")
-	})
-
-	t.Run("empty findings", func(t *testing.T) {
-		assert.Nil(t, findFinding(nil, "a/b", "v1"))
-	})
-}
-
-func TestDropDeps(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "a/b", Ref: "v1"},
-		{NWO: "c/d", Ref: "v2"},
-		{NWO: "e/f", Ref: "v3"},
-	}
-	pm := dep.ParentMap{
-		"a/b@v1": {"root"},
-		"c/d@v2": {"a/b@v1"},
-		"e/f@v3": {"c/d@v2"},
-	}
-	bad := map[string]bool{
-		"c/d@v2": true,
-	}
-
-	gotDeps, gotPM := dropDeps(deps, pm, bad)
-
-	require.Len(t, gotDeps, 2)
-	assert.Equal(t, "a/b", gotDeps[0].NWO)
-	assert.Equal(t, "e/f", gotDeps[1].NWO)
-
-	assert.Contains(t, gotPM, "a/b@v1")
-	assert.NotContains(t, gotPM, "c/d@v2")
-	assert.Contains(t, gotPM, "e/f@v3")
-}
-
-func TestDropDeps_all_bad(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "a/b", Ref: "v1"},
-	}
-	pm := dep.ParentMap{
-		"a/b@v1": {"root"},
-	}
-	bad := map[string]bool{
-		"a/b@v1": true,
-	}
-
-	gotDeps, gotPM := dropDeps(deps, pm, bad)
-	assert.Empty(t, gotDeps)
-	assert.Empty(t, gotPM)
-}
-
-func TestDropDeps_none_bad(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "a/b", Ref: "v1"},
-		{NWO: "c/d", Ref: "v2"},
-	}
-	pm := dep.ParentMap{
-		"a/b@v1": {"root"},
-		"c/d@v2": {"a/b@v1"},
-	}
-
-	gotDeps, gotPM := dropDeps(deps, pm, map[string]bool{})
-	assert.Len(t, gotDeps, 2)
-	assert.Len(t, gotPM, 2)
-}
 
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
 // workflow fails resolution (e.g. repo not found), only the failed ref is
@@ -171,11 +62,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "test stub"
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachFn))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
@@ -246,12 +133,7 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachTrap := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		t.Fatal("reachability should not be called when all resolutions fail")
-		return resolve.Unreachable, ""
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachTrap))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
@@ -377,11 +259,7 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "test stub"
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachFn))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
@@ -593,11 +471,7 @@ func TestPlanWorkflow_CrossRefTransitiveClosure(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "test stub"
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachFn))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{

@@ -24,10 +24,6 @@ const (
 	// Stale means the pinned SHA no longer matches what the ref
 	// resolves to today.
 	Stale Category = "stale"
-	// ImpostorCommit means the pinned SHA is not in the ref's git
-	// history (possible fork-network commit). Matches zizmor's
-	// impostor-commit audit ID.
-	ImpostorCommit Category = "impostor-commit"
 	// MisleadingSHA means a ref looks like a SHA but resolves to a
 	// different commit.
 	MisleadingSHA Category = "misleading-sha"

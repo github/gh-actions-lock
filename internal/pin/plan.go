@@ -2,7 +2,6 @@ package pin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -146,23 +145,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		// Fall through with partial deps to pin what we can.
 	}
 
-	// Reachability gate — drop impostors, auto-fix when a sane release exists.
-	status("verifying " + wr.Path)
-	reachResults := opts.Resolver.CheckReachabilityAll(ctx, deps)
-	gateEntries, badKeys, autoFixed, autoFixRewrites := reachabilityGate(ctx, wr, opts, deps, reachResults)
-	entries = append(entries, gateEntries...)
-
-	if len(badKeys) > 0 {
-		deps, parentMap = dropDeps(deps, parentMap, badKeys)
-		if len(deps) == 0 {
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
-			return planResult{entries: entries, wplans: wplans}, nil
-		}
-	}
-
-	// Track reachability metadata for pinned entries.
-	fullScanDeps := collectFullScanDeps(reachResults, badKeys)
-
 	// Snapshot direct-dep matching before narrowing/ReverseLookup mutate
 	// dep.Ref — the tracker records index-aligned booleans at construction,
 	// then Keys() reads post-mutation refs. Must be built while deps and
@@ -174,23 +156,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("pinning " + wr.Path)
 	rewrites := make(map[string]string)
 	narrowedNWOs := make(map[string]bool) // NWOs where narrowing chose a tag
-	for k, v := range autoFixRewrites {
-		rewrites[k] = v
-	}
 
 	narrowDirectDeps(ctx, opts, deps, directTracker, rewrites, narrowedNWOs)
 
 	// ReverseLookup canonicalizes each dep's ref while preserving the tags
-	// narrowing chose and transitive deps' declared refs. An impostor commit
-	// surfaced here ends the workflow early.
-	rlRewrites, impostorEntry, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
+	// narrowing chose and transitive deps' declared refs.
+	rlRewrites, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
 	if err != nil {
 		return planResult{}, err
-	}
-	if impostorEntry != nil {
-		entries = append(entries, *impostorEntry)
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
-		return planResult{entries: entries, wplans: wplans}, nil
 	}
 	for k, v := range rlRewrites {
 		rewrites[k] = v
@@ -233,7 +206,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
-	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, directTracker, inventorySHA, autoFixed, fullScanDeps)...)
+	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, directTracker, inventorySHA)...)
 
 	// Record findings that are informational (ref-moved, misleading-sha).
 	entries = append(entries, informationalEntries(wr)...)
@@ -272,86 +245,6 @@ func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.Act
 		})
 	}
 	return out
-}
-
-// reachabilityGate classifies resolved deps: unreachable deps are auto-repinned
-// to a recommended release when one exists, else dropped for investigation;
-// reachability-unknown deps are dropped. badKeys lists the dropped dep keys.
-func reachabilityGate(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, deps []dep.Dependency, reachResults []resolve.ReachabilityResult) (entries []Entry, badKeys map[string]bool, autoFixed, autoFixRewrites map[string]string) {
-	badKeys = make(map[string]bool)
-	autoFixed = make(map[string]string)       // new dep key -> original ref
-	autoFixRewrites = make(map[string]string) // old uses -> new uses (for YAML rewrite)
-	for _, rr := range reachResults {
-		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
-		switch rr.Status {
-		case resolve.Unreachable:
-			// Look for a recommended release to auto-repin.
-			var recTag, recSHA string
-			if f := findFinding(wr.Findings, rr.Owner+"/"+rr.Repo, rr.Ref); f != nil && f.RecommendedTag != "" {
-				recTag, recSHA = f.RecommendedTag, f.RecommendedSHA
-			} else if opts.Tagger != nil {
-				recTag, recSHA = checks.FindRecommendedRelease(ctx, opts.Tagger, opts.Resolver, opts.Pool, rr.Owner, rr.Repo)
-			}
-
-			if recTag != "" {
-				// Rewrite the dep in place to the recommended release so it
-				// stays in the pinning pipeline instead of being dropped.
-				nwo := rr.Owner + "/" + rr.Repo
-				newKey := nwo + "@" + recTag
-				autoFixed[newKey] = rr.Ref
-				autoFixRewrites[nwo+"@"+rr.Ref] = nwo + "@" + recTag
-				for i := range deps {
-					if deps[i].Key() == depKey {
-						deps[i].Ref = recTag
-						if recSHA != "" {
-							deps[i].SHA = recSHA
-						}
-						break
-					}
-				}
-				continue // don't mark as bad - dep stays in pipeline
-			}
-
-			entries = append(entries, Entry{
-				NWO:        rr.Owner + "/" + rr.Repo,
-				Ref:        rr.Ref,
-				SHA:        rr.SHA,
-				Resolution: Investigate,
-				Issue:      string(checks.ImpostorCommit),
-				Reason:     rr.Detail,
-				Workflows:  []string{wr.Path},
-			})
-			badKeys[depKey] = true
-		case resolve.ReachabilityUnknown:
-			entries = append(entries, Entry{
-				NWO:        rr.Owner + "/" + rr.Repo,
-				Ref:        rr.Ref,
-				SHA:        rr.SHA,
-				Resolution: Skipped,
-				Issue:      "reachability_unknown",
-				Reason:     rr.Detail,
-				Workflows:  []string{wr.Path},
-			})
-			badKeys[depKey] = true
-		}
-	}
-	return entries, badKeys, autoFixed, autoFixRewrites
-}
-
-// collectFullScanDeps returns the set of still-pinned dep keys whose
-// reachability check required a full commit scan.
-func collectFullScanDeps(reachResults []resolve.ReachabilityResult, badKeys map[string]bool) map[string]bool {
-	fullScanDeps := make(map[string]bool)
-	for _, rr := range reachResults {
-		depKey := rr.Owner + "/" + rr.Repo + "@" + rr.Ref
-		if badKeys[depKey] {
-			continue
-		}
-		if rr.FullScanUsed {
-			fullScanDeps[depKey] = true
-		}
-	}
-	return fullScanDeps
 }
 
 // narrowDirectDeps rewrites direct deps' mutable refs to precise tags (bare SHA
@@ -429,9 +322,8 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 }
 
 // reverseLookupRewrites canonicalizes dep refs via ReverseLookup (SHA -> tag/
-// branch), restoring refs that narrowing or a transitive dep already fixed. A
-// non-nil *Entry signals an impostor commit (err stays nil) so the caller bails.
-func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, *Entry, error) {
+// branch), restoring refs that narrowing or a transitive dep already fixed.
+func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, error) {
 	// Save narrowed refs before ReverseLookup - it may overwrite dep.Ref
 	// with a branch name, but we want to keep the semver tag narrowing chose.
 	narrowedRefs := make(map[int]string)
@@ -456,18 +348,7 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 	// ReverseLookup: SHA -> containing tag/branch. Rewrites refs to canonical form.
 	normRewrites, err := opts.Resolver.ReverseLookup(ctx, deps)
 	if err != nil {
-		var imp *resolve.ImpostorError
-		if errors.As(err, &imp) {
-			return nil, &Entry{
-				NWO:        imp.NWO,
-				Ref:        imp.Ref,
-				Resolution: Investigate,
-				Issue:      string(checks.ImpostorCommit),
-				Reason:     imp.Error(),
-				Workflows:  []string{wr.Path},
-			}, nil
-		}
-		return nil, nil, fmt.Errorf("reverse lookup: %w", err)
+		return nil, fmt.Errorf("reverse lookup: %w", err)
 	}
 	// Restore narrowed refs that ReverseLookup may have overwritten.
 	for i, ref := range narrowedRefs {
@@ -493,13 +374,13 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 		}
 		rewrites[k] = v
 	}
-	return rewrites, nil, nil
+	return rewrites, nil
 }
 
 // buildPinnedEntries emits an entry for every resolved dep, marking it Verified
 // when the lockfile already records the same SHA and Pinned otherwise. Deps
 // already emitted from inventory (by NWO:SHA) are skipped.
-func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap, directTracker lockfile.DirectTracker, inventorySHA map[string]bool, autoFixed map[string]string, fullScanDeps map[string]bool) []Entry {
+func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap, directTracker lockfile.DirectTracker, inventorySHA map[string]bool) []Entry {
 	// Load existing lockfile state so re-runs are noops for unchanged deps.
 	existingSHA := make(map[string]string) // NWO@Ref -> SHA
 	if opts.Store != nil {
@@ -531,15 +412,9 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 			Resolution: res,
 			OnBranch:   dep.Branch,
 			Tag:        dep.Tag,
-			FullScan:   fullScanDeps[dep.NWO+"@"+dep.Ref],
 			Workflows:  []string{wr.Path},
 			RequiredBy: parents,
 			Direct:     directKeys[depKey],
-		}
-		if orig, ok := autoFixed[depKey]; ok {
-			entry.AutoFixedRef = orig
-			entry.Direct = true       // auto-fixed deps are always direct uses
-			entry.Resolution = Pinned // auto-fix is always a new pin
 		}
 		out = append(out, entry)
 	}
@@ -571,46 +446,6 @@ func informationalEntries(wr checks.WorkflowReport) []Entry {
 		}
 	}
 	return out
-}
-
-func findFinding(findings []checks.Finding, nwo, ref string) *checks.Finding {
-	var best *checks.Finding
-	for i := range findings {
-		f := &findings[i]
-		if f.ActionRef != nil && f.ActionRef.Owner+"/"+f.ActionRef.Repo == nwo && f.ActionRef.Ref == ref {
-			if f.RecommendedTag != "" {
-				return f
-			}
-			if best == nil {
-				best = f
-			}
-		}
-		if f.Dependency != nil && f.Dependency.NWO == nwo && f.Dependency.Ref == ref {
-			if f.RecommendedTag != "" {
-				return f
-			}
-			if best == nil {
-				best = f
-			}
-		}
-	}
-	return best
-}
-
-func dropDeps(deps []dep.Dependency, pm dep.ParentMap, bad map[string]bool) ([]dep.Dependency, dep.ParentMap) {
-	var kept []dep.Dependency
-	for _, d := range deps {
-		if !bad[d.Key()] {
-			kept = append(kept, d)
-		}
-	}
-	newPM := make(dep.ParentMap)
-	for k, v := range pm {
-		if !bad[k] {
-			newPM[k] = v
-		}
-	}
-	return kept, newPM
 }
 
 // partitionByInventory splits refs into those with a matching inventory

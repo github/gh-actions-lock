@@ -841,15 +841,11 @@ func TestNew_Options(t *testing.T) {
 	nowFn := func() time.Time { return fixed }
 	sleepCalled := false
 	sleepFn := func(_ context.Context, _ time.Duration) { sleepCalled = true }
-	reachFn := func(_ context.Context, _, _, _, _ string) (ReachabilityStatus, string) {
-		return Reachable, "stub"
-	}
 
 	r, err := New("test.com", pool,
 		WithTransport(reg),
 		WithNowFn(nowFn),
 		WithSleepFn(sleepFn),
-		WithCheckReachabilityFunc(reachFn),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -862,10 +858,6 @@ func TestNew_Options(t *testing.T) {
 	r.sleepFn(context.Background(), 0)
 	if !sleepCalled {
 		t.Fatal("SleepFn not applied")
-	}
-
-	if r.checkReachFn == nil {
-		t.Fatal("CheckReachFn not applied")
 	}
 }
 

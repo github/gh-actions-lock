@@ -32,13 +32,3 @@ func TestTagPeel(t *testing.T) {
 		}
 	})
 }
-
-func TestReachCacheEntry(t *testing.T) {
-	e := reachCacheEntry{status: Reachable, detail: "found on main"}
-	if e.status != Reachable {
-		t.Fatalf("expected Reachable, got %v", e.status)
-	}
-	if e.detail != "found on main" {
-		t.Fatalf("unexpected detail: %s", e.detail)
-	}
-}

@@ -2,7 +2,6 @@ package resolve
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -22,7 +21,7 @@ import (
 //     If no protected branch contains sha, the search falls back to all
 //     branches in the same tier order.
 //   - branch is REQUIRED to be non-empty; an error is returned otherwise
-//     (impostor / fork-network signal).
+
 //
 // hintRef may be empty (e.g. for bare-SHA pins). The repo's default branch
 // is discovered automatically via GET /repos/{owner}/{repo} (cached).
@@ -38,7 +37,7 @@ func (r *Resolver) DiscoverContaining(ctx context.Context, owner, repo, sha, hin
 // directly (literal ref, recorded hint branch, default branch, protected
 // branches, release/v* branches) so a relevant branch is never missed because
 // it sorts beyond the paginated listing cap. Phase 2 — a full protected-first
-// then all-branches scan — runs only when phase 1 finds nothing. An impostor
+// then all-branches scan — runs only when phase 1 finds nothing. An orphan
 // error is returned only if both phases fail to place the commit.
 func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, sha, hintRef, defaultBranch string) (tag, branch string, err error) {
 	// Phase 0: check named branches directly (ref, hint, default) — one
@@ -94,9 +93,8 @@ func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, s
 		}
 	}
 
-	if branch == "" {
-		return "", "", &ImpostorError{NWO: owner + "/" + repo, Ref: hintRef, SHA: sha}
-	}
+	// No branch found — proceed without one. The commit may exist only
+	// on refs/tags (lightweight repos, GitHub Releases, etc.).
 
 	// Discover tags pointing at sha.
 	allTags, err := r.ListTagsForRepo(ctx, owner, repo)
@@ -260,13 +258,11 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		}
 		tag, branch, err := r.DiscoverContaining(ctx, owner, repo, d.SHA, d.Ref)
 		if err != nil {
-			var imp *ImpostorError
-			if errors.As(err, &imp) {
-				imp.NWO = d.NWO
-				imp.Ref = d.Ref
-				return nil, imp
-			}
 			return nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
+		}
+		if tag == "" && branch == "" {
+			return nil, fmt.Errorf("%s@%s: commit %s is not reachable from any ref (tag or branch) — orphaned commit",
+				d.NWO, d.Ref, parserlock.ShortSHA(d.SHA))
 		}
 		d.Tag = tag
 		d.Branch = branch

@@ -16,10 +16,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// reachabilityConcurrency bounds how many per-dependency reachability checks
-// run in parallel in the REST fallback path.
-const reachabilityConcurrency = 8
-
 // DefaultMaxRecursionDepth matches the runner's composite action recursion limit.
 const DefaultMaxRecursionDepth = 10
 
@@ -34,12 +30,6 @@ func WithTransport(t http.RoundTripper) Option {
 // WithProfile attaches profiling instrumentation.
 func WithProfile(p *profile.Session) Option {
 	return func(r *Resolver) { r.profile = p }
-}
-
-// WithCheckReachabilityFunc overrides the default REST-based reachability
-// check. Intended for tests that want deterministic branch-discovery results.
-func WithCheckReachabilityFunc(fn func(ctx context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string)) Option {
-	return func(r *Resolver) { r.checkReachFn = fn }
 }
 
 // WithNowFn overrides time.Now for rate-limit retry timing in tests.
@@ -72,21 +62,17 @@ type Resolver struct {
 	transport http.RoundTripper // nil → use default authenticated transport
 	profile   *profile.Session  // nil → no profiling
 
-	// Domain-level caches: action resolution, reachability, branch hints.
+	// Domain-level caches: action resolution, branch hints.
 	cache              syncmap.Map[ghapi.ActionRef, resolvedEntry]
 	latestRefCache     syncmap.Map[ghapi.Repo, string]
-	reachCache         syncmap.Map[ghapi.Reach, reachCacheEntry]
-	reachSF            singleflight.Group
-	reachInFlight      sync.Map // sfKey → struct{}, tracks deps submitted to pool
 	branchHintBySHA    syncmap.Map[ghapi.NWOSha, string]
 	releaseBranchCache syncmap.Map[ghapi.Repo, []ghapi.BranchHead]
 	releaseBranchSF    singleflight.Group
 	tagObjectCache     syncmap.Map[ghapi.NWOSha, tagPeel]
 
 	// Test overrides (injected via With* options).
-	checkReachFn func(ctx context.Context, owner, repo, sha, ref string) (ReachabilityStatus, string)
-	nowFn        func() time.Time
-	sleepFn      func(context.Context, time.Duration)
+	nowFn   func() time.Time
+	sleepFn func(context.Context, time.Duration)
 
 	// OnResolveProgress is called when a resolution batch makes progress.
 	OnResolveProgress func(done, total int)
@@ -142,9 +128,9 @@ func (r *Resolver) SeedBranchHints(deps []dep.Dependency) {
 	}
 }
 
-// SeedFromLockfile pre-warms the resolution and reachability caches so
-// repeat runs skip redundant API calls. Do NOT call with --rescan: seeding
-// would hide ref movement and skip reachability checks.
+// SeedFromLockfile pre-warms the resolution cache so repeat runs skip
+// redundant API calls. Do NOT call with --rescan: seeding would hide
+// ref movement.
 func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 	for _, d := range deps {
 		if d.SHA == "" || d.Ref == "" {
@@ -157,10 +143,6 @@ func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 		r.cache.Put(
 			ghapi.ForActionRef(owner, repo, d.Path, d.Ref),
 			resolvedEntry{dep: d},
-		)
-		r.reachCache.Put(
-			ghapi.ForReach(owner, repo, d.SHA, d.Ref),
-			reachCacheEntry{status: Reachable, detail: "seeded from lockfile"},
 		)
 	}
 }
@@ -186,25 +168,6 @@ func (r *Resolver) branchHint(owner, repo, sha string) string {
 }
 
 // --- Cache helpers (package-internal) ---
-
-func (r *Resolver) putReachCache(owner, repo, sha, ref string, status ReachabilityStatus, detail string) {
-	r.reachCache.Put(ghapi.ForReach(owner, repo, sha, ref), reachCacheEntry{status: status, detail: detail})
-}
-
-func (r *Resolver) getReachCache(owner, repo, sha, ref string) (status ReachabilityStatus, detail string, ok bool) {
-	entry, hit := r.reachCache.Get(ghapi.ForReach(owner, repo, sha, ref))
-	if !hit {
-		return "", "", false
-	}
-	return entry.status, entry.detail, true
-}
-
-// claimReachability marks a reachability key as in-flight. Returns true if
-// this caller is the first to claim.
-func (r *Resolver) claimReachability(key string) bool {
-	_, loaded := r.reachInFlight.LoadOrStore(key, struct{}{})
-	return !loaded
-}
 
 // --- Progress ---
 

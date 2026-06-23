@@ -8,7 +8,6 @@ import (
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
-	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,7 +41,7 @@ func TestRetainUnresolvablePins_keepsExistingPinOnColocatedRepin(t *testing.T) {
 	rec := &Record{
 		Entries: []Entry{
 			{NWO: "actions/checkout", Ref: "v5", SHA: "3333333333333333333333333333333333333333", Resolution: Pinned, Direct: true, OnBranch: "main", Workflows: []string{wfPath}},
-			{NWO: "bad/impostor", Ref: "v1", SHA: "1111111111111111111111111111111111111111", Resolution: Investigate, Issue: string(checks.ImpostorCommit), Workflows: []string{wfPath}},
+			{NWO: "bad/impostor", Ref: "v1", SHA: "1111111111111111111111111111111111111111", Resolution: Investigate, Issue: "impostor-commit", Workflows: []string{wfPath}},
 		},
 	}
 	deps := []dep.Dependency{

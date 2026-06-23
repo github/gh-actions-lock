@@ -10,7 +10,6 @@ import (
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
-	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"golang.org/x/sync/errgroup"
 )
@@ -126,15 +125,13 @@ func groupPinnedByWorkflow(rec *Record) map[string][]dep.Dependency {
 }
 
 // retainUnresolvablePins re-adds the workflow's existing on-disk pins for any
-// entry that cannot be resolved this run (impostor-flagged or transiently
+// entry that cannot be resolved this run (flagged for investigation or transiently
 // unresolvable, e.g. 403/SSO). Without this a co-located re-pin silently
 // drops the existing pin.
 func retainUnresolvablePins(rec *Record, store *lockfile.State, wfPath string, deps []dep.Dependency, directKeys map[string]bool) []dep.Dependency {
 	retain := make(map[string]bool)
 	for _, e := range rec.Entries {
-		shouldRetain := (e.Resolution == Investigate && e.Issue == string(checks.ImpostorCommit)) ||
-			e.Resolution == Unresolved
-		if !shouldRetain {
+		if e.Resolution != Unresolved && e.Resolution != Investigate {
 			continue
 		}
 		for _, wf := range e.Workflows {

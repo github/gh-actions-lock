@@ -8,7 +8,6 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/pin"
-	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/ui"
@@ -17,7 +16,7 @@ import (
 // reportHasUnfixableErrors returns true when the report contains error-
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
-// don't count. LocalAction, SelfHostedRunner, ImpostorCommit, and
+// don't count. LocalAction, SelfHostedRunner, and
 // LockfileForgery errors are unfixable — the workflow or lockfile must
 // be investigated.
 func reportHasUnfixableErrors(report *checks.Report) bool {
@@ -28,7 +27,7 @@ func reportHasUnfixableErrors(report *checks.Report) bool {
 			}
 			switch f.Category {
 			case checks.LocalAction, checks.SelfHostedRunner,
-				checks.ImpostorCommit, checks.LockfileForgery:
+				checks.LockfileForgery:
 				return true
 			}
 		}
@@ -39,7 +38,7 @@ func reportHasUnfixableErrors(report *checks.Report) bool {
 // reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
 // but only matches categories that renderInvestigationAlerts does NOT
 // handle (LocalAction, SelfHostedRunner). Use this to gate the
-// PresentResults call so impostor-commit / lockfile-forgery findings
+// PresentResults call so lockfile-forgery findings
 // don't trigger a redundant (and stale) error summary.
 func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 	for _, wr := range report.Workflows {
@@ -116,13 +115,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	// the log so the findings surface on the terminal.
 	//
 	// Only trigger for categories NOT already rendered by
-	// renderInvestigationAlerts (which handles impostor-commit and
+	// renderInvestigationAlerts (which handles lockfile-forgery and
 	// lockfile-forgery). Without this gate PresentResults would also
 	// emit a stale summary line counting pre-fix not-pinned findings.
 	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,
-			checks.ImpostorCommit, checks.LockfileForgery)
+			checks.LockfileForgery)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {
@@ -275,7 +274,7 @@ func renderFullScanWarnings(console *ui.UI, pinned []pin.Entry) {
 }
 
 // renderInvestigationAlerts prints error-level alerts for entries that
-// require manual investigation (impostor commits, forgery, etc.).
+// require manual investigation (forgery, orphaned commits, etc.).
 // Entries sharing the same NWO@Ref are grouped so the action line
 // appears once with all affected workflows listed underneath.
 func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *resolve.Resolver) {
@@ -305,24 +304,9 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 
 	console.TermBlank()
 
-	// Use a specific header when all entries are impostor-commit;
-	// fall back to a generic header when other issue types are mixed in.
-	allImpostor := true
-	for _, g := range groups {
-		if g.Issue != string(checks.ImpostorCommit) {
-			allImpostor = false
-			break
-		}
-	}
-	if allImpostor {
-		console.TermError("%d %s %s maintainer action — pinned commit is not reachable from any branch",
-			len(groups), ui.Pluralize(len(groups), "action", "actions"),
-			ui.Pluralize(len(groups), "requires", "require"))
-	} else {
-		console.TermError("%d %s %s investigation — do not auto-pin",
-			len(groups), ui.Pluralize(len(groups), "action", "actions"),
-			ui.Pluralize(len(groups), "requires", "require"))
-	}
+	console.TermError("%d %s %s investigation — do not auto-pin",
+		len(groups), ui.Pluralize(len(groups), "action", "actions"),
+		ui.Pluralize(len(groups), "requires", "require"))
 	for _, g := range groups {
 		dep := g.NWO + "@" + g.Ref
 		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
@@ -332,11 +316,6 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 		if g.Suggestion != "" {
 			console.TermDetail("    %s Suggested re-pin: %s",
 				console.TermBold("→"), console.TermYellow(g.NWO+"@"+g.Suggestion))
-		}
-		if g.Issue == string(checks.ImpostorCommit) {
-			console.TermDetail("    %s %s", console.TermYellow("!"), pipeline.ImpostorCommitContext)
-			console.TermDetail("    %s %s", console.TermBold("→"), pipeline.PublisherEscalationCopy)
-			console.TermDetail("    see: %s", console.TermLink(console.TermDim("Using tags for release management"), pipeline.PublisherTagReleasesDocURL))
 		}
 	}
 }

@@ -62,7 +62,7 @@ func TestRenderInvestigationAlerts_DeduplicatesByNWORef(t *testing.T) {
 	out := buf.String()
 
 	// Header should count 1 unique action, not 2 raw entries.
-	if !strings.Contains(out, "1 action requires maintainer action") {
+	if !strings.Contains(out, "1 action requires investigation") {
 		t.Errorf("expected '1 action requires maintainer action', got:\n%s", out)
 	}
 
@@ -99,7 +99,7 @@ func TestRenderInvestigationAlerts_DistinctActionsStaySeparate(t *testing.T) {
 	renderInvestigationAlerts(console, entries, r)
 	out := buf.String()
 
-	if !strings.Contains(out, "2 actions require maintainer action") {
+	if !strings.Contains(out, "2 actions require investigation") {
 		t.Errorf("expected '2 actions require maintainer action', got:\n%s", out)
 	}
 	if !strings.Contains(out, "octo/action-a@aaaa") || !strings.Contains(out, "octo/action-b@bbbb") {
@@ -136,46 +136,6 @@ func TestRenderInvestigationAlerts_WorkflowDedup(t *testing.T) {
 	}
 	if got := strings.Count(out, "deploy.yml"); got != 1 {
 		t.Errorf("expected deploy.yml listed once, got %d\noutput:\n%s", got, out)
-	}
-}
-
-func TestRenderInvestigationAlerts_ImpostorCommitEscalation(t *testing.T) {
-	entries := []pin.Entry{
-		{
-			NWO:       "octo/action",
-			Ref:       "abc123abc123abc123abc123abc123abc123abcd",
-			Issue:     "impostor-commit",
-			Workflows: []string{"ci.yml"},
-		},
-	}
-
-	var buf bytes.Buffer
-	console := ui.NewPlain(&buf)
-	r := &resolve.Resolver{}
-	renderInvestigationAlerts(console, entries, r)
-	out := buf.String()
-
-	// All-impostor header.
-	if !strings.Contains(out, "requires maintainer action") {
-		t.Errorf("expected maintainer action header for all-impostor entries, got:\n%s", out)
-	}
-
-	// Impostor context line.
-	if !strings.Contains(out, "indistinguishable from impostor") {
-		t.Errorf("expected impostor commit context line, got:\n%s", out)
-	}
-
-	// Actionable copy with → arrow.
-	if !strings.Contains(out, "→") {
-		t.Errorf("expected → action arrow, got:\n%s", out)
-	}
-	if !strings.Contains(out, "Ask the action maintainer") {
-		t.Errorf("expected actionable escalation copy, got:\n%s", out)
-	}
-
-	// Doc link present — plain UI renders the display text, not the URL.
-	if !strings.Contains(out, "Using tags for release management") {
-		t.Errorf("expected doc link for tag release management, got:\n%s", out)
 	}
 }
 

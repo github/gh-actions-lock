@@ -163,7 +163,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		console.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
-	// Build a Lister for impostor enrichment + pin narrowing,
+	// Build a Lister for pin narrowing,
 	// reusing the resolver's unified API client.
 	var tagger *tag.Lister
 	if gc := r.GHClient(); gc != nil {
@@ -173,7 +173,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	runOpts := pipeline.RunOptions{
 		WorkflowPaths: opts.workflowPaths,
 		Resolver:      r,
-		Tagger:        tagger,
 		Store:         store,
 		Pool:          pool,
 		Rescan:        opts.rescan,
@@ -321,7 +320,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// succeeded — so machine consumers never see findings for a run that
 	// then failed to write. Exit code mirrors the terminal autofix path: a
 	// non-zero exit only when findings remain that can't be auto-fixed
-	// (impostor commit / lockfile forgery).
+	// (lockfile forgery).
 	if opts.jsonFields != "" {
 		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
 			return err

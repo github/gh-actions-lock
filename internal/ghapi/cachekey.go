@@ -103,29 +103,6 @@ func (k Compare) String() string {
 	return k.repo.String() + "|" + k.base + "|" + k.head
 }
 
-// Reach is (NWO, sha, ref) — the reachability cache distinguishes the same
-// SHA on different refs because the verdict depends on which ref's history
-// we're walking. The SHA is lowercased; the ref preserves case.
-type Reach struct {
-	repo Repo
-	sha  string
-	ref  string
-}
-
-// ForReach builds a Reach key, lowercasing the SHA.
-func ForReach(owner, repo, sha, ref string) Reach {
-	return Reach{
-		repo: ForRepo(owner, repo),
-		sha:  strings.ToLower(sha),
-		ref:  ref,
-	}
-}
-
-// String is diagnostics-only; do not parse.
-func (k Reach) String() string {
-	return k.repo.String() + "|" + k.sha + "|" + k.ref
-}
-
 // ActionRef is the path-aware key used by the resolver's per-ref cache and
 // the BFS dedup set in ResolveAllRecursive. Sub-action paths must be
 // distinct identities for graph traversal — actions/cache/save@v4 visits

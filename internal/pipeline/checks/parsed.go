@@ -20,23 +20,12 @@ type ParsedWorkflow struct {
 	DepsErr       error
 	// Resolved, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
-	// (ref-moved, impostor-commit) are skipped and the engine relies on
+	// (ref-moved) are skipped and the engine relies on
 	// purely structural validation against the on-disk lockfile. Caller
 	// is asserting "this workflow is already fully resolved" — typically
 	// set on the fast path when every direct ref in the workflow is
 	// already recorded in the lockfile.
 	Resolved bool
-	// SkipReachWhenUnchanged, when true, instructs DiagnoseParsed to skip
-	// the per-dep reachability network call for any ExistingDep whose
-	// (NWO, Ref, SHA) matches an entry in the freshly-resolved live deps
-	// for this workflow. A Reachable result is synthesized in place. This
-	// is the per-workflow analogue of the cmd-level fast path: when at
-	// least one direct ref is new/changed (so the workflow couldn't be
-	// fully trusted), the remaining unchanged pins still don't need a
-	// fresh network reachability sweep on every run. Callers should leave
-	// this false when --rescan or an equivalent "verify everything" flag
-	// is in effect.
-	SkipReachWhenUnchanged bool
 	// NonHostedRunner is true when at least one job in the workflow
 	// uses a runs-on label that is not a known GitHub-hosted runner
 	// (self-hosted, custom label, runner group, or expression). These

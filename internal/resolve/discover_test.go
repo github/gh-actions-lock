@@ -2,7 +2,6 @@ package resolve
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -84,10 +83,15 @@ func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
 		httpmock.JSONResponse(httpmock.BranchListResponse()),
 	)
-	// Phase 2: listBranches (full listing) also returns empty → impostor error.
+	// Phase 2: listBranches (full listing) also returns empty.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
 		httpmock.JSONResponse(httpmock.BranchListResponse()),
+	)
+	// Tags: empty → orphaned commit (no tag either).
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse([]any{}),
 	)
 
 	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
@@ -95,12 +99,12 @@ func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = r.DiscoverContaining(context.Background(), "actions", "checkout", "dead", "poisoned")
-	if err == nil {
-		t.Fatalf("expected error for commit with no branches")
+	tag, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "dead", "poisoned")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "impostor") {
-		t.Fatalf("expected impostor-signal error, got %v", err)
+	if tag != "" || branch != "" {
+		t.Fatalf("expected empty tag/branch for orphaned commit, got tag=%q branch=%q", tag, branch)
 	}
 	reg.Verify(t)
 }

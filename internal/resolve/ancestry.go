@@ -23,24 +23,6 @@ const (
 	ReachabilityUnknown ReachabilityStatus = "unknown"
 )
 
-// ReachabilityResult holds the outcome of a single reachability check.
-type ReachabilityResult struct {
-	Owner  string
-	Repo   string
-	Ref    string
-	SHA    string
-	DepKey string // full dependency key (e.g. "actions/cache/save@v4")
-	Status ReachabilityStatus
-	Detail string // human-readable detail (e.g. compare status or error)
-	// FullScanUsed is true when the commit was not found in the canonical
-	// "likely" branch set (default, protected, release/v*, literal ref,
-	// lockfile hint) and the check had to fall back to scanning every branch
-	// in the repo. Even when the commit is ultimately Reachable, a full-scan
-	// fallback means it is not on a canonical branch — a notable signal worth
-	// surfacing to the user.
-	FullScanUsed bool
-}
-
 // AncestryStatus represents whether a pinned SHA is a legitimate ancestor of the live SHA.
 type AncestryStatus int
 

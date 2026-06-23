@@ -49,8 +49,6 @@ func checkMisleadingSha(ctx context.Context, pw ParsedWorkflow, r CheckResolver)
 // upgraded to LockfileForgery (mutually exclusive with ref-moved).
 // When the observed SHA is itself unreachable from any branch of the
 // upstream repo (tag-moved-to-fork-network), an additional
-// ImpostorCommit finding is emitted alongside ref-moved /
-// ancestry-unknown. Forgery suppresses the observed-SHA impostor: the
 // lockfile-tampering claim is stronger.
 func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex map[string]lockedPin, r CheckResolver) []Finding {
 	var out []Finding
@@ -77,7 +75,6 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 		case resolve.AncestryNotAncestor:
 			// Compare API gave an authoritative not-an-ancestor verdict.
 			// Forgery wins: don't double-flag with an observed-SHA
-			// impostor finding.
 			f.Category = LockfileForgery
 			f.Severity = SeverityError
 			f.Confidence = ConfidenceHigh
@@ -96,11 +93,6 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()), suffixWith(ancestryDetail))
 			f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"
 			out = append(out, f)
-			// Inconclusive ancestry doesn't block a branch_commits check
-			// on the observed SHA.
-			if imp, ok := liveRefImpostorFinding(pw, ref, sha, r); ok {
-				out = append(out, imp)
-			}
 		default:
 			// AncestryConfirmed: routine release.
 			f.Category = RefMoved
@@ -109,29 +101,9 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()))
 			f.Remediation = "re-run `gh actions-lock` to refresh the lock entry"
 			out = append(out, f)
-			if imp, ok := liveRefImpostorFinding(pw, ref, sha, r); ok {
-				out = append(out, imp)
-			}
 		}
 	}
 	return out
-}
-
-// liveRefImpostorFinding returns an impostor-commit finding when the
-// observed SHA is not reachable from any branch of the upstream repo
-// (the tag-hijacked-to-fork-network shape). Unknown reachability fails
-// open. Caller must suppress this in the forgery branch.
-func liveRefImpostorFinding(pw ParsedWorkflow, ref parserlock.ActionRef, observedSHA string, r CheckResolver) (Finding, bool) {
-	status := r.CheckReachability(ref.Owner, ref.Repo, observedSHA, ref.Ref)
-	if status != resolve.Unreachable {
-		return Finding{}, false
-	}
-	f := newRefFinding(pw, ref, ImpostorCommit, SeverityError, ConfidenceHigh)
-	f.ObservedSHA = observedSHA
-	f.Dependency = synthDep(ref, observedSHA)
-	f.Detail = fmt.Sprintf("ref %s now resolves to %s — not on any branch of %s/%s (fork-network injection)", ref.Ref, parserlock.ShortSHA(observedSHA), ref.Owner, ref.Repo)
-	f.Remediation = "investigate immediately — the upstream ref has been moved to a commit that is not in this repo's branch history"
-	return f, true
 }
 
 // suffixWith renders an optional detail as ": <detail>" for inline
@@ -141,43 +113,4 @@ func suffixWith(detail string) string {
 		return ""
 	}
 	return ": " + detail
-}
-
-// checkImpostorCommit emits ImpostorCommit when the locked SHA is
-// not reachable from the ref's history. Skips entries already covered by
-// a forgery finding (forgery is the stronger signal).
-func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]lockedPin, r CheckResolver, forgeryKeys map[string]bool) []Finding {
-	if len(depIndex) == 0 {
-		return nil
-	}
-	var out []Finding
-	for _, ref := range pw.Refs {
-		pin, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]
-		if !ok {
-			continue
-		}
-		if parserlock.IsFullSha(ref.Ref) {
-			continue
-		}
-		if forgeryKeys[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)] {
-			continue
-		}
-		status := r.CheckReachability(ref.Owner, ref.Repo, pin.SHA(), ref.Ref)
-		if status != resolve.Unreachable {
-			// Fail open on ReachabilityUnknown by design: only an
-			// authoritative Unreachable is an impostor. The inconclusive
-			// case is surfaced as a ReachabilityUnknown warning by the
-			// pipeline's reachabilityComplementFindings — emitting it here
-			// too would double-report every direct dep on an API hiccup.
-			continue
-		}
-		// branch_commits gave an authoritative answer: the locked SHA is
-		// not on any branch of the upstream repo (fork-network impostor).
-		f := newRefFinding(pw, ref, ImpostorCommit, SeverityError, ConfidenceHigh)
-		f.Dependency = synthDep(ref, pin.SHA())
-		f.Detail = fmt.Sprintf("locked %s is not reachable from %s — classic fork-network impostor-commit shape", parserlock.ShortSHA(pin.SHA()), ref.Ref)
-		f.Remediation = "investigate immediately — the lockfile entry may have been injected"
-		out = append(out, f)
-	}
-	return out
 }
