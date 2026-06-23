@@ -75,15 +75,49 @@ const (
 	shaImpostor   = "ffffffffffffffffffffffffffffffffffffffff"
 )
 
+// checkPinKey returns a decorated pin string "owner/repo@ref#sha1-hex" that
+// checkNewLockfile parses to build both the workflow key (before #) and the
+// Dependencies entry (Commit from the suffix).
 func checkPinKey(owner, repo, ref, sha string) string {
-	return owner + "/" + repo + "@" + ref + ":sha1-" + sha
+	return owner + "/" + repo + "@" + ref + "#sha1-" + sha
 }
 
-func checkNewLockfile(workflows map[string][]string) parserlock.File {
-	return parserlock.File{
-		Version:   parserlock.Version,
-		Workflows: workflows,
+// checkNewLockfile builds a File from decorated pin keys.
+func checkNewLockfile(workflows map[string][]string, deps ...map[string]parserlock.Action) parserlock.File {
+	d := make(map[string]parserlock.Action)
+	wf := make(map[string][]string, len(workflows))
+	if len(deps) > 0 && deps[0] != nil {
+		// Explicit deps override, pass through workflows as-is.
+		d = deps[0]
+		wf = workflows
+	} else {
+		for path, pins := range workflows {
+			keys := make([]string, 0, len(pins))
+			for _, decorated := range pins {
+				key, commit := splitDecoratedPin(decorated)
+				keys = append(keys, key)
+				if commit != "" {
+					// Extract ref from key (after @)
+					ref := key[strings.LastIndex(key, "@")+1:]
+					d[key] = parserlock.Action{Ref: ref, Commit: commit}
+				}
+			}
+			wf[path] = keys
+		}
 	}
+	return parserlock.File{
+		Version:      parserlock.Version,
+		Workflows:    wf,
+		Dependencies: d,
+	}
+}
+
+// splitDecoratedPin splits "owner/repo@ref#sha1-hex" into key and commit.
+func splitDecoratedPin(s string) (key, commit string) {
+	if idx := strings.Index(s, "#"); idx >= 0 {
+		return s[:idx], s[idx+1:]
+	}
+	return s, ""
 }
 
 func checkParsedWF(path string, uses ...parserlock.ActionRef) ParsedWorkflow {
@@ -666,13 +700,13 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 // "injected lockfile entry" every time the GitHub API hiccupped would be
 // worse than useless. These tests pin that contract.
 
-func impostorFixture(reach resolve.ReachabilityStatus) (ParsedWorkflow, map[string]parserlock.Pin, *stubCheckResolver) {
+func impostorFixture(reach resolve.ReachabilityStatus) (ParsedWorkflow, map[string]lockedPin, *stubCheckResolver) {
 	ref := checkRef("actions", "checkout", "v4")
 	pw := checkParsedWF(".github/workflows/ci.yml", ref)
-	depIndex := map[string]parserlock.Pin{
+	depIndex := map[string]lockedPin{
 		parserlock.IndexKey("actions", "checkout", "v4"): {
-			NWO: "actions/checkout", Owner: "actions", Repo: "checkout",
-			Ref: "v4", Algo: "sha1", Hex: shaImpostor,
+			Pin:    parserlock.Pin{NWO: "actions/checkout", Owner: "actions", Repo: "checkout", Ref: "v4"},
+			Commit: "sha1-" + shaImpostor,
 		},
 	}
 	r := &stubCheckResolver{

@@ -12,7 +12,7 @@ import (
 // matching lockfile entry. SHA-shaped refs are reported under their own
 // category. When the lockfile has an entry for the same action at a
 // different ref, RefChanged wins.
-func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[string]parserlock.Pin) []Finding {
+func checkNotPinned(pw ParsedWorkflow, depPins []lockedPin, depIndex map[string]lockedPin) []Finding {
 	if len(pw.Refs) == 0 {
 		return nil
 	}
@@ -43,7 +43,7 @@ func checkNotPinned(pw ParsedWorkflow, depPins []parserlock.Pin, depIndex map[st
 // commit SHA — both bare-SHA uses with no lock entry and bare-SHA uses
 // whose lock entry just mirrors the same SHA. The anti-pattern (no
 // human-readable ref) is the same in both cases.
-func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]parserlock.Pin) []Finding {
+func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]lockedPin) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
 		if !parserlock.IsFullSha(ref.Ref) {
@@ -54,7 +54,7 @@ func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]parserlock.Pin) []Find
 		f.Remediation = fmt.Sprintf("pin to a tag instead: https://github.com/%s/releases", nwoLower(ref.Owner, ref.Repo))
 		lockedSha := ref.Ref
 		if locked, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
-			lockedSha = locked.Hex
+			lockedSha = locked.SHA()
 		}
 		f.Dependency = synthDep(ref, lockedSha)
 		out = append(out, f)
@@ -66,11 +66,11 @@ func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]parserlock.Pin) []Find
 // differs from the lockfile entry's ref for the same action (owner/repo).
 // A single action may legitimately have multiple pinned refs across
 // workflows, so this only fires when no pin matches the workflow's ref.
-func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
+func checkRefChanged(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 	if len(depPins) == 0 {
 		return nil
 	}
-	pinsByAction := make(map[string][]parserlock.Pin, len(depPins))
+	pinsByAction := make(map[string][]lockedPin, len(depPins))
 	for _, p := range depPins {
 		k := nwoLower(p.Owner, p.Repo)
 		pinsByAction[k] = append(pinsByAction[k], p)
@@ -99,7 +99,7 @@ func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 		f := newRefFinding(pw, ref, RefChanged, SeverityError, ConfidenceHigh)
 		f.Detail = fmt.Sprintf("workflow uses ref %q but lockfile pins %q", ref.Ref, p.Ref)
 		f.Remediation = "re-run `gh actions-lock` to refresh the lockfile, or revert the uses: line"
-		f.Dependency = synthDep(ref, p.Hex)
+		f.Dependency = synthDep(ref, p.SHA())
 		out = append(out, f)
 	}
 	return out
@@ -109,7 +109,7 @@ func checkRefChanged(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 // ref in the workflow references. If the workflow has already been
 // rewritten to pin by SHA, the lockfile entry (keyed by the original tag)
 // is still valid — surface keys both ways so we don't false-flag.
-func checkStale(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
+func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 	if len(depPins) == 0 {
 		return nil
 	}
@@ -125,9 +125,9 @@ func checkStale(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 		if used[p.IndexKey()] {
 			continue
 		}
-		if p.Hex != "" {
+		if p.SHA() != "" {
 			nwo := strings.ToLower(p.NWO)
-			if usedBySHA[nwo+"@"+strings.ToLower(p.Hex)] {
+			if usedBySHA[nwo+"@"+strings.ToLower(p.SHA())] {
 				continue
 			}
 		}
@@ -141,7 +141,7 @@ func checkStale(pw ParsedWorkflow, depPins []parserlock.Pin) []Finding {
 			Dependency: &dep.Dependency{
 				NWO: strings.ToLower(p.NWO),
 				Ref: p.Ref,
-				SHA: p.Hex,
+				SHA: p.SHA(),
 			},
 		}
 		out = append(out, f)

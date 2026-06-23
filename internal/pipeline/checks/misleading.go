@@ -52,7 +52,7 @@ func checkMisleadingSha(ctx context.Context, pw ParsedWorkflow, r CheckResolver)
 // ImpostorCommit finding is emitted alongside ref-moved /
 // ancestry-unknown. Forgery suppresses the observed-SHA impostor: the
 // lockfile-tampering claim is stronger.
-func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex map[string]parserlock.Pin, r CheckResolver) []Finding {
+func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex map[string]lockedPin, r CheckResolver) []Finding {
 	var out []Finding
 	for _, ref := range pw.Refs {
 		if parserlock.IsFullSha(ref.Ref) {
@@ -66,13 +66,13 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 		if !ok || sha == "" {
 			continue
 		}
-		if strings.EqualFold(sha, pin.Hex) {
+		if strings.EqualFold(sha, pin.SHA()) {
 			continue
 		}
-		ancestry, ancestryDetail := r.CheckAncestry(ctx, ref.Owner, ref.Repo, pin.Hex, sha)
+		ancestry, ancestryDetail := r.CheckAncestry(ctx, ref.Owner, ref.Repo, pin.SHA(), sha)
 		f := newRefFinding(pw, ref, "", "", "")
 		f.ObservedSHA = sha
-		f.Dependency = synthDep(ref, pin.Hex)
+		f.Dependency = synthDep(ref, pin.SHA())
 		switch ancestry {
 		case resolve.AncestryNotAncestor:
 			// Compare API gave an authoritative not-an-ancestor verdict.
@@ -81,7 +81,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Category = LockfileForgery
 			f.Severity = SeverityError
 			f.Confidence = ConfidenceHigh
-			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — lockfile may have been tampered with", parserlock.ShortSHA(pin.Hex), parserlock.ShortSHA(sha))
+			f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — lockfile may have been tampered with", parserlock.ShortSHA(pin.SHA()), parserlock.ShortSHA(sha))
 			f.Remediation = "investigate immediately — verify the lockfile entry against upstream history"
 			out = append(out, f)
 		case resolve.AncestryUnknown:
@@ -93,7 +93,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Category = AncestryUnknown
 			f.Severity = SeverityWarning
 			f.Confidence = ConfidenceMedium
-			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.Hex), suffixWith(ancestryDetail))
+			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()), suffixWith(ancestryDetail))
 			f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"
 			out = append(out, f)
 			// Inconclusive ancestry doesn't block a branch_commits check
@@ -106,7 +106,7 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			f.Category = RefMoved
 			f.Severity = SeverityWarning
 			f.Confidence = ConfidenceHigh
-			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.Hex))
+			f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()))
 			f.Remediation = "re-run `gh actions-lock` to refresh the lock entry"
 			out = append(out, f)
 			if imp, ok := liveRefImpostorFinding(pw, ref, sha, r); ok {
@@ -146,7 +146,7 @@ func suffixWith(detail string) string {
 // checkImpostorCommit emits ImpostorCommit when the locked SHA is
 // not reachable from the ref's history. Skips entries already covered by
 // a forgery finding (forgery is the stronger signal).
-func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, r CheckResolver, forgeryKeys map[string]bool) []Finding {
+func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]lockedPin, r CheckResolver, forgeryKeys map[string]bool) []Finding {
 	if len(depIndex) == 0 {
 		return nil
 	}
@@ -162,7 +162,7 @@ func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, 
 		if forgeryKeys[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)] {
 			continue
 		}
-		status := r.CheckReachability(ref.Owner, ref.Repo, pin.Hex, ref.Ref)
+		status := r.CheckReachability(ref.Owner, ref.Repo, pin.SHA(), ref.Ref)
 		if status != resolve.Unreachable {
 			// Fail open on ReachabilityUnknown by design: only an
 			// authoritative Unreachable is an impostor. The inconclusive
@@ -174,8 +174,8 @@ func checkImpostorCommit(pw ParsedWorkflow, depIndex map[string]parserlock.Pin, 
 		// branch_commits gave an authoritative answer: the locked SHA is
 		// not on any branch of the upstream repo (fork-network impostor).
 		f := newRefFinding(pw, ref, ImpostorCommit, SeverityError, ConfidenceHigh)
-		f.Dependency = synthDep(ref, pin.Hex)
-		f.Detail = fmt.Sprintf("locked %s is not reachable from %s — classic fork-network impostor-commit shape", parserlock.ShortSHA(pin.Hex), ref.Ref)
+		f.Dependency = synthDep(ref, pin.SHA())
+		f.Detail = fmt.Sprintf("locked %s is not reachable from %s — classic fork-network impostor-commit shape", parserlock.ShortSHA(pin.SHA()), ref.Ref)
 		f.Remediation = "investigate immediately — the lockfile entry may have been injected"
 		out = append(out, f)
 	}

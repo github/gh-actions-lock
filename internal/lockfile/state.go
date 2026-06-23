@@ -183,7 +183,15 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid pin %q in %s for workflow %q", raw, parserlock.Path, workflowKey)
 		}
-		out = append(out, pinToDep(pin))
+		d := pinToDep(pin)
+		if action, found := s.file.Dependencies[raw]; found {
+			d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
+			if idx := strings.Index(action.Commit, "-"); idx >= 0 {
+				d.HashAlgo = action.Commit[:idx]
+				d.SHA = action.Commit[idx+1:]
+			}
+		}
+		out = append(out, d)
 	}
 	return out, nil
 }
@@ -203,6 +211,10 @@ func (s *State) AllDeps() []dep.Dependency {
 		}
 		d := pinToDep(pin)
 		d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
+		if idx := strings.Index(action.Commit, "-"); idx >= 0 {
+			d.HashAlgo = action.Commit[:idx]
+			d.SHA = action.Commit[idx+1:]
+		}
 		out = append(out, d)
 	}
 	return out
@@ -326,10 +338,10 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				usesSet[c] = true
 			}
 		}
-		// Compute the best ref for this dep: tag > branch. Preserve
-		// existing ref from prior Set calls when the dep arrives without
-		// discovery metadata (carried unchanged from a previous lockfile).
-		ref := parserlock.BestRef(d.Tag, d.Branch)
+		// The action's Ref must match the pin key's ref (which is d.Ref).
+		// Preserve existing ref when the dep arrives without one (carried
+		// unchanged from a previous lockfile).
+		ref := d.Ref
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
 			if ref == "" {
 				ref = existing.Ref
@@ -348,7 +360,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
 			Ref:     ref,
-			Commit:  pin.Algo + "-" + pin.Hex,
+			Commit:  d.HashAlgoOrDetect() + "-" + d.SHA,
 			OwnerID: ids[0],
 			RepoID:  ids[1],
 			Uses:    uses,
