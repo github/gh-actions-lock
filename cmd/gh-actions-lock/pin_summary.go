@@ -222,9 +222,14 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 		if len(short) > 7 {
 			short = short[:7]
 		}
-		label := g.NWO + "@" + g.Ref
-		if short != "" {
-			label = fmt.Sprintf("%s (%s)", label, short)
+		var label string
+		if looksLikeSHA(g.Ref) {
+			label = g.NWO + "@" + short
+		} else {
+			label = g.NWO + "@" + g.Ref
+			if short != "" {
+				label = fmt.Sprintf("%s (%s)", label, short)
+			}
 		}
 		console.TermDetail("  %s", console.TermYellow(label))
 		for _, wf := range g.workflows {
@@ -575,6 +580,13 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 		if latest == "" {
 			continue // no semver releases — nothing to suggest
 		}
+		// Don't suggest a downgrade: if the user is on v3.4, only nudge
+		// if the latest full semver is v3.4.x or higher.
+		if latestSV, latestOK := parserlock.ParseSemVer(latest); latestOK {
+			if !latestSV.Greater(sv) {
+				continue
+			}
+		}
 		seen[key] = &nudgeEntry{key: key, latest: latest, workflows: e.Workflows}
 	}
 	if len(seen) == 0 {
@@ -632,4 +644,19 @@ func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo string) s
 		}
 	}
 	return bestTag
+}
+
+// looksLikeSHA returns true when ref is a hex string of SHA-1 (40) or
+// SHA-256 (64) length.
+func looksLikeSHA(ref string) bool {
+	n := len(ref)
+	if n != 40 && n != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

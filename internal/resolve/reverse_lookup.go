@@ -261,12 +261,9 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 			return nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
 		}
 		if tag == "" && branch == "" {
-			// When the user wrote a bare SHA (uses: org/repo@<sha>), not
-			// finding a containing ref is expected — just keep it pinned
-			// as-is. Only error for symbolic refs where we resolved a SHA
-			// that nothing points to.
 			if looksLikeSHA(d.Ref) {
-				continue
+				return nil, fmt.Errorf("%s@%s: no tag or branch contains this commit — a symbolic ref is required for the lockfile",
+					d.NWO, parserlock.ShortSHA(d.Ref))
 			}
 			return nil, fmt.Errorf("%s@%s: commit %s is not reachable from any ref (tag or branch) — orphaned commit",
 				d.NWO, d.Ref, parserlock.ShortSHA(d.SHA))
