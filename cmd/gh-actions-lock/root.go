@@ -138,27 +138,17 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 		return nil, nil, nil, err
 	}
 
-	if newResolver == nil {
-		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
-			return resolve.New(hostname, pool)
+	// Load lockfile before auth so version/parse errors surface before
+	// "token not found" — a future-version lockfile should tell the user
+	// to upgrade, not complain about missing auth.
+	loadStore := func(meta lockfile.MetadataResolver) (*lockfile.State, error) {
+		if workflowsDir != "" {
+			return lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), meta)
 		}
+		return lockfile.LoadState(".", meta)
 	}
-	r, err := newResolver(resolveHostname(hostname), pool)
+	store, err := loadStore(nil)
 	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	var store *lockfile.State
-	if workflowsDir != "" {
-		store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), r)
-	} else {
-		store, err = lockfile.LoadState(".", r)
-	}
-	if err != nil {
-		// An unreadable (non-future-version) lockfile is never silently
-		// discarded. Recovery policy may delete-and-recreate (interactive
-		// fix mode) or fail (CI, read-only, relock); either way the choice
-		// is explicit and surfaces to the user.
 		if errors.Is(err, lockfile.ErrCorruptLockfile) && onCorrupt != nil {
 			lockPath := filepath.Join(".", parserlock.Path)
 			if workflowsDir != "" {
@@ -169,17 +159,27 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 				return nil, nil, nil, rerr
 			}
 			if recovered {
-				if workflowsDir != "" {
-					store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), r)
-				} else {
-					store, err = lockfile.LoadState(".", r)
-				}
+				store, err = loadStore(nil)
 			}
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
 		}
 	}
+
+	if newResolver == nil {
+		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
+			return resolve.New(hostname, pool)
+		}
+	}
+	r, err := newResolver(resolveHostname(hostname), pool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Now that the resolver is available, set it as the metadata resolver
+	// for the store and re-seed branch hints.
+	store.SetMetadataResolver(r)
 	r.SeedBranchHints(store.AllDeps())
 
 	return paths, r, store, nil

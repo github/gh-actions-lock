@@ -168,6 +168,15 @@ func (s *State) OriginalVersion() string {
 	return s.originalVersion
 }
 
+// SetMetadataResolver sets the resolver used by lookupIDs to fetch owner/repo
+// numeric IDs. This allows loading the lockfile before auth is available,
+// then wiring in the resolver once the API client is ready.
+func (s *State) SetMetadataResolver(meta MetadataResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta = meta
+}
+
 // HasWorkflow reports whether the lockfile's workflows{} map already
 // contains an entry for workflowKey. Used by `upgrade --no-onboard` to
 // refuse silently onboarding a previously-untracked workflow during a
