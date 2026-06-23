@@ -63,6 +63,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: already_pinned_all_valid
     category: happy_path
@@ -77,7 +78,8 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
-      lockfile_contains: ["actions/checkout@v4:sha1-"]
+      lockfile_deps_cover_direct: true
+      lockfile_contains: ["'actions/checkout@v4':"]
       lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: multi_action_happy
@@ -94,6 +96,7 @@ scenarios:
             - "actions/cache@v4"
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: composite_action_transitive
     category: happy_path
@@ -305,6 +308,7 @@ scenarios:
         response: "y"
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: onboarded_future_version
     category: lockfile
@@ -382,6 +386,7 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: local_action_skipped
     category: workflow_parsing
@@ -436,6 +441,7 @@ scenarios:
             - "actions/cache/save@v4"
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: duplicate_action_refs
     category: workflow_parsing
@@ -456,6 +462,7 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═════════════════════════════ output_modes ══════════════════════════════║
@@ -516,6 +523,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: rescan_inconclusive_fails
     category: output_modes
@@ -566,6 +574,7 @@ scenarios:
           actions: ["actions/checkout@v4", "actions/setup-node@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: many_workflows
     category: multi_workflow
@@ -590,6 +599,7 @@ scenarios:
           actions: ["actions/checkout@v4", "actions/create-release@v1"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: transitive_closure_cross_repo
     category: multi_workflow
@@ -668,6 +678,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.\d+\.\d+'
 
   - name: fresh_full_tag_unchanged
@@ -681,6 +692,7 @@ scenarios:
           actions: ["actions/checkout@v4.2.0"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.2\.0'
 
   - name: fresh_branch_ref_narrows
@@ -694,6 +706,7 @@ scenarios:
           actions: ["actions/checkout@main"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v\d+\.\d+\.\d+'
 
   - name: fresh_branch_ref_no_narrow
@@ -708,6 +721,7 @@ scenarios:
           actions: ["actions/checkout@main"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'main'
 
   - name: onboarded_branch_ref_narrows
@@ -722,6 +736,7 @@ scenarios:
       lockfile_template: pinned_checkout_main
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v\d+\.\d+\.\d+'
 
   - name: local_action_only
@@ -831,6 +846,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_excludes: 'v4\.\d+\.\d+'
 
   - name: fresh_no_narrow_full_tag
@@ -845,6 +861,7 @@ scenarios:
           actions: ["actions/checkout@v4.2.0"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.2\.0'
 
   - name: onboarded_sticky_imprecise
@@ -859,6 +876,7 @@ scenarios:
       lockfile_template: pinned_checkout_v4_imprecise
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_excludes: 'v4\.\d+\.\d+'
 
   - name: onboarded_full_tag_unchanged
@@ -873,6 +891,7 @@ scenarios:
       lockfile_template: pinned_checkout_full
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.\d+\.\d+'
 
   - name: onboarded_no_narrow_keeps_major
@@ -888,6 +907,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_excludes: 'v4\.\d+\.\d+'
       output_excludes: ["pinned without a full semver tag"]
 
@@ -903,6 +923,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       output_excludes: ["Consider using full semver"]
 
   - name: fresh_no_fix_no_narrow_json_version_ref
@@ -955,6 +976,7 @@ scenarios:
           actions: ["cli/gh-extension-precompile@v2.1.0"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       output_excludes: ["pinned without a full semver tag"]
 
   - name: transitive_provenance_ref_not_narrowed
@@ -968,6 +990,7 @@ scenarios:
           actions: ["cli/gh-extension-precompile@v2.1.0"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_contains:
         - "'actions/attest-build-provenance@v1':"
         - "ref: 'v1'"
@@ -1004,7 +1027,8 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
-      lockfile_contains: ["actions/checkout@v4:sha1-"]
+      lockfile_deps_cover_direct: true
+      lockfile_contains: ["'actions/checkout@v4':"]
       lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: onboarded_no_onboard_mixed
@@ -1023,7 +1047,8 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
-      lockfile_contains: ["actions/checkout@v4:sha1-"]
+      lockfile_deps_cover_direct: true
+      lockfile_contains: ["'actions/checkout@v4':"]
       lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: fresh_no_fix_no_onboard_json_findings
@@ -1068,6 +1093,7 @@ scenarios:
       lockfile_template: pinned_checkout_v4_imprecise
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: fresh_no_interactive_no_onboard_ci
     category: onboarding
@@ -1100,7 +1126,7 @@ scenarios:
     expect:
       exit: 2
       output_contains:
-        - "corrupt"
+        - "unreadable"
 
   - name: onboarded_no_interactive_corrupt
     category: lockfile
@@ -1116,7 +1142,7 @@ scenarios:
     expect:
       exit: 2
       output_contains:
-        - "corrupt"
+        - "unreadable"
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ dependabot ═══════════════════════════════║
@@ -1142,6 +1168,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: ".valid"
@@ -1287,7 +1314,7 @@ scenarios:
     expect:
       exit: 2
       output_contains:
-        - "corrupt"
+        - "unreadable"
 
   - name: dbot_multi_workflow
     category: dependabot
@@ -1375,6 +1402,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: '.findings[] | select(.category == "version-ref") | .category'
@@ -1399,6 +1427,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: '.valid'
