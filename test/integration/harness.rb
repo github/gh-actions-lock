@@ -398,9 +398,12 @@ module ActionsPin
 
         $stderr.print "\e[2m  cloning #{nwo}…\e[0m "
         $stderr.flush
-        system("git", "clone", "--depth=1", "--quiet",
-               "https://github.com/#{nwo}.git", dir,
-               exception: true)
+        unless system("git", "clone", "--depth=1", "--quiet",
+                      "https://github.com/#{nwo}.git", dir)
+          $stderr.puts "\e[31mfailed\e[0m"
+          FileUtils.rm_rf(dir)
+          raise SkipScenario, "clone failed for #{nwo} (repo not found or no access)"
+        end
         $stderr.puts "\e[2mdone\e[0m"
 
         env = @env.dup
