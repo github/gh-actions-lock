@@ -238,7 +238,13 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		}
 
 		if repo.Object == nil || repo.Object.OID == "" {
-			results[idx].Err = fmt.Errorf("ref %q does not exist", ref.Ref)
+			// Distinguish between a short SHA (looks like hex but isn't a
+			// full 40/64-char commit) and a named ref that doesn't exist.
+			if isHexString(ref.Ref) {
+				results[idx].Err = fmt.Errorf("version %q does not resolve — if this is a commit, use the full SHA", ref.Ref)
+			} else {
+				results[idx].Err = fmt.Errorf("version %q does not exist", ref.Ref)
+			}
 			continue
 		}
 
@@ -297,4 +303,16 @@ func ssoRequiredMessage(hostname, owner string) string {
 		host = "github.com"
 	}
 	return fmt.Sprintf("SSO authorization required: your token is not authorized for the %q organization (SAML enforcement). Authorize it at https://%s/orgs/%s/sso and retry", owner, host, owner)
+}
+
+func isHexString(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
