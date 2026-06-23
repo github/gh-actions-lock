@@ -1534,6 +1534,26 @@ scenarios:
         - "ref: 'v4'"
         - "commit: 'sha1-"
 
+  - name: accept_moved_resolves_forgery
+    category: security
+    description: "--accept-moved re-resolves a lockfile-forgery dep to the current live SHA"
+    needs_token: true
+    tags: [smoke]
+    flags: ["--accept-moved", "--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: forgery_stale_checkout
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-"
+
   - name: onboard_roundtrip_v002
     category: onboarding
     description: "Fresh onboard writes a v0.0.2 lockfile with correct key format, ref field, and commit field"

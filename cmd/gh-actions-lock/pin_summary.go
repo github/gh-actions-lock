@@ -19,16 +19,19 @@ import (
 // don't count. LocalAction, SelfHostedRunner, and
 // LockfileForgery errors are unfixable — the workflow or lockfile must
 // be investigated.
-func reportHasUnfixableErrors(report *checks.Report) bool {
+func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
 			if f.Severity != checks.SeverityError {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.SelfHostedRunner,
-				checks.LockfileForgery:
+			case checks.LocalAction, checks.SelfHostedRunner:
 				return true
+			case checks.LockfileForgery:
+				if !acceptMoved {
+					return true
+				}
 			}
 		}
 	}
@@ -58,7 +61,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 
@@ -87,7 +90,7 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	}
 	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
-	hasUnfixable := reportHasUnfixableErrors(report)
+	hasUnfixable := reportHasUnfixableErrors(report, acceptMoved)
 	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
