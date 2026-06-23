@@ -237,6 +237,9 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "429"
 
   - name: api_server_error_500
     category: api_errors
@@ -250,6 +253,9 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "500"
 
   - name: api_unauthorized_401
     category: api_errors
@@ -312,6 +318,8 @@ scenarios:
       lockfile_template: future_version
     expect:
       exit: 2
+      output_contains:
+        - "upgrade"
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════ workflow_parsing ════════════════════════════║
@@ -325,6 +333,8 @@ scenarios:
       workflows: {}
     expect:
       exit: 2
+      output_contains:
+        - "no workflow"
 
   - name: no_workflows_summary
     category: workflow_parsing
@@ -1089,6 +1099,8 @@ scenarios:
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
       exit: 2
+      output_contains:
+        - "corrupt"
 
   - name: onboarded_no_interactive_corrupt
     category: lockfile
@@ -1103,6 +1115,8 @@ scenarios:
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
       exit: 2
+      output_contains:
+        - "corrupt"
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ dependabot ═══════════════════════════════║
@@ -1272,6 +1286,8 @@ scenarios:
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
       exit: 2
+      output_contains:
+        - "corrupt"
 
   - name: dbot_multi_workflow
     category: dependabot
