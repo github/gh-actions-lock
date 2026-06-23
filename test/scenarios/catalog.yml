@@ -1126,7 +1126,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - dependencies:
@@ -1174,7 +1174,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - findings:
@@ -1221,7 +1221,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - dependencies:
@@ -1297,7 +1297,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - dependencies:
@@ -1349,7 +1349,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
@@ -1375,7 +1375,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
   - name: dbot_impostor_blocks
     category: dependabot
