@@ -289,6 +289,48 @@ module ActionsPin
         self
       end
 
+      # Verify every action ref listed in workflows: exists as a key in dependencies:.
+      def assert_lockfile_deps_cover_direct
+        @assertions << -> (r) {
+          lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+          content = File.read(lockpath) rescue ""
+          lf = YAML.safe_load(content) rescue nil
+          unless lf.is_a?(Hash) && lf["workflows"].is_a?(Hash) && lf["dependencies"].is_a?(Hash)
+            assert_true("lockfile deps cover direct: parseable lockfile", false)
+            next
+          end
+          dep_keys = lf["dependencies"].keys.to_set
+          lf["workflows"].each do |wf_path, refs|
+            next unless refs.is_a?(Array)
+            refs.each do |ref|
+              assert_true("direct dep covered: #{ref} (from #{wf_path})", dep_keys.include?(ref))
+            end
+          end
+        }
+        self
+      end
+
+      # Verify every ref in a dependency's uses: list exists as a key in dependencies:.
+      def assert_lockfile_deps_cover_indirect
+        @assertions << -> (r) {
+          lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+          content = File.read(lockpath) rescue ""
+          lf = YAML.safe_load(content) rescue nil
+          unless lf.is_a?(Hash) && lf["dependencies"].is_a?(Hash)
+            assert_true("lockfile deps cover indirect: parseable lockfile", false)
+            next
+          end
+          dep_keys = lf["dependencies"].keys.to_set
+          lf["dependencies"].each do |pin, meta|
+            next unless meta.is_a?(Hash) && meta["uses"].is_a?(Array)
+            meta["uses"].each do |used_ref|
+              assert_true("indirect dep covered: #{used_ref} (used by #{pin})", dep_keys.include?(used_ref))
+            end
+          end
+        }
+        self
+      end
+
       def assert_custom(&block)
         @assertions << block
         self
@@ -1561,6 +1603,8 @@ module ActionsPin
         lines << "lockfile matches /#{spec['lockfile_comment_matches']}/" if spec["lockfile_comment_matches"]
         lines << "lockfile excludes /#{spec['lockfile_comment_excludes']}/" if spec["lockfile_comment_excludes"]
         lines << "lockfile exists" if spec["lockfile_exists"]
+        lines << "lockfile deps cover direct" if spec["lockfile_deps_cover_direct"]
+        lines << "lockfile deps cover indirect" if spec["lockfile_deps_cover_indirect"]
         lines << "lockfile == golden #{spec['lockfile_golden']}" if spec["lockfile_golden"]
         if spec["jq"]
           spec["jq"].each do |check|
@@ -1635,6 +1679,14 @@ module ActionsPin
         if spec["lockfile_exists"]
           ok = !failures.any? { |f| f.include?("lockfile exists") }
           checks << ["lockfile exists", ok]
+        end
+        if spec["lockfile_deps_cover_direct"]
+          ok = !failures.any? { |f| f.include?("direct dep covered:") }
+          checks << ["lockfile deps cover direct", ok]
+        end
+        if spec["lockfile_deps_cover_indirect"]
+          ok = !failures.any? { |f| f.include?("indirect dep covered:") }
+          checks << ["lockfile deps cover indirect", ok]
         end
         if spec["lockfile_golden"]
           ok = !failures.any? { |f| f.include?("lockfile does not match golden") }

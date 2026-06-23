@@ -176,6 +176,14 @@ def hydrate_assertions(s, expect, needs_token: false)
     s.assert_lockfile_contains(*expect["lockfile_contains"])
   end
 
+  if expect["lockfile_deps_cover_direct"]
+    s.assert_lockfile_deps_cover_direct
+  end
+
+  if expect["lockfile_deps_cover_indirect"]
+    s.assert_lockfile_deps_cover_indirect
+  end
+
   if expect["lockfile_golden"]
     golden_path = File.expand_path("../../scenarios/testdata/#{expect["lockfile_golden"]}", __FILE__)
     s.assert_custom do |r|

@@ -104,6 +104,8 @@ scenarios:
           actions: ["actions/create-github-app-token@v1"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════════ sso_auth ════════════════════════════════║
@@ -278,6 +280,7 @@ scenarios:
     expect:
       exit: 0
       lockfile_exists: true
+      lockfile_deps_cover_direct: true
 
   - name: onboarded_corrupt_recovery
     category: lockfile
@@ -587,6 +590,8 @@ scenarios:
     expect:
       exit: 1
       lockfile_golden: transitive_closure_cross_repo.lock
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
       output_contains:
         - "transitive"
 
@@ -1484,6 +1489,8 @@ scenarios:
     expect:
       exit: 1
       lockfile_exists: true
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
       lockfile_contains:
         - "version: 'v0.0.2'"
         - "ref:"
