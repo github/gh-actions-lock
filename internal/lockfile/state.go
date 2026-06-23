@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -37,12 +38,13 @@ type MetadataResolver interface {
 // take the same mutex, allowing parallel pin and upgrade workers to share
 // a single store instance without external synchronization.
 type State struct {
-	mu       sync.Mutex
-	lockPath string // full path to actions.lock on disk
-	file     parserlock.File
-	meta     MetadataResolver
-	idCache  map[string][2]int64
-	idSF     singleflight.Group
+	mu              sync.Mutex
+	lockPath        string // full path to actions.lock on disk
+	file            parserlock.File
+	originalVersion string // version string read from disk (empty if file did not exist)
+	meta            MetadataResolver
+	idCache         map[string][2]int64
+	idSF            singleflight.Group
 }
 
 // ErrCorruptLockfile reports that a lockfile exists on disk but cannot be
@@ -67,8 +69,10 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	contents, err := os.ReadFile(lockfilePath)
 
 	var file parserlock.File
+	var originalVersion string
 	switch {
 	case err == nil:
+		originalVersion = extractVersion(contents)
 		file, err = parserlock.Parse(contents)
 		if err != nil {
 			// A future-version lockfile (written by a newer binary) must
@@ -104,10 +108,11 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	}
 
 	s := &State{
-		lockPath: lockfilePath,
-		file:     file,
-		meta:     meta,
-		idCache:  map[string][2]int64{},
+		lockPath:        lockfilePath,
+		file:            file,
+		originalVersion: originalVersion,
+		meta:            meta,
+		idCache:         map[string][2]int64{},
 	}
 	// Normalize on-disk entries to the canonical (lowercased) pin form so any
 	// legacy mixed-case keys are rewritten on the next Save.
@@ -155,6 +160,12 @@ func (s *State) File() parserlock.File {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.file
+}
+
+// OriginalVersion returns the version string that was on disk before the
+// lockfile was loaded and migrated. Empty when the file did not exist.
+func (s *State) OriginalVersion() string {
+	return s.originalVersion
 }
 
 // HasWorkflow reports whether the lockfile's workflows{} map already
@@ -473,4 +484,20 @@ func (s *State) lookupIDs(ctx context.Context, owner, repo string) ([2]int64, er
 		return [2]int64{}, err
 	}
 	return res.([2]int64), nil
+}
+
+// extractVersion reads the version field from raw lockfile YAML without
+// a full parse. Returns empty string if not found.
+func extractVersion(contents []byte) string {
+	for _, line := range bytes.Split(contents, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("version:")) {
+			v := bytes.TrimPrefix(line, []byte("version:"))
+			v = bytes.TrimSpace(v)
+			// Strip surrounding quotes (single or double).
+			v = bytes.Trim(v, "'\"")
+			return string(v)
+		}
+	}
+	return ""
 }
