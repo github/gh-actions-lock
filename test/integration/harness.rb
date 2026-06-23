@@ -1479,7 +1479,12 @@ module ActionsPin
         puts
 
         # Prepare fixtures early so we can show starting state
-        ctx = s.prepare(@binary, profile_dir: @profile_dir)
+        begin
+          ctx = s.prepare(@binary, profile_dir: @profile_dir)
+        rescue SkipScenario => e
+          puts "  \e[33m⊘ skip:\e[0m #{e.message}"
+          return nil
+        end
 
         # ── INPUT ──
         puts "\e[1m┌─ INPUT #{"─" * (w - 10)}┐\e[0m"
