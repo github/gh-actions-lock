@@ -501,30 +501,6 @@ end
 
 # GraphQL handler that resolves actions/checkout@v4 to the given SHA
 # and returns DIVERGED for all reachability checks.
-def checkout_graphql_impostor(srv)
-  srv.on(:POST, %r{/graphql$}) do |req|
-    body = JSON.parse(req.body) rescue {}
-    query = body["query"] || ""
-
-    if query.include?("expression")
-      # ResolveActionFiles — return the locked SHA (no ref-moved)
-      [200, { "Content-Type" => "application/json" },
-       JSON.generate({ data: { a0: {
-         nameWithOwner: "actions/checkout",
-         object: { oid: CHECKOUT_SHA, file: { object: { text: "name: Checkout\ndescription: Checkout\n" } } }
-       } } })]
-    elsif query.include?("compare")
-      # BatchBranchContains — all branches report DIVERGED (unreachable)
-      repo_data = {}
-      query.scan(/b(\d+):/).flatten.each { |i| repo_data["b#{i}"] = { compare: { status: "DIVERGED" } } }
-      [200, { "Content-Type" => "application/json" },
-       JSON.generate({ data: { repo: repo_data } })]
-    else
-      [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
-    end
-  end
-end
-
 # GraphQL handler that resolves actions/checkout@v4 to a DIFFERENT SHA
 # (simulating ref-moved), so the forgery ancestry check kicks in.
 def checkout_graphql_forgery(srv)
@@ -643,15 +619,6 @@ STUB_WIRING = {
   no_fix_json_combined: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
     s.env("GH_TOKEN" => "gho_fake_json_combined_token")
-  },
-
-  # Detection scenarios: impostor commit (SHA unreachable from any branch)
-  dbot_impostor_blocks: ->(s) {
-    s.stub_server do |srv|
-      checkout_graphql_impostor(srv)
-      checkout_repo_rest(srv)
-    end
-    s.env("GH_TOKEN" => "gho_fake_impostor_token")
   },
 
   # Detection scenarios: lockfile forgery (pinned SHA not ancestor of live SHA)

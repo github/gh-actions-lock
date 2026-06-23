@@ -238,11 +238,16 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		}
 
 		if repo.Object == nil || repo.Object.OID == "" {
-			// Distinguish between a short SHA (looks like hex but isn't a
-			// full 40/64-char commit) and a named ref that doesn't exist.
-			if isHexString(ref.Ref) {
-				results[idx].Err = fmt.Errorf("version %q does not resolve — if this is a commit, use the full SHA", ref.Ref)
-			} else {
+			n := len(ref.Ref)
+			switch {
+			case isHexString(ref.Ref) && (n == 40 || n == 64):
+				// Full SHA that doesn't resolve — commit is unreachable/orphaned
+				results[idx].Err = fmt.Errorf("commit %s does not exist or is not reachable in %s/%s",
+					ref.Ref[:12], ref.Owner, ref.Repo)
+			case isHexString(ref.Ref):
+				// Short hex — ambiguous, might be a truncated SHA
+				results[idx].Err = fmt.Errorf("version %q does not resolve — if this is a commit, use the full 40-character SHA", ref.Ref)
+			default:
 				results[idx].Err = fmt.Errorf("version %q does not exist", ref.Ref)
 			}
 			continue

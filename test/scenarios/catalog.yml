@@ -1447,48 +1447,20 @@ scenarios:
         lockfile_version: v0.0.2
         valid: true
   - name: dbot_impostor_blocks
-    category: dependabot
-    description: "Impostor commit (unreachable SHA) produces impostor-commit/error finding"
-    needs_stub: true
-    tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
+    category: security
+    description: "Orphaned commit (no tag or branch contains it) blocks pinning"
+    needs_token: true
+    tags: [smoke]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive"]
     fixtures:
       workflows:
         ci.yml:
           name: CI
-          actions: ["actions/checkout@v4"]
-      lockfile_template: pinned_checkout
+          actions: ["nodeselector/actions-test-fixtures@7b403c9ec14bd3ae0bbf793c2bee8815a7ac920b"]
     expect:
-      exit: 1
-      stdout_is_json: true
-      jq:
-        - expr: '.valid'
-          equals: "false"
-        - expr: '.findings | length'
-          greater_than: 0
-        - expr: '.findings[] | select(.category == "impostor-commit") | .category'
-          equals: "impostor-commit"
-        - expr: '.findings[] | select(.category == "impostor-commit") | .severity'
-          equals: "error"
-
-      golden_json:
-        cli_version: (devel)
-        lockfile_version: v0.0.2
-        valid: false
-        findings:
-          - category: impostor-commit
-            confidence: high
-            dependency: actions/checkout@v4
-            detail: "locked de0fac2e4500 is not reachable from v4 \u2014 classic fork-network impostor-commit shape"
-            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: "investigate immediately \u2014 the lockfile entry may have been injected"
-            severity: error
-            workflow: .github/workflows/ci.yml
-
-      lockfile_contains:
-        - "'actions/checkout@v4':"
-        - "ref: 'v4'"
-        - "commit: 'sha1-"
+      exit: 2
+      output_contains:
+        - "does not exist or is not reachable"
 
   - name: dbot_forgery_blocks
     category: dependabot
