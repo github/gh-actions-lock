@@ -917,7 +917,7 @@ scenarios:
 
   - name: transitive_major_ref_not_narrowed
     category: narrowing
-    description: "Transitive dep of a composite keeps the major ref the composite declares (actions/setup-go@v5 stays v5, not narrowed to v5.x.y) — we don't own composite-internal refs"
+    description: "Transitive dep of a composite keeps the major ref the composite declares (actions/attest-build-provenance@v1 stays v1, not narrowed to v1.x.y) — we don't own composite-internal refs"
     needs_token: true
     fixtures:
       workflows:
@@ -926,8 +926,11 @@ scenarios:
           actions: ["cli/gh-extension-precompile@v2.1.0"]
     expect:
       exit: 0
-      lockfile_comment_matches: 'actions/setup-go@v5:'
-      lockfile_comment_excludes: 'actions/setup-go@v5\.\d+\.\d+'
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "'actions/attest-build-provenance@v1':"
+      lockfile_comment_excludes: 'actions/attest-build-provenance@v1\.\d+\.\d+'
 
   - name: transitive_version_ref_nudge_suppressed
     category: narrowing
@@ -944,7 +947,7 @@ scenarios:
 
   - name: transitive_provenance_ref_not_narrowed
     category: narrowing
-    description: "Second-hop transitive dep (actions/attest-build-provenance@v1, pulled in via cli/gh-extension-precompile) keeps its declared major ref — not narrowed to v1.x.y. This dep also declares a bare-SHA subpath internally, which must stay verbatim rather than being reverse-looked-up into a malformed ref."
+    description: "Second-hop transitive dep (actions/attest-build-provenance pinned by bare SHA, pulled in via attest-build-provenance@v1) stays verbatim rather than being reverse-looked-up into a malformed ref"
     needs_token: true
     fixtures:
       workflows:
@@ -953,7 +956,9 @@ scenarios:
           actions: ["cli/gh-extension-precompile@v2.1.0"]
     expect:
       exit: 0
-      lockfile_comment_matches: 'actions/attest-build-provenance@v1:'
+      lockfile_contains:
+        - "'actions/attest-build-provenance@v1':"
+        - "ref: 'v1'"
       lockfile_comment_excludes: 'actions/attest-build-provenance@v1\.\d+\.\d+'
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
