@@ -522,14 +522,14 @@ func stripNWORefPrefix(s string) string {
 // re-pins. Only shown for repos that actually have semver releases.
 func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Record, r *resolve.Resolver) {
 	type nudgeEntry struct {
-		key    string // NWO@Ref
-		latest string // best full-semver tag, e.g. v1.2.3
+		key       string // NWO@Ref
+		latest    string // best full-semver tag, e.g. v1.2.3
+		workflows []string
 	}
 
-	seen := map[string]bool{}
+	seen := map[string]*nudgeEntry{}
 	// Cache per-repo so we don't call ListTags twice for the same repo.
 	repoLatest := map[string]string{} // NWO → latest full semver (or "" if none)
-	var entries []nudgeEntry
 
 	for _, e := range record.Entries {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
@@ -542,11 +542,19 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 		if ok && sv.IsFull() {
 			continue
 		}
-		key := e.NWO + "@" + e.Ref
-		if seen[key] {
+		// Only nudge for partial semver refs (v4, v3.1) — not arbitrary
+		// branch names like canary, main, nightly. A ref must at least
+		// parse as semver (partial) to be nudge-worthy.
+		if !ok {
 			continue
 		}
-		seen[key] = true
+		key := e.NWO + "@" + e.Ref
+		if ne, exists := seen[key]; exists {
+			for _, wf := range e.Workflows {
+				ne.workflows = append(ne.workflows, wf)
+			}
+			continue
+		}
 
 		latest, cached := repoLatest[e.NWO]
 		if !cached {
@@ -556,10 +564,14 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 		if latest == "" {
 			continue // no semver releases — nothing to suggest
 		}
-		entries = append(entries, nudgeEntry{key: key, latest: latest})
+		seen[key] = &nudgeEntry{key: key, latest: latest, workflows: e.Workflows}
 	}
-	if len(entries) == 0 {
+	if len(seen) == 0 {
 		return
+	}
+	entries := make([]*nudgeEntry, 0, len(seen))
+	for _, ne := range seen {
+		entries = append(entries, ne)
 	}
 	console.TermBlank()
 	console.TermWarn("%d %s pinned without a full semver tag",
@@ -569,8 +581,11 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 			console.TermYellow(ne.key),
 			console.TermBold("→"),
 			console.TermYellow(ne.latest))
+		for _, wf := range ne.workflows {
+			console.TermDetail("    %s", wf)
+		}
 	}
-	console.TermDetail("  Run without --no-narrow to upgrade.")
+	console.TermDetail("  Update the uses: line in your workflow to the full version to lock precisely.")
 }
 
 // latestFullSemverTag returns the highest full semver tag (vX.Y.Z) for

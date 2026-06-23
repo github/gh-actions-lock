@@ -393,6 +393,11 @@ func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
 		if ok && sv.IsFull() {
 			continue
 		}
+		// Only flag partial semver refs (v4, v3.1) — not branch names
+		// like canary, main, nightly which are intentional.
+		if !ok {
+			continue
+		}
 		key := e.NWO + "@" + e.Ref
 		di, exists := seen[key]
 		if !exists {
