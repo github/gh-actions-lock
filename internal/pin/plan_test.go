@@ -429,6 +429,74 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	assert.True(t, comp.Direct, "composite is a direct workflow use")
 }
 
+// TestNarrowVerifiedEntries_StickyPrecision locks the fast-path narrowing
+// guard: an already-recorded direct dep the user kept at an imprecise semver
+// ref (v4) must not be narrowed to a full tag on a no-op re-pin, while a
+// non-sticky branch ref (main) still narrows. Mirrors narrowDirectDeps.
+func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
+	const sha = "abc1230000000000000000000000000000000000"
+
+	// A live Tagger that *would* narrow: actions/checkout publishes a full
+	// semver tag at the same commit as the imprecise ref. Only the guard, not
+	// the absence of a Tagger, may spare a sticky entry.
+	newTagger := func(t *testing.T) (*tag.Lister, *httpmock.Registry) {
+		reg := &httpmock.Registry{}
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/tags`),
+			httpmock.JSONResponse([]any{
+				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
+				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
+			}),
+		)
+		return tag.NewListerForTest(t, reg), reg
+	}
+
+	// Empty Findings => NeedsAttention() false => verified fast path.
+	fastPathReport := func(ref string) checks.WorkflowReport {
+		return checks.WorkflowReport{
+			Path: ".github/workflows/ci.yml",
+			Inventory: []checks.InventoryEntry{{
+				Dep:    dep.Dependency{NWO: "actions/checkout", Ref: ref, SHA: sha},
+				File:   ".github/workflows/ci.yml",
+				Direct: true,
+			}},
+		}
+	}
+
+	t.Run("imprecise v4 marked sticky is left as v4", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		opts := PlanOptions{
+			Tagger:           tagger,
+			prevImpreciseNWO: map[string]bool{"actions/checkout": true},
+		}
+
+		result, err := planWorkflow(context.Background(), fastPathReport("v4"), opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4", result.entries[0].Ref, "sticky v4 must not be narrowed")
+		assert.Empty(t, result.entries[0].AutoFixedRef, "no auto-fix should be recorded")
+		require.Len(t, result.wplans, 1)
+		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite for a sticky entry")
+	})
+
+	t.Run("branch ref main is still narrowed", func(t *testing.T) {
+		tagger, reg := newTagger(t)
+		defer reg.Verify(t) // the Tagger must actually run on this path
+		// main is not a semver ref, so Plan never marks it imprecise.
+		opts := PlanOptions{Tagger: tagger, prevImpreciseNWO: map[string]bool{}}
+
+		result, err := planWorkflow(context.Background(), fastPathReport("main"), opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4.2.1", result.entries[0].Ref, "branch ref should narrow to the full tag")
+		assert.Equal(t, "main", result.entries[0].AutoFixedRef)
+		require.Len(t, result.wplans, 1)
+		assert.Equal(t, map[string]string{"actions/checkout@main": "actions/checkout@v4.2.1"}, result.wplans[0].Rewrites)
+	})
+}
+
 // TestPlanWorkflow_CrossRefTransitiveClosure verifies that a composite at
 // ref "updated" whose action.yml references a sibling subpath at ref "main"
 // produces the full transitive closure: the sibling (same NWO, different

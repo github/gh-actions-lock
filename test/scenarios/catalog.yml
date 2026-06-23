@@ -66,7 +66,7 @@ scenarios:
 
   - name: already_pinned_all_valid
     category: happy_path
-    description: "Already-pinned workflow validates without network calls (fast path)"
+    description: "Already-pinned v4 workflow re-pins on the verified fast path; sticky precision keeps the v4 dep key (no narrowing)"
     needs_token: true
     tags: [smoke]
     fixtures:
@@ -77,6 +77,8 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_contains: ["actions/checkout@v4:sha1-"]
+      lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: multi_action_happy
     category: happy_path
@@ -981,7 +983,7 @@ scenarios:
 
   - name: onboarded_no_onboard_repin
     category: onboarding
-    description: "--no-onboard: already-tracked workflow re-pins normally"
+    description: "--no-onboard: already-tracked workflow re-pins normally, keeping sticky v4 precision"
     needs_token: true
     flags: ["--no-onboard"]
     fixtures:
@@ -992,10 +994,12 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_contains: ["actions/checkout@v4:sha1-"]
+      lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: onboarded_no_onboard_mixed
     category: onboarding
-    description: "--no-onboard: mix of tracked and untracked — tracked re-pinned, untracked refused"
+    description: "--no-onboard: mix of tracked and untracked — tracked re-pinned (sticky v4), untracked refused"
     needs_token: true
     flags: ["--no-onboard"]
     fixtures:
@@ -1009,6 +1013,8 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_contains: ["actions/checkout@v4:sha1-"]
+      lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: fresh_no_fix_no_onboard_json_findings
     category: onboarding

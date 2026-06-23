@@ -610,11 +610,9 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 	return out
 }
 
-// narrowVerifiedEntries upgrades already-recorded deps from imprecise refs
-// (main, v4, etc.) to full semver tags when possible. Returns rewrites for
-// the workflow YAML. Skipped when --no-narrow is set. Only direct entries
-// are narrowed: a transitive dep's ref belongs to the composite that
-// declares it and never appears in our workflow YAML.
+// narrowVerifiedEntries upgrades already-recorded direct deps to full semver
+// tags when possible, returning the workflow-YAML rewrites. Skipped for
+// --no-narrow, transitive deps, and refs the user kept imprecise (sticky v4).
 func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions) map[string]string {
 	if opts.NoNarrow || opts.Tagger == nil {
 		return nil
@@ -627,6 +625,12 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		}
 		owner, repo := splitNWO(e.NWO)
 		if owner == "" {
+			continue
+		}
+		// Respect a prior imprecise precision choice, mirroring the
+		// slow-path guard in narrowDirectDeps: a verified v4 entry the
+		// user kept as v4 must not be narrowed on a no-op re-pin.
+		if opts.prevImpreciseNWO[strings.ToLower(e.NWO)] {
 			continue
 		}
 		// Already full semver — nothing to do.
