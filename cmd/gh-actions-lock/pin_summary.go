@@ -239,6 +239,10 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 				console.TermYellow("!"), console.TermDim(prev), console.TermBold(g.Ref))
 		}
 	}
+	if len(purelyTransitive) > 0 {
+		console.TermBlank()
+		console.TermDetail("Transitive dependencies (from composite actions):")
+	}
 	for _, te := range purelyTransitive {
 		short := te.SHA
 		if len(short) > 7 {
