@@ -13,7 +13,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/github/actions-lockfile/go v0.0.4-0.20260623172727-c745c7cdf283
+require github.com/github/actions-lockfile/go v0.0.4-0.20260623173526-135b60480891
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7 // indirect
