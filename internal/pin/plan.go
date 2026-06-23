@@ -30,6 +30,11 @@ type PlanOptions struct {
 	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
 	NoNarrow bool
 
+	// AcceptMoved treats ref-moved and lockfile-forgery findings as
+	// resolvable: affected deps are pruned from the inventory and
+	// re-resolved to their current live SHA.
+	AcceptMoved bool
+
 	// prevImpreciseNWO is computed once in Plan() from the global lockfile
 	// state. It holds lowercased NWOs that are already recorded with a
 	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
@@ -114,7 +119,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
-	inventory := pruneStaleInventory(wr.Inventory, wr.Findings)
+	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved)
 
 	if !wr.NeedsAttention() {
 		entries = verifiedEntries(inventory, wr.Path)
@@ -470,14 +475,17 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 
 // pruneStaleInventory drops inventory entries matching a stale finding (a pin
 // the workflow no longer references), so a fix-mode re-pin converges.
-func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding) []checks.InventoryEntry {
+func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved bool) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {
-		if f.Category != checks.Stale || f.Dependency == nil {
-			continue
+		switch {
+		case f.Category == checks.Stale && f.Dependency != nil:
+			d := f.Dependency
+			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
+		case acceptMoved && (f.Category == checks.LockfileForgery || f.Category == checks.RefMoved) && f.Dependency != nil:
+			d := f.Dependency
+			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
 		}
-		d := f.Dependency
-		stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
 	}
 	if len(stale) == 0 {
 		return inventory

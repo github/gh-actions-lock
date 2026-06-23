@@ -50,6 +50,10 @@ type checkOptions struct {
 	// Use when org-provisioned larger runners (e.g. ubuntu-latest-xl)
 	// are flagged as self-hosted but you know they are GitHub-hosted.
 	allowRunners []string
+	// acceptMoved re-resolves deps flagged as lockfile-forgery or
+	// ref-moved: prunes the stale lockfile entry and re-pins to the
+	// current live SHA.
+	acceptMoved bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -61,6 +65,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false, "Keep mutable version refs (e.g. v4) instead of narrowing to full patch tags (e.g. v4.2.1)")
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Additional runner `labels` to treat as GitHub-hosted (e.g. ubuntu-latest-xl)")
+	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or lockfile-forgery to their current live SHA")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
 
@@ -125,8 +130,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	// Pre-warm resolver caches from the lockfile so repeat runs skip
 	// redundant GraphQL and REST calls. Skipped when --rescan is set:
-	// a full re-verification must hit the network to detect ref movement
-	// and re-check reachability.
+	// a full re-verification must hit the network to detect ref movement.
+	// --accept-moved implies --rescan (must detect what moved).
+	if opts.acceptMoved {
+		opts.rescan = true
+	}
 	trustLockfileCaches := !opts.rescan
 	if trustLockfileCaches {
 		r.SeedFromLockfile(store.AllDeps())
@@ -274,14 +282,15 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		console.ClearWorkerStatuses()
 	}
 	record, planErr := pin.Plan(ctx, report, pin.PlanOptions{
-		Resolver:  r,
-		Tagger:    tagger,
-		Store:     store,
-		Pool:      pool,
-		RepoOwner: repoOwner,
-		RepoName:  repoName,
-		Version:   cliVersion(),
-		NoNarrow:  opts.noNarrow,
+		Resolver:    r,
+		Tagger:      tagger,
+		Store:       store,
+		Pool:        pool,
+		RepoOwner:   repoOwner,
+		RepoName:    repoName,
+		Version:     cliVersion(),
+		NoNarrow:    opts.noNarrow,
+		AcceptMoved: opts.acceptMoved,
 	})
 	endPlan()
 	if planErr != nil {
