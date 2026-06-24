@@ -1420,20 +1420,25 @@ scenarios:
         lockfile_version: v0.0.2
         valid: true
   - name: dbot_impostor_blocks
-    category: security
-    description: "Orphaned commit (no tag or branch contains it) blocks pinning"
+    category: dependabot
+    description: "Orphaned commit (no tag or branch contains it) blocks pinning — dependabot sees the finding in JSON"
     needs_token: true
     tags: [smoke]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=findings"]
     fixtures:
       workflows:
         ci.yml:
           name: CI
           actions: ["nodeselector/actions-test-fixtures@7b403c9ec14bd3ae0bbf793c2bee8815a7ac920b"]
     expect:
-      exit: 2
-      output_contains:
-        - "does not exist or is not reachable"
+      exit: 1
+      stdout_is_json: true
+      stdout_contains: ["does not exist or is not reachable"]
+      jq:
+        - expr: '.findings | length'
+          gt: 0
+        - expr: '.findings[0].category'
+          equals: 'not-pinned'
 
   - name: dbot_forgery_blocks
     category: dependabot
