@@ -25,9 +25,13 @@ jobs:
 
       - name: Install gh-actions-lock
         run: gh extension install github/gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Relock
         run: gh actions-lock --no-onboard --no-interactive ${{ inputs.extra-flags }}
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Commit updated lockfile
         run: |
