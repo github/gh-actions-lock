@@ -1,0 +1,7 @@
+name: Relock on Dependabot
+on: pull_request
+
+jobs:
+  relock:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    uses: ./.github/workflows/relock.yml
