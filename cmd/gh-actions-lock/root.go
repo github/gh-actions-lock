@@ -83,6 +83,22 @@ Scans all workflows under .github/workflows/ by default and fixes
 what it can — pinning every resolvable action and updating the
 lockfile. Pass --no-fix for a read-only check that writes nothing.
 
+REF NARROWING
+
+When a new workflow is first pinned and uses a partial version ref
+like actions/checkout@v4, the lockfile narrows it to the highest
+matching full semver tag (e.g. v4.2.1). Full semver tags are
+effectively immutable — unlike major/minor splats, they almost never
+move once published, so the pinned SHA stays valid longer between
+lockfile refreshes.
+
+Only freshly pinned refs are narrowed — already-locked deps are not
+touched. Only refs that parse as semantic versions (v4, v3.2) are
+candidates; branch names (main, canary) and non-version tags are
+never narrowed because the latest semver release in a repo may have
+nothing to do with the ref the workflow intended.
+Pass --no-narrow to disable this behavior entirely.
+
 --json selects the output format only (independent of --no-fix);
 structured results go to stdout and progress to stderr:
 

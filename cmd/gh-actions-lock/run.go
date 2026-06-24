@@ -64,7 +64,11 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
-	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false, "Keep mutable version refs (e.g. v4) instead of narrowing to full patch tags (e.g. v4.2.1)")
+	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false,
+		"Keep mutable version refs (e.g. v4) instead of narrowing to full semver (e.g. v4.2.1).\n"+
+			"Only refs that parse as semantic versions are narrowed (v4, v4.2); branch names\n"+
+			"like 'main' or non-version tags are never narrowed because a full semver tag is\n"+
+			"far more likely to resolve to exactly one commit for its entire lifetime.")
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Additional runner `labels` to treat as GitHub-hosted (e.g. ubuntu-latest-xl)")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Treat all runner labels as GitHub-hosted (skip self-hosted checks)")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or lockfile-forgery to their current live SHA")
