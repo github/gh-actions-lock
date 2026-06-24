@@ -695,9 +695,9 @@ scenarios:
       lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.2\.0'
 
-  - name: fresh_branch_ref_narrows
+  - name: fresh_branch_ref_not_narrowed
     category: narrowing
-    description: "Branch ref (main) on public action narrows to full semver"
+    description: "Branch ref (main) on public action is NOT narrowed — non-version refs are intentional"
     needs_token: true
     fixtures:
       workflows:
@@ -707,7 +707,8 @@ scenarios:
     expect:
       exit: 0
       lockfile_deps_cover_direct: true
-      lockfile_comment_matches: 'v\d+\.\d+\.\d+'
+      lockfile_contains:
+        - "'actions/checkout@main'"
 
   - name: fresh_branch_ref_no_narrow
     category: narrowing
@@ -724,9 +725,9 @@ scenarios:
       lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'main'
 
-  - name: onboarded_branch_ref_narrows
+  - name: onboarded_branch_ref_not_narrowed
     category: narrowing
-    description: "Already-pinned dep at @main gets narrowed to full semver (v6.x.y) on re-run"
+    description: "Already-pinned dep at @main is NOT narrowed — non-version refs are intentional choices"
     needs_token: true
     fixtures:
       workflows:
@@ -737,8 +738,8 @@ scenarios:
     expect:
       exit: 0
       lockfile_deps_cover_direct: true
-      lockfile_comment_matches: 'v\d+\.\d+\.\d+'
-      lockfile_comment_excludes: "'actions/checkout@main'"
+      lockfile_contains:
+        - "'actions/checkout@main'"
 
   - name: local_action_only
     category: workflow_parsing

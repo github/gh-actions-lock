@@ -305,8 +305,9 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 
 // TestNarrowVerifiedEntries_StickyPrecision locks the fast-path narrowing
 // guard: an already-recorded direct dep the user kept at an imprecise semver
-// ref (v4) must not be narrowed to a full tag on a no-op re-pin, while a
-// non-sticky branch ref (main) still narrows. Mirrors narrowDirectDeps.
+// ref (v4) must not be narrowed to a full tag on a no-op re-pin, and a
+// non-version ref (main) must not be narrowed either (it's an intentional
+// choice). Only imprecise semver refs (v4, v4.2) are narrowing candidates.
 func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	const sha = "abc1230000000000000000000000000000000000"
 
@@ -354,20 +355,19 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite for a sticky entry")
 	})
 
-	t.Run("branch ref main is still narrowed", func(t *testing.T) {
-		tagger, reg := newTagger(t)
-		defer reg.Verify(t) // the Tagger must actually run on this path
-		// main is not a semver ref, so Plan never marks it imprecise.
-		opts := PlanOptions{Tagger: tagger, prevImpreciseNWO: map[string]bool{}}
+	t.Run("branch ref main is NOT narrowed", func(t *testing.T) {
+		// main is not version-shaped, so narrowing must not touch it.
+		// Non-version refs are intentional choices (e.g. vercel/next.js@canary).
+		opts := PlanOptions{Tagger: nil, prevImpreciseNWO: map[string]bool{}}
 
 		result, err := planWorkflow(context.Background(), fastPathReport("main"), opts, func(string) {})
 		require.NoError(t, err)
 
 		require.Len(t, result.entries, 1)
-		assert.Equal(t, "v4.2.1", result.entries[0].Ref, "branch ref should narrow to the full tag")
-		assert.Equal(t, "main", result.entries[0].AutoFixedRef)
+		assert.Equal(t, "main", result.entries[0].Ref, "branch ref should stay as-is")
+		assert.Equal(t, "", result.entries[0].AutoFixedRef)
 		require.Len(t, result.wplans, 1)
-		assert.Equal(t, map[string]string{"actions/checkout@main": "actions/checkout@v4.2.1"}, result.wplans[0].Rewrites)
+		assert.Nil(t, result.wplans[0].Rewrites)
 	})
 }
 

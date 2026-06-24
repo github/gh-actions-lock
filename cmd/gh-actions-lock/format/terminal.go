@@ -191,7 +191,7 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 			labels = append(labels, l)
 		}
 		sort.Strings(labels)
-		out.Detail("  ↳ re-run with --allow-runners %s", strings.Join(labels, ","))
+		out.Detail("  ↳ re-run with --allow-runners %s or -A to allow all", strings.Join(labels, ","))
 	}
 }
 
@@ -325,10 +325,10 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 				labels = append(labels, l)
 			}
 			sort.Strings(labels)
-			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s",
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s or -A to allow all",
 				strings.Join(labels, ","))
 		} else {
-			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label>")
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label> or -A to allow all")
 		}
 	}
 	if len(expressionRunnerWorkflows) > 0 {

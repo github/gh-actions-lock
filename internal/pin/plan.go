@@ -320,8 +320,10 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 			continue
 		}
 
-		// Narrow to a full semver patch tag when possible. Covers
-		// partial semver (v4, v3.1) and non-semver refs (main, master).
+		// Narrow to a full semver patch tag when the ref is already
+		// version-shaped but imprecise (v4, v3.1). Non-version refs like
+		// `main`, `canary`, or `releases/v4` are intentional — narrowing
+		// them risks picking up unrelated semver tags from the repo.
 		// Skip if --no-narrow or if the lockfile already recorded this
 		// dep without a full semver ref (respect prior precision choice).
 		nwoLower := strings.ToLower(dep.NWO)
@@ -329,7 +331,10 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 			continue
 		}
 		sv, ok := parserlock.ParseSemVer(dep.Ref)
-		if ok && sv.IsFull() {
+		if !ok {
+			continue
+		}
+		if sv.IsFull() {
 			continue
 		}
 
@@ -574,9 +579,16 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		if opts.prevImpreciseNWO[strings.ToLower(e.NWO)] {
 			continue
 		}
-		// Already full semver — nothing to do.
+		// Only narrow refs that are already version-shaped but imprecise
+		// (e.g. v4, v4.2). Non-version refs like `main`, `canary`, or
+		// `releases/v4` are intentional choices — narrowing them could pick
+		// up unrelated semver tags from the repo (e.g. framework releases
+		// in a monorepo like vercel/next.js).
 		sv, ok := parserlock.ParseSemVer(e.Ref)
-		if ok && sv.IsFull() {
+		if !ok {
+			continue
+		}
+		if sv.IsFull() {
 			continue
 		}
 		// Try exact tag match, then ancestor fallback.
