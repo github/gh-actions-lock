@@ -325,7 +325,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// Write the run log.
 	record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.hostname)}
-	if path, werr := record.WriteJSON(); werr == nil {
+	if path, werr := record.WriteJSON(); werr == nil && opts.jsonFields == "" {
 		defer func() {
 			console.TermBlank()
 			console.TermDetail("Resolution record: %s", path)
