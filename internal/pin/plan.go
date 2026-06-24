@@ -387,19 +387,15 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 		deps[i].Ref = ref
 	}
 	// Restore transitive deps' declared refs — we don't own the composite's
-	// action.yml so the lockfile should keep the ref it declares. Exception:
-	// when the declared ref is a bare SHA (commit hash), keep ReverseLookup's
-	// discovered tag/branch since a SHA is not a valid symbolic ref.
+	// action.yml so the lockfile key must match what it declares. The
+	// discovered tag/branch is preserved in dep.Tag/dep.Branch and used by
+	// state.Set for the lockfile ref: field.
 	transitiveRewriteKeys := make(map[string]bool)
 	for i := range deps {
 		if directTracker.IsDirect(i) {
 			continue
 		}
 		origRef := transitiveOrigRefs[i]
-		if resolve.LooksLikeSHA(origRef) {
-			// Bare SHA — keep ReverseLookup's discovered ref.
-			continue
-		}
 		deps[i].Ref = origRef
 		transitiveRewriteKeys[deps[i].NWO+"@"+origRef] = true
 	}

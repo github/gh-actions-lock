@@ -361,7 +361,16 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		// The action's Ref must match the pin key's ref (which is d.Ref).
 		// Preserve existing ref when the dep arrives without one (carried
 		// unchanged from a previous lockfile).
+		// When the dep's ref is a bare SHA (transitive dep pinned by commit),
+		// prefer the discovered tag or branch for the metadata ref field.
 		ref := d.Ref
+		if isSHARef(ref) {
+			if d.Tag != "" {
+				ref = d.Tag
+			} else if d.Branch != "" {
+				ref = d.Branch
+			}
+		}
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
 			if ref == "" {
 				ref = existing.Ref
@@ -509,4 +518,19 @@ func extractVersion(contents []byte) string {
 		}
 	}
 	return ""
+}
+
+// isSHARef returns true when ref is a hex string of SHA-1 (40) or
+// SHA-256 (64) length.
+func isSHARef(ref string) bool {
+	n := len(ref)
+	if n != 40 && n != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
