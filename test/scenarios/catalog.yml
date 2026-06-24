@@ -470,7 +470,7 @@ scenarios:
 
   - name: no_fix_mode
     category: output_modes
-    description: "--no-fix with valid lockfile — exit 0, nothing written"
+    description: "--no-fix reports findings without writing — exits 1 when unpinned deps exist"
     needs_token: true
     flags: ["--no-fix"]
     fixtures:
@@ -479,7 +479,7 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit_any: [0, 1]
+      exit: 1
 
   - name: json_output_valid
     category: output_modes
