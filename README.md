@@ -28,57 +28,6 @@ Workflows that are onboarded to the lockfile enforce that all dependencies are p
 
 Finally, locked actions must have a branch that the commit being locked exists within. This is to make impostor commit style attacks harder.
 
-## CI Integration
-
-### Lockfile lint
-
-A composite action checks that `actions.lock` is in sync with your workflow files. Add it to your CI:
-
-```yaml
-jobs:
-  lockfile-lint:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/gh-actions-lock/actions/lint@main
-```
-
-The action installs `gh-actions-lock` and runs a read-only check. It produces GitHub annotations, grouped log output, and a job summary with any findings.
-
-#### Inputs
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `extra-flags` | Extra flags passed to `gh actions-lock` (e.g. `--allow-runners foo`) | `""` |
-| `ignore-categories` | Comma-separated finding categories to treat as warnings instead of errors (e.g. `local-action`) | `""` |
-
-### Dependabot relock
-
-When Dependabot bumps an action version, the lockfile goes stale. A reusable workflow automatically relocks on Dependabot PRs.
-
-Add a caller workflow to your repo:
-
-```yaml
-name: Relock on Dependabot
-
-on:
-  pull_request:
-
-permissions:
-  contents: write
-
-jobs:
-  relock:
-    if: github.actor == 'dependabot[bot]'
-    uses: github/gh-actions-lock/.github/workflows/relock.yml@main
-    with:
-      head-ref: ${{ github.head_ref }}
-```
-
-The reusable workflow checks out the Dependabot branch, runs `gh actions-lock` with `--no-onboard`, and pushes the updated lockfile.
-
 ## Limitations
 
 There are currently eligibility limitations for workflows that can be onboarded to lockfiles:
