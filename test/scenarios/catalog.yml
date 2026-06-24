@@ -881,18 +881,18 @@ scenarios:
 
   - name: onboarded_full_tag_unchanged
     category: narrowing
-    description: "Lockfile dep key is v4.2.0 (from prior narrowed pin), workflow says @v4 (never locked as v4) — re-pin keeps the lockfile's full semver precision"
+    description: "Workflow and lockfile both say v4.2.0 — re-run is a no-op, full semver precision is preserved"
     needs_token: true
     fixtures:
       workflows:
         ci.yml:
           name: CI
-          actions: ["actions/checkout@v4"]
+          actions: ["actions/checkout@v4.2.0"]
       lockfile_template: pinned_checkout_full
     expect:
       exit: 0
       lockfile_deps_cover_direct: true
-      lockfile_comment_matches: 'v4\.\d+\.\d+'
+      lockfile_comment_matches: 'v4\.2\.0'
 
   - name: onboarded_no_narrow_keeps_major
     category: narrowing
