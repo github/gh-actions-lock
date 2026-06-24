@@ -66,6 +66,7 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	investigated := record.Investigated()
 
 	if len(pinned) > 0 {
+		console.TermBlank()
 		renderPinnedEntries(console, pinned)
 	}
 
@@ -99,6 +100,7 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
 	hasUnfixable := reportHasUnfixableErrors(report, acceptMoved)
 	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
+		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
