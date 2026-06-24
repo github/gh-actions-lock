@@ -23,6 +23,8 @@ runner = ActionsPin::Integration::Runner.new
 # Minimal workflow YAML that uses a single action.
 def simple_workflow(name:, action:)
   <<~YAML
+    # This workflow is managed by gh actions-lock.
+
     name: #{name}
     on: workflow_dispatch
     jobs:
@@ -37,6 +39,8 @@ end
 def multi_action_workflow(name:, actions:)
   steps = actions.map { |a| "      - uses: #{a}" }.join("\n")
   <<~YAML
+    # This workflow is managed by gh actions-lock.
+
     name: #{name}
     on: workflow_dispatch
     jobs:
