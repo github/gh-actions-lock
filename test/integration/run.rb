@@ -178,6 +178,8 @@ def hydrate_assertions(s, expect, needs_token: false)
 
   if expect["lockfile_deps_cover_direct"]
     s.assert_lockfile_deps_cover_direct
+    # Also verify lockfile workflow refs match the actual YAML files.
+    s.assert_lockfile_workflow_coherence
   end
 
   if expect["lockfile_deps_cover_indirect"]

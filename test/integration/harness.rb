@@ -331,6 +331,38 @@ module ActionsPin
         self
       end
 
+      # Verify that the lockfile's workflow→dep mapping is coherent with the
+      # actual workflow YAML files. Every dep listed under a workflow key must
+      # correspond to a `uses:` line in that workflow file (by NWO@ref match).
+      # This catches bugs where the lockfile is stale relative to the YAML.
+      def assert_lockfile_workflow_coherence
+        @assertions << -> (r) {
+          lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+          content = File.read(lockpath) rescue ""
+          lf = YAML.safe_load(content) rescue nil
+          unless lf.is_a?(Hash) && lf["workflows"].is_a?(Hash)
+            assert_true("lockfile coherence: parseable lockfile", false)
+            next
+          end
+          lf["workflows"].each do |wf_path, refs|
+            next unless refs.is_a?(Array)
+            wf_file = File.join(r.dir, wf_path)
+            next unless File.exist?(wf_file)
+            wf_content = File.read(wf_file)
+            refs.each do |ref|
+              # Extract NWO@tag from the dep key
+              parts = ref.split("@", 2)
+              next unless parts.length == 2
+              nwo, tag = parts
+              # The workflow should have `uses: NWO@tag` (or NWO/sub@tag)
+              uses_pat = /uses:\s*#{Regexp.escape(nwo)}(?:\/[^@]+)?@#{Regexp.escape(tag)}/
+              assert_true("lockfile coherence: #{wf_path} uses #{ref}", wf_content.match?(uses_pat))
+            end
+          end
+        }
+        self
+      end
+
       def assert_custom(&block)
         @assertions << block
         self
@@ -1799,6 +1831,8 @@ module ActionsPin
         if spec["lockfile_deps_cover_direct"]
           ok = !failures.any? { |f| f.include?("direct dep covered:") }
           checks << ["lockfile deps cover direct", ok]
+          ok = !failures.any? { |f| f.include?("lockfile coherence:") }
+          checks << ["lockfile ↔ workflow coherence", ok]
         end
         if spec["lockfile_deps_cover_indirect"]
           ok = !failures.any? { |f| f.include?("indirect dep covered:") }
