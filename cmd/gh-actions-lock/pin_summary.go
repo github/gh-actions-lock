@@ -64,10 +64,18 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
+	narrowed := record.Narrowed()
 
 	if len(pinned) > 0 {
 		console.TermBlank()
 		renderPinnedEntries(console, pinned)
+	}
+
+	if len(narrowed) > 0 && len(pinned) == 0 {
+		console.TermBlank()
+	}
+	if len(narrowed) > 0 {
+		renderNarrowedEntries(console, narrowed)
 	}
 
 	renderFullScanWarnings(console, pinned)
@@ -140,6 +148,16 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 		return errSilent
 	}
 	return nil
+}
+
+// renderNarrowedEntries shows refs that were upgraded from mutable (main, v4)
+// to full semver (v6.0.2) on already-pinned workflows.
+func renderNarrowedEntries(console *ui.UI, narrowed []pin.Entry) {
+	console.TermSuccess("Narrowed %d %s to full semver",
+		len(narrowed), ui.Pluralize(len(narrowed), "ref", "refs"))
+	for _, e := range narrowed {
+		console.TermDetail(" %s@%s → %s", e.NWO, e.AutoFixedRef, e.Ref)
+	}
 }
 
 // renderPinnedEntries prints the "Pinned N actions across M workflows" block,
