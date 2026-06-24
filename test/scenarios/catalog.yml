@@ -63,10 +63,11 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: already_pinned_all_valid
     category: happy_path
-    description: "Already-pinned workflow validates without network calls (fast path)"
+    description: "Already-pinned v4 workflow re-pins on the verified fast path; sticky precision keeps the v4 dep key (no narrowing)"
     needs_token: true
     tags: [smoke]
     fixtures:
@@ -77,6 +78,9 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: multi_action_happy
     category: happy_path
@@ -92,6 +96,7 @@ scenarios:
             - "actions/cache@v4"
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: composite_action_transitive
     category: happy_path
@@ -104,6 +109,8 @@ scenarios:
           actions: ["actions/create-github-app-token@v1"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════════ sso_auth ════════════════════════════════║
@@ -233,6 +240,9 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "429"
 
   - name: api_server_error_500
     category: api_errors
@@ -246,6 +256,9 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
+      output_contains:
+        - "could not be resolved"
+        - "500"
 
   - name: api_unauthorized_401
     category: api_errors
@@ -278,6 +291,7 @@ scenarios:
     expect:
       exit: 0
       lockfile_exists: true
+      lockfile_deps_cover_direct: true
 
   - name: onboarded_corrupt_recovery
     category: lockfile
@@ -294,6 +308,7 @@ scenarios:
         response: "y"
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: onboarded_future_version
     category: lockfile
@@ -307,6 +322,8 @@ scenarios:
       lockfile_template: future_version
     expect:
       exit: 2
+      output_contains:
+        - "upgrade"
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════ workflow_parsing ════════════════════════════║
@@ -320,6 +337,8 @@ scenarios:
       workflows: {}
     expect:
       exit: 2
+      output_contains:
+        - "no workflow"
 
   - name: no_workflows_summary
     category: workflow_parsing
@@ -351,7 +370,7 @@ scenarios:
 
   - name: expression_in_uses
     category: workflow_parsing
-    description: "Expression-based uses: (${{ }}) — skipped with warning"
+    description: "Expression-based uses: (${{ }}) — unparseable, skipped with warning"
     needs_token: true
     fixtures:
       workflows:
@@ -367,6 +386,7 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: local_action_skipped
     category: workflow_parsing
@@ -421,6 +441,7 @@ scenarios:
             - "actions/cache/save@v4"
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: duplicate_action_refs
     category: workflow_parsing
@@ -441,6 +462,7 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═════════════════════════════ output_modes ══════════════════════════════║
@@ -448,7 +470,7 @@ scenarios:
 
   - name: no_fix_mode
     category: output_modes
-    description: "--no-fix with valid lockfile — exit 0, nothing written"
+    description: "--no-fix reports findings without writing — exits 1 when unpinned deps exist"
     needs_token: true
     flags: ["--no-fix"]
     fixtures:
@@ -457,7 +479,7 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit_any: [0, 1]
+      exit: 1
 
   - name: json_output_valid
     category: output_modes
@@ -470,7 +492,7 @@ scenarios:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      exit_any: [0, 1]
+      exit: 1
       stdout_is_json: true
 
   - name: json_output_findings
@@ -501,6 +523,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: rescan_inconclusive_fails
     category: output_modes
@@ -551,6 +574,7 @@ scenarios:
           actions: ["actions/checkout@v4", "actions/setup-node@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: many_workflows
     category: multi_workflow
@@ -575,6 +599,7 @@ scenarios:
           actions: ["actions/checkout@v4", "actions/create-release@v1"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: transitive_closure_cross_repo
     category: multi_workflow
@@ -582,9 +607,15 @@ scenarios:
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    fixtures:
+      delete_lockfile: true
     expect:
       exit: 1
-      lockfile_golden: transitive_closure_cross_repo.lock
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "nodeselector/actions-test-fixtures-b@main"
+        - "uses:"
       output_contains:
         - "transitive"
 
@@ -649,6 +680,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.\d+\.\d+'
 
   - name: fresh_full_tag_unchanged
@@ -662,11 +694,12 @@ scenarios:
           actions: ["actions/checkout@v4.2.0"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.2\.0'
 
-  - name: fresh_branch_ref_narrows
+  - name: fresh_branch_ref_not_narrowed
     category: narrowing
-    description: "Branch ref (main) on public action narrows to full semver"
+    description: "Branch ref (main) on public action is NOT narrowed — non-version refs are intentional"
     needs_token: true
     fixtures:
       workflows:
@@ -675,7 +708,9 @@ scenarios:
           actions: ["actions/checkout@main"]
     expect:
       exit: 0
-      lockfile_comment_matches: 'v\d+\.\d+\.\d+'
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "'actions/checkout@main'"
 
   - name: fresh_branch_ref_no_narrow
     category: narrowing
@@ -689,11 +724,12 @@ scenarios:
           actions: ["actions/checkout@main"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'main'
 
-  - name: onboarded_branch_ref_narrows
+  - name: onboarded_branch_ref_not_narrowed
     category: narrowing
-    description: "Onboarded workflow at @main — verified dep narrowing upgrades to full semver"
+    description: "Already-pinned dep at @main is NOT narrowed — non-version refs are intentional choices"
     needs_token: true
     fixtures:
       workflows:
@@ -703,7 +739,9 @@ scenarios:
       lockfile_template: pinned_checkout_main
     expect:
       exit: 0
-      lockfile_comment_matches: 'v\d+\.\d+\.\d+'
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "'actions/checkout@main'"
 
   - name: local_action_only
     category: workflow_parsing
@@ -812,6 +850,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_excludes: 'v4\.\d+\.\d+'
 
   - name: fresh_no_narrow_full_tag
@@ -826,6 +865,7 @@ scenarios:
           actions: ["actions/checkout@v4.2.0"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.2\.0'
 
   - name: onboarded_sticky_imprecise
@@ -840,21 +880,23 @@ scenarios:
       lockfile_template: pinned_checkout_v4_imprecise
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_excludes: 'v4\.\d+\.\d+'
 
   - name: onboarded_full_tag_unchanged
     category: narrowing
-    description: "Lockfile dep key is v4.2.0 (from prior narrowed pin), workflow says @v4 (never locked as v4) — re-pin keeps the lockfile's full semver precision"
+    description: "Workflow and lockfile both say v4.2.0 — re-run is a no-op, full semver precision is preserved"
     needs_token: true
     fixtures:
       workflows:
         ci.yml:
           name: CI
-          actions: ["actions/checkout@v4"]
+          actions: ["actions/checkout@v4.2.0"]
       lockfile_template: pinned_checkout_full
     expect:
       exit: 0
-      lockfile_comment_matches: 'v4\.\d+\.\d+'
+      lockfile_deps_cover_direct: true
+      lockfile_comment_matches: 'v4\.2\.0'
 
   - name: onboarded_no_narrow_keeps_major
     category: narrowing
@@ -869,6 +911,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       lockfile_comment_excludes: 'v4\.\d+\.\d+'
       output_excludes: ["pinned without a full semver tag"]
 
@@ -884,6 +927,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       output_excludes: ["Consider using full semver"]
 
   - name: fresh_no_fix_no_narrow_json_version_ref
@@ -908,9 +952,9 @@ scenarios:
         - expr: '.findings[0].dependency'
           contains: 'actions/checkout'
 
-  - name: transitive_major_ref_not_narrowed
+  - name: transitive_ref_preserved
     category: narrowing
-    description: "Transitive dep of a composite keeps the major ref the composite declares (actions/setup-go@v5 stays v5, not narrowed to v5.x.y) — we don't own composite-internal refs"
+    description: "Transitive dep keeps the composite's declared ref (v1) — not narrowed, no version-ref nudge, and bare-SHA refs get a discovered tag in the ref field"
     needs_token: true
     fixtures:
       workflows:
@@ -919,35 +963,13 @@ scenarios:
           actions: ["cli/gh-extension-precompile@v2.1.0"]
     expect:
       exit: 0
-      lockfile_comment_matches: 'actions/setup-go@v5:'
-      lockfile_comment_excludes: 'actions/setup-go@v5\.\d+\.\d+'
-
-  - name: transitive_version_ref_nudge_suppressed
-    category: narrowing
-    description: "Transitive deps with imprecise refs do not trigger the version-ref nudge — user cannot change composite-internal refs"
-    needs_token: true
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["cli/gh-extension-precompile@v2.1.0"]
-    expect:
-      exit: 0
-      output_excludes: ["pinned without a full semver tag"]
-
-  - name: transitive_provenance_ref_not_narrowed
-    category: narrowing
-    description: "Second-hop transitive dep (actions/attest-build-provenance@v1, pulled in via cli/gh-extension-precompile) keeps its declared major ref — not narrowed to v1.x.y. This dep also declares a bare-SHA subpath internally, which must stay verbatim rather than being reverse-looked-up into a malformed ref."
-    needs_token: true
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["cli/gh-extension-precompile@v2.1.0"]
-    expect:
-      exit: 0
-      lockfile_comment_matches: 'actions/attest-build-provenance@v1:'
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "'actions/attest-build-provenance@v1':"
+        - "ref: 'v1'"
       lockfile_comment_excludes: 'actions/attest-build-provenance@v1\.\d+\.\d+'
+      output_excludes: ["pinned without a full semver tag"]
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ onboarding ═══════════════════════════════║
@@ -969,7 +991,7 @@ scenarios:
 
   - name: onboarded_no_onboard_repin
     category: onboarding
-    description: "--no-onboard: already-tracked workflow re-pins normally"
+    description: "--no-onboard: already-tracked workflow re-pins normally, keeping sticky v4 precision"
     needs_token: true
     flags: ["--no-onboard"]
     fixtures:
@@ -980,10 +1002,13 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: onboarded_no_onboard_mixed
     category: onboarding
-    description: "--no-onboard: mix of tracked and untracked — tracked re-pinned, untracked refused"
+    description: "--no-onboard: mix of tracked and untracked — tracked re-pinned (sticky v4), untracked refused"
     needs_token: true
     flags: ["--no-onboard"]
     fixtures:
@@ -997,6 +1022,9 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_comment_excludes: 'actions/checkout@v4\.\d'
 
   - name: fresh_no_fix_no_onboard_json_findings
     category: onboarding
@@ -1040,6 +1068,7 @@ scenarios:
       lockfile_template: pinned_checkout_v4_imprecise
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
   - name: fresh_no_interactive_no_onboard_ci
     category: onboarding
@@ -1071,6 +1100,8 @@ scenarios:
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
       exit: 2
+      output_contains:
+        - "unreadable"
 
   - name: onboarded_no_interactive_corrupt
     category: lockfile
@@ -1085,6 +1116,8 @@ scenarios:
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
       exit: 2
+      output_contains:
+        - "unreadable"
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ dependabot ═══════════════════════════════║
@@ -1110,6 +1143,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: ".valid"
@@ -1126,7 +1160,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - dependencies:
@@ -1171,10 +1205,10 @@ scenarios:
             dependency: actions/checkout@v4
             detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - findings:
@@ -1183,7 +1217,7 @@ scenarios:
                 dependency: actions/checkout@v4
                 detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/ci.yml
             path: .github/workflows/ci.yml
@@ -1218,10 +1252,10 @@ scenarios:
             dependency: actions/setup-node@v4
             detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - dependencies:
@@ -1236,7 +1270,7 @@ scenarios:
                 dependency: actions/setup-node@v4
                 detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/ci.yml
             path: .github/workflows/ci.yml
@@ -1254,6 +1288,8 @@ scenarios:
       lockfile: "{{{{invalid yaml content not parseable at all}}}}"
     expect:
       exit: 2
+      output_contains:
+        - "unreadable"
 
   - name: dbot_multi_workflow
     category: dependabot
@@ -1286,7 +1322,7 @@ scenarios:
             dependency: actions/checkout@v4
             detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
           - category: onboarding-required
@@ -1294,10 +1330,10 @@ scenarios:
             dependency: actions/setup-node@v4
             detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
             doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-            remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+            remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
         workflows:
           - dependencies:
@@ -1315,7 +1351,7 @@ scenarios:
                 dependency: actions/checkout@v4
                 detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/deploy.yml
               - category: onboarding-required
@@ -1323,7 +1359,7 @@ scenarios:
                 dependency: actions/setup-node@v4
                 detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
                 doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
-                remediation: onboard it first with `gh actions-lock check` (without --no-onboard)
+                remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/deploy.yml
             path: .github/workflows/deploy.yml
@@ -1341,6 +1377,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: '.findings[] | select(.category == "version-ref") | .category'
@@ -1349,7 +1386,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
@@ -1365,6 +1402,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: '.valid'
@@ -1372,35 +1410,37 @@ scenarios:
         - expr: '.findings | length'
           equals: "0"
 
+      lockfile_contains:
+        - "version: 'v0.0.2'"
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd'"
+
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.1
+        lockfile_version: v0.0.2
         valid: true
   - name: dbot_impostor_blocks
     category: dependabot
-    description: "Impostor commit (unreachable SHA) produces impostor-commit/error finding"
-    needs_stub: true
-    tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
+    description: "Orphaned commit (no tag or branch) produces reachability-unknown warning in JSON findings"
+    needs_token: true
+    tags: [smoke]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=findings"]
     fixtures:
       workflows:
         ci.yml:
           name: CI
-          actions: ["actions/checkout@v4"]
-      lockfile_template: pinned_checkout
+          actions: ["nodeselector/actions-test-fixtures@7b403c9ec14bd3ae0bbf793c2bee8815a7ac920b"]
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
+      stdout_contains: ["does not exist or is not reachable"]
       jq:
-        - expr: '.valid'
-          equals: "false"
         - expr: '.findings | length'
-          greater_than: 0
-        - expr: '.findings[] | select(.category == "impostor-commit") | .category'
-          equals: "impostor-commit"
-        - expr: '.findings[] | select(.category == "impostor-commit") | .severity'
-          equals: "error"
+          gt: 0
+        - expr: '.findings[0].category'
+          equals: 'reachability-unknown'
 
   - name: dbot_forgery_blocks
     category: dependabot
@@ -1426,3 +1466,64 @@ scenarios:
           equals: "lockfile-forgery"
         - expr: '.findings[] | select(.category == "lockfile-forgery") | .severity'
           equals: "error"
+
+      golden_json:
+        cli_version: (devel)
+        lockfile_version: v0.0.2
+        valid: false
+        findings:
+          - category: lockfile-forgery
+            confidence: high
+            dependency: actions/checkout@v4
+            detail: "pinned de0fac2e4500 is not an ancestor of bbbbbbbbbbbb \u2014 lockfile may have been tampered with"
+            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            remediation: "investigate immediately \u2014 verify the lockfile entry against upstream history"
+            severity: error
+            workflow: .github/workflows/ci.yml
+
+      lockfile_contains:
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-"
+
+  - name: accept_moved_resolves_forgery
+    category: security
+    description: "--accept-moved re-resolves a lockfile-forgery dep to the current live SHA"
+    needs_token: true
+    tags: [smoke]
+    flags: ["--accept-moved", "--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: forgery_stale_checkout
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "'actions/checkout@v4':"
+        - "ref: 'v4'"
+        - "commit: 'sha1-"
+
+  - name: onboard_roundtrip_v002
+    category: onboarding
+    description: "Fresh onboard writes a v0.0.2 lockfile with correct key format, ref field, and commit field"
+    needs_token: true
+    tags: [real_repo]
+    live_repo: nodeselector/actions-test-fixtures
+    fixtures:
+      delete_lockfile: true
+    expect:
+      exit: 1
+      lockfile_exists: true
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "version: 'v0.0.2'"
+        - "ref:"
+        - "commit: 'sha1-"
+        - "owner_id:"
+        - "repo_id:"
+      lockfile_comment_excludes: '^\s+tag:'
+      lockfile_comment_matches: "ref: '"

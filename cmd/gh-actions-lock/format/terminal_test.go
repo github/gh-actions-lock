@@ -460,7 +460,7 @@ func TestExtractBracketedLabels(t *testing.T) {
 // TestPresentResults_ExcludeCategoriesSkipsImpostor verifies that excluded
 // categories are not rendered in the error findings block. This prevents
 // duplication when renderInvestigationAlerts already surfaced the same
-// findings (e.g. impostor-commit).
+// findings (e.g. lockfile-forgery).
 func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 	var buf bytes.Buffer
 	u := ui.NewPlain(&buf)
@@ -471,11 +471,11 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 				Findings: []checks.Finding{
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
-						Category:     checks.ImpostorCommit,
+						Category:     checks.LockfileForgery,
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
-						Detail:       "commit aaaa not found on any branch",
+						Detail:       "commit aaaa lockfile entry was not a prior state",
 					},
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
@@ -490,17 +490,17 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.ImpostorCommit)
+	PresentResults(u, report, false, false, checks.LockfileForgery)
 	got := buf.String()
 
-	if strings.Contains(got, "IMPOSTOR-COMMIT") {
-		t.Errorf("excluded impostor-commit should not appear:\n%s", got)
+	if strings.Contains(got, "LOCKFILE-FORGERY") {
+		t.Errorf("excluded lockfile-forgery should not appear:\n%s", got)
 	}
-	if strings.Contains(got, "not found on any branch") {
-		t.Errorf("excluded impostor detail should not appear:\n%s", got)
+	if strings.Contains(got, "lockfile entry was not a prior state") {
+		t.Errorf("excluded forgery detail should not appear:\n%s", got)
 	}
 	// The summary line should not count the excluded category.
-	if strings.Contains(got, "impostor-commit") {
+	if strings.Contains(got, "lockfile-forgery") {
 		t.Errorf("excluded category should not appear in summary:\n%s", got)
 	}
 }
@@ -517,11 +517,11 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 				Findings: []checks.Finding{
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
-						Category:     checks.ImpostorCommit,
+						Category:     checks.LockfileForgery,
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
-						Detail:       "commit aaaa not found on any branch",
+						Detail:       "commit aaaa lockfile entry was not a prior state",
 					},
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
@@ -535,11 +535,11 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.ImpostorCommit)
+	PresentResults(u, report, false, false, checks.LockfileForgery)
 	got := buf.String()
 
-	if strings.Contains(got, "IMPOSTOR-COMMIT") {
-		t.Errorf("excluded impostor-commit should not appear:\n%s", got)
+	if strings.Contains(got, "LOCKFILE-FORGERY") {
+		t.Errorf("excluded lockfile-forgery should not appear:\n%s", got)
 	}
 	if !strings.Contains(got, "LOCAL-ACTION") {
 		t.Errorf("non-excluded local-action should still appear:\n%s", got)

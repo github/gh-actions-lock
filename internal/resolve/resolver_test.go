@@ -300,7 +300,8 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 // ref "updated" references a sibling subpath at a DIFFERENT ref "main", the
 // BFS discovers the full transitive closure through the second composite.
 // This mirrors nodeselector/actions-test-fixtures where:
-//   nested-composite@updated → simple-composite@main → (simple-node@main + fixtures-b/simple-echo@main)
+//
+//	nested-composite@updated → simple-composite@main → (simple-node@main + fixtures-b/simple-echo@main)
 func TestResolveAllRecursiveCrossRefTransitive(t *testing.T) {
 	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
@@ -840,15 +841,11 @@ func TestNew_Options(t *testing.T) {
 	nowFn := func() time.Time { return fixed }
 	sleepCalled := false
 	sleepFn := func(_ context.Context, _ time.Duration) { sleepCalled = true }
-	reachFn := func(_ context.Context, _, _, _, _ string) (ReachabilityStatus, string) {
-		return Reachable, "stub"
-	}
 
 	r, err := New("test.com", pool,
 		WithTransport(reg),
 		WithNowFn(nowFn),
 		WithSleepFn(sleepFn),
-		WithCheckReachabilityFunc(reachFn),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -861,10 +858,6 @@ func TestNew_Options(t *testing.T) {
 	r.sleepFn(context.Background(), 0)
 	if !sleepCalled {
 		t.Fatal("SleepFn not applied")
-	}
-
-	if r.checkReachFn == nil {
-		t.Fatal("CheckReachFn not applied")
 	}
 }
 

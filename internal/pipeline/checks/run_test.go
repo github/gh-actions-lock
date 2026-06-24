@@ -15,18 +15,16 @@ import (
 type (
 	stubRefKey       struct{ owner, repo, ref string }
 	stubAncestryKey  struct{ owner, repo, cand, head string }
-	stubReachKey     struct{ owner, repo, sha, ref string }
 	stubTagObjectKey struct{ owner, repo, sha string }
 )
 
 // stubCheckResolver scripts every CheckResolver call from test fixtures.
 // Missing entries return *Unknown values (fail-open).
 type stubCheckResolver struct {
-	refs            map[stubRefKey]string                       // resolved ref → sha; absence = unknown
-	ancestry        map[stubAncestryKey]resolve.AncestryStatus  // (cand, head) ancestry decision
-	ancestryDetails map[stubAncestryKey]string                  // optional per-key detail string; absence = ""
-	reach           map[stubReachKey]resolve.ReachabilityStatus // sha-reachable-from-ref decision
-	tagObjects      map[stubTagObjectKey]string                 // sha → peeled commit
+	refs            map[stubRefKey]string                      // resolved ref → sha; absence = unknown
+	ancestry        map[stubAncestryKey]resolve.AncestryStatus // (cand, head) ancestry decision
+	ancestryDetails map[stubAncestryKey]string                 // optional per-key detail string; absence = ""
+	tagObjects      map[stubTagObjectKey]string                // sha → peeled commit
 }
 
 func (s *stubCheckResolver) ResolveRef(owner, repo, ref string) (string, bool) {
@@ -49,17 +47,6 @@ func (s *stubCheckResolver) CheckAncestry(_ context.Context, owner, repo, cand, 
 	return v, s.ancestryDetails[key]
 }
 
-func (s *stubCheckResolver) CheckReachability(owner, repo, sha, ref string) resolve.ReachabilityStatus {
-	if s == nil {
-		return resolve.ReachabilityUnknown
-	}
-	v, ok := s.reach[stubReachKey{owner, repo, sha, ref}]
-	if !ok {
-		return resolve.ReachabilityUnknown
-	}
-	return v
-}
-
 func (s *stubCheckResolver) PeelTagObject(_ context.Context, owner, repo, sha string) (string, bool) {
 	if s == nil {
 		return "", false
@@ -75,15 +62,49 @@ const (
 	shaImpostor   = "ffffffffffffffffffffffffffffffffffffffff"
 )
 
+// checkPinKey returns a decorated pin string "owner/repo@ref#sha1-hex" that
+// checkNewLockfile parses to build both the workflow key (before #) and the
+// Dependencies entry (Commit from the suffix).
 func checkPinKey(owner, repo, ref, sha string) string {
-	return owner + "/" + repo + "@" + ref + ":sha1-" + sha
+	return owner + "/" + repo + "@" + ref + "#sha1-" + sha
 }
 
-func checkNewLockfile(workflows map[string][]string) parserlock.File {
-	return parserlock.File{
-		Version:   parserlock.Version,
-		Workflows: workflows,
+// checkNewLockfile builds a File from decorated pin keys.
+func checkNewLockfile(workflows map[string][]string, deps ...map[string]parserlock.Action) parserlock.File {
+	d := make(map[string]parserlock.Action)
+	wf := make(map[string][]string, len(workflows))
+	if len(deps) > 0 && deps[0] != nil {
+		// Explicit deps override, pass through workflows as-is.
+		d = deps[0]
+		wf = workflows
+	} else {
+		for path, pins := range workflows {
+			keys := make([]string, 0, len(pins))
+			for _, decorated := range pins {
+				key, commit := splitDecoratedPin(decorated)
+				keys = append(keys, key)
+				if commit != "" {
+					// Extract ref from key (after @)
+					ref := key[strings.LastIndex(key, "@")+1:]
+					d[key] = parserlock.Action{Ref: ref, Commit: commit}
+				}
+			}
+			wf[path] = keys
+		}
 	}
+	return parserlock.File{
+		Version:      parserlock.Version,
+		Workflows:    wf,
+		Dependencies: d,
+	}
+}
+
+// splitDecoratedPin splits "owner/repo@ref#sha1-hex" into key and commit.
+func splitDecoratedPin(s string) (key, commit string) {
+	if idx := strings.Index(s, "#"); idx >= 0 {
+		return s[:idx], s[idx+1:]
+	}
+	return s, ""
 }
 
 func checkParsedWF(path string, uses ...parserlock.ActionRef) ParsedWorkflow {
@@ -181,9 +202,6 @@ func TestRunChecks(t *testing.T) {
 				refs: map[stubRefKey]string{
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV4, "v4"}: resolve.Reachable,
-				},
 			},
 			wantCategories: nil,
 		},
@@ -199,9 +217,6 @@ func TestRunChecks(t *testing.T) {
 				},
 				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
 					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
-				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
 				},
 			},
 			wantCategories: []Category{RefMoved},
@@ -245,20 +260,6 @@ func TestRunChecks(t *testing.T) {
 					t.Fatalf("expected a lockfile-forgery finding, got %v", findingCategories(got))
 				}
 			},
-		},
-		{
-			name: "impostor-commit: sha unreachable from ref and resolver doesn't know ref",
-			lockfile: map[string][]string{
-				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
-			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
-			resolver: &stubCheckResolver{
-				// Resolver doesn't know the ref → no ref-moved / forgery path.
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaImpostor, "v4"}: resolve.Unreachable,
-				},
-			},
-			wantCategories: []Category{ImpostorCommit},
 		},
 		{
 			name:         "misleading-sha: sha-shaped ref resolves to different commit",
@@ -336,9 +337,6 @@ func TestRunChecks(t *testing.T) {
 					{"actions", "checkout", "v4"}: shaCheckoutV4,
 				},
 				// No ancestry entry → stub returns AncestryUnknown.
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-				},
 			},
 			wantCategories: []Category{AncestryUnknown},
 			extra: func(t *testing.T, got []Finding) {
@@ -370,9 +368,6 @@ func TestRunChecks(t *testing.T) {
 				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
 					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-				},
 			},
 			wantCategories: []Category{RefMoved},
 			extra: func(t *testing.T, got []Finding) {
@@ -399,9 +394,6 @@ func TestRunChecks(t *testing.T) {
 				ancestryDetails: map[stubAncestryKey]string{
 					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: "rate limited (HTTP 429); resets at 1717552800; retry budget exhausted after 3 attempts",
 				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-				},
 			},
 			wantCategories: []Category{AncestryUnknown},
 			extra: func(t *testing.T, got []Finding) {
@@ -421,61 +413,9 @@ func TestRunChecks(t *testing.T) {
 			// "ahead": the live SHA descends from the lockfile
 			// commit (its parent is a real descendant), so ref-moved
 			// would otherwise be the only finding. The new
-			// liveRefImpostorFinding catches the live-SHA branch
-			// unreachability and escalates with a parallel
-			// impostor-commit error.
-			name: "ref-moved + impostor-commit: tag hijacked to fork-network commit",
-			lockfile: map[string][]string{
-				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
-			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
-			resolver: &stubCheckResolver{
-				refs: map[stubRefKey]string{
-					{"actions", "checkout", "v4"}: shaImpostor,
-				},
-				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaImpostor}: resolve.AncestryConfirmed,
-				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-					{"actions", "checkout", shaImpostor, "v4"}:   resolve.Unreachable,
-				},
-			},
-			wantCategories: []Category{ImpostorCommit, RefMoved},
-			extra: func(t *testing.T, got []Finding) {
-				var impostor, refMoved *Finding
-				for i := range got {
-					switch got[i].Category {
-					case ImpostorCommit:
-						impostor = &got[i]
-					case RefMoved:
-						refMoved = &got[i]
-					}
-				}
-				if impostor == nil || refMoved == nil {
-					t.Fatalf("expected both impostor-commit and ref-moved, got %v", findingCategories(got))
-				}
-				if impostor.Severity != SeverityError {
-					t.Errorf("impostor severity: got %s, want error", impostor.Severity)
-				}
-				if impostor.ObservedSHA != shaImpostor {
-					t.Errorf("impostor ObservedSHA: got %q, want %q (live SHA, the actual impostor)", impostor.ObservedSHA, shaImpostor)
-				}
-				if impostor.Dependency == nil || impostor.Dependency.SHA != shaImpostor {
-					t.Errorf("impostor Dependency.SHA: want live %q, got %#v (must differ from ref-moved finding so consumers can tell them apart)", shaImpostor, impostor.Dependency)
-				}
-				if refMoved.Dependency == nil || refMoved.Dependency.SHA != shaCheckoutV3 {
-					t.Errorf("ref-moved Dependency.SHA: want locked %q, got %#v", shaCheckoutV3, refMoved.Dependency)
-				}
-				if !strings.Contains(impostor.Detail, "fork-network injection") {
-					t.Errorf("impostor Detail: want fork-network wording, got %q", impostor.Detail)
-				}
-			},
-		},
-		{
 			// Negative: when the live SHA *is* reachable from a
 			// branch, the move is benign (release-train style).
-			// Only ref-moved should fire — no parallel impostor.
+			// Only ref-moved should fire.
 			name: "ref-moved only: live SHA reachable means benign move",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
@@ -488,43 +428,13 @@ func TestRunChecks(t *testing.T) {
 				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
 					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-					{"actions", "checkout", shaCheckoutV4, "v4"}: resolve.Reachable,
-				},
 			},
 			wantCategories: []Category{RefMoved},
 		},
 		{
-			// Fail-open: reach result Unknown for live SHA (cache miss,
-			// rate limit) must not escalate to impostor-commit. Same
-			// fallback policy as the locked-SHA path.
-			name: "ref-moved only: live-SHA reachability unknown stays benign",
-			lockfile: map[string][]string{
-				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
-			},
-			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
-			resolver: &stubCheckResolver{
-				refs: map[stubRefKey]string{
-					{"actions", "checkout", "v4"}: shaCheckoutV4,
-				},
-				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
-					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
-				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-					// no live-SHA entry → ReachabilityUnknown
-				},
-			},
-			wantCategories: []Category{RefMoved},
-		},
-		{
-			// Forgery suppression: when ancestry says
-			// AncestryNotAncestor the lockfile is forged. Do NOT
-			// emit a parallel impostor-commit even if the live SHA
-			// is also unreachable — forgery is the stronger claim
-			// and double-flagging clutters without adding action.
-			name: "forgery suppresses live impostor",
+			// Forgery: when ancestry says AncestryNotAncestor the
+			// lockfile is forged.
+			name: "forgery: ancestry not ancestor",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 			},
@@ -536,35 +446,23 @@ func TestRunChecks(t *testing.T) {
 				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
 					{"actions", "checkout", shaImpostor, shaCheckoutV4}: resolve.AncestryNotAncestor,
 				},
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV4, "v4"}: resolve.Unreachable,
-				},
 			},
 			extra: func(t *testing.T, got []Finding) {
-				cats := findingCategories(got)
-				for _, c := range cats {
-					if c == string(ImpostorCommit) {
-						t.Fatalf("forgery branch must not emit parallel impostor-commit, got %v", cats)
-					}
-				}
 				hasForgery := false
-				for _, c := range cats {
+				for _, c := range findingCategories(got) {
 					if c == string(LockfileForgery) {
 						hasForgery = true
 					}
 				}
 				if !hasForgery {
-					t.Fatalf("expected lockfile-forgery, got %v", cats)
+					t.Fatalf("expected lockfile-forgery, got %v", findingCategories(got))
 				}
 			},
 		},
 		{
-			// AncestryUnknown + live SHA unreachable: both signals
-			// must surface. ancestry-unknown says "we can't tell if
-			// this is a release move or a forgery", impostor-commit
-			// says "live SHA is on no branch — investigate". They
-			// answer different questions, so emit both.
-			name: "ancestry-unknown + impostor: independent signals coexist",
+			// AncestryUnknown: when neither confirmed nor denied,
+			// emit ancestry-unknown warning.
+			name: "ancestry-unknown: inconclusive check",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV3)},
 			},
@@ -574,12 +472,8 @@ func TestRunChecks(t *testing.T) {
 					{"actions", "checkout", "v4"}: shaImpostor,
 				},
 				// No ancestry entry → AncestryUnknown.
-				reach: map[stubReachKey]resolve.ReachabilityStatus{
-					{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-					{"actions", "checkout", shaImpostor, "v4"}:   resolve.Unreachable,
-				},
 			},
-			wantCategories: []Category{AncestryUnknown, ImpostorCommit},
+			wantCategories: []Category{AncestryUnknown},
 		},
 	}
 
@@ -643,9 +537,6 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 		ancestry: map[stubAncestryKey]resolve.AncestryStatus{
 			{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
 		},
-		reach: map[stubReachKey]resolve.ReachabilityStatus{
-			{"actions", "checkout", shaCheckoutV3, "v4"}: resolve.Reachable,
-		},
 	}
 	got := RunChecks(context.Background(), pw, lf, r)
 	if len(got) == 0 {
@@ -655,67 +546,5 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 		if f.Confidence == "" {
 			t.Errorf("finding[%d] category=%s has empty Confidence — every construction site must set it", i, f.Category)
 		}
-	}
-}
-
-// --- impostor-commit fail-open guards -------------------------------------
-//
-// The locked-SHA impostor check (checkImpostorCommit) must only fire on an
-// authoritative Unreachable verdict. When reachability is Unknown (rate
-// limit / transient API failure) it must fail open: a scanner that cried
-// "injected lockfile entry" every time the GitHub API hiccupped would be
-// worse than useless. These tests pin that contract.
-
-func impostorFixture(reach resolve.ReachabilityStatus) (ParsedWorkflow, map[string]parserlock.Pin, *stubCheckResolver) {
-	ref := checkRef("actions", "checkout", "v4")
-	pw := checkParsedWF(".github/workflows/ci.yml", ref)
-	depIndex := map[string]parserlock.Pin{
-		parserlock.IndexKey("actions", "checkout", "v4"): {
-			NWO: "actions/checkout", Owner: "actions", Repo: "checkout",
-			Ref: "v4", Algo: "sha1", Hex: shaImpostor,
-		},
-	}
-	r := &stubCheckResolver{
-		reach: map[stubReachKey]resolve.ReachabilityStatus{
-			{"actions", "checkout", shaImpostor, "v4"}: reach,
-		},
-	}
-	return pw, depIndex, r
-}
-
-func TestCheckImpostorCommit_UnreachableEmitsFinding(t *testing.T) {
-	pw, depIndex, r := impostorFixture(resolve.Unreachable)
-
-	out := checkImpostorCommit(pw, depIndex, r, nil)
-	if len(out) != 1 {
-		t.Fatalf("Unreachable: got %d findings, want 1 (%v)", len(out), findingCategories(out))
-	}
-	if out[0].Category != ImpostorCommit {
-		t.Fatalf("category = %v, want ImpostorCommit", out[0].Category)
-	}
-}
-
-func TestCheckImpostorCommit_ReachabilityUnknownFailsOpen(t *testing.T) {
-	pw, depIndex, r := impostorFixture(resolve.ReachabilityUnknown)
-
-	out := checkImpostorCommit(pw, depIndex, r, nil)
-	for _, f := range out {
-		if f.Category == ImpostorCommit {
-			t.Fatalf("Unknown reachability must not emit ImpostorCommit (got %v)", findingCategories(out))
-		}
-	}
-}
-
-func TestLiveRefImpostorFinding_ReachabilityUnknownFailsOpen(t *testing.T) {
-	ref := checkRef("actions", "checkout", "v4")
-	pw := checkParsedWF(".github/workflows/ci.yml", ref)
-	r := &stubCheckResolver{
-		reach: map[stubReachKey]resolve.ReachabilityStatus{
-			{"actions", "checkout", shaImpostor, "v4"}: resolve.ReachabilityUnknown,
-		},
-	}
-
-	if _, ok := liveRefImpostorFinding(pw, ref, shaImpostor, r); ok {
-		t.Fatal("Unknown reachability must not produce a live-ref impostor finding")
 	}
 }

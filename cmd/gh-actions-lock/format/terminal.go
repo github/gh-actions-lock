@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
-
-	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/ui"
 )
 
@@ -116,7 +114,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction,
 		checks.SelfHostedRunner, checks.ExpressionRunner,
-		checks.Stale, checks.MisleadingSHA, checks.ImpostorCommit,
+		checks.Stale, checks.MisleadingSHA,
 	} {
 		if n, ok := catCounts[cat]; ok {
 			parts = append(parts, fmt.Sprintf("%d %s", n, string(cat)))
@@ -160,11 +158,6 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 		out.Detail("  ↳ Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
 			nwo, f.RecommendedTag, sha)
 	}
-	if f.Category == checks.ImpostorCommit {
-		out.Detail("  %s %s", ui.IconWarning, pipeline.ImpostorCommitContext)
-		out.Detail("  ↳ %s", pipeline.PublisherEscalationCopy)
-		out.Detail("  see: %s", out.DocLink(pipeline.PublisherTagReleasesDocURL))
-	}
 	if f.DocURL != "" {
 		out.Detail("  see: %s", out.DocLink(f.DocURL))
 	}
@@ -198,7 +191,7 @@ func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
 			labels = append(labels, l)
 		}
 		sort.Strings(labels)
-		out.Detail("  ↳ re-run with --allow-runners %s", strings.Join(labels, ","))
+		out.Detail("  ↳ re-run with --allow-runners %s or -A to allow all", strings.Join(labels, ","))
 	}
 }
 
@@ -332,10 +325,10 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 				labels = append(labels, l)
 			}
 			sort.Strings(labels)
-			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s",
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s or -A to allow all",
 				strings.Join(labels, ","))
 		} else {
-			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label>")
+			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label> or -A to allow all")
 		}
 	}
 	if len(expressionRunnerWorkflows) > 0 {
@@ -388,7 +381,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.ImpostorCommit, checks.LockfileForgery, checks.MisleadingSHA, checks.OnboardingRequired:
+	case checks.LockfileForgery, checks.MisleadingSHA, checks.OnboardingRequired:
 		return true
 	}
 	return false

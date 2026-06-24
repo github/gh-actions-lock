@@ -78,7 +78,7 @@ func TestReverseLookup_SkipsEmptyOwnerRepo(t *testing.T) {
 	deps := []dep.Dependency{
 		{NWO: "", Ref: "v1", SHA: "abc"},
 	}
-	rewrites, err := r.ReverseLookup(context.Background(), deps)
+	rewrites, _, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,17 +52,6 @@ func TestCompareLowercasesBothShas(t *testing.T) {
 	}
 }
 
-func TestReachLowercasesSha(t *testing.T) {
-	a := ForReach("o", "r", "AAA", "main")
-	b := ForReach("o", "r", "aaa", "main")
-	if a != b {
-		t.Fatalf("expected SHA to fold: %v vs %v", a, b)
-	}
-	if got := a.String(); got != "o/r|aaa|main" {
-		t.Fatalf("Reach.String() = %q", got)
-	}
-}
-
 func TestActionRefDistinguishesPath(t *testing.T) {
 	plain := ForActionRef("actions", "cache", "", "v4")
 	subpath := ForActionRef("actions", "cache", "save", "v4")

@@ -24,10 +24,6 @@ const (
 	// Stale means the pinned SHA no longer matches what the ref
 	// resolves to today.
 	Stale Category = "stale"
-	// ImpostorCommit means the pinned SHA is not in the ref's git
-	// history (possible fork-network commit). Matches zizmor's
-	// impostor-commit audit ID.
-	ImpostorCommit Category = "impostor-commit"
 	// MisleadingSHA means a ref looks like a SHA but resolves to a
 	// different commit.
 	MisleadingSHA Category = "misleading-sha"
@@ -57,7 +53,7 @@ const (
 	// lockfile. Under --no-onboard the tool refuses to add new entries: the
 	// workflow/action is skipped and surfaced rather than silently pinned.
 	// Already-tracked entries are still re-pinned. The operator must onboard
-	// explicitly (run `gh actions-lock check` without --no-onboard) to add it.
+	// explicitly (run `gh actions-lock` without --no-onboard) to add it.
 	OnboardingRequired Category = "onboarding-required"
 	// VersionRef is an informational nudge: a dependency is pinned with a
 	// ref that is not a full semver tag (e.g. v4, v3.1, main). Full semver

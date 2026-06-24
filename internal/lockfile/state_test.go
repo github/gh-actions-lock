@@ -10,7 +10,6 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
-	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 type fakeMetadataResolver struct{}
@@ -19,7 +18,7 @@ func (fakeMetadataResolver) RepoIDs(_ context.Context, owner, repo string) (int6
 	return 1, 2, nil
 }
 
-func TestState_PersistsTagAndBranch(t *testing.T) {
+func TestState_PersistsRef(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
 		t.Fatal(err)
@@ -49,7 +48,7 @@ func TestState_PersistsTagAndBranch(t *testing.T) {
 		},
 	}
 
-	if err := store.Set(context.Background(), workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml")), deps, nil, nil); err != nil {
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, nil, nil); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -61,29 +60,24 @@ func TestState_PersistsTagAndBranch(t *testing.T) {
 		t.Fatalf("reading lockfile: %v", err)
 	}
 	got := string(raw)
+	// Tag dep should serialize ref as the tag value (tag > branch).
 	for _, want := range []string{
-		"'actions/checkout@v4.2.1:sha1-",
-		"tag: 'v4.2.1'",
-		"branch: 'main'",
-		"'internal/branch-only@main:sha1-",
+		"'actions/checkout@v4.2.1':",
+		"ref: 'v4.2.1'",
+		"'internal/branch-only@main':",
+		"ref: 'main'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lockfile missing %q\n--- contents ---\n%s", want, got)
 		}
 	}
 
-	// Branch-only entry should NOT emit tag:, only branch:.
-	branchOnlyIdx := strings.Index(got, "internal/branch-only@main:sha1-")
-	if branchOnlyIdx < 0 {
-		t.Fatalf("expected branch-only entry in lockfile")
+	// The lockfile should NOT contain separate tag:/branch: fields.
+	if strings.Contains(got, "tag:") {
+		t.Errorf("lockfile should not contain tag: field\n%s", got)
 	}
-	branchSection := got[branchOnlyIdx:]
-	nextEntryIdx := strings.Index(branchSection[1:], "  'actions/")
-	if nextEntryIdx >= 0 {
-		branchSection = branchSection[:nextEntryIdx+1]
-	}
-	if strings.Contains(branchSection, "tag:") {
-		t.Errorf("branch-only entry should not emit tag:\n%s", branchSection)
+	if strings.Contains(got, "branch:") {
+		t.Errorf("lockfile should not contain branch: field\n%s", got)
 	}
 
 	// Reload and verify roundtrip.
@@ -91,27 +85,21 @@ func TestState_PersistsTagAndBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopening store: %v", err)
 	}
-	checkoutKey := "actions/checkout@v4.2.1:sha1-abc123abc123abc123abc123abc123abc123abc1"
+	checkoutKey := "actions/checkout@v4.2.1"
 	a, ok := store2.file.Dependencies[checkoutKey]
 	if !ok {
 		t.Fatalf("expected %s in reloaded lockfile, keys=%v", checkoutKey, actionKeys(store2.file.Dependencies))
 	}
-	if a.Tag != "v4.2.1" {
-		t.Errorf("expected Tag=v4.2.1, got %q", a.Tag)
+	if a.Ref != "v4.2.1" {
+		t.Errorf("expected Ref=v4.2.1, got %q", a.Ref)
 	}
-	if a.Branch != "main" {
-		t.Errorf("expected Branch=main, got %q", a.Branch)
-	}
-	branchOnlyKey := "internal/branch-only@main:sha1-def456def456def456def456def456def456def4"
+	branchOnlyKey := "internal/branch-only@main"
 	b, ok := store2.file.Dependencies[branchOnlyKey]
 	if !ok {
 		t.Fatalf("expected %s, keys=%v", branchOnlyKey, actionKeys(store2.file.Dependencies))
 	}
-	if b.Tag != "" {
-		t.Errorf("expected empty Tag, got %q", b.Tag)
-	}
-	if b.Branch != "main" {
-		t.Errorf("expected Branch=main, got %q", b.Branch)
+	if b.Ref != "main" {
+		t.Errorf("expected Ref=main, got %q", b.Ref)
 	}
 }
 
@@ -123,7 +111,9 @@ func actionKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func TestState_SetRejectsEmptyBranch(t *testing.T) {
+// TestState_SetAcceptsEmptyBranch verifies that deps with no discovered
+// branch are accepted — the new schema makes ref optional.
+func TestState_SetAcceptsEmptyBranch(t *testing.T) {
 	dir := t.TempDir()
 	store, err := LoadState(dir, fakeMetadataResolver{})
 	if err != nil {
@@ -136,28 +126,22 @@ func TestState_SetRejectsEmptyBranch(t *testing.T) {
 			Ref:      "v4",
 			SHA:      "abc123abc123abc123abc123abc123abc123abc1",
 			HashAlgo: "sha1",
-			// Branch intentionally empty — should be rejected.
 		},
 	}
 
 	err = store.Set(context.Background(), ".github/workflows/ci.yml", deps, nil, nil)
-	if err == nil {
-		t.Fatal("expected error for dep with empty Branch, got nil")
-	}
-	if !strings.Contains(err.Error(), "branch is required") {
-		t.Errorf("expected 'branch is required' in error, got: %v", err)
+	if err != nil {
+		t.Fatalf("Set should accept dep with empty Branch, got: %v", err)
 	}
 }
 
-// TestState_SetPreservesBranchForUnchangedPin reproduces the write-path bug
-// where adding a new action to an already-tracked workflow failed with
-// "branch is required". The lockfile read path (parserlock.Pin) drops branch,
-// so a carried Verified dep arrives at Set branchless; Set must fall back to
-// the branch already recorded on disk for that unchanged pin instead of
-// rejecting the whole write.
-func TestState_SetPreservesBranchForUnchangedPin(t *testing.T) {
+// TestState_SetPreservesRefForUnchangedPin reproduces the write-path where
+// adding a new action to an already-tracked workflow must not lose the ref
+// for carried (Verified) deps that arrive without Tag/Branch from the read
+// path. Set must fall back to the ref already recorded on disk.
+func TestState_SetPreservesRefForUnchangedPin(t *testing.T) {
 	dir := t.TempDir()
-	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
+	wfKey := ".github/workflows/ci.yml"
 
 	store, err := LoadState(dir, fakeMetadataResolver{})
 	if err != nil {
@@ -200,16 +184,13 @@ func TestState_SetPreservesBranchForUnchangedPin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopening store: %v", err)
 	}
-	checkoutKey := "actions/checkout@v4:sha1-abc123abc123abc123abc123abc123abc123abc1"
+	checkoutKey := "actions/checkout@v4"
 	a, ok := store3.file.Dependencies[checkoutKey]
 	if !ok {
 		t.Fatalf("expected %s preserved, keys=%v", checkoutKey, actionKeys(store3.file.Dependencies))
 	}
-	if a.Branch != "main" {
-		t.Errorf("expected preserved Branch=main for unchanged pin, got %q", a.Branch)
-	}
-	if a.Tag != "v4" {
-		t.Errorf("expected preserved Tag=v4 for unchanged pin, got %q", a.Tag)
+	if a.Ref != "v4" {
+		t.Errorf("expected preserved Ref=v4 for unchanged pin, got %q", a.Ref)
 	}
 }
 
@@ -255,11 +236,11 @@ func TestState_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 	got := string(raw)
 
 	// Shared dep pin that both A and B should reference.
-	sharedPin := "shared/dep@v1:sha1-cccccccccccccccccccccccccccccccccccccccc"
+	sharedPin := "shared/dep@v1"
 
 	// Both A and B should have uses: containing the shared dep.
-	aPin := "owner/a@v1:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	bPin := "owner/b@v1:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	aPin := "owner/a@v1"
+	bPin := "owner/b@v1"
 
 	// Verify structure via reload.
 	store2, err := LoadState(dir, fakeMetadataResolver{})
@@ -298,7 +279,9 @@ func TestState_DiamondTransitiveDepEmittedCorrectly(t *testing.T) {
 
 // TestState_SaveGCHandlesCyclicUses verifies that Save()'s garbage collection
 // walk (which follows uses: edges) terminates when the uses: graph contains a
-// cycle (A uses B, B uses A). Both entries should be retained.
+// cycle (A uses B, B uses A). Both entries should be retained in the write.
+// The new parser rejects cycles on reload, so we verify Save doesn't hang
+// and the cycle is caught on re-parse.
 func TestState_SaveGCHandlesCyclicUses(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
@@ -319,7 +302,6 @@ func TestState_SaveGCHandlesCyclicUses(t *testing.T) {
 		"owner/b@v1": {"owner/a@v1"},
 		"owner/a@v1": {"owner/b@v1"},
 	}
-	// A is the workflow-direct entry.
 	directKeys := map[string]bool{
 		"owner/a@v1": true,
 	}
@@ -327,25 +309,18 @@ func TestState_SaveGCHandlesCyclicUses(t *testing.T) {
 	if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
+	// Save should not hang (GC walk terminates despite cycle).
 	if err := store.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Reload and verify both entries survived GC (cycle didn't cause infinite
-	// loop or premature GC).
-	store2, err := LoadState(dir, fakeMetadataResolver{})
-	if err != nil {
-		t.Fatalf("reopening store: %v", err)
+	// The new parser rejects cycles on reload.
+	_, err = LoadState(dir, fakeMetadataResolver{})
+	if err == nil {
+		t.Fatal("expected parser to reject cyclic uses on reload")
 	}
-
-	aPin := "owner/a@v1:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	bPin := "owner/b@v1:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-	if _, ok := store2.file.Dependencies[aPin]; !ok {
-		t.Errorf("expected %s to survive GC, keys=%v", aPin, actionKeys(store2.file.Dependencies))
-	}
-	if _, ok := store2.file.Dependencies[bPin]; !ok {
-		t.Errorf("expected %s to survive GC (reachable via cyclic uses:), keys=%v", bPin, actionKeys(store2.file.Dependencies))
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("expected cycle error, got: %v", err)
 	}
 }
 
@@ -514,8 +489,7 @@ func setupClosure(t *testing.T, dir string) {
 	}
 	parentMap := map[string][]string{"actions/cache@v4": {"actions/setup-go@v6"}}
 	directKeys := map[string]bool{"actions/setup-go@v6": true}
-	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
-	if err := store.Set(context.Background(), wfKey, deps, parentMap, directKeys); err != nil {
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", deps, parentMap, directKeys); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := store.Save(); err != nil {
@@ -605,7 +579,7 @@ func TestState_BumpYieldsMinimalDiff(t *testing.T) {
 	if strings.Contains(string(after), "owner/b@v2") {
 		t.Fatalf("expected owner/b@v2 to be gone after bump, got:\n%s", after)
 	}
-	if !strings.Contains(string(after), "owner/b@v6:sha1-9999999999999999999999999999999999999999") {
+	if !strings.Contains(string(after), "owner/b@v6") {
 		t.Fatalf("expected bumped owner/b@v6 pin, got:\n%s", after)
 	}
 }
@@ -671,7 +645,7 @@ func TestState_BumpTransitiveRemoval(t *testing.T) {
 			t.Fatal(err)
 		}
 		before, _ := os.ReadFile(filepath.Join(dir, parserlock.Path))
-		sharedPin := "shared/s@v1:sha1-5555555555555555555555555555555555555555"
+		sharedPin := "shared/s@v1"
 		if !strings.Contains(string(before), sharedPin) {
 			t.Fatalf("setup: expected shared pin present, got:\n%s", before)
 		}
@@ -739,27 +713,26 @@ func TestState_SaveFormatIsStable(t *testing.T) {
 	const golden = "# This file is machine-generated by `gh actions-lock`.\n" +
 		"# Do not edit by hand; run `gh actions-lock` to update.\n" +
 		"# Docs: https://gh.io/actions-lockfile\n" +
-		"version: 'v0.0.1'\n" +
+		"version: '" + parserlock.Version + "'\n" +
 		"workflows:\n" +
 		"    '.github/workflows/ci.yml':\n" +
-		"        - 'actions/checkout@v4:sha1-11111111111111111111111111111111111111aa'\n" +
-		"        - 'actions/setup-go@v5:sha1-22222222222222222222222222222222222222bb'\n" +
+		"        - 'actions/checkout@v4'\n" +
+		"        - 'actions/setup-go@v5'\n" +
 		"dependencies:\n" +
-		"    'actions/checkout@v4:sha1-11111111111111111111111111111111111111aa':\n" +
-		"        tag: 'v4'\n" +
-		"        branch: 'main'\n" +
+		"    'actions/checkout@v4':\n" +
+		"        ref: 'v4'\n" +
 		"        commit: 'sha1-11111111111111111111111111111111111111aa'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"        uses:\n" +
-		"            - 'shared/dep@v1:sha1-33333333333333333333333333333333333333cc'\n" +
-		"    'actions/setup-go@v5:sha1-22222222222222222222222222222222222222bb':\n" +
-		"        branch: 'main'\n" +
+		"            - 'shared/dep@v1'\n" +
+		"    'actions/setup-go@v5':\n" +
+		"        ref: 'v5'\n" +
 		"        commit: 'sha1-22222222222222222222222222222222222222bb'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
-		"    'shared/dep@v1:sha1-33333333333333333333333333333333333333cc':\n" +
-		"        branch: 'main'\n" +
+		"    'shared/dep@v1':\n" +
+		"        ref: 'v1'\n" +
 		"        commit: 'sha1-33333333333333333333333333333333333333cc'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n"
@@ -818,57 +791,52 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 	const golden = "# This file is machine-generated by `gh actions-lock`.\n" +
 		"# Do not edit by hand; run `gh actions-lock` to update.\n" +
 		"# Docs: https://gh.io/actions-lockfile\n" +
-		"version: 'v0.0.1'\n" +
+		"version: '" + parserlock.Version + "'\n" +
 		"workflows:\n" +
 		"    '.github/workflows/workflow-a.yml':\n" +
-		"        - 'actions/checkout@v4:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n" +
-		"        - 'my-org/composite-a@v1:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'\n" +
-		"        - 'my-org/composite-c@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'\n" +
+		"        - 'actions/checkout@v4'\n" +
+		"        - 'my-org/composite-a@v1'\n" +
+		"        - 'my-org/composite-c@v1'\n" +
 		"    '.github/workflows/workflow-b.yml':\n" +
-		"        - 'actions/checkout@v4:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n" +
-		"        - 'my-org/composite-b@v2:sha1-cccccccccccccccccccccccccccccccccccccccc'\n" +
+		"        - 'actions/checkout@v4'\n" +
+		"        - 'my-org/composite-b@v2'\n" +
 		"    '.github/workflows/workflow-c.yml':\n" +
-		"        - 'my-org/leaf@main:sha1-dddddddddddddddddddddddddddddddddddddddd'\n" +
+		"        - 'my-org/leaf@main'\n" +
 		"dependencies:\n" +
-		"    'actions/checkout@v4:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa':\n" +
-		"        tag: 'v4'\n" +
-		"        branch: 'main'\n" +
+		"    'actions/checkout@v4':\n" +
+		"        ref: 'v4'\n" +
 		"        commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
-		"    'my-org/composite-a@v1:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb':\n" +
-		"        tag: 'v1'\n" +
-		"        branch: 'main'\n" +
+		"    'my-org/composite-a@v1':\n" +
+		"        ref: 'v1'\n" +
 		"        commit: 'sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"        uses:\n" +
-		"            - 'my-org/composite-b@v2:sha1-cccccccccccccccccccccccccccccccccccccccc'\n" +
-		"            - 'other-org/external@v1:sha1-ffffffffffffffffffffffffffffffffffffffff'\n" +
-		"    'my-org/composite-b@v2:sha1-cccccccccccccccccccccccccccccccccccccccc':\n" +
-		"        tag: 'v2'\n" +
-		"        branch: 'main'\n" +
+		"            - 'my-org/composite-b@v2'\n" +
+		"            - 'other-org/external@v1'\n" +
+		"    'my-org/composite-b@v2':\n" +
+		"        ref: 'v2'\n" +
 		"        commit: 'sha1-cccccccccccccccccccccccccccccccccccccccc'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"        uses:\n" +
-		"            - 'my-org/leaf@main:sha1-dddddddddddddddddddddddddddddddddddddddd'\n" +
-		"    'my-org/composite-c@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee':\n" +
-		"        tag: 'v1'\n" +
-		"        branch: 'main'\n" +
+		"            - 'my-org/leaf@main'\n" +
+		"    'my-org/composite-c@v1':\n" +
+		"        ref: 'v1'\n" +
 		"        commit: 'sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"        uses:\n" +
-		"            - 'my-org/composite-b@v2:sha1-cccccccccccccccccccccccccccccccccccccccc'\n" +
-		"    'my-org/leaf@main:sha1-dddddddddddddddddddddddddddddddddddddddd':\n" +
-		"        branch: 'main'\n" +
+		"            - 'my-org/composite-b@v2'\n" +
+		"    'my-org/leaf@main':\n" +
+		"        ref: 'main'\n" +
 		"        commit: 'sha1-dddddddddddddddddddddddddddddddddddddddd'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
-		"    'other-org/external@v1:sha1-ffffffffffffffffffffffffffffffffffffffff':\n" +
-		"        tag: 'v1'\n" +
-		"        branch: 'main'\n" +
+		"    'other-org/external@v1':\n" +
+		"        ref: 'v1'\n" +
 		"        commit: 'sha1-ffffffffffffffffffffffffffffffffffffffff'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n"
@@ -895,12 +863,12 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 	if err := store.Set(ctx, ".github/workflows/workflow-a.yml",
 		[]dep.Dependency{checkout, compositeA, compositeB, leaf, compositeC, external},
 		map[string][]string{
-			"my-org/composite-b@v2":  {"my-org/composite-a@v1", "my-org/composite-c@v1"},
-			"other-org/external@v1":  {"my-org/composite-a@v1"},
-			"my-org/leaf@main":       {"my-org/composite-b@v2"},
+			"my-org/composite-b@v2": {"my-org/composite-a@v1", "my-org/composite-c@v1"},
+			"other-org/external@v1": {"my-org/composite-a@v1"},
+			"my-org/leaf@main":      {"my-org/composite-b@v2"},
 		},
 		map[string]bool{
-			"actions/checkout@v4":    true,
+			"actions/checkout@v4":   true,
 			"my-org/composite-a@v1": true,
 			"my-org/composite-c@v1": true,
 		},
@@ -917,7 +885,7 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 		[]dep.Dependency{checkout, compositeB},
 		nil,
 		map[string]bool{
-			"actions/checkout@v4":    true,
+			"actions/checkout@v4":   true,
 			"my-org/composite-b@v2": true,
 		},
 	); err != nil {

@@ -40,7 +40,7 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	assert.Equal(t, "./local-action", localPaths[0])
 
 	assert.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "expression-based")
+	assert.Contains(t, warnings[0], "unparseable uses:")
 }
 
 func TestDiscoverWorkflowsIn(t *testing.T) {

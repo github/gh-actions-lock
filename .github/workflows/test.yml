@@ -19,7 +19,16 @@ jobs:
       - uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
-      - run: go test ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
 
   integration-stub:
     runs-on: ubuntu-latest

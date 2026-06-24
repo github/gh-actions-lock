@@ -2,6 +2,8 @@ package resolve
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -84,10 +86,15 @@ func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 		httpmock.RESTWithQuery("GET", `repos/actions/checkout/branches`, "protected=true"),
 		httpmock.JSONResponse(httpmock.BranchListResponse()),
 	)
-	// Phase 2: listBranches (full listing) also returns empty → impostor error.
+	// Phase 2: listBranches (full listing) also returns empty.
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/branches`),
 		httpmock.JSONResponse(httpmock.BranchListResponse()),
+	)
+	// Tags: empty → orphaned commit (no tag either).
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse([]any{}),
 	)
 
 	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
@@ -95,12 +102,12 @@ func TestDiscoverContaining_NoBranchesFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = r.DiscoverContaining(context.Background(), "actions", "checkout", "dead", "poisoned")
-	if err == nil {
-		t.Fatalf("expected error for commit with no branches")
+	tag, branch, err := r.DiscoverContaining(context.Background(), "actions", "checkout", "dead", "poisoned")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "impostor") {
-		t.Fatalf("expected impostor-signal error, got %v", err)
+	if tag != "" || branch != "" {
+		t.Fatalf("expected empty tag/branch for orphaned commit, got tag=%q branch=%q", tag, branch)
 	}
 	reg.Verify(t)
 }
@@ -282,7 +289,7 @@ func TestReverseLookup_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "abc123abc123abc123abc123abc123abc123abc1", SHA: "abc123", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.ReverseLookup(context.Background(), deps)
+	rewrites, _, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,7 +330,7 @@ func TestReverseLookup_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "v4", SHA: "abc", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.ReverseLookup(context.Background(), deps)
+	rewrites, _, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -340,12 +347,36 @@ func TestReverseLookup_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 }
 
 func TestReverseLookup_FailsClosedOnImpostor(t *testing.T) {
-	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(httpmock.BranchListResponse()),
-	)
-	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
+	// DiscoverContaining makes several REST calls (individual branch lookups,
+	// default-branch, protected branches, full listing, tags). Use a custom
+	// transport that returns empty lists / 404s so the dep reports as an issue.
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.Path, "/git/ref/") {
+			return &http.Response{
+				StatusCode: 404,
+				Body:       io.NopCloser(strings.NewReader(`{"message":"Not Found"}`)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Request:    req,
+			}, nil
+		}
+		// repos/:owner/:repo → repo metadata (default_branch)
+		if req.URL.Path == "/api/v3/repos/actions/checkout" {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"default_branch":"main"}`)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Request:    req,
+			}, nil
+		}
+		// Everything else (branches listing, tags, etc.) → empty array
+		return &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(`[]`)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    req,
+		}, nil
+	})
+	r, err := New("github.com", pinpool.New(2, nil), WithTransport(transport))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,11 +384,22 @@ func TestReverseLookup_FailsClosedOnImpostor(t *testing.T) {
 	deps := []dep.Dependency{
 		{NWO: "actions/checkout", Ref: "poisoned", SHA: "dead"},
 	}
-	_, err = r.ReverseLookup(context.Background(), deps)
-	if err == nil {
-		t.Fatalf("expected fail-closed error, got nil")
+	_, issues, err := r.ReverseLookup(context.Background(), deps)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
 	}
-	reg.Verify(t)
+	if len(issues) == 0 {
+		t.Fatalf("expected a lookup issue for orphaned commit, got none")
+	}
+	if issues[0].NWO != "actions/checkout" {
+		t.Errorf("expected NWO=actions/checkout, got %q", issues[0].NWO)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestReverseLookup_PreservesBranchRefOverTag(t *testing.T) {
@@ -382,7 +424,7 @@ func TestReverseLookup_PreservesBranchRefOverTag(t *testing.T) {
 		{NWO: "actions/checkout", Ref: "main", SHA: "abc", HashAlgo: "sha1"},
 	}
 
-	rewrites, err := r.ReverseLookup(context.Background(), deps)
+	rewrites, _, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

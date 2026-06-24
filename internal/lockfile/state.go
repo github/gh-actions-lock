@@ -1,6 +1,7 @@
 package lockfile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -37,12 +38,13 @@ type MetadataResolver interface {
 // take the same mutex, allowing parallel pin and upgrade workers to share
 // a single store instance without external synchronization.
 type State struct {
-	mu       sync.Mutex
-	lockPath string // full path to actions.lock on disk
-	file     parserlock.File
-	meta     MetadataResolver
-	idCache  map[string][2]int64
-	idSF     singleflight.Group
+	mu              sync.Mutex
+	lockPath        string // full path to actions.lock on disk
+	file            parserlock.File
+	originalVersion string // version string read from disk (empty if file did not exist)
+	meta            MetadataResolver
+	idCache         map[string][2]int64
+	idSF            singleflight.Group
 }
 
 // ErrCorruptLockfile reports that a lockfile exists on disk but cannot be
@@ -67,8 +69,10 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	contents, err := os.ReadFile(lockfilePath)
 
 	var file parserlock.File
+	var originalVersion string
 	switch {
 	case err == nil:
+		originalVersion = extractVersion(contents)
 		file, err = parserlock.Parse(contents)
 		if err != nil {
 			// A future-version lockfile (written by a newer binary) must
@@ -104,10 +108,11 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	}
 
 	s := &State{
-		lockPath: lockfilePath,
-		file:     file,
-		meta:     meta,
-		idCache:  map[string][2]int64{},
+		lockPath:        lockfilePath,
+		file:            file,
+		originalVersion: originalVersion,
+		meta:            meta,
+		idCache:         map[string][2]int64{},
 	}
 	// Normalize on-disk entries to the canonical (lowercased) pin form so any
 	// legacy mixed-case keys are rewritten on the next Save.
@@ -157,6 +162,21 @@ func (s *State) File() parserlock.File {
 	return s.file
 }
 
+// OriginalVersion returns the version string that was on disk before the
+// lockfile was loaded and migrated. Empty when the file did not exist.
+func (s *State) OriginalVersion() string {
+	return s.originalVersion
+}
+
+// SetMetadataResolver sets the resolver used by lookupIDs to fetch owner/repo
+// numeric IDs. This allows loading the lockfile before auth is available,
+// then wiring in the resolver once the API client is ready.
+func (s *State) SetMetadataResolver(meta MetadataResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta = meta
+}
+
 // HasWorkflow reports whether the lockfile's workflows{} map already
 // contains an entry for workflowKey. Used by `upgrade --no-onboard` to
 // refuse silently onboarding a previously-untracked workflow during a
@@ -183,15 +203,23 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid pin %q in %s for workflow %q", raw, parserlock.Path, workflowKey)
 		}
-		out = append(out, pinToDep(pin))
+		d := pinToDep(pin)
+		if action, found := s.file.Dependencies[raw]; found {
+			d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
+			if idx := strings.Index(action.Commit, "-"); idx >= 0 {
+				d.HashAlgo = action.Commit[:idx]
+				d.SHA = action.Commit[idx+1:]
+			}
+		}
+		out = append(out, d)
 	}
 	return out, nil
 }
 
 // AllDeps returns every action entry in the lockfile as a Dependency,
-// populated with Tag and Branch from the action metadata block. Order is
-// undefined. Intended for callers that need the union of recorded pins
-// across all workflows (e.g. seeding resolver caches on startup).
+// populated with Tag and Branch inferred from the action's ref field.
+// Order is undefined. Intended for callers that need the union of recorded
+// pins across all workflows (e.g. seeding resolver caches on startup).
 func (s *State) AllDeps() []dep.Dependency {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,8 +230,11 @@ func (s *State) AllDeps() []dep.Dependency {
 			continue
 		}
 		d := pinToDep(pin)
-		d.Tag = action.Tag
-		d.Branch = action.Branch
+		d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
+		if idx := strings.Index(action.Commit, "-"); idx >= 0 {
+			d.HashAlgo = action.Commit[:idx]
+			d.SHA = action.Commit[idx+1:]
+		}
 		out = append(out, d)
 	}
 	return out
@@ -266,13 +297,6 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		}
 		pin = pin.Canonical()
 		pinKey := pin.String()
-		// The read path (parserlock.Pin) drops branch, so an unchanged carried
-		// dep arrives branchless; reuse the recorded branch. Only a new pin errors.
-		if d.Branch == "" {
-			if existing, ok := s.file.Dependencies[pinKey]; !ok || existing.Branch == "" {
-				return fmt.Errorf("%s@%s: branch is required in lockfile metadata; run `gh actions-lock` to populate it", d.NWO, d.Ref)
-			}
-		}
 		keyToPin[d.Key()] = pinKey
 		var isDirect bool
 		if directKeys != nil {
@@ -334,14 +358,22 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				usesSet[c] = true
 			}
 		}
-		// Preserve branch/tag and existing uses from prior Set calls.
-		branch, tag := d.Branch, d.Tag
-		if existing, ok := s.file.Dependencies[pinKey]; ok {
-			if branch == "" {
-				branch = existing.Branch
+		// The action's Ref must match the pin key's ref (which is d.Ref).
+		// Preserve existing ref when the dep arrives without one (carried
+		// unchanged from a previous lockfile).
+		// When the dep's ref is a bare SHA (transitive dep pinned by commit),
+		// prefer the discovered tag or branch for the metadata ref field.
+		ref := d.Ref
+		if isSHARef(ref) {
+			if d.Tag != "" {
+				ref = d.Tag
+			} else if d.Branch != "" {
+				ref = d.Branch
 			}
-			if tag == "" {
-				tag = existing.Tag
+		}
+		if existing, ok := s.file.Dependencies[pinKey]; ok {
+			if ref == "" {
+				ref = existing.Ref
 			}
 			for _, u := range existing.Uses {
 				usesSet[u] = true
@@ -356,9 +388,8 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			sort.Strings(uses)
 		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
-			Tag:     tag,
-			Branch:  branch,
-			Commit:  pin.Algo + "-" + pin.Hex,
+			Ref:     ref,
+			Commit:  d.HashAlgoOrDetect() + "-" + d.SHA,
 			OwnerID: ids[0],
 			RepoID:  ids[1],
 			Uses:    uses,
@@ -471,4 +502,35 @@ func (s *State) lookupIDs(ctx context.Context, owner, repo string) ([2]int64, er
 		return [2]int64{}, err
 	}
 	return res.([2]int64), nil
+}
+
+// extractVersion reads the version field from raw lockfile YAML without
+// a full parse. Returns empty string if not found.
+func extractVersion(contents []byte) string {
+	for _, line := range bytes.Split(contents, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("version:")) {
+			v := bytes.TrimPrefix(line, []byte("version:"))
+			v = bytes.TrimSpace(v)
+			// Strip surrounding quotes (single or double).
+			v = bytes.Trim(v, "'\"")
+			return string(v)
+		}
+	}
+	return ""
+}
+
+// isSHARef returns true when ref is a hex string of SHA-1 (40) or
+// SHA-256 (64) length.
+func isSHARef(ref string) bool {
+	n := len(ref)
+	if n != 40 && n != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

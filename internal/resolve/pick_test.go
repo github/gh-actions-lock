@@ -58,7 +58,11 @@ func TestPickPreferredTag(t *testing.T) {
 		want       string
 	}{
 		{"hint wins over semver", []string{"v1.0.0", "v2.0.0"}, "v1.0.0", "v1.0.0"},
-		{"highest semver", []string{"v1.0.0", "v3.2.1", "v2.0.0"}, "", "v3.2.1"},
+		{"highest full semver", []string{"v1.0.0", "v3.2.1", "v2.0.0"}, "", "v3.2.1"},
+		{"full semver beats major-only", []string{"v5", "v4.3.1"}, "", "v4.3.1"},
+		{"full semver beats higher major-only", []string{"v9", "v2.1.0"}, "", "v2.1.0"},
+		{"major-only when no full semver", []string{"v4", "v3"}, "", "v4"},
+		{"hint major wins when present", []string{"v4", "v3"}, "v4", "v4"},
 		{"no semver falls to lex", []string{"beta", "alpha"}, "", "alpha"},
 		{"mixed semver and non-semver", []string{"latest", "v1.0.0", "v2.0.0"}, "", "v2.0.0"},
 		{"single candidate", []string{"v1.0.0"}, "", "v1.0.0"},

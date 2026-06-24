@@ -22,12 +22,9 @@ import (
 func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
 	parsed := ParseAll(paths, store)
 	if r != nil {
-		refs, deps := CollectResolvable(parsed)
+		refs, _ := CollectResolvable(parsed)
 		if len(refs) > 0 {
 			_, _, _ = r.ResolveAllRecursive(ctx, refs)
-		}
-		if len(deps) > 0 {
-			_ = r.CheckReachabilityAll(ctx, deps)
 		}
 	}
 	return DiagnoseParsed(ctx, parsed, r, store, pool)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -49,12 +49,12 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
 `,
-		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-		"actions/setup-go@v6:sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c",
+		"actions/checkout@v6=sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+		"actions/setup-go@v6=sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c",
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -68,27 +68,6 @@ jobs:
 }
 
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
-
-// reachableFunc returns a checkReachFn that reports all commits as reachable.
-func reachableFunc() func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string) {
-	return func(_ context.Context, owner, repo, sha, ref string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "ancestor of " + ref
-	}
-}
-
-// unreachableFunc returns a checkReachFn that reports all commits as unreachable.
-func unreachableFunc() func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string) {
-	return func(_ context.Context, owner, repo, sha, ref string) (resolve.ReachabilityStatus, string) {
-		return resolve.Unreachable, "commit is not an ancestor of " + ref
-	}
-}
-
-// unknownReachFunc returns a checkReachFn that reports unknown (clone failure).
-func unknownReachFunc() func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string) {
-	return func(_ context.Context, owner, repo, sha, ref string) (resolve.ReachabilityStatus, string) {
-		return resolve.ReachabilityUnknown, "clone failed"
-	}
-}
 
 func testRepoResponse(nameWithOwner, oid, actionYAML string) map[string]any {
 	return map[string]any{
@@ -139,16 +118,38 @@ func writeTempWorkflow(t *testing.T, body string, pins ...string) string {
 // workflow file. Owner/repo IDs are stubbed; the read path doesn't validate
 // them. All user-supplied scalars are single-quoted to mirror the
 // production emitter (see internal/lockfile/store.go::marshalDeterministic).
+// writeTempLockfile writes a minimal lockfile for the given pins. Each
+// pinString has the form "owner/repo@ref" (the v0.0.2 pin key format).
+// A synthetic commit hash is generated from the pin key for each entry.
+// The ref field in each action body matches the pin key's ref. Overrides
+// can pass "owner/repo@ref=sha1-hex" to supply an explicit commit.
 func writeTempLockfile(t *testing.T, repoDir, wfName string, pinStrings []string) {
 	t.Helper()
 	var sb strings.Builder
-	sb.WriteString("version: 'v0.0.1'\ndependencies:\n")
-	for _, pin := range pinStrings {
-		sb.WriteString("  '" + pin + "':\n    branch: 'main'\n    commit: 'sha1-deadbeef'\n    owner_id: 1\n    repo_id: 1\n")
+	sb.WriteString("version: '" + parserlock.Version + "'\ndependencies:\n")
+	for _, raw := range pinStrings {
+		key, commit := raw, ""
+		if idx := strings.Index(raw, "="); idx >= 0 {
+			key = raw[:idx]
+			commit = raw[idx+1:]
+		}
+		pin, ok := parserlock.ParsePin(key)
+		if !ok {
+			t.Fatalf("writeTempLockfile: invalid pin %q", key)
+		}
+		if commit == "" {
+			// Generate deterministic fake commit from pin key.
+			commit = "sha1-" + strings.Repeat(string("abcdef0123456789"[len(key)%16]), 40)
+		}
+		sb.WriteString("  '" + key + "':\n    ref: '" + pin.Ref + "'\n    commit: '" + commit + "'\n    owner_id: 1\n    repo_id: 1\n")
 	}
 	sb.WriteString("workflows:\n  '.github/workflows/" + wfName + "':\n")
-	for _, pin := range pinStrings {
-		sb.WriteString("    - '" + pin + "'\n")
+	for _, raw := range pinStrings {
+		key := raw
+		if idx := strings.Index(raw, "="); idx >= 0 {
+			key = raw[:idx]
+		}
+		sb.WriteString("    - '" + key + "'\n")
 	}
 	p := filepath.Join(repoDir, ".github", "workflows", "actions.lock")
 	require.NoError(t, os.WriteFile(p, []byte(sb.String()), 0o600))
@@ -165,10 +166,6 @@ func readTempLockfilePins(t *testing.T) string {
 }
 
 func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (string, string, error) {
-	return runCommandWithHTTPAndReach(t, rt, nil, args...)
-}
-
-func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func(context.Context, string, string, string, string) (resolve.ReachabilityStatus, string), args ...string) (string, string, error) {
 	t.Helper()
 
 	stdoutR, stdoutW, err := os.Pipe()
@@ -177,11 +174,7 @@ func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func
 	require.NoError(t, err)
 
 	newResolver := func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
-		var opts []resolve.Option
-		if reachFn != nil {
-			opts = append(opts, resolve.WithCheckReachabilityFunc(reachFn))
-		}
-		return resolve.New(hostname, pool, append(opts, resolve.WithTransport(rt))...)
+		return resolve.New(hostname, pool, resolve.WithTransport(rt))
 	}
 
 	cmd := newRootCmd(newResolver)
@@ -222,168 +215,6 @@ func runCommandWithHTTPAndReach(t *testing.T, rt http.RoundTripper, reachFn func
 // commit. The malicious commit is NOT reachable from the legitimate tag.
 // TestCheck_TamperedAndUnreachable verifies that when a pinned SHA differs
 // from live resolution AND the old SHA is unreachable, both errors are reported.
-func TestCheck_TamperedAndUnreachable(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	pinnedSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-	reg.Register(
-		httpmock.GraphQLForRepo("example", "action"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: example/action@v1
-`,
-		"example/action@v1:sha1-"+pinnedSHA,
-	)
-
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
-	)
-	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
-
-	var payload struct {
-		Valid    bool             `json:"valid"`
-		Findings []format.Finding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.False(t, payload.Valid)
-
-	categories := map[string]bool{}
-	for _, f := range payload.Findings {
-		categories[f.Category] = true
-	}
-	// SHA changed but Compare API is not mocked → ancestry returns
-	// Unknown, so the SHA mismatch surfaces as ancestry-unknown
-	// rather than ref-moved or lockfile-forgery.
-	assert.True(t, categories["ancestry-unknown"], "should detect SHA changed (ancestry inconclusive): %+v", payload.Findings)
-	assert.True(t, categories["impostor-commit"], "should detect unreachable commit: %+v", payload.Findings)
-}
-
-// TestCheck_UnreachableOnly verifies that when a pinned SHA matches live
-// resolution but is not reachable from the ref, an impostor-commit error is reported.
-func TestCheck_UnreachableOnly(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	sha := "cccccccccccccccccccccccccccccccccccccccc"
-
-	reg.Register(
-		httpmock.GraphQLForRepo("example", "action"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: example/action@v1
-`,
-		"example/action@v1:sha1-"+sha,
-	)
-
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unreachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
-	)
-	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero when findings are invalid")
-
-	var payload struct {
-		Valid    bool             `json:"valid"`
-		Findings []format.Finding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.False(t, payload.Valid)
-
-	hasUnreachable := false
-	for _, f := range payload.Findings {
-		if f.Category == "impostor-commit" {
-			hasUnreachable = true
-		}
-	}
-	assert.True(t, hasUnreachable, "should detect unreachable commit: %+v", payload.Findings)
-}
-
-// TestCheck_ReachabilityUnknown verifies that when the reachability check
-// cannot complete, validation passes with a warning.
-func TestCheck_ReachabilityUnknown(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
-	sha := "dddddddddddddddddddddddddddddddddddddddd"
-
-	reg.Register(
-		httpmock.GraphQLForRepo("example", "action"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
-			},
-		}),
-	)
-
-	workflowPath := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: example/action@v1
-`,
-		"example/action@v1:sha1-"+sha,
-	)
-
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, unknownReachFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
-	)
-	require.NoError(t, err, "unknown reachability should not fail the check")
-
-	var payload struct {
-		Valid    bool             `json:"valid"`
-		Findings []format.Finding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.True(t, payload.Valid, "valid should be true when reachability is unknown")
-
-	// Reachability unknown surfaces as CategoryReachabilityUnknown +
-	// SeverityWarning so consumers (Dependabot FindingMapper) don't
-	// see CategoryValid for a scan that didn't actually verify.
-	hasWarning := false
-	sawValid := false
-	for _, f := range payload.Findings {
-		if f.Severity == "warning" && strings.Contains(f.Detail, "clone failed") {
-			hasWarning = true
-			if f.Category != "reachability-unknown" {
-				t.Errorf("category = %q, want %q (must not regress to valid+warning)", f.Category, "reachability-unknown")
-			}
-		}
-		if f.Category == "valid" {
-			sawValid = true
-		}
-	}
-	assert.True(t, hasWarning, "should have a reachability warning: %+v", payload.Findings)
-	assert.False(t, sawValid, "CategoryValid must not appear for an unverified scan: %+v", payload.Findings)
-}
-
 // TestCheck_Reachable verifies the happy path: pinned SHA matches live
 // resolution and is reachable — validation passes with no errors or warnings.
 func TestCheck_Reachable(t *testing.T) {
@@ -409,11 +240,11 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1:sha1-"+sha,
+		"example/action@v1=sha1-"+sha,
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -475,11 +306,11 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1:sha1-"+pinnedSHA,
+		"example/action@v1=sha1-"+pinnedSHA,
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
@@ -537,11 +368,11 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1:sha1-"+pinnedSHA,
+		"example/action@v1=sha1-"+pinnedSHA,
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -595,11 +426,11 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1:sha1-"+pinnedSHA,
+		"example/action@v1=sha1-"+pinnedSHA,
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -670,15 +501,15 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
 `,
-		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-		"actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5",
+		"actions/checkout@v6",
+		"actions/setup-go@v6",
 		// Transitive dependency (via actions/setup-go@v6).
-		"actions/cache@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684",
+		"actions/cache@v4",
 	)
 
 	// Test per-workflow dependencies view
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=workflows", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -748,12 +579,12 @@ jobs:
     steps:
       - uses: actions/setup-go@v6
 `,
-		"actions/setup-go@v6:sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5",
-		"actions/cache@v4:sha1-5a3ec84eff668545956fd18022155c47e93e2684",
+		"actions/setup-go@v6",
+		"actions/cache@v4",
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=workflows", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -799,12 +630,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 `,
-		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+		"actions/checkout@v6",
 	)
 
 	// --json with no value should use the default fields (valid,findings,workflows)
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -859,18 +690,18 @@ jobs:
 	require.NoError(t, os.WriteFile(wfPath, []byte(wfBody), 0o600))
 
 	// Lockfile records ONLY checkout — setup-go is "new".
-	lockYAML := "version: 'v0.0.1'\ndependencies:\n" +
-		"  'actions/checkout@v6:sha1-" + checkoutSHA + "':\n" +
-		"    branch: 'main'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+	lockYAML := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  'actions/checkout@v6" + "':\n" +
+		"    ref: 'v6'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  '.github/workflows/workflow.yml':\n" +
-		"    - 'actions/checkout@v6:sha1-" + checkoutSHA + "'\n"
+		"    - 'actions/checkout@v6" + "'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 	t.Chdir(dir)
 
 	// Run WITHOUT --rescan so SeedFromLockfile is active.
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--no-fix", "--json=valid,findings",
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--no-fix", "--json=valid,findings",
 		".github/workflows/workflow.yml",
 	)
 	// setup-go is resolved but not yet pinned → "not-pinned" finding → errSilent.
@@ -928,12 +759,12 @@ jobs:
 	wfPath := filepath.Join(dir, ".github", "workflows", "workflow.yml")
 	require.NoError(t, os.WriteFile(wfPath, []byte(wfBody), 0o600))
 
-	lockYAML := "version: 'v0.0.1'\ndependencies:\n" +
-		"  'actions/checkout@v6:sha1-" + checkoutSHA + "':\n" +
-		"    branch: 'main'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+	lockYAML := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  'actions/checkout@v6" + "':\n" +
+		"    ref: 'v6'\n    commit: 'sha1-" + checkoutSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  '.github/workflows/workflow.yml':\n" +
-		"    - 'actions/checkout@v6:sha1-" + checkoutSHA + "'\n"
+		"    - 'actions/checkout@v6" + "'\n"
 	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
 	require.NoError(t, os.WriteFile(lockPath, []byte(lockYAML), 0o600))
 	t.Chdir(dir)
@@ -945,8 +776,8 @@ jobs:
 
 	// Terminal mode (no --json), read-only. setup-go is unpinned → !valid →
 	// errSilent.
-	_, _, runErr := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--no-fix", ".github/workflows/workflow.yml",
+	_, _, runErr := runCommandWithHTTP(t, reg,
+		"--no-fix", ".github/workflows/workflow.yml",
 	)
 	require.ErrorIs(t, runErr, errSilent)
 
@@ -1030,8 +861,8 @@ jobs:
 	t.Chdir(dir)
 
 	// Bare --json: renderer only, autofix still runs.
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--json=valid,findings",
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--json=valid,findings",
 		".github/workflows/workflow.yml",
 	)
 	require.NoError(t, err)
@@ -1090,11 +921,11 @@ jobs:
     steps:
       - uses: example/action@v1
 `,
-		"example/action@v1:sha1-"+staleSHA,
+		"example/action@v1=sha1-"+staleSHA,
 	)
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	// ref-moved is a warning (valid=true), not an error.
 	require.NoError(t, err, "ref-moved is a warning, should not error")
@@ -1137,7 +968,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 `,
-		"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+		"actions/checkout@v6",
 	)
 
 	wf2Path := filepath.Join(filepath.Dir(wf1), "workflow2.yml")
@@ -1153,21 +984,21 @@ jobs:
 
 	// Add wf2's deps to the lockfile (writeTempWorkflow only seeded wf1).
 	writeTempLockfile(t, ".", "workflow.yml",
-		[]string{"actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd"})
+		[]string{"actions/checkout@v6"})
 	// Replace with a multi-workflow lockfile.
-	lockYAML := "version: v0.0.1\n" +
+	lockYAML := "version: " + parserlock.Version + "\n" +
 		"dependencies:\n" +
-		"  actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd:\n" +
-		"    branch: main\n    commit: sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n    owner_id: 1\n    repo_id: 1\n" +
+		"  actions/checkout@v6:\n" +
+		"    ref: v6\n    commit: sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n    owner_id: 1\n    repo_id: 1\n" +
 		"workflows:\n" +
 		"  .github/workflows/workflow.yml:\n" +
-		"    - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n" +
+		"    - actions/checkout@v6\n" +
 		"  .github/workflows/workflow2.yml:\n" +
-		"    - actions/checkout@v6:sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd\n"
+		"    - actions/checkout@v6\n"
 	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 
-	stdout, _, err := runCommandWithHTTPAndReach(t, reg, reachableFunc(),
-		"check", "--no-fix", "--json=dependencies", wf1, wf2Path,
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--no-fix", "--json=dependencies", wf1, wf2Path,
 	)
 	require.NoError(t, err)
 
@@ -1224,7 +1055,7 @@ func TestCheckCommand_JSONLoadErrorIsInvalid(t *testing.T) {
 	defer reg.Verify(t)
 
 	missingPath := filepath.Join(t.TempDir(), "missing.yml")
-	stdout, _, err := runCommandWithHTTP(t, reg, "check", "--no-fix", "--json=valid,findings", missingPath)
+	stdout, _, err := runCommandWithHTTP(t, reg, "--no-fix", "--json=valid,findings", missingPath)
 	require.ErrorIs(t, err, errSilent)
 
 	var payload struct {

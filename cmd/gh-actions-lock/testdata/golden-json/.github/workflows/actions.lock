@@ -1,37 +1,37 @@
-version: 'v0.0.1'
+version: 'v0.0.2'
 dependencies:
-  'actions/cache@v4:sha1-cccccccccccccccccccccccccccccccccccccccc':
-    branch: 'main'
+  'actions/cache@v4':
+    ref: 'v4'
     commit: 'sha1-cccccccccccccccccccccccccccccccccccccccc'
     owner_id: 3
     repo_id: 3
-  'actions/checkout@v6:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa':
-    branch: 'main'
+  'actions/checkout@v6':
+    ref: 'v6'
     commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     owner_id: 1
     repo_id: 1
-  'actions/setup-go@v6:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb':
-    branch: 'main'
+  'actions/setup-go@v6':
+    ref: 'v6'
     commit: 'sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     owner_id: 2
     repo_id: 2
     uses:
-      - 'actions/cache@v4:sha1-cccccccccccccccccccccccccccccccccccccccc'
-      - 'helper/only-transitive@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
-  'helper/only-transitive@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee':
-    branch: 'main'
+      - 'actions/cache@v4'
+      - 'helper/only-transitive@v1'
+  'helper/only-transitive@v1':
+    ref: 'v1'
     commit: 'sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
     owner_id: 5
     repo_id: 5
-  'old/dead@v1:sha1-dddddddddddddddddddddddddddddddddddddddd':
-    branch: 'main'
+  'old/dead@v1':
+    ref: 'v1'
     commit: 'sha1-dddddddddddddddddddddddddddddddddddddddd'
     owner_id: 4
     repo_id: 4
 workflows:
   '.github/workflows/ci.yml':
-    - 'actions/checkout@v6:sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    - 'actions/setup-go@v6:sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-    - 'actions/cache@v4:sha1-cccccccccccccccccccccccccccccccccccccccc'
-    - 'helper/only-transitive@v1:sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
-    - 'old/dead@v1:sha1-dddddddddddddddddddddddddddddddddddddddd'
+    - 'actions/checkout@v6'
+    - 'actions/setup-go@v6'
+    - 'actions/cache@v4'
+    - 'helper/only-transitive@v1'
+    - 'old/dead@v1'

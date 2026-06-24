@@ -29,8 +29,6 @@ func depToPin(d dep.Dependency) (parserlock.Pin, error) {
 		Owner: owner,
 		Repo:  repo,
 		Ref:   d.Ref,
-		Algo:  d.HashAlgoOrDetect(),
-		Hex:   d.SHA,
 	}, nil
 }
 
@@ -40,9 +38,7 @@ func depToPin(d dep.Dependency) (parserlock.Pin, error) {
 // workflow uses: strings.
 func pinToDep(p parserlock.Pin) dep.Dependency {
 	return dep.Dependency{
-		NWO:      p.NWO,
-		Ref:      p.Ref,
-		SHA:      p.Hex,
-		HashAlgo: p.Algo,
+		NWO: p.NWO,
+		Ref: p.Ref,
 	}
 }

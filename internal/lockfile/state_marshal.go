@@ -12,11 +12,11 @@ import (
 // maps are randomized; for a lockfile we want byte-stable output across runs.
 //
 // All string keys and values whose content is user-supplied (pin strings,
-// workflow paths, tag/branch/commit, version) are emitted single-quoted so
+// workflow paths, ref/commit, version) are emitted single-quoted so
 // the file round-trips identically regardless of YAML scalar-resolution
 // quirks: pin keys carry colons, tags can look like floats ("1.0"), refs
 // can collide with YAML 1.1 booleans ("y", "no", "on", "off"). Schema
-// field names (version, dependencies, workflows, tag, branch, …) stay
+// field names (version, dependencies, workflows, ref, …) stay
 // unquoted because they're hardcoded and trivially safe.
 func marshalDeterministic(file parserlock.File) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
@@ -57,11 +57,8 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		for _, k := range keys {
 			a := file.Dependencies[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
-			if a.Tag != "" {
-				addQuotedField(entry, "tag", a.Tag)
-			}
-			if a.Branch != "" {
-				addQuotedField(entry, "branch", a.Branch)
+			if a.Ref != "" {
+				addQuotedField(entry, "ref", a.Ref)
 			}
 			if a.Commit != "" {
 				addQuotedField(entry, "commit", a.Commit)

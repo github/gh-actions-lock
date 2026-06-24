@@ -28,12 +28,12 @@ func TestIsHostedRunnerLabel(t *testing.T) {
 	notHosted := []string{
 		"self-hosted", "linux", "my-custom-runner",
 		"gpu", "ARM64",
-		"ubuntu-20.04",  // EOL, not in map
-		"macos-13",      // removed
-		"macos-12",      // removed
-		"macos-11",      // removed
-		"windows-2019",  // removed
-		"ubuntu-18.04",  // removed
+		"ubuntu-20.04", // EOL, not in map
+		"macos-13",     // removed
+		"macos-12",     // removed
+		"macos-11",     // removed
+		"windows-2019", // removed
+		"ubuntu-18.04", // removed
 	}
 	for _, l := range notHosted {
 		assert.False(t, IsHostedRunnerLabel(l), "expected non-hosted: %s", l)

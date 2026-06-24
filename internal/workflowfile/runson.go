@@ -25,18 +25,18 @@ var hostedRunnerLabels = map[string]bool{
 	"ubuntu-slim": true,
 
 	// Linux firewall (feature-flagged)
-	"ubuntu-24.04-firewall": true,
+	"ubuntu-24.04-firewall":  true,
 	"ubuntu-latest-firewall": true,
 
 	// Windows x64
-	"windows-latest":       true,
-	"windows-2022":         true,
-	"windows-2025":         true,
-	"windows-2025-vs2026":  true,
+	"windows-latest":      true,
+	"windows-2022":        true,
+	"windows-2025":        true,
+	"windows-2025-vs2026": true,
 
 	// Windows ARM64
-	"windows-11-arm":          true,
-	"windows-11-vs2026-arm":   true,
+	"windows-11-arm":        true,
+	"windows-11-vs2026-arm": true,
 
 	// macOS (Apple Silicon / arm64)
 	"macos-latest": true,
@@ -70,6 +70,7 @@ var (
 
 // RegisterOrgHostedLabels adds labels to the hosted runner allowlist.
 // Call before ParseAll; safe to call multiple times.
+// The special value "*" marks all labels as hosted.
 func RegisterOrgHostedLabels(labels []string) {
 	if len(labels) == 0 {
 		return
@@ -92,7 +93,7 @@ func IsHostedRunnerLabel(label string) bool {
 	}
 	orgHostedMu.RLock()
 	defer orgHostedMu.RUnlock()
-	return orgHostedLabels[lower]
+	return orgHostedLabels["*"] || orgHostedLabels[lower]
 }
 
 // ExtractRunsOnLabels returns the deduplicated runs-on labels across all jobs.

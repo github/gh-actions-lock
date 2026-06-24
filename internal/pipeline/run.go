@@ -10,14 +10,12 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
 	"github.com/github/gh-actions-lock/internal/resolve"
-	"github.com/github/gh-actions-lock/internal/tag"
 )
 
 // RunOptions configures the Run pipeline.
 type RunOptions struct {
 	WorkflowPaths []string
 	Resolver      *resolve.Resolver
-	Tagger        *tag.Lister
 	Store         *lockfile.State
 	Pool          *pinpool.Pool
 	Rescan        bool // re-verify all pins end-to-end
@@ -36,7 +34,7 @@ type RunResult struct {
 }
 
 // Run executes the full diagnostic pipeline: parse → trust-check →
-// resolve → reachability pre-warm → diagnose → enrich impostors.
+// resolve → diagnose.
 func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	r := opts.Resolver
 	prof := opts.Profile
@@ -74,11 +72,10 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 				parsed[i].Resolved = true
 				skippedRescan++
 			} else {
-				parsed[i].SkipReachWhenUnchanged = true
 				// Collect deps covered by recorded refs for cache
 				// seeding. These refs have matching lockfile entries,
-				// so their resolve + reachability results can be
-				// served from the lockfile rather than the network.
+				// so their resolve results can be served from the
+				// lockfile rather than the network.
 				rd := parsed[i].RecordedDeps(recorded)
 				seedDeps = append(seedDeps, rd...)
 				for _, r := range recorded {
@@ -109,11 +106,11 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			unresolved = append(unresolved, pw)
 		}
 	}
-	refs, deps := CollectUnrecordedResolvable(unresolved, recordedKeys)
+	refs, _ := CollectUnrecordedResolvable(unresolved, recordedKeys)
 
 	// Phase 2: Resolve.
 	if r == nil {
-		// No resolver means no network resolution or reachability.
+		// No resolver means no network resolution.
 		// Diagnose will still flag structural issues (not-pinned, etc.).
 	} else {
 		// Wire resolver progress hook.
@@ -123,55 +120,12 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 		if len(refs) > 0 {
 			endResolve := prof.Phase("  resolve refs")
-			// First call warms the resolver's cache; results are consumed
-			// indirectly by the reachability phase and diagnose via cache
-			// lookups. The live deps are re-fetched from cache below.
 			_, _, _ = r.ResolveAllRecursive(ctx, refs)
 			endResolve()
 		}
 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
-		}
-
-		// Phase 3: Pre-warm reachability across all unresolved workflows.
-		var reachDeps, liveMoved, liveDirect []dep.Dependency
-		if opts.Rescan {
-			reachDeps = deps
-			if len(unresolved) > 0 {
-				live, _, _ := r.ResolveAllRecursive(ctx, refs)
-				liveMoved = CollectLiveMovedReachDeps(unresolved, live)
-				liveDirect = CollectLiveDirectReachDeps(unresolved, live)
-			}
-		} else {
-			live, _, _ := r.ResolveAllRecursive(ctx, refs)
-			// Merge recorded deps into the live set so CollectReachDeps
-			// treats them as confirmed at their lockfile SHAs, preventing
-			// unnecessary reachability network checks.
-			if len(seedDeps) > 0 {
-				live = append(live, dep.Dedup(seedDeps)...)
-			}
-			reachDeps = CollectReachDeps(unresolved, live)
-			liveMoved = CollectLiveMovedReachDeps(unresolved, live)
-			liveDirect = CollectLiveDirectReachDeps(unresolved, live)
-		}
-
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		if len(reachDeps) > 0 || len(liveMoved) > 0 || len(liveDirect) > 0 {
-			endReach := prof.Phase("  reachability pre-warm")
-			if len(reachDeps) > 0 {
-				_ = r.CheckReachabilityAll(ctx, reachDeps)
-			}
-			if ctx.Err() == nil && len(liveMoved) > 0 {
-				_ = r.CheckReachabilityAll(ctx, liveMoved)
-			}
-			if ctx.Err() == nil && len(liveDirect) > 0 {
-				_ = r.CheckReachabilityAll(ctx, liveDirect)
-			}
-			endReach()
 		}
 
 		// Quiet resolver hooks before diagnostics (cache-only, no progress).
@@ -182,35 +136,15 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		return nil, ctx.Err()
 	}
 
-	// Phase 4: Diagnose.
+	// Phase 3: Diagnose.
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
 	endDiag()
 	valid := report.IsValid()
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	// Phase 5: Enrich impostor findings with recommended release suggestions.
-	if opts.Tagger != nil && hasImpostorFindings(report) {
-		checks.EnrichImpostorFindings(ctx, report, opts.Tagger, r, opts.Pool)
-	}
 
 	return &RunResult{
 		Report:        report,
 		Valid:         valid,
 		SkippedRescan: skippedRescan,
 	}, nil
-}
-
-func hasImpostorFindings(r *checks.Report) bool {
-	for _, wr := range r.Workflows {
-		for _, f := range wr.Findings {
-			if f.Category == checks.ImpostorCommit {
-				return true
-			}
-		}
-	}
-	return false
 }

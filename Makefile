@@ -7,13 +7,28 @@ EXT_DIR := $(XDG_DATA_HOME)/gh/extensions/$(EXT_NAME)
 
 RUBY := $(shell command -v /opt/homebrew/opt/ruby/bin/ruby 2>/dev/null || echo ruby)
 
-.PHONY: build test test-integration test-shell test-live test-smoke test-stub test-real install reinstall uninstall
+.PHONY: build test vet fmt fmt-check test-integration test-shell test-live test-smoke test-stub test-real install reinstall uninstall
 
 build:
 	go build -o $(BIN) ./cmd/gh-actions-lock
 
 test:
-	go test ./...
+	go test -race -count=1 ./...
+
+vet:
+	go vet ./...
+
+fmt:
+	gofmt -w .
+
+# Mirrors the CI gofmt gate: fails (non-zero) if anything is unformatted.
+fmt-check:
+	@unformatted="$$(gofmt -l .)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files are not gofmt-clean:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
 
 test-integration: build
 	$(RUBY) test/integration/run.rb

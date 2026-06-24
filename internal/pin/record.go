@@ -90,6 +90,17 @@ func (r *Record) Unresolved() []Entry {
 	return r.byResolution(Unresolved)
 }
 
+// Narrowed returns verified entries whose refs were upgraded (AutoFixedRef set).
+func (r *Record) Narrowed() []Entry {
+	var out []Entry
+	for _, e := range r.Entries {
+		if e.Resolution == Verified && e.AutoFixedRef != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // Valid reports whether the record contains no investigate or unresolved entries.
 func (r *Record) Valid() bool {
 	for _, e := range r.Entries {

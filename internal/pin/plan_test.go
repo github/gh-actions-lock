@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
@@ -15,115 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestFindFinding(t *testing.T) {
-	ref := func(owner, repo, ref string) *parserlock.ActionRef {
-		return &parserlock.ActionRef{Owner: owner, Repo: repo, Ref: ref}
-	}
-
-	ff := []checks.Finding{
-		{ActionRef: ref("actions", "checkout", "v4"), Category: "unpinned"},
-		{ActionRef: ref("actions", "cache", "v3"), Category: "impostor", RecommendedTag: "v3.4.0", RecommendedSHA: "abc"},
-		{ActionRef: ref("actions", "cache", "v3"), Category: "unpinned"},
-		{Dependency: &dep.Dependency{NWO: "other/dep", Ref: "v2"}, Category: "ref-moved"},
-		{Dependency: &dep.Dependency{NWO: "other/dep", Ref: "v2"}, Category: "sane", RecommendedTag: "v2.1.0"},
-	}
-
-	t.Run("matches by ActionRef NWO and ref", func(t *testing.T) {
-		f := findFinding(ff, "actions/checkout", "v4")
-		require.NotNil(t, f)
-		assert.Equal(t, checks.Category("unpinned"), f.Category)
-	})
-
-	t.Run("prefers finding with RecommendedTag", func(t *testing.T) {
-		f := findFinding(ff, "actions/cache", "v3")
-		require.NotNil(t, f)
-		assert.Equal(t, "v3.4.0", f.RecommendedTag)
-		assert.Equal(t, "abc", f.RecommendedSHA)
-	})
-
-	t.Run("matches by Dependency NWO and ref", func(t *testing.T) {
-		f := findFinding(ff, "other/dep", "v2")
-		require.NotNil(t, f)
-		assert.Equal(t, "v2.1.0", f.RecommendedTag)
-	})
-
-	t.Run("returns nil for no match", func(t *testing.T) {
-		f := findFinding(ff, "nonexistent/action", "v1")
-		assert.Nil(t, f)
-	})
-
-	t.Run("returns best match without RecommendedTag", func(t *testing.T) {
-		onlyBasic := []checks.Finding{
-			{ActionRef: ref("a", "b", "v1"), Category: "first"},
-			{ActionRef: ref("a", "b", "v1"), Category: "second"},
-		}
-		f := findFinding(onlyBasic, "a/b", "v1")
-		require.NotNil(t, f)
-		assert.Equal(t, checks.Category("first"), f.Category, "should return the first match")
-	})
-
-	t.Run("empty findings", func(t *testing.T) {
-		assert.Nil(t, findFinding(nil, "a/b", "v1"))
-	})
-}
-
-func TestDropDeps(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "a/b", Ref: "v1"},
-		{NWO: "c/d", Ref: "v2"},
-		{NWO: "e/f", Ref: "v3"},
-	}
-	pm := dep.ParentMap{
-		"a/b@v1": {"root"},
-		"c/d@v2": {"a/b@v1"},
-		"e/f@v3": {"c/d@v2"},
-	}
-	bad := map[string]bool{
-		"c/d@v2": true,
-	}
-
-	gotDeps, gotPM := dropDeps(deps, pm, bad)
-
-	require.Len(t, gotDeps, 2)
-	assert.Equal(t, "a/b", gotDeps[0].NWO)
-	assert.Equal(t, "e/f", gotDeps[1].NWO)
-
-	assert.Contains(t, gotPM, "a/b@v1")
-	assert.NotContains(t, gotPM, "c/d@v2")
-	assert.Contains(t, gotPM, "e/f@v3")
-}
-
-func TestDropDeps_all_bad(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "a/b", Ref: "v1"},
-	}
-	pm := dep.ParentMap{
-		"a/b@v1": {"root"},
-	}
-	bad := map[string]bool{
-		"a/b@v1": true,
-	}
-
-	gotDeps, gotPM := dropDeps(deps, pm, bad)
-	assert.Empty(t, gotDeps)
-	assert.Empty(t, gotPM)
-}
-
-func TestDropDeps_none_bad(t *testing.T) {
-	deps := []dep.Dependency{
-		{NWO: "a/b", Ref: "v1"},
-		{NWO: "c/d", Ref: "v2"},
-	}
-	pm := dep.ParentMap{
-		"a/b@v1": {"root"},
-		"c/d@v2": {"a/b@v1"},
-	}
-
-	gotDeps, gotPM := dropDeps(deps, pm, map[string]bool{})
-	assert.Len(t, gotDeps, 2)
-	assert.Len(t, gotPM, 2)
-}
 
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
 // workflow fails resolution (e.g. repo not found), only the failed ref is
@@ -171,11 +62,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "test stub"
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachFn))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
@@ -246,12 +133,7 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachTrap := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		t.Fatal("reachability should not be called when all resolutions fail")
-		return resolve.Unreachable, ""
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachTrap))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
@@ -289,13 +171,10 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	}
 }
 
-// TestPlanWorkflow_DoesNotNarrowTransitiveDeps verifies that a transitive
-// dependency discovered from a composite action's action.yml keeps the ref the
-// composite author declared, even when a narrower full-semver tag exists at the
-// same commit. We only own (and may narrow) refs that literally appear in a
-// workflow `uses:` line; rewriting a composite's internal refs is churn and can
-// invent refs the composite never declared.
-func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
+// TestPlanWorkflow_TransitiveDepUsesDiscoveredRef verifies that a transitive
+// dependency keeps the composite's declared ref when it's a valid symbolic ref
+// (tag/branch). Only bare-SHA refs are replaced by ReverseLookup's discovery.
+func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -377,11 +256,7 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "test stub"
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachFn))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{
@@ -418,7 +293,6 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	trans, ok := byNWO["trans/dep"]
 	require.True(t, ok, "transitive dep should be pinned")
 	assert.Equal(t, "v2", trans.Ref, "transitive ref must stay as the composite declared it")
-	assert.NotEqual(t, "v2.3.4", trans.Ref, "transitive dep must not be narrowed")
 	assert.Equal(t, transSHA, trans.SHA)
 	assert.False(t, trans.Direct, "transitive dep must not be marked Direct")
 	assert.Contains(t, trans.RequiredBy, "comp/action@v1.0.0")
@@ -427,6 +301,74 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	require.True(t, ok, "direct composite should be pinned")
 	assert.Equal(t, "v1.0.0", comp.Ref)
 	assert.True(t, comp.Direct, "composite is a direct workflow use")
+}
+
+// TestNarrowVerifiedEntries_StickyPrecision locks the fast-path narrowing
+// guard: an already-recorded direct dep the user kept at an imprecise semver
+// ref (v4) must not be narrowed to a full tag on a no-op re-pin, and a
+// non-version ref (main) must not be narrowed either (it's an intentional
+// choice). Only imprecise semver refs (v4, v4.2) are narrowing candidates.
+func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
+	const sha = "abc1230000000000000000000000000000000000"
+
+	// A live Tagger that *would* narrow: actions/checkout publishes a full
+	// semver tag at the same commit as the imprecise ref. Only the guard, not
+	// the absence of a Tagger, may spare a sticky entry.
+	newTagger := func(t *testing.T) (*tag.Lister, *httpmock.Registry) {
+		reg := &httpmock.Registry{}
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/tags`),
+			httpmock.JSONResponse([]any{
+				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
+				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
+			}),
+		)
+		return tag.NewListerForTest(t, reg), reg
+	}
+
+	// Empty Findings => NeedsAttention() false => verified fast path.
+	fastPathReport := func(ref string) checks.WorkflowReport {
+		return checks.WorkflowReport{
+			Path: ".github/workflows/ci.yml",
+			Inventory: []checks.InventoryEntry{{
+				Dep:    dep.Dependency{NWO: "actions/checkout", Ref: ref, SHA: sha},
+				File:   ".github/workflows/ci.yml",
+				Direct: true,
+			}},
+		}
+	}
+
+	t.Run("imprecise v4 marked sticky is left as v4", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		opts := PlanOptions{
+			Tagger:           tagger,
+			prevImpreciseNWO: map[string]bool{"actions/checkout": true},
+		}
+
+		result, err := planWorkflow(context.Background(), fastPathReport("v4"), opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4", result.entries[0].Ref, "sticky v4 must not be narrowed")
+		assert.Empty(t, result.entries[0].AutoFixedRef, "no auto-fix should be recorded")
+		require.Len(t, result.wplans, 1)
+		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite for a sticky entry")
+	})
+
+	t.Run("branch ref main is NOT narrowed", func(t *testing.T) {
+		// main is not version-shaped, so narrowing must not touch it.
+		// Non-version refs are intentional choices (e.g. vercel/next.js@canary).
+		opts := PlanOptions{Tagger: nil, prevImpreciseNWO: map[string]bool{}}
+
+		result, err := planWorkflow(context.Background(), fastPathReport("main"), opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "main", result.entries[0].Ref, "branch ref should stay as-is")
+		assert.Equal(t, "", result.entries[0].AutoFixedRef)
+		require.Len(t, result.wplans, 1)
+		assert.Nil(t, result.wplans[0].Rewrites)
+	})
 }
 
 // TestPlanWorkflow_CrossRefTransitiveClosure verifies that a composite at
@@ -525,11 +467,7 @@ func TestPlanWorkflow_CrossRefTransitiveClosure(t *testing.T) {
 	)
 
 	pool := pinpool.New(2, nil)
-	reachFn := func(_ context.Context, _, _, _, _ string) (resolve.ReachabilityStatus, string) {
-		return resolve.Reachable, "test stub"
-	}
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg),
-		resolve.WithCheckReachabilityFunc(reachFn))
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
 
 	wr := checks.WorkflowReport{

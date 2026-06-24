@@ -37,7 +37,7 @@ type Finding struct {
 	DocURL string
 	// RecommendedTag is the most recent stable tag whose commit is
 	// reachable from a branch, populated for unreachable-SHA findings
-	// (ImpostorCommit) when one can be found. Empty otherwise.
+	// when one can be found. Empty otherwise.
 	RecommendedTag string
 	// RecommendedSHA is the commit SHA the recommended tag points to.
 	RecommendedSHA string

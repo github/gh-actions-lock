@@ -33,8 +33,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fatih/color v1.7.0 h1:DkWD4oS2D8LGGgTQ6IvwJJXSL5Vp2ffcQg58nFV38Ys=
 github.com/fatih/color v1.7.0/go.mod h1:Zm6kSWBoL9eyXnKyktHP6abPY2pDugNf5KwzbycvMj4=
-github.com/github/actions-lockfile/go v0.0.3 h1:pvvbEnsmKtBiiUJ2I5n35W3Uei3EvmnZe1PKJ3q4YrY=
-github.com/github/actions-lockfile/go v0.0.3/go.mod h1:kp8pDNXwrr3fC+6Mgmh/ZODa6AsIEC+bmf1CLQ/7DEs=
+github.com/github/actions-lockfile/go v0.0.4 h1:FP2KrJNhBti8rR7+Z8TKycJdWFc0gzuaj0wTlANoFdY=
+github.com/github/actions-lockfile/go v0.0.4/go.mod h1:kp8pDNXwrr3fC+6Mgmh/ZODa6AsIEC+bmf1CLQ/7DEs=
 github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 h1:2VTzZjLZBgl62/EtslCrtky5vbi9dd7HrQPQIx6wqiw=
 github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542/go.mod h1:Ow0tF8D4Kplbc8s8sSb3V2oUCygFHVp8gC3Dn6U4MNI=
 github.com/henvic/httpretty v0.0.6 h1:JdzGzKZBajBfnvlMALXXMVQWxWMF/ofTy8C3/OSUTxs=

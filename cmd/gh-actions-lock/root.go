@@ -83,14 +83,26 @@ Scans all workflows under .github/workflows/ by default and fixes
 what it can — pinning every resolvable action and updating the
 lockfile. Pass --no-fix for a read-only check that writes nothing.
 
+REF NARROWING
+
+When a new workflow is first pinned and uses a partial version ref
+like actions/checkout@v4, the lockfile narrows it to the highest
+matching full semver tag (e.g. v4.2.1). Full semver tags are
+effectively immutable — unlike major/minor splats, they almost never
+move once published, so the pinned SHA stays valid longer between
+lockfile refreshes.
+
+Only freshly pinned refs are narrowed — already-locked deps are not
+touched. Only refs that parse as semantic versions (v4, v3.2) are
+candidates; branch names (main, canary) and non-version tags are
+never narrowed because the latest semver release in a repo may have
+nothing to do with the ref the workflow intended.
+Pass --no-narrow to disable this behavior entirely.
+
 --json selects the output format only (independent of --no-fix);
 structured results go to stdout and progress to stderr:
 
   gh actions-lock --no-fix --json 2>/dev/null | jq .valid
-
-Commands:
-
-  gh actions-lock             Verify and fix the dependency lock
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows and fix what's fixable
@@ -99,8 +111,14 @@ $ gh actions-lock
 # Verify a specific workflow
 $ gh actions-lock .github/workflows/ci.yml
 
-# Read-only check for CI integration (writes nothing)
+# Read-only check for CI integration (writes nothing, exits 1 if invalid)
 $ gh actions-lock --no-fix --json=valid,findings
+
+# Treat org larger runners as hosted
+$ gh actions-lock --allow-runners ubuntu-latest-xl,ubuntu-latest-2xl
+
+# All fields as JSON
+$ gh actions-lock --json
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -120,7 +138,6 @@ $ gh actions-lock --no-fix --json=valid,findings
 	// Dependabot so a relock never silently adds an entry it didn't ask for.
 	cmd.PersistentFlags().Bool("no-onboard", false, "Refuse to onboard new workflows or actions; only re-pin already-tracked entries")
 	cmd.PersistentFlags().Bool("no-interactive", false, "Run without interactive prompts")
-	cmd.AddCommand(newCheckCmd(newResolver))
 
 	return cmd
 }
@@ -137,27 +154,17 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 		return nil, nil, nil, err
 	}
 
-	if newResolver == nil {
-		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
-			return resolve.New(hostname, pool)
+	// Load lockfile before auth so version/parse errors surface before
+	// "token not found" — a future-version lockfile should tell the user
+	// to upgrade, not complain about missing auth.
+	loadStore := func(meta lockfile.MetadataResolver) (*lockfile.State, error) {
+		if workflowsDir != "" {
+			return lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), meta)
 		}
+		return lockfile.LoadState(".", meta)
 	}
-	r, err := newResolver(resolveHostname(hostname), pool)
+	store, err := loadStore(nil)
 	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	var store *lockfile.State
-	if workflowsDir != "" {
-		store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), r)
-	} else {
-		store, err = lockfile.LoadState(".", r)
-	}
-	if err != nil {
-		// An unreadable (non-future-version) lockfile is never silently
-		// discarded. Recovery policy may delete-and-recreate (interactive
-		// fix mode) or fail (CI, read-only, relock); either way the choice
-		// is explicit and surfaces to the user.
 		if errors.Is(err, lockfile.ErrCorruptLockfile) && onCorrupt != nil {
 			lockPath := filepath.Join(".", parserlock.Path)
 			if workflowsDir != "" {
@@ -168,17 +175,27 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 				return nil, nil, nil, rerr
 			}
 			if recovered {
-				if workflowsDir != "" {
-					store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), r)
-				} else {
-					store, err = lockfile.LoadState(".", r)
-				}
+				store, err = loadStore(nil)
 			}
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("opening lockfile: %w", err)
 		}
 	}
+
+	if newResolver == nil {
+		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
+			return resolve.New(hostname, pool)
+		}
+	}
+	r, err := newResolver(resolveHostname(hostname), pool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Now that the resolver is available, set it as the metadata resolver
+	// for the store and re-seed branch hints.
+	store.SetMetadataResolver(r)
 	r.SeedBranchHints(store.AllDeps())
 
 	return paths, r, store, nil

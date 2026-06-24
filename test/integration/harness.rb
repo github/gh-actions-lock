@@ -289,6 +289,80 @@ module ActionsPin
         self
       end
 
+      # Verify every action ref listed in workflows: exists as a key in dependencies:.
+      def assert_lockfile_deps_cover_direct
+        @assertions << -> (r) {
+          lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+          content = File.read(lockpath) rescue ""
+          lf = YAML.safe_load(content) rescue nil
+          unless lf.is_a?(Hash) && lf["workflows"].is_a?(Hash) && lf["dependencies"].is_a?(Hash)
+            assert_true("lockfile deps cover direct: parseable lockfile", false)
+            next
+          end
+          dep_keys = lf["dependencies"].keys.to_set
+          lf["workflows"].each do |wf_path, refs|
+            next unless refs.is_a?(Array)
+            refs.each do |ref|
+              assert_true("direct dep covered: #{ref} (from #{wf_path})", dep_keys.include?(ref))
+            end
+          end
+        }
+        self
+      end
+
+      # Verify every ref in a dependency's uses: list exists as a key in dependencies:.
+      def assert_lockfile_deps_cover_indirect
+        @assertions << -> (r) {
+          lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+          content = File.read(lockpath) rescue ""
+          lf = YAML.safe_load(content) rescue nil
+          unless lf.is_a?(Hash) && lf["dependencies"].is_a?(Hash)
+            assert_true("lockfile deps cover indirect: parseable lockfile", false)
+            next
+          end
+          dep_keys = lf["dependencies"].keys.to_set
+          lf["dependencies"].each do |pin, meta|
+            next unless meta.is_a?(Hash) && meta["uses"].is_a?(Array)
+            meta["uses"].each do |used_ref|
+              assert_true("indirect dep covered: #{used_ref} (used by #{pin})", dep_keys.include?(used_ref))
+            end
+          end
+        }
+        self
+      end
+
+      # Verify that the lockfile's workflow→dep mapping is coherent with the
+      # actual workflow YAML files. Every dep listed under a workflow key must
+      # correspond to a `uses:` line in that workflow file (by NWO@ref match).
+      # This catches bugs where the lockfile is stale relative to the YAML.
+      def assert_lockfile_workflow_coherence
+        @assertions << -> (r) {
+          lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+          content = File.read(lockpath) rescue ""
+          lf = YAML.safe_load(content) rescue nil
+          unless lf.is_a?(Hash) && lf["workflows"].is_a?(Hash)
+            assert_true("lockfile coherence: parseable lockfile", false)
+            next
+          end
+          lf["workflows"].each do |wf_path, refs|
+            next unless refs.is_a?(Array)
+            wf_file = File.join(r.dir, wf_path)
+            next unless File.exist?(wf_file)
+            wf_content = File.read(wf_file)
+            refs.each do |ref|
+              # Extract NWO@tag from the dep key
+              parts = ref.split("@", 2)
+              next unless parts.length == 2
+              nwo, tag = parts
+              # The workflow should have `uses: NWO@tag` (or NWO/sub@tag)
+              uses_pat = /uses:\s*#{Regexp.escape(nwo)}(?:\/[^@]+)?@#{Regexp.escape(tag)}/
+              assert_true("lockfile coherence: #{wf_path} uses #{ref}", wf_content.match?(uses_pat))
+            end
+          end
+        }
+        self
+      end
+
       def assert_custom(&block)
         @assertions << block
         self
@@ -356,9 +430,12 @@ module ActionsPin
 
         $stderr.print "\e[2m  cloning #{nwo}…\e[0m "
         $stderr.flush
-        system("git", "clone", "--depth=1", "--quiet",
-               "https://github.com/#{nwo}.git", dir,
-               exception: true)
+        unless system("git", "clone", "--depth=1", "--quiet",
+                      "https://github.com/#{nwo}.git", dir)
+          $stderr.puts "\e[31mfailed\e[0m"
+          FileUtils.rm_rf(dir)
+          raise SkipScenario, "clone failed for #{nwo} (repo not found or no access)"
+        end
         $stderr.puts "\e[2mdone\e[0m"
 
         env = @env.dup
@@ -566,6 +643,7 @@ module ActionsPin
         @profile_dir = nil
         @pause = false
         @last_dir = nil
+        @last_run = nil        # { nwo:, lockfile:, workflows: {} } for push
         @diff_cache = {}       # name → diff string
         @diff_order = []       # insertion order for eviction
       end
@@ -912,7 +990,7 @@ module ActionsPin
 
         active_ctx = nil
         scenario_names = @scenarios.map { |s| s.name.to_s }
-        commands = %w[list ls run test review inspect diff cd rerun build pause profile auth status clear help quit exit q]
+        commands = %w[list ls run test review inspect diff cd rerun build pause profile auth status push clear help quit exit q]
 
         # Tab completion: commands first, then scenario names for run/test/inspect/cd
         Reline.completion_proc = proc do |input|
@@ -1145,6 +1223,9 @@ module ActionsPin
           when "diff"
             show_paged_diff(arg)
 
+          when "push"
+            push_last_run(arg)
+
           when "auth"
             show_auth
 
@@ -1237,6 +1318,105 @@ module ActionsPin
         IO.popen(["less", "-R"], "w") { |io| io.write(diff) }
       rescue Errno::EPIPE
         # user quit pager early — that's fine
+      end
+
+      def cache_last_run(ctx)
+        return unless ctx.live_repo
+        lockfile_path = File.join(ctx.dir, ".github", "workflows", "actions.lock")
+        return unless File.exist?(lockfile_path)
+
+        # Collect changed workflow files (the binary rewrites uses: lines)
+        changed = `cd #{Shellwords.shellescape(ctx.dir)} && git diff --name-only 2>/dev/null`.strip.split("\n")
+        workflows = {}
+        changed.each do |f|
+          next unless f.start_with?(".github/workflows/") && f.end_with?(".yml", ".yaml")
+          full = File.join(ctx.dir, f)
+          workflows[f] = File.read(full) if File.exist?(full)
+        end
+
+        @last_run = {
+          nwo: ctx.live_repo,
+          lockfile: File.read(lockfile_path),
+          workflows: workflows,
+        }
+      end
+
+      def push_last_run(arg)
+        unless @last_run
+          puts "  \e[33mno run to push\e[0m — run a repo first (e.g. \e[36mgithub/launch\e[0m)"
+          return
+        end
+
+        nwo = @last_run[:nwo]
+        create_pr = arg&.strip == "--pr"
+        branch = "actions-lock/pin"
+        ts = Time.now.strftime("%Y%m%d-%H%M%S")
+        branch = "#{branch}-#{ts}"
+
+        Dir.mktmpdir("actions-lock-push-") do |dir|
+          puts "  \e[2mcloning #{nwo}…\e[0m"
+          unless system("git", "clone", "--depth=1", "--quiet",
+                        "https://github.com/#{nwo}.git", dir)
+            puts "  \e[31mclone failed\e[0m"
+            return
+          end
+
+          # Create branch
+          unless system("git", "checkout", "-b", branch, chdir: dir,
+                        out: File::NULL, err: File::NULL)
+            puts "  \e[31mfailed to create branch\e[0m"
+            return
+          end
+
+          # Write lockfile
+          lockfile_dest = File.join(dir, ".github", "workflows", "actions.lock")
+          FileUtils.mkdir_p(File.dirname(lockfile_dest))
+          File.write(lockfile_dest, @last_run[:lockfile])
+
+          # Write changed workflows
+          @last_run[:workflows].each do |path, content|
+            File.write(File.join(dir, path), content)
+          end
+
+          # Commit
+          system("git", "add", "-A", chdir: dir, out: File::NULL, err: File::NULL)
+          nfiles = @last_run[:workflows].size + 1
+          msg = "Pin actions with lockfile\n\nGenerated by `gh actions-lock` against #{nwo}."
+          unless system("git", "commit", "-q", "-m", msg, chdir: dir,
+                        out: File::NULL, err: File::NULL)
+            puts "  \e[33mno changes to commit\e[0m"
+            return
+          end
+
+          # Push
+          print "  \e[2mpushing #{branch}…\e[0m "
+          $stdout.flush
+          unless system("git", "push", "--quiet", "origin", branch, chdir: dir,
+                        out: File::NULL, err: [:child, :out])
+            puts "\e[31mfailed\e[0m"
+            return
+          end
+          puts "\e[32mdone\e[0m"
+          puts "  \e[36mhttps://github.com/#{nwo}/compare/#{branch}\e[0m"
+
+          # Optionally create PR
+          if create_pr
+            print "  \e[2mcreating PR…\e[0m "
+            $stdout.flush
+            body = "Generated by `gh actions-lock`.\n\nPins #{nfiles} #{nfiles == 1 ? "file" : "files"}."
+            pr_url = `gh pr create --repo #{Shellwords.shellescape(nwo)} --head #{Shellwords.shellescape(branch)} \
+              --title "Pin actions with lockfile" \
+              --body #{Shellwords.shellescape(body)} \
+              2>&1`.strip
+            if $?.success?
+              puts "\e[32mdone\e[0m"
+              puts "  \e[36m#{pr_url}\e[0m"
+            else
+              puts "\e[31mfailed\e[0m"
+              puts "  #{pr_url}"
+            end
+          end
+        end
       end
 
       def show_starting_state(dir, width)
@@ -1334,6 +1514,8 @@ module ActionsPin
         puts "  \e[36mprofile [dir|off]\e[0m     Toggle profiling (default: ./profiles)"
         puts "  \e[36mauth\e[0m                  Show current auth source"
         puts "  \e[36mstatus\e[0m                Show current toggles"
+        puts "  \e[36mpush\e[0m                  Push last run's lockfile to the repo"
+        puts "  \e[36mpush --pr\e[0m             Push and create a PR"
         puts "  \e[36mclear\e[0m                 Clear screen"
         puts "  \e[36mhelp\e[0m                  Show this help"
         puts "  \e[36mquit\e[0m                  Exit (or Ctrl+D)"
@@ -1434,7 +1616,12 @@ module ActionsPin
         puts
 
         # Prepare fixtures early so we can show starting state
-        ctx = s.prepare(@binary, profile_dir: @profile_dir)
+        begin
+          ctx = s.prepare(@binary, profile_dir: @profile_dir)
+        rescue SkipScenario => e
+          puts "  \e[33m⊘ skip:\e[0m #{e.message}"
+          return nil
+        end
 
         # ── INPUT ──
         puts "\e[1m┌─ INPUT #{"─" * (w - 10)}┐\e[0m"
@@ -1487,6 +1674,9 @@ module ActionsPin
           # Capture full diff before teardown
           diff_text = `cd #{Shellwords.shellescape(ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
           cache_diff(s.name.to_s, diff_text)
+
+          # Cache lockfile + changed workflows for `push` command
+          cache_last_run(ctx)
 
           # ── DIFF ──
           show_diff(ctx.dir, w, scenario_name: s.name.to_s)
@@ -1561,6 +1751,8 @@ module ActionsPin
         lines << "lockfile matches /#{spec['lockfile_comment_matches']}/" if spec["lockfile_comment_matches"]
         lines << "lockfile excludes /#{spec['lockfile_comment_excludes']}/" if spec["lockfile_comment_excludes"]
         lines << "lockfile exists" if spec["lockfile_exists"]
+        lines << "lockfile deps cover direct" if spec["lockfile_deps_cover_direct"]
+        lines << "lockfile deps cover indirect" if spec["lockfile_deps_cover_indirect"]
         lines << "lockfile == golden #{spec['lockfile_golden']}" if spec["lockfile_golden"]
         if spec["jq"]
           spec["jq"].each do |check|
@@ -1635,6 +1827,16 @@ module ActionsPin
         if spec["lockfile_exists"]
           ok = !failures.any? { |f| f.include?("lockfile exists") }
           checks << ["lockfile exists", ok]
+        end
+        if spec["lockfile_deps_cover_direct"]
+          ok = !failures.any? { |f| f.include?("direct dep covered:") }
+          checks << ["lockfile deps cover direct", ok]
+          ok = !failures.any? { |f| f.include?("lockfile coherence:") }
+          checks << ["lockfile ↔ workflow coherence", ok]
+        end
+        if spec["lockfile_deps_cover_indirect"]
+          ok = !failures.any? { |f| f.include?("indirect dep covered:") }
+          checks << ["lockfile deps cover indirect", ok]
         end
         if spec["lockfile_golden"]
           ok = !failures.any? { |f| f.include?("lockfile does not match golden") }

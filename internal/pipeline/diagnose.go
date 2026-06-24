@@ -16,10 +16,9 @@ import (
 	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
-// DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.
-// Assumes the resolver caches have already been warmed (calls into the
-// resolver will hit cache and stay silent). Returns a checks.Report aggregating per-
-// workflow findings in input order.
+// DiagnoseParsed runs engine diagnostics for each pre-parsed workflow, assuming
+// the resolver caches are warm (calls hit cache and stay silent). Returns a
+// checks.Report aggregating per-workflow findings in input order.
 func DiagnoseParsed(ctx context.Context, parsed []checks.ParsedWorkflow, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
 	type indexedPW struct {
 		idx int
@@ -48,115 +47,8 @@ func DiagnoseParsed(ctx context.Context, parsed []checks.ParsedWorkflow, r *reso
 }
 
 func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) checks.WorkflowReport {
-	wr := checks.WorkflowReport{Path: pw.Path}
-
-	if pw.LoadErr != nil {
-		wr.Findings = append(wr.Findings, checks.Finding{
-			WorkflowPath: pw.Path,
-			Category:     checks.NotPinned,
-			Severity:     checks.SeverityError,
-			// High: the YAML failed to load — concrete, file-level fact.
-			Confidence: checks.ConfidenceHigh,
-			Detail:     fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
-			DocURL:     DocURLFor(checks.NotPinned),
-		})
-		return wr
-	}
-
-	wr.ActionRefs = pw.Refs
-	wr.ParseWarnings = pw.ParseWarnings
-
-	if len(pw.LocalPaths) > 0 {
-		wfKey := workflowfile.KeyFromPath(pw.Path)
-		if store != nil && store.HasWorkflow(wfKey) {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.LocalAction,
-				Severity:     checks.SeverityError,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
-				Remediation:  "remove `uses: ./…` steps or move them to a separate workflow",
-			})
-		} else {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.LocalAction,
-				Severity:     checks.SeverityWarning,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
-			})
-		}
-		return wr
-	}
-
-	if pw.NonHostedRunner {
-		// Split labels into expressions vs literal non-hosted labels.
-		var exprLabels, literalLabels []string
-		for _, l := range pw.NonHostedLabels {
-			if strings.Contains(l, "${") {
-				exprLabels = append(exprLabels, l)
-			} else {
-				literalLabels = append(literalLabels, l)
-			}
-		}
-
-		// If all non-hosted labels are expressions, use ExpressionRunner.
-		if len(literalLabels) == 0 {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.ExpressionRunner,
-				Severity:     checks.SeverityWarning,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("runs-on uses expressions [%s] that can't be resolved statically", strings.Join(exprLabels, ", ")),
-			})
-			return wr
-		}
-
-		// Otherwise report as self-hosted (include only literal labels in detail).
-		labelList := strings.Join(literalLabels, ", ")
-		wfKey := workflowfile.KeyFromPath(pw.Path)
-		if store != nil && store.HasWorkflow(wfKey) {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.SelfHostedRunner,
-				Severity:     checks.SeverityError,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; use GitHub-hosted runners to continue using the lockfile", labelList),
-				Remediation:  "switch to GitHub-hosted runner labels or move self-hosted jobs to a separate workflow",
-			})
-		} else {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.SelfHostedRunner,
-				Severity:     checks.SeverityWarning,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; lockfile onboarding is not supported", labelList),
-			})
-		}
-		return wr
-	}
-
-	if len(pw.Refs) == 0 {
-		wr.Findings = append(wr.Findings, checks.Finding{
-			WorkflowPath: pw.Path,
-			Category:     checks.RunOnly,
-			Severity:     checks.SeverityOK,
-			Confidence:   checks.ConfidenceHigh,
-			Detail:       "no action references found",
-		})
-		return wr
-	}
-
-	if pw.DepsErr != nil {
-		wr.Findings = append(wr.Findings, checks.Finding{
-			WorkflowPath: pw.Path,
-			Category:     checks.NotPinned,
-			Severity:     checks.SeverityError,
-			Confidence:   checks.ConfidenceHigh,
-			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
-			Remediation:  "fix or regenerate the dependencies: section with `gh actions-lock`",
-			DocURL:       DocURLFor(checks.NotPinned),
-		})
+	wr, done := precheckWorkflow(pw, store)
+	if done {
 		return wr
 	}
 	wr.Deps = pw.ExistingDeps
@@ -201,42 +93,9 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 
-	var reach []resolve.ReachabilityResult
-	if r != nil && len(pw.ExistingDeps) > 0 {
-		toCheck, trusted := partitionReachByLive(pw.ExistingDeps, liveDeps, pw.SkipReachWhenUnchanged)
-		reach = trusted
-		if len(toCheck) > 0 {
-			reach = append(reach, r.CheckReachabilityAll(ctx, toCheck)...)
-		}
-	}
-	// Independent sweep for LIVE SHAs whose tag has moved: the
-	// tag-hijacked-to-fork-network shape is invisible to the locked-SHA
-	// sweep above (the lockfile entry is still legitimate; the live
-	// SHA is the impostor). Kept separate so the result map's
-	// (NWO, Ref, SHA) keys don't shadow the lockfile sweep — they
-	// share NWO@Ref dep keys, which would confuse
-	// reachabilityComplementFindings if mixed into `reach`.
-	var liveMovedReach []resolve.ReachabilityResult
-	if r != nil && len(liveDeps) > 0 && len(pw.ExistingDeps) > 0 {
-		if moved := liveMovedDeps(pw.ExistingDeps, liveDeps); len(moved) > 0 {
-			liveMovedReach = r.CheckReachabilityAll(ctx, moved)
-		}
-	}
-	// Pin-time parity sweep: any (NWO, Ref, LIVE SHA) that neither the
-	// locked-SHA sweep nor the tag-moved sweep covers gets a fresh reach
-	// check here. Catches the NotPinned-direct impostor case and any
-	// transitive composite live dep that isn't in the lockfile yet. With
-	// this in place, applyPin's reach-loop Unreachable branch becomes a
-	// fail-loud invariant rather than a primary detection path.
-	var liveDirectReach []resolve.ReachabilityResult
-	if r != nil && len(liveDeps) > 0 {
-		if extra := liveDirectReachDeps(pw, liveDeps); len(extra) > 0 {
-			liveDirectReach = r.CheckReachabilityAll(ctx, extra)
-		}
-	}
 	var checkR checks.CheckResolver
 	if r != nil && liveDeps != nil {
-		checkR = checks.NewPrewarmedResolver(r, liveDeps, reach, liveMovedReach, liveDirectReach)
+		checkR = checks.NewPrewarmedResolver(r, liveDeps)
 	}
 	rawFindings := checks.RunChecks(ctx, pw, store.File(), checkR)
 
@@ -250,13 +109,6 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		wr.Findings = append(wr.Findings, f)
 	}
 
-	if len(reach) > 0 {
-		wr.Findings = append(wr.Findings, reachabilityComplementFindings(pw.Path, reach, pw.ExistingDeps, directNWOs, parentMap, wr.Findings)...)
-	}
-	if len(liveDirectReach) > 0 {
-		wr.Findings = append(wr.Findings, liveReachImpostorFindings(pw.Path, liveDirectReach, liveDeps, directNWOs, parentMap, wr.Findings)...)
-	}
-
 	if !hasIssues(wr.Findings) {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
@@ -268,6 +120,125 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 
 	return wr
+}
+
+// precheckWorkflow handles terminal preconditions (load error, local-path
+// actions, non-hosted runner, no refs, unreadable deps). It returns true when
+// one fired; otherwise the report is seeded with ActionRefs/ParseWarnings.
+func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.WorkflowReport, bool) {
+	wr := checks.WorkflowReport{Path: pw.Path}
+
+	if pw.LoadErr != nil {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.NotPinned,
+			Severity:     checks.SeverityError,
+			// High: the YAML failed to load — concrete, file-level fact.
+			Confidence: checks.ConfidenceHigh,
+			Detail:     fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
+			DocURL:     DocURLFor(checks.NotPinned),
+		})
+		return wr, true
+	}
+
+	wr.ActionRefs = pw.Refs
+	wr.ParseWarnings = pw.ParseWarnings
+
+	if len(pw.LocalPaths) > 0 {
+		wfKey := workflowfile.KeyFromPath(pw.Path)
+		if store != nil && store.HasWorkflow(wfKey) {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.LocalAction,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
+				Remediation:  "remove `uses: ./…` steps or move them to a separate workflow",
+			})
+		} else {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.LocalAction,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
+			})
+		}
+		return wr, true
+	}
+
+	if pw.NonHostedRunner {
+		// Split labels into expressions vs literal non-hosted labels.
+		var exprLabels, literalLabels []string
+		for _, l := range pw.NonHostedLabels {
+			if strings.Contains(l, "${") {
+				exprLabels = append(exprLabels, l)
+			} else {
+				literalLabels = append(literalLabels, l)
+			}
+		}
+
+		// If all non-hosted labels are expressions, use ExpressionRunner.
+		if len(literalLabels) == 0 {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.ExpressionRunner,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("runs-on uses expressions [%s] that can't be resolved statically", strings.Join(exprLabels, ", ")),
+			})
+			return wr, true
+		}
+
+		// Otherwise report as self-hosted (include only literal labels in detail).
+		labelList := strings.Join(literalLabels, ", ")
+		wfKey := workflowfile.KeyFromPath(pw.Path)
+		if store != nil && store.HasWorkflow(wfKey) {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.SelfHostedRunner,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; use GitHub-hosted runners to continue using the lockfile", labelList),
+				Remediation:  "switch to GitHub-hosted runner labels or move self-hosted jobs to a separate workflow",
+			})
+		} else {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.SelfHostedRunner,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; lockfile onboarding is not supported", labelList),
+			})
+		}
+		return wr, true
+	}
+
+	if len(pw.Refs) == 0 {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.RunOnly,
+			Severity:     checks.SeverityOK,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       "no action references found",
+		})
+		return wr, true
+	}
+
+	if pw.DepsErr != nil {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.NotPinned,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
+			Remediation:  "fix or regenerate the dependencies: section with `gh actions-lock`",
+			DocURL:       DocURLFor(checks.NotPinned),
+		})
+		return wr, true
+	}
+
+	return wr, false
 }
 
 func indexDeps(deps []dep.Dependency) map[string]dep.Dependency {

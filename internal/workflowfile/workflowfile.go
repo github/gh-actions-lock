@@ -61,7 +61,7 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 		}
 		value = strings.TrimSpace(value)
 		if strings.Contains(value, "${") {
-			warnings = append(warnings, fmt.Sprintf("can't pin expression-based uses: %s", value))
+			warnings = append(warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
 			return
 		}
 		if strings.HasPrefix(value, "./") {

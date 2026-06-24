@@ -8,7 +8,6 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/pin"
-	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/ui"
@@ -17,19 +16,22 @@ import (
 // reportHasUnfixableErrors returns true when the report contains error-
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
-// don't count. LocalAction, SelfHostedRunner, ImpostorCommit, and
+// don't count. LocalAction, SelfHostedRunner, and
 // LockfileForgery errors are unfixable — the workflow or lockfile must
 // be investigated.
-func reportHasUnfixableErrors(report *checks.Report) bool {
+func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
 			if f.Severity != checks.SeverityError {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.SelfHostedRunner,
-				checks.ImpostorCommit, checks.LockfileForgery:
+			case checks.LocalAction, checks.SelfHostedRunner:
 				return true
+			case checks.LockfileForgery:
+				if !acceptMoved {
+					return true
+				}
 			}
 		}
 	}
@@ -39,7 +41,7 @@ func reportHasUnfixableErrors(report *checks.Report) bool {
 // reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
 // but only matches categories that renderInvestigationAlerts does NOT
 // handle (LocalAction, SelfHostedRunner). Use this to gate the
-// PresentResults call so impostor-commit / lockfile-forgery findings
+// PresentResults call so lockfile-forgery findings
 // don't trigger a redundant (and stale) error summary.
 func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 	for _, wr := range report.Workflows {
@@ -59,12 +61,21 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
+	narrowed := record.Narrowed()
 
 	if len(pinned) > 0 {
+		console.TermBlank()
 		renderPinnedEntries(console, pinned)
+	}
+
+	if len(narrowed) > 0 && len(pinned) == 0 {
+		console.TermBlank()
+	}
+	if len(narrowed) > 0 {
+		renderNarrowedEntries(console, narrowed)
 	}
 
 	renderFullScanWarnings(console, pinned)
@@ -86,10 +97,18 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 		console.TermNeutral("No workflows to check")
 		return nil
 	}
+
+	// Surface lockfile schema upgrade when the on-disk version differs from
+	// the current binary's version (e.g. v0.0.1 → v0.0.2).
+	if originalVersion != "" && originalVersion != parserlock.Version {
+		console.TermDetail("Upgraded lockfile schema %s → %s", originalVersion, parserlock.Version)
+	}
+
 	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
-	hasUnfixable := reportHasUnfixableErrors(report)
+	hasUnfixable := reportHasUnfixableErrors(report, acceptMoved)
 	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
+		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
 			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
@@ -116,19 +135,29 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	// the log so the findings surface on the terminal.
 	//
 	// Only trigger for categories NOT already rendered by
-	// renderInvestigationAlerts (which handles impostor-commit and
+	// renderInvestigationAlerts (which handles lockfile-forgery and
 	// lockfile-forgery). Without this gate PresentResults would also
 	// emit a stale summary line counting pre-fix not-pinned findings.
 	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,
-			checks.ImpostorCommit, checks.LockfileForgery)
+			checks.LockfileForgery)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {
 		return errSilent
 	}
 	return nil
+}
+
+// renderNarrowedEntries shows refs that were upgraded from mutable (main, v4)
+// to full semver (v6.0.2) on already-pinned workflows.
+func renderNarrowedEntries(console *ui.UI, narrowed []pin.Entry) {
+	console.TermSuccess("Narrowed %d %s to full semver",
+		len(narrowed), ui.Pluralize(len(narrowed), "ref", "refs"))
+	for _, e := range narrowed {
+		console.TermDetail(" %s@%s → %s", e.NWO, e.AutoFixedRef, e.Ref)
+	}
 }
 
 // renderPinnedEntries prints the "Pinned N actions across M workflows" block,
@@ -220,9 +249,14 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 		if len(short) > 7 {
 			short = short[:7]
 		}
-		label := g.NWO + "@" + g.Ref
-		if short != "" {
-			label = fmt.Sprintf("%s (%s)", label, short)
+		var label string
+		if looksLikeSHA(g.Ref) {
+			label = g.NWO + "@" + short
+		} else {
+			label = g.NWO + "@" + g.Ref
+			if short != "" {
+				label = fmt.Sprintf("%s (%s)", label, short)
+			}
 		}
 		console.TermDetail("  %s", console.TermYellow(label))
 		for _, wf := range g.workflows {
@@ -237,14 +271,25 @@ func renderPinnedEntries(console *ui.UI, pinned []pin.Entry) {
 				console.TermYellow("!"), console.TermDim(prev), console.TermBold(g.Ref))
 		}
 	}
+	if len(purelyTransitive) > 0 {
+		console.TermBlank()
+		console.TermDetail("Transitive dependencies (from composite actions):")
+	}
 	for _, te := range purelyTransitive {
 		short := te.SHA
 		if len(short) > 7 {
 			short = short[:7]
 		}
-		label := te.NWO + "@" + te.Ref
-		if short != "" {
-			label = fmt.Sprintf("%s (%s)", label, short)
+		// When the ref IS the full SHA (composite actions pin by commit),
+		// just show NWO@short instead of the redundant full-sha (short).
+		var label string
+		if te.Ref == te.SHA || (len(te.Ref) >= 40 && te.Ref == te.SHA[:len(te.Ref)]) {
+			label = te.NWO + "@" + short
+		} else {
+			label = te.NWO + "@" + te.Ref
+			if short != "" {
+				label = fmt.Sprintf("%s (%s)", label, short)
+			}
 		}
 		via := ""
 		if te.parentLabel != "" {
@@ -275,7 +320,7 @@ func renderFullScanWarnings(console *ui.UI, pinned []pin.Entry) {
 }
 
 // renderInvestigationAlerts prints error-level alerts for entries that
-// require manual investigation (impostor commits, forgery, etc.).
+// require manual investigation (forgery, orphaned commits, etc.).
 // Entries sharing the same NWO@Ref are grouped so the action line
 // appears once with all affected workflows listed underneath.
 func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *resolve.Resolver) {
@@ -305,24 +350,9 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 
 	console.TermBlank()
 
-	// Use a specific header when all entries are impostor-commit;
-	// fall back to a generic header when other issue types are mixed in.
-	allImpostor := true
-	for _, g := range groups {
-		if g.Issue != string(checks.ImpostorCommit) {
-			allImpostor = false
-			break
-		}
-	}
-	if allImpostor {
-		console.TermError("%d %s %s maintainer action — pinned commit is not reachable from any branch",
-			len(groups), ui.Pluralize(len(groups), "action", "actions"),
-			ui.Pluralize(len(groups), "requires", "require"))
-	} else {
-		console.TermError("%d %s %s investigation — do not auto-pin",
-			len(groups), ui.Pluralize(len(groups), "action", "actions"),
-			ui.Pluralize(len(groups), "requires", "require"))
-	}
+	console.TermError("%d %s %s investigation — do not auto-pin",
+		len(groups), ui.Pluralize(len(groups), "action", "actions"),
+		ui.Pluralize(len(groups), "requires", "require"))
 	for _, g := range groups {
 		dep := g.NWO + "@" + g.Ref
 		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
@@ -332,11 +362,6 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 		if g.Suggestion != "" {
 			console.TermDetail("    %s Suggested re-pin: %s",
 				console.TermBold("→"), console.TermYellow(g.NWO+"@"+g.Suggestion))
-		}
-		if g.Issue == string(checks.ImpostorCommit) {
-			console.TermDetail("    %s %s", console.TermYellow("!"), pipeline.ImpostorCommitContext)
-			console.TermDetail("    %s %s", console.TermBold("→"), pipeline.PublisherEscalationCopy)
-			console.TermDetail("    see: %s", console.TermLink(console.TermDim("Using tags for release management"), pipeline.PublisherTagReleasesDocURL))
 		}
 	}
 }
@@ -540,14 +565,14 @@ func stripNWORefPrefix(s string) string {
 // re-pins. Only shown for repos that actually have semver releases.
 func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Record, r *resolve.Resolver) {
 	type nudgeEntry struct {
-		key    string // NWO@Ref
-		latest string // best full-semver tag, e.g. v1.2.3
+		key       string // NWO@Ref
+		latest    string // best full-semver tag, e.g. v1.2.3
+		workflows []string
 	}
 
-	seen := map[string]bool{}
+	seen := map[string]*nudgeEntry{}
 	// Cache per-repo so we don't call ListTags twice for the same repo.
 	repoLatest := map[string]string{} // NWO → latest full semver (or "" if none)
-	var entries []nudgeEntry
 
 	for _, e := range record.Entries {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
@@ -560,11 +585,19 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 		if ok && sv.IsFull() {
 			continue
 		}
-		key := e.NWO + "@" + e.Ref
-		if seen[key] {
+		// Only nudge for partial semver refs (v4, v3.1) — not arbitrary
+		// branch names like canary, main, nightly. A ref must at least
+		// parse as semver (partial) to be nudge-worthy.
+		if !ok {
 			continue
 		}
-		seen[key] = true
+		key := e.NWO + "@" + e.Ref
+		if ne, exists := seen[key]; exists {
+			for _, wf := range e.Workflows {
+				ne.workflows = append(ne.workflows, wf)
+			}
+			continue
+		}
 
 		latest, cached := repoLatest[e.NWO]
 		if !cached {
@@ -574,10 +607,21 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 		if latest == "" {
 			continue // no semver releases — nothing to suggest
 		}
-		entries = append(entries, nudgeEntry{key: key, latest: latest})
+		// Don't suggest a downgrade: if the user is on v3.4, only nudge
+		// if the latest full semver is v3.4.x or higher.
+		if latestSV, latestOK := parserlock.ParseSemVer(latest); latestOK {
+			if !latestSV.Greater(sv) {
+				continue
+			}
+		}
+		seen[key] = &nudgeEntry{key: key, latest: latest, workflows: e.Workflows}
 	}
-	if len(entries) == 0 {
+	if len(seen) == 0 {
 		return
+	}
+	entries := make([]*nudgeEntry, 0, len(seen))
+	for _, ne := range seen {
+		entries = append(entries, ne)
 	}
 	console.TermBlank()
 	console.TermWarn("%d %s pinned without a full semver tag",
@@ -587,8 +631,11 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 			console.TermYellow(ne.key),
 			console.TermBold("→"),
 			console.TermYellow(ne.latest))
+		for _, wf := range ne.workflows {
+			console.TermDetail("    %s", wf)
+		}
 	}
-	console.TermDetail("  Run without --no-narrow to upgrade.")
+	console.TermDetail("  Update the uses: line in your workflow to the full version to lock precisely.")
 }
 
 // latestFullSemverTag returns the highest full semver tag (vX.Y.Z) for
@@ -624,4 +671,19 @@ func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo string) s
 		}
 	}
 	return bestTag
+}
+
+// looksLikeSHA returns true when ref is a hex string of SHA-1 (40) or
+// SHA-256 (64) length.
+func looksLikeSHA(ref string) bool {
+	n := len(ref)
+	if n != 40 && n != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

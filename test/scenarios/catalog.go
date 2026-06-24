@@ -41,9 +41,9 @@ type Scenario struct {
 
 // Fixtures describes the file-system setup for a scenario.
 type Fixtures struct {
-	Workflows       map[string]WorkflowFixture `yaml:"workflows"`
-	Lockfile        string                     `yaml:"lockfile"`
-	LockfileTemplate string                    `yaml:"lockfile_template"`
+	Workflows        map[string]WorkflowFixture `yaml:"workflows"`
+	Lockfile         string                     `yaml:"lockfile"`
+	LockfileTemplate string                     `yaml:"lockfile_template"`
 }
 
 // WorkflowFixture is either a structured action list or raw YAML.
@@ -65,16 +65,16 @@ type JQCheck struct {
 
 // Expect declares assertions on the scenario outcome.
 type Expect struct {
-	Exit            *int                   `yaml:"exit"`
-	ExitAny         []int                  `yaml:"exit_any"`
-	OutputContains  []string               `yaml:"output_contains"`
-	OutputExcludes  []string               `yaml:"output_excludes"`
-	StdoutContains  []string               `yaml:"stdout_contains"`
-	StdoutIsJSON    bool                   `yaml:"stdout_is_json"`
-	LockfileExists  bool                   `yaml:"lockfile_exists"`
-	Custom          string                 `yaml:"custom"`
-	JQ              []JQCheck              `yaml:"jq,omitempty"`
-	GoldenJSON      map[string]interface{} `yaml:"golden_json,omitempty"`
+	Exit           *int                   `yaml:"exit"`
+	ExitAny        []int                  `yaml:"exit_any"`
+	OutputContains []string               `yaml:"output_contains"`
+	OutputExcludes []string               `yaml:"output_excludes"`
+	StdoutContains []string               `yaml:"stdout_contains"`
+	StdoutIsJSON   bool                   `yaml:"stdout_is_json"`
+	LockfileExists bool                   `yaml:"lockfile_exists"`
+	Custom         string                 `yaml:"custom"`
+	JQ             []JQCheck              `yaml:"jq,omitempty"`
+	GoldenJSON     map[string]interface{} `yaml:"golden_json,omitempty"`
 }
 
 // HasTag reports whether the scenario has the given tag.
