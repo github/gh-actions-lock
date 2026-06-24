@@ -7,16 +7,21 @@ on:
       extra-flags:
         type: string
         default: ""
+      # The PR head branch to check out and push back to. Required because
+      # github.head_ref is not available inside workflow_call context.
+      head-ref:
+        type: string
+        required: true
 
 jobs:
   relock:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6.0.2
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ inputs.head-ref }}
 
       - name: Install gh-actions-lock
         run: gh extension install github/gh-actions-lock
