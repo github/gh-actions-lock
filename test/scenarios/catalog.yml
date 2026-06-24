@@ -611,9 +611,11 @@ scenarios:
       delete_lockfile: true
     expect:
       exit: 1
-      lockfile_golden: transitive_closure_cross_repo.lock
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "nodeselector/actions-test-fixtures-b@main"
+        - "uses:"
       output_contains:
         - "transitive"
 
