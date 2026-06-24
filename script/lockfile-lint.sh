@@ -20,11 +20,17 @@ fi
 valid=$(echo "$json_output" | jq -r '.valid // empty')
 num_findings=$(echo "$json_output" | jq -r '.findings // [] | length')
 
+# local-action findings are informational (local path actions can't be
+# locked but aren't a supply chain risk). Count only blocking findings
+# for the exit decision.
+blocking_findings=$(echo "$json_output" | jq '[.findings[] | select(.category != "local-action")] | length')
+
 # Log findings as annotations
 if [ "$num_findings" != "0" ] && [ -n "$num_findings" ]; then
   echo ""
   echo "::group::Findings ($num_findings)"
-  echo "$json_output" | jq -r '.findings[] | "::error file=\(.workflow)::[\(.category)] \(.dependency): \(.detail)"'
+  echo "$json_output" | jq -r '.findings[] | select(.category != "local-action") | "::error file=\(.workflow)::[\(.category)] \(.dependency // "n/a"): \(.detail)"'
+  echo "$json_output" | jq -r '.findings[] | select(.category == "local-action") | "::warning file=\(.workflow)::[\(.category)] \(.detail)"'
   echo "::endgroup::"
 fi
 
@@ -35,7 +41,7 @@ echo "$json_output" | jq -r '.workflows[] | (if .valid then "pass" else "FAIL" e
 echo "::endgroup::"
 
 # Show what a fix would change
-if [ "$exit_code" -ne 0 ]; then
+if [ "$blocking_findings" -gt 0 ]; then
   echo ""
   echo "::group::Lockfile diff (what gh actions-lock would change)"
   cp .github/workflows/actions.lock .github/workflows/actions.lock.bak 2>/dev/null || true
@@ -50,7 +56,7 @@ if [ -n "$GITHUB_STEP_SUMMARY" ]; then
   {
     echo "## Lockfile lint"
     echo ""
-    if [ "$valid" = "true" ]; then
+    if [ "$blocking_findings" -eq 0 ]; then
       echo "Lockfile is in sync."
     else
       echo "Lockfile is **out of sync**. Run \`gh actions-lock\` to fix."
@@ -59,9 +65,12 @@ if [ -n "$GITHUB_STEP_SUMMARY" ]; then
       echo ""
       echo "| Workflow | Category | Dependency | Detail |"
       echo "|----------|----------|------------|--------|"
-      echo "$json_output" | jq -r '.findings[] | "| `\(.workflow)` | \(.category) | `\(.dependency)` | \(.detail) |"'
+      echo "$json_output" | jq -r '.findings[] | select(.category != "local-action") | "| `\(.workflow)` | \(.category) | `\(.dependency // "n/a")` | \(.detail) |"'
     fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
-exit $exit_code
+# Exit non-zero only if there are blocking findings
+if [ "$blocking_findings" -gt 0 ]; then
+  exit 1
+fi
