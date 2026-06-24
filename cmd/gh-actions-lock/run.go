@@ -49,7 +49,8 @@ type checkOptions struct {
 	// allowRunners lists additional runner labels to treat as hosted.
 	// Use when org-provisioned larger runners (e.g. ubuntu-latest-xl)
 	// are flagged as self-hosted but you know they are GitHub-hosted.
-	allowRunners []string
+	allowRunners    []string
+	allowAllRunners bool
 	// acceptMoved re-resolves deps flagged as lockfile-forgery or
 	// ref-moved: prunes the stale lockfile entry and re-pins to the
 	// current live SHA.
@@ -65,6 +66,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false, "Keep mutable version refs (e.g. v4) instead of narrowing to full patch tags (e.g. v4.2.1)")
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Additional runner `labels` to treat as GitHub-hosted (e.g. ubuntu-latest-xl)")
+	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Treat all runner labels as GitHub-hosted (skip self-hosted checks)")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or lockfile-forgery to their current live SHA")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
@@ -108,7 +110,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	pool := pinpool.New(0, console) // 0 → DefaultWorkers
 
 	// Register user-supplied runner labels as hosted before parsing.
-	if len(opts.allowRunners) > 0 {
+	if opts.allowAllRunners {
+		workflowfile.RegisterOrgHostedLabels([]string{"*"})
+	} else if len(opts.allowRunners) > 0 {
 		workflowfile.RegisterOrgHostedLabels(opts.allowRunners)
 	}
 
