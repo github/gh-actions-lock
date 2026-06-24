@@ -4,33 +4,41 @@
 # grouped log output, a lockfile diff, and a job summary.
 set -o pipefail
 
-binary="${1:?usage: lockfile-lint.sh <gh-actions-lock-command>}"
+binary="${1:?usage: lockfile-lint.sh <command> [ignore-categories] [extra-flags...]}"
+ignore_categories="${2:-}"
+shift 2 2>/dev/null || shift $#
+
+# Build a jq filter from the comma-separated ignore list.
+# Categories in this list become warnings instead of errors.
+if [ -n "$ignore_categories" ]; then
+  jq_ignore_filter=$(echo "$ignore_categories" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R -s 'split("\n") | map(select(length > 0))')
+else
+  jq_ignore_filter='[]'
+fi
 
 # Run the check, capture JSON stdout separately from stderr
 exit_code=0
-json_output=$($binary --no-fix --no-interactive --json=valid,findings,workflows 2>/dev/null) || exit_code=$?
+json_output=$($binary --no-fix --no-interactive --json=valid,findings,workflows "$@" 2>/dev/null) || exit_code=$?
 
 # If exit code 2, the tool itself failed — re-run to show stderr
 if [ "$exit_code" -eq 2 ]; then
   echo "::error::gh-actions-lock failed:"
-  $binary --no-fix --no-interactive 2>&1 || true
+  $binary --no-fix --no-interactive "$@" 2>&1 || true
   exit 2
 fi
 
 valid=$(echo "$json_output" | jq -r '.valid // empty')
 num_findings=$(echo "$json_output" | jq -r '.findings // [] | length')
 
-# local-action findings are informational (local path actions can't be
-# locked but aren't a supply chain risk). Count only blocking findings
-# for the exit decision.
-blocking_findings=$(echo "$json_output" | jq '[.findings[] | select(.category != "local-action")] | length')
+ignored="$jq_ignore_filter"
+blocking_findings=$(echo "$json_output" | jq --argjson ignored "$ignored" '[.findings[] | select(.category as $c | ($ignored | index($c)) | not)] | length')
 
 # Log findings as annotations
 if [ "$num_findings" != "0" ] && [ -n "$num_findings" ]; then
   echo ""
   echo "::group::Findings ($num_findings)"
-  echo "$json_output" | jq -r '.findings[] | select(.category != "local-action") | "::error file=\(.workflow)::[\(.category)] \(.dependency // "n/a"): \(.detail)"'
-  echo "$json_output" | jq -r '.findings[] | select(.category == "local-action") | "::warning file=\(.workflow)::[\(.category)] \(.detail)"'
+  echo "$json_output" | jq -r --argjson ignored "$ignored" '.findings[] | select(.category as $c | ($ignored | index($c)) | not) | "::error file=\(.workflow)::[\(.category)] \(.dependency // "n/a"): \(.detail)"'
+  echo "$json_output" | jq -r --argjson ignored "$ignored" '.findings[] | select(.category as $c | ($ignored | index($c)) | not | not) | "::warning file=\(.workflow)::[\(.category)] \(.detail) (ignored)"'
   echo "::endgroup::"
 fi
 
@@ -45,7 +53,7 @@ if [ "$blocking_findings" -gt 0 ]; then
   echo ""
   echo "::group::Lockfile diff (what gh actions-lock would change)"
   cp .github/workflows/actions.lock .github/workflows/actions.lock.bak 2>/dev/null || true
-  $binary --no-interactive 2>/dev/null || true
+  $binary --no-interactive "$@" 2>/dev/null || true
   diff -u .github/workflows/actions.lock.bak .github/workflows/actions.lock || true
   git checkout -- . 2>/dev/null
   echo "::endgroup::"
@@ -65,7 +73,7 @@ if [ -n "$GITHUB_STEP_SUMMARY" ]; then
       echo ""
       echo "| Workflow | Category | Dependency | Detail |"
       echo "|----------|----------|------------|--------|"
-      echo "$json_output" | jq -r '.findings[] | select(.category != "local-action") | "| `\(.workflow)` | \(.category) | `\(.dependency // "n/a")` | \(.detail) |"'
+      echo "$json_output" | jq -r --argjson ignored "$ignored" '.findings[] | select(.category as $c | ($ignored | index($c)) | not) | "| `\(.workflow)` | \(.category) | `\(.dependency // "n/a")` | \(.detail) |"'
     fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi
