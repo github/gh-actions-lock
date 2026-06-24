@@ -70,6 +70,7 @@ var (
 
 // RegisterOrgHostedLabels adds labels to the hosted runner allowlist.
 // Call before ParseAll; safe to call multiple times.
+// The special value "*" marks all labels as hosted.
 func RegisterOrgHostedLabels(labels []string) {
 	if len(labels) == 0 {
 		return
@@ -92,7 +93,7 @@ func IsHostedRunnerLabel(label string) bool {
 	}
 	orgHostedMu.RLock()
 	defer orgHostedMu.RUnlock()
-	return orgHostedLabels[lower]
+	return orgHostedLabels["*"] || orgHostedLabels[lower]
 }
 
 // ExtractRunsOnLabels returns the deduplicated runs-on labels across all jobs.
