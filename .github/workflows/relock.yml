@@ -15,7 +15,7 @@ on:
 
 jobs:
   relock:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
     steps:
