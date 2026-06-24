@@ -4,16 +4,16 @@
 # grouped log output, a lockfile diff, and a job summary.
 set -o pipefail
 
-binary="${1:?usage: lockfile-lint.sh <path-to-gh-actions-lock>}"
+binary="${1:?usage: lockfile-lint.sh <gh-actions-lock-command>}"
 
 # Run the check, capture JSON stdout separately from stderr
 exit_code=0
-json_output=$("$binary" --no-fix --no-interactive --json=valid,findings,workflows 2>/dev/null) || exit_code=$?
+json_output=$($binary --no-fix --no-interactive --json=valid,findings,workflows 2>/dev/null) || exit_code=$?
 
 # If exit code 2, the tool itself failed — re-run to show stderr
 if [ "$exit_code" -eq 2 ]; then
   echo "::error::gh-actions-lock failed:"
-  "$binary" --no-fix --no-interactive 2>&1 || true
+  $binary --no-fix --no-interactive 2>&1 || true
   exit 2
 fi
 
@@ -39,7 +39,7 @@ if [ "$exit_code" -ne 0 ]; then
   echo ""
   echo "::group::Lockfile diff (what gh actions-lock would change)"
   cp .github/workflows/actions.lock .github/workflows/actions.lock.bak 2>/dev/null || true
-  "$binary" --no-interactive 2>/dev/null || true
+  $binary --no-interactive 2>/dev/null || true
   diff -u .github/workflows/actions.lock.bak .github/workflows/actions.lock || true
   git checkout -- . 2>/dev/null
   echo "::endgroup::"

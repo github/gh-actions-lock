@@ -78,17 +78,15 @@ jobs:
     runs-on: ubuntu-slim
     permissions:
       contents: read
-      id-token: write
     steps:
-      - name: OIDC Setup for goproxy
-        uses: github/setup-goproxy@v1.1.0
       - uses: actions/checkout@v5.0.1
-      - uses: actions/setup-go@v6.4.0
-        with:
-          go-version-file: go.mod
-      - run: make build
+
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Check lockfile is in sync
-        run: ./script/lockfile-lint.sh ./gh-actions-lock
+        run: ./script/lockfile-lint.sh gh-actions-lock
         env:
           GH_TOKEN: ${{ github.token }}
