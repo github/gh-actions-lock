@@ -738,6 +738,7 @@ scenarios:
       exit: 0
       lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v\d+\.\d+\.\d+'
+      lockfile_comment_excludes: "'actions/checkout@main'"
 
   - name: local_action_only
     category: workflow_parsing

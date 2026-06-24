@@ -197,11 +197,12 @@ func buildDirectKeys(rec *Record, wfPath string) map[string]bool {
 }
 
 // workflowsWithNewPins returns the set of workflow paths that contain at
-// least one entry with Resolution == Pinned (i.e. genuinely new or changed).
+// least one entry with Resolution == Pinned (i.e. genuinely new or changed)
+// or a narrowed ref (Verified with AutoFixedRef set, meaning the dep key changed).
 func workflowsWithNewPins(rec *Record) map[string]bool {
 	m := make(map[string]bool)
 	for _, e := range rec.Entries {
-		if e.Resolution != Pinned {
+		if e.Resolution != Pinned && !(e.Resolution == Verified && e.AutoFixedRef != "") {
 			continue
 		}
 		for _, wf := range e.Workflows {
