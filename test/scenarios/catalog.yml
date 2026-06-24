@@ -1421,7 +1421,7 @@ scenarios:
         valid: true
   - name: dbot_impostor_blocks
     category: dependabot
-    description: "Orphaned commit (no tag or branch contains it) blocks pinning — dependabot sees the finding in JSON"
+    description: "Orphaned commit (no tag or branch) produces reachability-unknown warning in JSON findings"
     needs_token: true
     tags: [smoke]
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=findings"]
@@ -1431,14 +1431,14 @@ scenarios:
           name: CI
           actions: ["nodeselector/actions-test-fixtures@7b403c9ec14bd3ae0bbf793c2bee8815a7ac920b"]
     expect:
-      exit: 1
+      exit: 0
       stdout_is_json: true
       stdout_contains: ["does not exist or is not reachable"]
       jq:
         - expr: '.findings | length'
           gt: 0
         - expr: '.findings[0].category'
-          equals: 'not-pinned'
+          equals: 'reachability-unknown'
 
   - name: dbot_forgery_blocks
     category: dependabot
