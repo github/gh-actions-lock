@@ -370,7 +370,7 @@ scenarios:
 
   - name: expression_in_uses
     category: workflow_parsing
-    description: "Expression-based uses: (${{ }}) — skipped with warning"
+    description: "Expression-based uses: (${{ }}) — unparseable, skipped with warning"
     needs_token: true
     fixtures:
       workflows:
