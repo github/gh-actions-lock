@@ -166,9 +166,36 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// ReverseLookup canonicalizes each dep's ref while preserving the tags
 	// narrowing chose and transitive deps' declared refs.
-	rlRewrites, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
+	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
 	if err != nil {
 		return planResult{}, err
+	}
+	// Deps that ReverseLookup couldn't resolve (orphaned commits, bare SHAs
+	// with no containing ref) become Unresolved entries rather than aborting.
+	if len(lookupIssues) > 0 {
+		skip := make(map[int]bool, len(lookupIssues))
+		for _, issue := range lookupIssues {
+			entries = append(entries, Entry{
+				NWO:        issue.NWO,
+				Ref:        issue.Ref,
+				SHA:        issue.SHA,
+				Resolution: Unresolved,
+				Issue:      "reverse-lookup",
+				Reason:     issue.Message,
+				Workflows:  []string{wr.Path},
+			})
+			skip[issue.Index] = true
+		}
+		// Remove failed deps so they don't flow into pinning/commit.
+		filtered := deps[:0]
+		for i, d := range deps {
+			if !skip[i] {
+				filtered = append(filtered, d)
+			}
+		}
+		deps = filtered
+		// Rebuild direct tracker against the filtered slice.
+		directTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
 	}
 	for k, v := range rlRewrites {
 		rewrites[k] = v
@@ -328,7 +355,8 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 
 // reverseLookupRewrites canonicalizes dep refs via ReverseLookup (SHA -> tag/
 // branch), restoring refs that narrowing or a transitive dep already fixed.
-func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, error) {
+// Returns the rewrites map, indices of unresolvable deps, and any hard error.
+func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, []resolve.LookupIssue, error) {
 	// Save narrowed refs before ReverseLookup - it may overwrite dep.Ref
 	// with a branch name, but we want to keep the semver tag narrowing chose.
 	narrowedRefs := make(map[int]string)
@@ -351,9 +379,9 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 	}
 
 	// ReverseLookup: SHA -> containing tag/branch. Rewrites refs to canonical form.
-	normRewrites, err := opts.Resolver.ReverseLookup(ctx, deps)
+	normRewrites, lookupIssues, err := opts.Resolver.ReverseLookup(ctx, deps)
 	if err != nil {
-		return nil, fmt.Errorf("reverse lookup: %w", err)
+		return nil, nil, fmt.Errorf("reverse lookup: %w", err)
 	}
 	// Restore narrowed refs that ReverseLookup may have overwritten.
 	for i, ref := range narrowedRefs {
@@ -379,7 +407,7 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 		}
 		rewrites[k] = v
 	}
-	return rewrites, nil
+	return rewrites, lookupIssues, nil
 }
 
 // buildPinnedEntries emits an entry for every resolved dep, marking it Verified

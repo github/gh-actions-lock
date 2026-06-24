@@ -241,14 +241,28 @@ func (r *Resolver) LikelyBranches(ctx context.Context, owner, repo, sha, ref, de
 	return out
 }
 
+// LookupIssue describes a single dep that ReverseLookup could not resolve.
+type LookupIssue struct {
+	Index   int    // position in the deps slice
+	NWO     string // owner/repo
+	Ref     string // original ref
+	SHA     string // commit hash
+	Message string // human-readable reason
+}
+
 // ReverseLookup performs a reverse lookup (SHA → containing tag/branch)
 // for every entry in deps via DiscoverContaining, populates dep.Tag and
 // dep.Branch, and computes the canonical @ref. The ref priority is:
 // tag (semver-ish release) > protected branch > default branch > any branch.
 // When the canonical ref differs from dep.Ref the change is recorded in
 // the returned rewrites map and dep.Ref is updated in place.
-func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (map[string]string, error) {
+//
+// Deps that cannot be resolved (orphaned commits, bare SHAs with no
+// containing ref) are skipped and reported in the returned issues slice.
+// Only transient/API errors are returned as err.
+func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (map[string]string, []LookupIssue, error) {
 	rewrites := map[string]string{}
+	var issues []LookupIssue
 	for i := range deps {
 		d := &deps[i]
 		owner, repo := d.OwnerRepo()
@@ -257,15 +271,24 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		}
 		tag, branch, err := r.DiscoverContaining(ctx, owner, repo, d.SHA, d.Ref)
 		if err != nil {
-			return nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
+			return nil, nil, fmt.Errorf("%s@%s: %w", d.NWO, d.Ref, err)
 		}
 		if tag == "" && branch == "" {
+			var msg string
 			if looksLikeSHA(d.Ref) {
-				return nil, fmt.Errorf("%s@%s: no tag or branch contains this commit — a symbolic ref is required for the lockfile",
-					d.NWO, parserlock.ShortSHA(d.Ref))
+				msg = fmt.Sprintf("no tag or branch contains this commit — a symbolic ref is required for the lockfile")
+			} else {
+				msg = fmt.Sprintf("commit %s is not reachable from any ref (tag or branch) — orphaned commit",
+					parserlock.ShortSHA(d.SHA))
 			}
-			return nil, fmt.Errorf("%s@%s: commit %s is not reachable from any ref (tag or branch) — orphaned commit",
-				d.NWO, d.Ref, parserlock.ShortSHA(d.SHA))
+			issues = append(issues, LookupIssue{
+				Index:   i,
+				NWO:     d.NWO,
+				Ref:     d.Ref,
+				SHA:     d.SHA,
+				Message: msg,
+			})
+			continue
 		}
 		d.Tag = tag
 		d.Branch = branch
@@ -282,7 +305,7 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		rewrites[d.NWO+"@"+d.Ref] = d.NWO + "@" + newRef
 		d.Ref = newRef
 	}
-	return rewrites, nil
+	return rewrites, issues, nil
 }
 
 // looksLikeSHA returns true when ref is a hex string of SHA-1 (40) or
