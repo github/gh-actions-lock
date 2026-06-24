@@ -367,14 +367,13 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 		}
 	}
 
-	// Preserve transitive deps' declared refs across ReverseLookup. We still
-	// want the tag/branch metadata it populates (the lockfile write requires
-	// a branch), but the ref itself must stay exactly as the composite's
-	// action.yml declares it - we don't own it and must not rewrite it.
-	transitiveRefs := make(map[int]string)
+	// Snapshot transitive deps' declared refs before ReverseLookup mutates
+	// them. We restore symbolic refs (tags/branches) afterward but let
+	// ReverseLookup's discovered ref stick when the original is a bare SHA.
+	transitiveOrigRefs := make(map[int]string)
 	for i := range deps {
 		if !directTracker.IsDirect(i) {
-			transitiveRefs[i] = deps[i].Ref
+			transitiveOrigRefs[i] = deps[i].Ref
 		}
 	}
 
@@ -387,12 +386,22 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 	for i, ref := range narrowedRefs {
 		deps[i].Ref = ref
 	}
-	// Restore transitive deps' declared refs and suppress any rewrite
-	// ReverseLookup produced for them - keyed by the declared NWO@ref.
-	transitiveRewriteKeys := make(map[string]bool, len(transitiveRefs))
-	for i, ref := range transitiveRefs {
-		deps[i].Ref = ref
-		transitiveRewriteKeys[deps[i].NWO+"@"+ref] = true
+	// Restore transitive deps' declared refs — we don't own the composite's
+	// action.yml so the lockfile should keep the ref it declares. Exception:
+	// when the declared ref is a bare SHA (commit hash), keep ReverseLookup's
+	// discovered tag/branch since a SHA is not a valid symbolic ref.
+	transitiveRewriteKeys := make(map[string]bool)
+	for i := range deps {
+		if directTracker.IsDirect(i) {
+			continue
+		}
+		origRef := transitiveOrigRefs[i]
+		if resolve.LooksLikeSHA(origRef) {
+			// Bare SHA — keep ReverseLookup's discovered ref.
+			continue
+		}
+		deps[i].Ref = origRef
+		transitiveRewriteKeys[deps[i].NWO+"@"+origRef] = true
 	}
 	rewrites := make(map[string]string)
 	for k, v := range normRewrites {

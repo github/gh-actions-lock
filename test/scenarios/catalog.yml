@@ -950,7 +950,7 @@ scenarios:
 
   - name: transitive_major_ref_not_narrowed
     category: narrowing
-    description: "Transitive dep of a composite keeps the major ref the composite declares (actions/attest-build-provenance@v1 stays v1, not narrowed to v1.x.y) — we don't own composite-internal refs"
+    description: "Transitive dep keeps the composite's declared ref (v1) — only bare-SHA refs are replaced by ReverseLookup's discovered tag/branch"
     needs_token: true
     fixtures:
       workflows:
@@ -967,7 +967,7 @@ scenarios:
 
   - name: transitive_version_ref_nudge_suppressed
     category: narrowing
-    description: "Transitive deps with imprecise refs do not trigger the version-ref nudge — user cannot change composite-internal refs"
+    description: "Transitive deps with composite-declared refs do not trigger the version-ref nudge — user cannot change composite-internal refs"
     needs_token: true
     fixtures:
       workflows:
@@ -981,7 +981,7 @@ scenarios:
 
   - name: transitive_provenance_ref_not_narrowed
     category: narrowing
-    description: "Second-hop transitive dep (actions/attest-build-provenance pinned by bare SHA, pulled in via attest-build-provenance@v1) stays verbatim rather than being reverse-looked-up into a malformed ref"
+    description: "Transitive dep keeps composite's declared ref (v1) — bare-SHA refs would be replaced by discovered tag/branch, but symbolic refs are preserved"
     needs_token: true
     fixtures:
       workflows:

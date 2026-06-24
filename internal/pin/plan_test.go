@@ -171,13 +171,10 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	}
 }
 
-// TestPlanWorkflow_DoesNotNarrowTransitiveDeps verifies that a transitive
-// dependency discovered from a composite action's action.yml keeps the ref the
-// composite author declared, even when a narrower full-semver tag exists at the
-// same commit. We only own (and may narrow) refs that literally appear in a
-// workflow `uses:` line; rewriting a composite's internal refs is churn and can
-// invent refs the composite never declared.
-func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
+// TestPlanWorkflow_TransitiveDepUsesDiscoveredRef verifies that a transitive
+// dependency keeps the composite's declared ref when it's a valid symbolic ref
+// (tag/branch). Only bare-SHA refs are replaced by ReverseLookup's discovery.
+func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -296,7 +293,6 @@ func TestPlanWorkflow_DoesNotNarrowTransitiveDeps(t *testing.T) {
 	trans, ok := byNWO["trans/dep"]
 	require.True(t, ok, "transitive dep should be pinned")
 	assert.Equal(t, "v2", trans.Ref, "transitive ref must stay as the composite declared it")
-	assert.NotEqual(t, "v2.3.4", trans.Ref, "transitive dep must not be narrowed")
 	assert.Equal(t, transSHA, trans.SHA)
 	assert.False(t, trans.Direct, "transitive dep must not be marked Direct")
 	assert.Contains(t, trans.RequiredBy, "comp/action@v1.0.0")

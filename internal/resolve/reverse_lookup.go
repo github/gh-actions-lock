@@ -275,7 +275,7 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		}
 		if tag == "" && branch == "" {
 			var msg string
-			if looksLikeSHA(d.Ref) {
+			if LooksLikeSHA(d.Ref) {
 				msg = fmt.Sprintf("no tag or branch contains this commit — a symbolic ref is required for the lockfile")
 			} else {
 				msg = fmt.Sprintf("commit %s is not reachable from any ref (tag or branch) — orphaned commit",
@@ -308,9 +308,9 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 	return rewrites, issues, nil
 }
 
-// looksLikeSHA returns true when ref is a hex string of SHA-1 (40) or
+// LooksLikeSHA returns true when ref is a hex string of SHA-1 (40) or
 // SHA-256 (64) length — i.e. the user wrote a bare commit hash.
-func looksLikeSHA(ref string) bool {
+func LooksLikeSHA(ref string) bool {
 	n := len(ref)
 	if n != 40 && n != 64 {
 		return false
