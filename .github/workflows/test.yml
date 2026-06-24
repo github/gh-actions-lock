@@ -80,13 +80,4 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5.0.1
-
-      - name: Install gh-actions-lock
-        run: gh extension install github/gh-actions-lock
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Check lockfile is in sync
-        run: ./script/lockfile-lint.sh gh-actions-lock
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: ./actions/lint

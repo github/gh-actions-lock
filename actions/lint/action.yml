@@ -1,0 +1,23 @@
+name: Lint actions.lock
+description: Check that actions.lock is in sync with workflow files
+
+inputs:
+  extra-flags:
+    description: Extra flags passed to gh actions-lock (e.g. "--allow-runners foo")
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install gh-actions-lock
+      shell: bash
+      run: gh extension install github/gh-actions-lock
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Check lockfile is in sync
+      shell: bash
+      run: ${{ github.action_path }}/../../script/lockfile-lint.sh "gh actions-lock" ${{ inputs.extra-flags }}
+      env:
+        GH_TOKEN: ${{ github.token }}
