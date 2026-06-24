@@ -258,10 +258,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		}
 		// Surface SSO URL even in read-only mode — it's the actionable fix
 		// for SAML-gated repos and shouldn't require a --fix run to see.
-		if gc := r.GHClient(); gc != nil {
-			if ssoURL := gc.SSOURL(); ssoURL != "" {
-				console.TermBlank()
-				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+		// Suppressed in JSON mode to avoid corrupting stdout.
+		if opts.jsonFields == "" {
+			if gc := r.GHClient(); gc != nil {
+				if ssoURL := gc.SSOURL(); ssoURL != "" {
+					console.TermBlank()
+					console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+				}
 			}
 		}
 		if !valid {
@@ -352,10 +355,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// the run, matching cli/cli's "Authorize in your web browser:" line.
 	// This runs even when renderPinSummary returns errSilent (unresolved
 	// entries exist) because the SSO hint is the fix for those entries.
-	if gc := r.GHClient(); gc != nil {
-		if ssoURL := gc.SSOURL(); ssoURL != "" {
-			console.TermBlank()
-			console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+	// Suppressed in JSON mode to avoid corrupting stdout.
+	if opts.jsonFields == "" {
+		if gc := r.GHClient(); gc != nil {
+			if ssoURL := gc.SSOURL(); ssoURL != "" {
+				console.TermBlank()
+				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+			}
 		}
 	}
 
