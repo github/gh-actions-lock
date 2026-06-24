@@ -948,9 +948,9 @@ scenarios:
         - expr: '.findings[0].dependency'
           contains: 'actions/checkout'
 
-  - name: transitive_major_ref_not_narrowed
+  - name: transitive_ref_preserved
     category: narrowing
-    description: "Transitive dep keeps the composite's declared ref (v1) — only bare-SHA refs are replaced by ReverseLookup's discovered tag/branch"
+    description: "Transitive dep keeps the composite's declared ref (v1) — not narrowed, no version-ref nudge, and bare-SHA refs get a discovered tag in the ref field"
     needs_token: true
     fixtures:
       workflows:
@@ -963,38 +963,9 @@ scenarios:
       lockfile_deps_cover_indirect: true
       lockfile_contains:
         - "'actions/attest-build-provenance@v1':"
-      lockfile_comment_excludes: 'actions/attest-build-provenance@v1\.\d+\.\d+'
-
-  - name: transitive_version_ref_nudge_suppressed
-    category: narrowing
-    description: "Transitive deps with composite-declared refs do not trigger the version-ref nudge — user cannot change composite-internal refs"
-    needs_token: true
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["cli/gh-extension-precompile@v2.1.0"]
-    expect:
-      exit: 0
-      lockfile_deps_cover_direct: true
-      output_excludes: ["pinned without a full semver tag"]
-
-  - name: transitive_provenance_ref_not_narrowed
-    category: narrowing
-    description: "Transitive dep keeps composite's declared ref (v1) — bare-SHA refs would be replaced by discovered tag/branch, but symbolic refs are preserved"
-    needs_token: true
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["cli/gh-extension-precompile@v2.1.0"]
-    expect:
-      exit: 0
-      lockfile_deps_cover_direct: true
-      lockfile_contains:
-        - "'actions/attest-build-provenance@v1':"
         - "ref: 'v1'"
       lockfile_comment_excludes: 'actions/attest-build-provenance@v1\.\d+\.\d+'
+      output_excludes: ["pinned without a full semver tag"]
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ onboarding ═══════════════════════════════║
