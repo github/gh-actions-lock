@@ -726,7 +726,7 @@ scenarios:
 
   - name: onboarded_branch_ref_narrows
     category: narrowing
-    description: "Onboarded workflow at @main — verified dep narrowing upgrades to full semver"
+    description: "Already-pinned dep at @main gets narrowed to full semver (v6.x.y) on re-run"
     needs_token: true
     fixtures:
       workflows:
