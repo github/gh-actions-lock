@@ -82,4 +82,4 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5.0.1
-      - uses: ./actions/lint
+      - uses: github/gh-actions-lock/actions/lint@main
