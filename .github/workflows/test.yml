@@ -73,3 +73,14 @@ jobs:
           ruby --version
       - run: make build
       - run: make test-integration
+
+  lockfile-lint:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5.0.1
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock
+      - name: Check lockfile is in sync
+        run: gh actions-lock --no-fix --no-interactive
