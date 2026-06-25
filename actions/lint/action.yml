@@ -10,18 +10,29 @@ inputs:
     description: Comma-separated finding categories to treat as warnings instead of errors (e.g. "local-action")
     required: false
     default: ""
+  token:
+    description: GitHub token used by gh actions-lock for API calls. Defaults to github.token.
+    required: false
+    default: ${{ github.token }}
 
 runs:
   using: composite
   steps:
-    - name: Install gh-actions-lock
+    - name: OIDC Setup for goproxy
+      uses: github/setup-goproxy@v1.1.0
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/../../go.mod
+
+    - name: Build gh-actions-lock
       shell: bash
-      run: gh extension install github/gh-actions-lock
-      env:
-        GH_TOKEN: ${{ github.token }}
+      run: |
+        cd "${{ github.action_path }}/../.."
+        go build -o "$RUNNER_TEMP/gh-actions-lock" ./cmd/gh-actions-lock
 
     - name: Check lockfile is in sync
       shell: bash
-      run: ${{ github.action_path }}/../../script/lockfile-lint.sh "gh actions-lock" "${{ inputs.ignore-categories }}" ${{ inputs.extra-flags }}
+      run: ${{ github.action_path }}/../../script/lockfile-lint.sh "$RUNNER_TEMP/gh-actions-lock" "${{ inputs.ignore-categories }}" ${{ inputs.extra-flags }}
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ inputs.token }}
