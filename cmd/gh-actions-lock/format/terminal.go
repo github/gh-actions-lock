@@ -303,6 +303,12 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		out.TermCaution("%d %s skipped — local path actions are not yet supported",
 			len(localActionWorkflows),
 			ui.Pluralize(len(localActionWorkflows), "workflow", "workflows"))
+		var localNames []string
+		for _, p := range localActionWorkflows {
+			localNames = append(localNames, p)
+		}
+		sort.Strings(localNames)
+		out.TermDetail("↳ %s", strings.Join(localNames, ", "))
 	}
 	if len(selfHostedRunnerWorkflows) > 0 {
 		out.TermCaution("%d %s skipped — non-hosted runner labels are not supported",
@@ -337,10 +343,10 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			ui.Pluralize(len(expressionRunnerWorkflows), "workflow", "workflows"))
 		var wfNames []string
 		for _, p := range expressionRunnerWorkflows {
-			wfNames = append(wfNames, workflowName(p))
+			wfNames = append(wfNames, p)
 		}
 		sort.Strings(wfNames)
-		out.TermDetail("↳ %s — if the matrix resolves to hosted runners, pin manually",
+		out.TermDetail("↳ %s — re-run with -A (--allow-all-runners) if the matrix resolves to hosted runners",
 			strings.Join(wfNames, ", "))
 	}
 	if len(unpinnedWorkflows) > 0 {

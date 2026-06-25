@@ -130,7 +130,7 @@ func (f *File) NonHostedRunnerLabels() []string {
 			if seen[lower] {
 				continue
 			}
-			if strings.Contains(label, "${") || !IsHostedRunnerLabel(label) {
+			if !IsHostedRunnerLabel(label) {
 				seen[lower] = true
 				labels = append(labels, label)
 			}

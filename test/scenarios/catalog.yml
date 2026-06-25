@@ -838,6 +838,71 @@ scenarios:
     expect:
       exit: 0
 
+  - name: expression_runner_skipped
+    category: workflow_parsing
+    description: "Workflow with expression in runs-on — skipped by default"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              test:
+                runs-on: ${{ matrix.os }}
+                strategy:
+                  matrix:
+                    os: [ubuntu-latest, windows-latest]
+                steps:
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+      output_contains: ["expressions that can't be resolved statically", "--allow-all-runners"]
+
+  - name: expression_runner_allow_all
+    category: workflow_parsing
+    description: "--allow-all-runners pins workflows with expression in runs-on"
+    needs_token: true
+    flags: ["--allow-all-runners"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              test:
+                runs-on: ${{ matrix.os }}
+                strategy:
+                  matrix:
+                    os: [ubuntu-latest, windows-latest]
+                steps:
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+
+  - name: local_action_skip_names_workflow
+    category: workflow_parsing
+    description: "Local action skip message names the affected workflow file"
+    needs_token: true
+    fixtures:
+      workflows:
+        deploy.yml:
+          raw: |
+            name: Deploy
+            on: push
+            jobs:
+              deploy:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/setup
+                  - uses: actions/checkout@v4
+    expect:
+      exit: 0
+      output_contains: [".github/workflows/deploy.yml"]
+
   - name: fresh_no_narrow_keeps_major
     category: narrowing
     description: "--no-narrow: splat ref v4 stays v4 in lockfile (not narrowed to v4.x.y)"
