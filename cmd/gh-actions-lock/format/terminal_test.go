@@ -400,12 +400,8 @@ func TestPresentResults_ExpressionRunnerWarning(t *testing.T) {
 	if !strings.Contains(got, "maccloud-unified.yml") {
 		t.Errorf("should list affected workflow names:\n%s", got)
 	}
-	if !strings.Contains(got, "pin manually") {
-		t.Errorf("should show manual pinning guidance:\n%s", got)
-	}
-	// Should NOT show the --allow-runners hint (that's for real non-hosted labels).
-	if strings.Contains(got, "--allow-runners") {
-		t.Errorf("expression-runner warning should not suggest --allow-runners:\n%s", got)
+	if !strings.Contains(got, "--allow-all-runners") {
+		t.Errorf("should show --allow-all-runners remediation:\n%s", got)
 	}
 }
 

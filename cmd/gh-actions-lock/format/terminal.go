@@ -346,7 +346,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			wfNames = append(wfNames, workflowName(p))
 		}
 		sort.Strings(wfNames)
-		out.TermDetail("↳ %s — if the matrix resolves to hosted runners, pin manually",
+		out.TermDetail("↳ %s — re-run with -A (--allow-all-runners) if the matrix resolves to hosted runners",
 			strings.Join(wfNames, ", "))
 	}
 	if len(unpinnedWorkflows) > 0 {

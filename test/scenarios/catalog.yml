@@ -858,7 +858,7 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
-      output_contains: ["expressions that can't be resolved statically"]
+      output_contains: ["expressions that can't be resolved statically", "--allow-all-runners"]
 
   - name: expression_runner_allow_all
     category: workflow_parsing
