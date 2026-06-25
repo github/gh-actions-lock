@@ -65,7 +65,7 @@ dependencies:
             - 'actions/setup-go@v5'
     'github/gh-actions-lock@main':
         ref: 'main'
-        commit: 'sha1-592be5e0bff8d8cc3a624138d255606596cebc7f'
+        commit: 'sha1-419a59e0d36ec15d649200df42e3092fa0c117b7'
         owner_id: 9919
         repo_id: 1217640442
     'github/setup-goproxy@v1.1.0':
