@@ -257,6 +257,28 @@ on: push
 	}
 }
 
+func TestNonHostedRunnerLabels_WildcardAllowsExpressions(t *testing.T) {
+	RegisterOrgHostedLabels([]string{"*"})
+	t.Cleanup(func() {
+		orgHostedMu.Lock()
+		orgHostedLabels = nil
+		orgHostedMu.Unlock()
+	})
+
+	wf, err := Parse("ci.yml", []byte(`
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: echo hi
+`))
+	require.NoError(t, err)
+	assert.Empty(t, wf.NonHostedRunnerLabels(), "wildcard should treat expression labels as hosted")
+	assert.False(t, wf.HasNonHostedRunnerLabels())
+}
+
 func TestNonHostedRunnerLabels(t *testing.T) {
 	tests := []struct {
 		name string
