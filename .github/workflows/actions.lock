@@ -9,6 +9,7 @@ workflows:
         - 'github/setup-goproxy@v1.1.0'
     '.github/workflows/relock.yml':
         - 'actions/checkout@v6.0.2'
+        - 'github/gh-actions-lock@main'
     '.github/workflows/sync-early-access-release.yml':
         - 'actions/checkout@v6.0.2'
     '.github/workflows/test.yml':
@@ -65,7 +66,7 @@ dependencies:
             - 'actions/setup-go@v5'
     'github/gh-actions-lock@main':
         ref: 'main'
-        commit: 'sha1-419a59e0d36ec15d649200df42e3092fa0c117b7'
+        commit: 'sha1-da8ddbe47a719ba4dd60cde61bb96c4301b98e61'
         owner_id: 9919
         repo_id: 1217640442
     'github/setup-goproxy@v1.1.0':
