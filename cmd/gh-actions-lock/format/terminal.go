@@ -303,6 +303,12 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		out.TermCaution("%d %s skipped — local path actions are not yet supported",
 			len(localActionWorkflows),
 			ui.Pluralize(len(localActionWorkflows), "workflow", "workflows"))
+		var localNames []string
+		for _, p := range localActionWorkflows {
+			localNames = append(localNames, workflowName(p))
+		}
+		sort.Strings(localNames)
+		out.TermDetail("↳ %s", strings.Join(localNames, ", "))
 	}
 	if len(selfHostedRunnerWorkflows) > 0 {
 		out.TermCaution("%d %s skipped — non-hosted runner labels are not supported",
