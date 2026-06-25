@@ -305,7 +305,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			ui.Pluralize(len(localActionWorkflows), "workflow", "workflows"))
 		var localNames []string
 		for _, p := range localActionWorkflows {
-			localNames = append(localNames, workflowName(p))
+			localNames = append(localNames, p)
 		}
 		sort.Strings(localNames)
 		out.TermDetail("↳ %s", strings.Join(localNames, ", "))
@@ -343,7 +343,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			ui.Pluralize(len(expressionRunnerWorkflows), "workflow", "workflows"))
 		var wfNames []string
 		for _, p := range expressionRunnerWorkflows {
-			wfNames = append(wfNames, workflowName(p))
+			wfNames = append(wfNames, p)
 		}
 		sort.Strings(wfNames)
 		out.TermDetail("↳ %s — re-run with -A (--allow-all-runners) if the matrix resolves to hosted runners",

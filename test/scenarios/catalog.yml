@@ -901,7 +901,7 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
-      output_contains: ["deploy.yml"]
+      output_contains: [".github/workflows/deploy.yml"]
 
   - name: fresh_no_narrow_keeps_major
     category: narrowing
