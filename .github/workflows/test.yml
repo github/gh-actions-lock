@@ -80,6 +80,7 @@ jobs:
     runs-on: ubuntu-slim
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5.0.1
       - uses: github/gh-actions-lock/actions/lint@main
