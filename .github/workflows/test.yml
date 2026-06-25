@@ -1,3 +1,5 @@
+# This workflow is managed by gh actions-lock.
+
 name: test
 
 on:
@@ -73,3 +75,11 @@ jobs:
           ruby --version
       - run: make build
       - run: make test-integration
+
+  lockfile-lint:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5.0.1
+      - uses: github/gh-actions-lock/actions/lint@main

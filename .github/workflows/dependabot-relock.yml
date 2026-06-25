@@ -1,0 +1,14 @@
+# This workflow is managed by gh actions-lock.
+
+name: Relock on Dependabot
+on: pull_request
+
+permissions:
+  contents: write
+
+jobs:
+  relock:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    uses: ./.github/workflows/relock.yml
+    with:
+      head-ref: ${{ github.head_ref }}
