@@ -445,6 +445,12 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 		if b.cleaned != "" {
 			console.TermDetail("  %s", console.TermDim(b.cleaned))
 		}
+		if b.fixHint != "" {
+			console.TermBlank()
+			for _, hint := range strings.Split(b.fixHint, "\n") {
+				console.TermDetail("%s", hint)
+			}
+		}
 	}
 
 	for _, dep := range noReasonDeps {
