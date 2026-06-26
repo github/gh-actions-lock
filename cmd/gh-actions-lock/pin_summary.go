@@ -445,6 +445,12 @@ func renderUnresolvedWarnings(console *ui.UI, unresolvedEntries []pin.Entry) {
 		if b.cleaned != "" {
 			console.TermDetail("  %s", console.TermDim(b.cleaned))
 		}
+		if b.fixHint != "" {
+			console.TermBlank()
+			for _, hint := range strings.Split(b.fixHint, "\n") {
+				console.TermDetail("%s", hint)
+			}
+		}
 	}
 
 	for _, dep := range noReasonDeps {
@@ -509,6 +515,20 @@ func extractFixHint(reason string) string {
 		return strings.Join(ssoFixHints(), "\n")
 	}
 	return ""
+}
+
+// reportHasSSO returns true if any finding in the report contains
+// SSO/SAML error text, indicating the user needs to authorize their token.
+func reportHasSSO(report *checks.Report) bool {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if strings.Contains(f.Detail, "SSO authorization required") ||
+				strings.Contains(f.Detail, "SAML enforcement") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // stripNWORefPrefix removes a leading "owner/repo@ref: " pattern from s.

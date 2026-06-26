@@ -249,10 +249,9 @@ func TestRenderUnresolvedWarnings_SSOShowsFixHint(t *testing.T) {
 		t.Errorf("expected trailing 'and retry' guidance trimmed, got:\n%s", out)
 	}
 
-	// SSO URL is NOT rendered here — it comes from the X-GitHub-SSO header
-	// and is surfaced by check.go at the end of the run.
-	if strings.Contains(out, "Authorize in your web browser") {
-		t.Errorf("SSO hint should not be rendered by renderUnresolvedWarnings (comes from check.go), got:\n%s", out)
+	// Fix hint should now be rendered inline (no longer relies on X-GitHub-SSO header).
+	if !strings.Contains(out, "gh auth refresh") {
+		t.Errorf("expected fix hint containing 'gh auth refresh', got:\n%s", out)
 	}
 }
 
@@ -295,6 +294,11 @@ func TestRenderUnresolvedWarnings_DedupsBySameReason(t *testing.T) {
 	reasonIdx := strings.Index(out, "SSO authorization required")
 	if lastAction > reasonIdx {
 		t.Errorf("actions should appear before reason in multi-action layout\noutput:\n%s", out)
+	}
+
+	// Fix hint should appear exactly once (deduped with the reason bucket).
+	if got := strings.Count(out, "gh auth refresh"); got != 1 {
+		t.Errorf("expected fix hint to appear once (deduped), got %d\noutput:\n%s", got, out)
 	}
 }
 
