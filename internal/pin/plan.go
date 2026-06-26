@@ -301,7 +301,13 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		}
 
 		// Bare-SHA refs: find a tag pointing at the same commit.
+		// Skip if --no-narrow — the user wants to keep their commit SHA as-is.
+		// Mark narrowedNWOs so ReverseLookup also preserves the SHA ref.
 		if parserlock.IsFullSha(dep.Ref) {
+			if opts.NoNarrow {
+				narrowedNWOs[strings.ToLower(dep.NWO)] = true
+				continue
+			}
 			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA)
 			if err != nil {
 				continue
