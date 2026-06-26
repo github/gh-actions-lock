@@ -170,7 +170,7 @@ func TestCleanUnresolvedReason(t *testing.T) {
 			nwo:      "actions/checkout",
 			ref:      "v4.3.1",
 			wantText: `SSO authorization required: your token is not authorized for the "actions" organization (SAML enforcement)`,
-			wantHint: "Authorize in your web browser:  https://github.com/orgs/actions/sso",
+			wantHint: "Run:  gh auth refresh -h github.com",
 		},
 		{
 			name:     "bare reason without prefixes passes through",

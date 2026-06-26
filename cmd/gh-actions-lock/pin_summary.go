@@ -504,28 +504,11 @@ func cleanUnresolvedReason(reason, nwo, ref string) (string, string) {
 // extractFixHint returns an actionable hint for common resolution errors.
 // Returns "" when no actionable guidance can be inferred.
 func extractFixHint(reason string) string {
-	// SSO/SAML enforcement: extract the authorization URL.
-	// Matches cli/cli's format: "Authorize in your web browser:  <url>"
 	if strings.Contains(reason, "SSO authorization required") ||
 		strings.Contains(reason, "SAML enforcement") {
-		if url := extractURLWithPrefix(reason, "https://github.com/orgs/"); url != "" {
-			return fmt.Sprintf("Authorize in your web browser:  %s", url)
-		}
+		return strings.Join(ssoFixHints(), "\n")
 	}
 	return ""
-}
-
-// extractURLWithPrefix finds the first URL in text starting with prefix.
-func extractURLWithPrefix(text, prefix string) string {
-	idx := strings.Index(text, prefix)
-	if idx < 0 {
-		return ""
-	}
-	end := idx
-	for end < len(text) && text[end] != ' ' && text[end] != '\n' && text[end] != ')' {
-		end++
-	}
-	return text[idx:end]
 }
 
 // stripNWORefPrefix removes a leading "owner/repo@ref: " pattern from s.

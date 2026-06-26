@@ -260,14 +260,16 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 				return err
 			}
 		}
-		// Surface SSO URL even in read-only mode — it's the actionable fix
-		// for SAML-gated repos and shouldn't require a --fix run to see.
+		// Surface SSO guidance even in read-only mode — it's the actionable
+		// fix for SAML-gated repos and shouldn't require a --fix run to see.
 		// Suppressed in JSON mode to avoid corrupting stdout.
 		if opts.jsonFields == "" {
 			if gc := r.GHClient(); gc != nil {
-				if ssoURL := gc.SSOURL(); ssoURL != "" {
+				if gc.SSOURL() != "" {
 					console.TermBlank()
-					console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+					for _, hint := range ssoFixHints() {
+						console.TermDetail("%s", hint)
+					}
 				}
 			}
 		}
@@ -355,16 +357,17 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	hasInconclusive := opts.rescan && report.HasInconclusive()
 	summaryErr := renderPinSummary(ctx, console, record, report, r, skippedRescan, hasInconclusive, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion())
 
-	// Surface the SAML SSO authorization URL if one was captured during
-	// the run, matching cli/cli's "Authorize in your web browser:" line.
-	// This runs even when renderPinSummary returns errSilent (unresolved
-	// entries exist) because the SSO hint is the fix for those entries.
-	// Suppressed in JSON mode to avoid corrupting stdout.
+	// Surface SAML SSO fix guidance if an SSO header was captured during
+	// the run. This runs even when renderPinSummary returns errSilent
+	// (unresolved entries exist) because the SSO hint is the fix for
+	// those entries. Suppressed in JSON mode to avoid corrupting stdout.
 	if opts.jsonFields == "" {
 		if gc := r.GHClient(); gc != nil {
-			if ssoURL := gc.SSOURL(); ssoURL != "" {
+			if gc.SSOURL() != "" {
 				console.TermBlank()
-				console.TermDetail("Authorize in your web browser:  %s", ssoURL)
+				for _, hint := range ssoFixHints() {
+					console.TermDetail("%s", hint)
+				}
 			}
 		}
 	}
