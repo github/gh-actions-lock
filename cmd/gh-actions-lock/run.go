@@ -260,6 +260,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 				return err
 			}
 		}
+		// Surface SSO guidance even in read-only mode — it's the actionable
+		// fix for SAML-gated repos and shouldn't require a --fix run to see.
+		if opts.jsonFields == "" && reportHasSSO(report) {
+			console.TermBlank()
+			for _, hint := range ssoFixHints() {
+				console.TermDetail("%s", hint)
+			}
+		}
 		if !valid {
 			if opts.jsonFields == "" {
 				console.TermDetail("Re-run without --no-fix to apply fixes.")

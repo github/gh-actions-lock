@@ -121,7 +121,6 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
-
 // retryTransport wraps an http.RoundTripper with retry logic for transient
 // server errors (5xx), explicit rate limits (429), and GitHub secondary
 // rate limits (403 with Retry-After or X-RateLimit-Reset headers).

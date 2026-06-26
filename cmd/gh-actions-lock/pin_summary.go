@@ -517,6 +517,20 @@ func extractFixHint(reason string) string {
 	return ""
 }
 
+// reportHasSSO returns true if any finding in the report contains
+// SSO/SAML error text, indicating the user needs to authorize their token.
+func reportHasSSO(report *checks.Report) bool {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if strings.Contains(f.Detail, "SSO authorization required") ||
+				strings.Contains(f.Detail, "SAML enforcement") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // stripNWORefPrefix removes a leading "owner/repo@ref: " pattern from s.
 // The ref can be a tag (v4.3.1), branch, or full SHA. This handles both
 // the current action's own prefix and cross-action references that appear
