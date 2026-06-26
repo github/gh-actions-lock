@@ -371,6 +371,136 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	})
 }
 
+// TestNoNarrow_BareSHA exercises bare-SHA narrowing through the full slow path
+// (Resolver + ReverseLookup + Tagger), confirming that --no-narrow protects the
+// SHA from rewriting and that the default path still narrows it to a tag.
+func TestNoNarrow_BareSHA(t *testing.T) {
+	const sha = "abc1230000000000000000000000000000000000"
+
+	// newSlowPathFixtures wires up a Resolver (GraphQL resolve + ReverseLookup
+	// branch/tag listing) and a Tagger that would narrow the SHA to v4.2.1.
+	// The report has a Finding so NeedsAttention() is true and the slow path runs.
+	newSlowPathFixtures := func(t *testing.T) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
+		t.Helper()
+		reg := &httpmock.Registry{}
+
+		// GraphQL: resolve the bare-SHA ref to itself.
+		reg.Register(
+			httpmock.GraphQLForRepo("actions", "checkout"),
+			httpmock.JSONResponse(map[string]any{
+				"data": map[string]any{
+					"a0": map[string]any{
+						"nameWithOwner": "actions/checkout",
+						"object": map[string]any{
+							"oid":  sha,
+							"file": map[string]any{"object": map[string]any{"text": "name: Checkout\nruns:\n  using: node20\n"}},
+						},
+					},
+				},
+			}),
+		)
+
+		// ReverseLookup: branch + tag listing — would rewrite the SHA to v4.2.1.
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/branches`),
+			httpmock.JSONResponse([]any{
+				map[string]any{"name": "main", "commit": map[string]any{"sha": sha}},
+			}),
+		)
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/tags`),
+			httpmock.JSONResponse([]any{
+				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
+				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
+			}),
+		)
+
+		pool := pinpool.New(2, nil)
+		resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
+		require.NoError(t, err)
+
+		tagger := tag.NewListerForTest(t, reg)
+
+		wr := checks.WorkflowReport{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				ActionRef:  &parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: sha},
+				Category:   "unpinned",
+				Severity:   checks.SeverityWarning,
+				Confidence: checks.ConfidenceHigh,
+			}},
+			ActionRefs: []parserlock.ActionRef{
+				{Owner: "actions", Repo: "checkout", Ref: sha},
+			},
+		}
+
+		return resolver, tagger, wr, reg
+	}
+
+	t.Run("no-narrow preserves bare SHA through ReverseLookup", func(t *testing.T) {
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
+
+		opts := PlanOptions{
+			Resolver: resolver,
+			Tagger:   tagger,
+			Pool:     pinpool.New(2, nil),
+			NoNarrow: true,
+		}
+
+		result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
+		require.NoError(t, err)
+
+		var pinned []Entry
+		for _, e := range result.entries {
+			if e.Resolution == Pinned {
+				pinned = append(pinned, e)
+			}
+		}
+		require.Len(t, pinned, 1, "expected exactly one pinned entry")
+		assert.Equal(t, sha, pinned[0].Ref, "bare SHA must survive both narrowDirectDeps and ReverseLookup")
+		assert.Empty(t, pinned[0].AutoFixedRef, "no auto-fix should be recorded")
+		require.Len(t, result.wplans, 1)
+		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite when --no-narrow")
+	})
+
+	t.Run("default narrows bare SHA to tag", func(t *testing.T) {
+		resolver, tagger, wr, reg := newSlowPathFixtures(t)
+
+		// ReverseLookup after narrowing resolves the new ref (v4.2.1) and
+		// lists tags again — register a second stub for that round-trip.
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/tags`),
+			httpmock.JSONResponse([]any{
+				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
+				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
+			}),
+		)
+
+		opts := PlanOptions{
+			Resolver: resolver,
+			Tagger:   tagger,
+			Pool:     pinpool.New(2, nil),
+			NoNarrow: false,
+		}
+
+		result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
+		require.NoError(t, err)
+
+		var pinned []Entry
+		for _, e := range result.entries {
+			if e.Resolution == Pinned {
+				pinned = append(pinned, e)
+			}
+		}
+		require.Len(t, pinned, 1, "expected exactly one pinned entry")
+		assert.Equal(t, "v4.2.1", pinned[0].Ref, "bare SHA should be narrowed to full semver tag")
+		require.Len(t, result.wplans, 1)
+		assert.Contains(t, result.wplans[0].Rewrites,
+			"actions/checkout@"+sha,
+			"rewrite map should record the original SHA ref")
+	})
+}
+
 // TestPlanWorkflow_CrossRefTransitiveClosure verifies that a composite at
 // ref "updated" whose action.yml references a sibling subpath at ref "main"
 // produces the full transitive closure: the sibling (same NWO, different

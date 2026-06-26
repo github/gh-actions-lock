@@ -933,6 +933,22 @@ scenarios:
       lockfile_deps_cover_direct: true
       lockfile_comment_matches: 'v4\.2\.0'
 
+  - name: fresh_no_narrow_keeps_bare_sha
+    category: narrowing
+    description: "--no-narrow: bare commit SHA stays as-is (not narrowed to a tag)"
+    needs_token: true
+    flags: ["--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"]
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "actions/checkout@d632683dd7b4114ad314bca15554477dd762a938"
+
   - name: onboarded_sticky_imprecise
     category: narrowing
     description: "Lockfile has splat ref v4 from prior --no-narrow run — re-pin without --no-narrow still keeps v4 (sticky precision)"
