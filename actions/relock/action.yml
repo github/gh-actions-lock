@@ -26,7 +26,7 @@ runs:
     - name: Relock
       shell: bash
       run: |
-        "$RUNNER_TEMP/gh-actions-lock" --no-onboard --no-interactive -A ${{ inputs.extra-flags }}
+        "$RUNNER_TEMP/gh-actions-lock" --no-interactive -A ${{ inputs.extra-flags }}
       env:
         GH_TOKEN: ${{ github.token }}
 
