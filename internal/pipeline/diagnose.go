@@ -67,6 +67,17 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		var resolveErr error
 		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
 		if resolveErr != nil {
+			if resolve.IsCompositeLocalPath(resolveErr) {
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: pw.Path,
+					Category:     checks.LocalAction,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					Detail:       fmt.Sprintf("a composite action uses local path actions whose transitive dependencies cannot be resolved: %s", resolveErr),
+					Remediation:  "the composite action must reference dependencies by owner/repo/path@ref instead of ./path",
+				})
+				return wr
+			}
 			// Low: we're surfacing the resolver failure itself, not a
 			// verdict about any specific dependency.
 			wr.Findings = append(wr.Findings, checks.Finding{

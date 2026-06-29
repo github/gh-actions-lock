@@ -399,6 +399,38 @@ func TestResolveAllRecursiveTerminatesOnCycle(t *testing.T) {
 	}
 }
 
+func TestResolveAllRecursiveCompositeLocalPathError(t *testing.T) {
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("owner", "composite", "", "v1"): {
+			dep:       dep.Dependency{NWO: "owner/composite", Ref: "v1", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n    - uses: actions/checkout@v6\n",
+		},
+		ghapi.ForActionRef("actions", "checkout", "", "v6"): {
+			dep:       dep.Dependency{NWO: "actions/checkout", Ref: "v6", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Checkout\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "owner", Repo: "composite", Ref: "v1"},
+	})
+	if err == nil {
+		t.Fatal("expected CompositeLocalPathError, got nil")
+	}
+	if !IsCompositeLocalPath(err) {
+		t.Fatalf("expected CompositeLocalPathError, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "./helper") {
+		t.Errorf("error should mention the local path, got: %v", err)
+	}
+	// Partial results should still be returned (checkout resolved).
+	if len(deps) < 2 {
+		t.Errorf("expected partial results with at least 2 deps, got %d", len(deps))
+	}
+}
+
 func TestNewAndLatestRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
