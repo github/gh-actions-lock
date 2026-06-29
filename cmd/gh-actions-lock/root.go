@@ -114,9 +114,6 @@ $ gh actions-lock .github/workflows/ci.yml
 # Read-only check for CI integration (writes nothing, exits 1 if invalid)
 $ gh actions-lock --no-fix --json=valid,findings
 
-# Treat org larger runners as hosted
-$ gh actions-lock --allow-runners ubuntu-latest-xl,ubuntu-latest-2xl
-
 # All fields as JSON
 $ gh actions-lock --json
 `),

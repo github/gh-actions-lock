@@ -16,9 +16,8 @@ import (
 // reportHasUnfixableErrors returns true when the report contains error-
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
-// don't count. LocalAction, SelfHostedRunner, and
-// LockfileForgery errors are unfixable — the workflow or lockfile must
-// be investigated.
+// don't count. LocalAction and LockfileForgery errors are unfixable --
+// the workflow or lockfile must be investigated.
 func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
@@ -26,7 +25,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.SelfHostedRunner:
+			case checks.LocalAction:
 				return true
 			case checks.LockfileForgery:
 				if !acceptMoved {
@@ -40,17 +39,16 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 
 // reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
 // but only matches categories that renderInvestigationAlerts does NOT
-// handle (LocalAction, SelfHostedRunner). Use this to gate the
-// PresentResults call so lockfile-forgery findings
-// don't trigger a redundant (and stale) error summary.
+// handle (LocalAction). Use this to gate the PresentResults call so
+// lockfile-forgery findings don't trigger a redundant (and stale) error
+// summary.
 func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
 			if f.Severity != checks.SeverityError {
 				continue
 			}
-			switch f.Category {
-			case checks.LocalAction, checks.SelfHostedRunner:
+			if f.Category == checks.LocalAction {
 				return true
 			}
 		}
@@ -128,16 +126,16 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	}
 
 	// Surface error-severity findings that the autofix can't resolve
-	// (local-action or self-hosted-runner on an already-onboarded
-	// workflow). PresentResults already rendered these during the
-	// diagnose phase, but the narration log was attached (discarded in
-	// terminal mode) so they didn't reach stderr. Temporarily detach
-	// the log so the findings surface on the terminal.
+	// (e.g. local-action on an already-onboarded workflow).
+	// PresentResults already rendered these during the diagnose phase,
+	// but the narration log was attached (discarded in terminal mode)
+	// so they didn't reach stderr. Temporarily detach the log so the
+	// findings surface on the terminal.
 	//
 	// Only trigger for categories NOT already rendered by
-	// renderInvestigationAlerts (which handles lockfile-forgery and
-	// lockfile-forgery). Without this gate PresentResults would also
-	// emit a stale summary line counting pre-fix not-pinned findings.
+	// renderInvestigationAlerts (which handles lockfile-forgery).
+	// Without this gate PresentResults would also emit a stale summary
+	// line counting pre-fix not-pinned findings.
 	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,

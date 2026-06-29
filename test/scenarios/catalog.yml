@@ -775,9 +775,9 @@ scenarios:
     expect:
       exit: 0
 
-  - name: self_hosted_runner_skipped
+  - name: self_hosted_runner_pinned
     category: workflow_parsing
-    description: "Workflow with self-hosted runner label — skipped cleanly"
+    description: "Workflow with self-hosted runner label — pinned normally"
     needs_token: true
     fixtures:
       workflows:
@@ -792,10 +792,11 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
-  - name: self_hosted_runner_onboarded_error
+  - name: self_hosted_runner_onboarded_valid
     category: workflow_parsing
-    description: "Onboarded workflow switches to self-hosted runner — hard error"
+    description: "Already-onboarded workflow with self-hosted runner — still valid"
     needs_token: true
     fixtures:
       workflows:
@@ -810,12 +811,11 @@ scenarios:
                   - uses: actions/checkout@v4
       lockfile_template: pinned_checkout
     expect:
-      exit: 1
-      output_contains: ["non-hosted runner labels"]
+      exit: 0
 
-  - name: custom_runner_label_skipped
+  - name: custom_runner_label_pinned
     category: workflow_parsing
-    description: "Workflow with custom runner label — skipped cleanly"
+    description: "Workflow with custom runner label — pinned normally"
     needs_token: true
     fixtures:
       workflows:
@@ -830,10 +830,11 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
-  - name: runner_group_skipped
+  - name: runner_group_pinned
     category: workflow_parsing
-    description: "Workflow with runner group — skipped cleanly"
+    description: "Workflow with runner group — pinned normally"
     needs_token: true
     fixtures:
       workflows:
@@ -850,10 +851,11 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      lockfile_deps_cover_direct: true
 
-  - name: expression_runner_skipped
+  - name: expression_runner_pinned
     category: workflow_parsing
-    description: "Workflow with expression in runs-on — skipped by default"
+    description: "Workflow with expression in runs-on — pinned normally"
     needs_token: true
     fixtures:
       workflows:
@@ -871,11 +873,11 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
-      output_contains: ["expressions that can't be resolved statically", "--allow-all-runners"]
+      lockfile_deps_cover_direct: true
 
-  - name: expression_runner_allow_all
+  - name: expression_runner_allow_all_noop
     category: workflow_parsing
-    description: "--allow-all-runners pins workflows with expression in runs-on"
+    description: "--allow-all-runners is a no-op but still pins normally"
     needs_token: true
     flags: ["--allow-all-runners"]
     fixtures:

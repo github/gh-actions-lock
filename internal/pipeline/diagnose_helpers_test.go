@@ -78,13 +78,6 @@ func TestHasIssues(t *testing.T) {
 			},
 			want: false,
 		},
-		{
-			name: "self-hosted-runner warning is not an issue",
-			findings: []checks.Finding{
-				{Category: checks.SelfHostedRunner, Severity: checks.SeverityWarning},
-			},
-			want: false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -25,7 +25,6 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 		{OnboardingRequired, "onboarding-required"},
 		{VersionRef, "version-ref"},
 		{LocalAction, "local-action"},
-		{SelfHostedRunner, "self-hosted-runner"},
 	}
 	for _, c := range cases {
 		if string(c.got) != c.want {
@@ -47,7 +46,7 @@ func TestCategoryIsInconclusive(t *testing.T) {
 	blocking := []Category{
 		NotPinned, ShaAsRef, RefChanged, RefMoved, Stale,
 		MisleadingSHA, LockfileForgery,
-		Valid, RunOnly, OnboardingRequired, VersionRef, LocalAction, SelfHostedRunner,
+		Valid, RunOnly, OnboardingRequired, VersionRef, LocalAction,
 	}
 	for _, c := range blocking {
 		if c.IsInconclusive() {

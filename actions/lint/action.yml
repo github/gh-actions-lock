@@ -3,13 +3,13 @@ description: Check that actions.lock is in sync with workflow files
 
 inputs:
   extra-flags:
-    description: Extra flags passed to gh actions-lock (e.g. "--allow-runners foo")
+    description: Extra flags passed to gh actions-lock
     required: false
     default: ""
   ignore-categories:
     description: Comma-separated finding categories to treat as warnings instead of errors (e.g. "local-action")
     required: false
-    default: "self-hosted-runner"
+    default: ""
 
 runs:
   using: composite
