@@ -428,6 +428,19 @@ scenarios:
       exit: 1
       output_contains: ["local path actions"]
 
+  - name: composite_local_path_blocked
+    category: workflow_parsing
+    description: "Remote composite using ./local-path internally — blocked because transitive deps are unresolvable"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["nodeselector/actions-test-fixtures/composite-with-local-path@main"]
+    expect:
+      exit: 1
+      output_contains: ["local path actions", "composite"]
+
   - name: sub_path_action
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"

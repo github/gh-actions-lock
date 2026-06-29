@@ -13,6 +13,27 @@ import (
 	"github.com/github/gh-actions-lock/internal/pinpool"
 )
 
+// CompositeLocalPathError is returned when a remote composite action uses a
+// local path (./…) reference in its steps. We cannot resolve transitive
+// dependencies behind such references, so the workflow must be blocked.
+type CompositeLocalPathError struct {
+	// Parent is the NWO@Ref of the composite action containing the local path.
+	Parent string
+	// LocalPath is the ./… value found in the composite's steps.
+	LocalPath string
+}
+
+func (e *CompositeLocalPathError) Error() string {
+	return fmt.Sprintf("composite action %s uses local path %q which cannot be resolved for pinning", e.Parent, e.LocalPath)
+}
+
+// IsCompositeLocalPath reports whether err (or any error in its chain)
+// is a CompositeLocalPathError.
+func IsCompositeLocalPath(err error) bool {
+	var target *CompositeLocalPathError
+	return errors.As(err, &target)
+}
+
 // LatestRef returns the highest stable tag for an action repository.
 func (r *Resolver) LatestRef(ctx context.Context, owner, repo string) (string, error) {
 	key := ghapi.ForRepo(owner, repo)
@@ -147,6 +168,13 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			// per tarball — same model the runner uses.
 			parentKey := deps[i].Key()
 			for _, use := range meta.NestedUses {
+				if strings.HasPrefix(use, "./") {
+					resolveErr = errors.Join(resolveErr, &CompositeLocalPathError{
+						Parent:    parentKey,
+						LocalPath: use,
+					})
+					continue
+				}
 				actionRef := parserlock.ParseActionRef(use)
 				if actionRef == nil {
 					continue
