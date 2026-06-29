@@ -475,6 +475,64 @@ func TestRunChecks(t *testing.T) {
 			},
 			wantCategories: []Category{AncestryUnknown},
 		},
+		{
+			// Transitive dep ref-moved: actions/setup-go@v5 is in the
+			// lockfile (from a composite action) but NOT in the
+			// workflow's direct refs. Its upstream tag moved.
+			name: "transitive ref-moved: dep not in direct refs",
+			lockfile: map[string][]string{
+				wfPath: {
+					checkPinKey("actions", "checkout", "v4", shaCheckoutV4),
+					checkPinKey("actions", "setup-go", "v5", shaSetupGoV5),
+				},
+			},
+			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			resolver: &stubCheckResolver{
+				refs: map[stubRefKey]string{
+					{"actions", "checkout", "v4"}: shaCheckoutV4,
+					{"actions", "setup-go", "v5"}: shaCheckoutV3, // different SHA = moved
+				},
+				ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+					{"actions", "setup-go", shaSetupGoV5, shaCheckoutV3}: resolve.AncestryConfirmed,
+				},
+			},
+			wantCategories: []Category{RefMoved, Stale},
+			extra: func(t *testing.T, got []Finding) {
+				for _, f := range got {
+					if f.Category == RefMoved {
+						if f.Dependency == nil || f.Dependency.SHA != shaSetupGoV5 {
+							t.Fatalf("expected transitive dep SHA %s, got %#v", shaSetupGoV5, got[0].Dependency)
+						}
+						return
+					}
+				}
+				t.Fatal("no ref-moved finding for transitive dep")
+			},
+		},
+		{
+			// Transitive dep not reported when it hasn't moved.
+			name: "transitive no finding: dep SHA matches upstream",
+			lockfile: map[string][]string{
+				wfPath: {
+					checkPinKey("actions", "checkout", "v4", shaCheckoutV4),
+					checkPinKey("actions", "setup-go", "v5", shaSetupGoV5),
+				},
+			},
+			workflowRefs: []parserlock.ActionRef{checkRef("actions", "checkout", "v4")},
+			resolver: &stubCheckResolver{
+				refs: map[stubRefKey]string{
+					{"actions", "checkout", "v4"}: shaCheckoutV4,
+					{"actions", "setup-go", "v5"}: shaSetupGoV5, // same = no drift
+				},
+			},
+			extra: func(t *testing.T, got []Finding) {
+				for _, f := range got {
+					if f.Category == RefMoved || f.Category == LockfileForgery || f.Category == AncestryUnknown {
+						t.Fatalf("unexpected ref-moved/forgery finding for current transitive dep: %#v", f)
+					}
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
