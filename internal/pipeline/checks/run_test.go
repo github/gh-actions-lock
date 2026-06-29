@@ -501,7 +501,7 @@ func TestRunChecks(t *testing.T) {
 				for _, f := range got {
 					if f.Category == RefMoved {
 						if f.Dependency == nil || f.Dependency.SHA != shaSetupGoV5 {
-							t.Fatalf("expected transitive dep SHA %s, got %#v", shaSetupGoV5, got[0].Dependency)
+							t.Fatalf("expected transitive dep SHA %s, got %#v", shaSetupGoV5, f.Dependency)
 						}
 						return
 					}
