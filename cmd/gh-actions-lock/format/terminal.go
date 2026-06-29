@@ -90,21 +90,13 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 			continue
 		}
 
-		// Self-hosted-runner findings share the same empty dep key;
-		// render them as a deduplicated group showing affected workflows.
-		var selfHostedFindings []checks.Finding
+		// Self-hosted-runner findings are no longer generated; render
+		// remaining non-excluded, non-not-pinned findings directly.
 		for _, f := range dg.findings {
 			if f.Category == checks.NotPinned || exclude[f.Category] {
 				continue
 			}
-			if f.Category == checks.SelfHostedRunner {
-				selfHostedFindings = append(selfHostedFindings, f)
-				continue
-			}
 			renderFindingDetail(out, f, dep)
-		}
-		if len(selfHostedFindings) > 0 {
-			renderSelfHostedGroup(out, selfHostedFindings)
 		}
 	}
 
@@ -113,7 +105,6 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 		checks.LockfileForgery,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction,
-		checks.SelfHostedRunner, checks.ExpressionRunner,
 		checks.Stale, checks.MisleadingSHA,
 	} {
 		if n, ok := catCounts[cat]; ok {
@@ -163,38 +154,6 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	}
 }
 
-// renderSelfHostedGroup prints a deduplicated block for self-hosted-runner
-// findings, listing each affected workflow and its non-hosted labels.
-func renderSelfHostedGroup(out *ui.UI, findings []checks.Finding) {
-	label := "SELF-HOSTED-RUNNER"
-	icon := "!"
-	if IsAlertedCategory(checks.SelfHostedRunner) {
-		icon = "✗"
-	}
-	out.Detail("%s %s", icon, out.Dim(label))
-	for _, f := range findings {
-		wfName := workflowName(f.WorkflowPath)
-		out.Detail("  %s: %s", out.Bold(wfName), f.Detail)
-	}
-	if IsAlertedCategory(checks.SelfHostedRunner) && findings[0].Remediation != "" {
-		out.Detail("  %s %s", ui.IconWarning, findings[0].Remediation)
-	}
-	labelSet := map[string]bool{}
-	for _, f := range findings {
-		for _, l := range extractBracketedLabels(f.Detail) {
-			labelSet[l] = true
-		}
-	}
-	if len(labelSet) > 0 {
-		var labels []string
-		for l := range labelSet {
-			labels = append(labels, l)
-		}
-		sort.Strings(labels)
-		out.Detail("  ↳ re-run with --allow-runners %s or -A to allow all", strings.Join(labels, ","))
-	}
-}
-
 // workflowName extracts the workflow filename from a path like
 // ".github/workflows/ci.yml".
 func workflowName(path string) string {
@@ -202,32 +161,6 @@ func workflowName(path string) string {
 		return path[i+1:]
 	}
 	return path
-}
-
-// extractBracketedLabels pulls comma-separated items from the first
-// [...] group in s. Returns nil if no brackets are found.
-// Template expressions like ${{ matrix.os }} are excluded — they can't
-// be passed as literal --allow-runners values.
-func extractBracketedLabels(s string) []string {
-	start := strings.Index(s, "[")
-	end := strings.Index(s, "]")
-	if start < 0 || end <= start {
-		return nil
-	}
-	inner := s[start+1 : end]
-	var labels []string
-	for _, l := range strings.Split(inner, ",") {
-		l = strings.TrimSpace(l)
-		if l != "" && !isExpression(l) {
-			labels = append(labels, l)
-		}
-	}
-	return labels
-}
-
-// isExpression reports whether s is a GitHub Actions template expression.
-func isExpression(s string) bool {
-	return strings.Contains(s, "${")
 }
 
 type warningGroup struct {
@@ -266,17 +199,13 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	}
 
 	// Triage warnings into buckets.
-	var unpinnedWorkflows, localActionWorkflows, selfHostedRunnerWorkflows, expressionRunnerWorkflows, bareSHADeps, otherDetailWarnings []string
+	var unpinnedWorkflows, localActionWorkflows, bareSHADeps, otherDetailWarnings []string
 	for _, key := range warnOrder {
 		wg := warnMap[key]
 		f := wg.finding
 		switch {
 		case f.Category == checks.LocalAction:
 			localActionWorkflows = append(localActionWorkflows, f.WorkflowPath)
-		case f.Category == checks.SelfHostedRunner:
-			selfHostedRunnerWorkflows = append(selfHostedRunnerWorkflows, f.WorkflowPath)
-		case f.Category == checks.ExpressionRunner:
-			expressionRunnerWorkflows = append(expressionRunnerWorkflows, f.WorkflowPath)
 		case f.Category == checks.NotPinned && f.ActionRef == nil:
 			unpinnedWorkflows = append(unpinnedWorkflows, f.WorkflowPath)
 		case f.Category == checks.ShaAsRef:
@@ -309,45 +238,6 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		}
 		sort.Strings(localNames)
 		out.TermDetail("↳ %s", strings.Join(localNames, ", "))
-	}
-	if len(selfHostedRunnerWorkflows) > 0 {
-		out.TermCaution("%d %s skipped — non-hosted runner labels are not supported",
-			len(selfHostedRunnerWorkflows),
-			ui.Pluralize(len(selfHostedRunnerWorkflows), "workflow", "workflows"))
-		// Collect distinct labels from findings for the remediation hint.
-		labelSet := map[string]bool{}
-		for _, key := range warnOrder {
-			wg := warnMap[key]
-			if wg.finding.Category != checks.SelfHostedRunner {
-				continue
-			}
-			for _, l := range extractBracketedLabels(wg.finding.Detail) {
-				labelSet[l] = true
-			}
-		}
-		if len(labelSet) > 0 {
-			var labels []string
-			for l := range labelSet {
-				labels = append(labels, l)
-			}
-			sort.Strings(labels)
-			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners %s or -A to allow all",
-				strings.Join(labels, ","))
-		} else {
-			out.TermDetail("↳ if these are org-hosted larger runners, re-run with --allow-runners <label> or -A to allow all")
-		}
-	}
-	if len(expressionRunnerWorkflows) > 0 {
-		out.TermCaution("%d %s skipped — runs-on uses expressions that can't be resolved statically",
-			len(expressionRunnerWorkflows),
-			ui.Pluralize(len(expressionRunnerWorkflows), "workflow", "workflows"))
-		var wfNames []string
-		for _, p := range expressionRunnerWorkflows {
-			wfNames = append(wfNames, p)
-		}
-		sort.Strings(wfNames)
-		out.TermDetail("↳ %s — re-run with -A (--allow-all-runners) if the matrix resolves to hosted runners",
-			strings.Join(wfNames, ", "))
 	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",

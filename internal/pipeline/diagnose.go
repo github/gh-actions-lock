@@ -5,7 +5,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
@@ -178,53 +177,6 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 		return wr, true
 	}
 
-	if pw.NonHostedRunner {
-		// Split labels into expressions vs literal non-hosted labels.
-		var exprLabels, literalLabels []string
-		for _, l := range pw.NonHostedLabels {
-			if strings.Contains(l, "${") {
-				exprLabels = append(exprLabels, l)
-			} else {
-				literalLabels = append(literalLabels, l)
-			}
-		}
-
-		// If all non-hosted labels are expressions, use ExpressionRunner.
-		if len(literalLabels) == 0 {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.ExpressionRunner,
-				Severity:     checks.SeverityWarning,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("runs-on uses expressions [%s] that can't be resolved statically", strings.Join(exprLabels, ", ")),
-			})
-			return wr, true
-		}
-
-		// Otherwise report as self-hosted (include only literal labels in detail).
-		labelList := strings.Join(literalLabels, ", ")
-		wfKey := workflowfile.KeyFromPath(pw.Path)
-		if store != nil && store.HasWorkflow(wfKey) {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.SelfHostedRunner,
-				Severity:     checks.SeverityError,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; use GitHub-hosted runners to continue using the lockfile", labelList),
-				Remediation:  "switch to GitHub-hosted runner labels or move self-hosted jobs to a separate workflow",
-			})
-		} else {
-			wr.Findings = append(wr.Findings, checks.Finding{
-				WorkflowPath: pw.Path,
-				Category:     checks.SelfHostedRunner,
-				Severity:     checks.SeverityWarning,
-				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("uses non-hosted runner labels [%s]; lockfile onboarding is not supported", labelList),
-			})
-		}
-		return wr, true
-	}
-
 	if len(pw.Refs) == 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
@@ -268,7 +220,7 @@ func hasIssues(ff []checks.Finding) bool {
 		if f.Category.IsInconclusive() {
 			continue
 		}
-		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Category != checks.LocalAction && f.Category != checks.SelfHostedRunner && f.Severity == checks.SeverityWarning {
+		if f.Category != checks.Valid && f.Category != checks.RunOnly && f.Category != checks.LocalAction && f.Severity == checks.SeverityWarning {
 			return true
 		}
 	}

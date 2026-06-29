@@ -26,14 +26,6 @@ type ParsedWorkflow struct {
 	// set on the fast path when every direct ref in the workflow is
 	// already recorded in the lockfile.
 	Resolved bool
-	// NonHostedRunner is true when at least one job in the workflow
-	// uses a runs-on label that is not a known GitHub-hosted runner
-	// (self-hosted, custom label, runner group, or expression). These
-	// workflows are skipped from onboarding.
-	NonHostedRunner bool
-	// NonHostedLabels holds the specific non-hosted runner labels found
-	// in the workflow (populated only when NonHostedRunner is true).
-	NonHostedLabels []string
 }
 
 // PartitionRefs splits refs into recorded (matching a lockfile entry by

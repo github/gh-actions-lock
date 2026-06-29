@@ -23,7 +23,6 @@ import (
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
-	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/spf13/cobra"
 )
 
@@ -46,9 +45,10 @@ type checkOptions struct {
 	// are kept as-is in the lock comment instead of being resolved to
 	// the full patch tag (e.g. "v4.2.1").
 	noNarrow bool
-	// allowRunners lists additional runner labels to treat as hosted.
-	// Use when org-provisioned larger runners (e.g. ubuntu-latest-xl)
-	// are flagged as self-hosted but you know they are GitHub-hosted.
+	// allowRunners and allowAllRunners are deprecated no-ops retained for
+	// backward compatibility. The hosted/self-hosted runner restriction has
+	// been removed; all runner labels are now accepted. These flags will be
+	// removed in the next minor release.
 	allowRunners    []string
 	allowAllRunners bool
 	// acceptMoved re-resolves deps flagged as lockfile-forgery or
@@ -69,8 +69,8 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 			"Only refs that parse as semantic versions are narrowed (v4, v4.2); branch names\n"+
 			"like 'main' or non-version tags are never narrowed because a full semver tag is\n"+
 			"far more likely to resolve to exactly one commit for its entire lifetime.")
-	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Additional runner `labels` to treat as GitHub-hosted (e.g. ubuntu-latest-xl)")
-	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Treat all runner labels as GitHub-hosted (skip self-hosted checks)")
+	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
+	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or lockfile-forgery to their current live SHA")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
@@ -113,13 +113,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Shared worker pool for all concurrent phases.
 	pool := pinpool.New(0, console) // 0 → DefaultWorkers
 
-	// Register user-supplied runner labels as hosted before parsing.
-	if opts.allowAllRunners {
-		workflowfile.RegisterOrgHostedLabels([]string{"*"})
-	} else if len(opts.allowRunners) > 0 {
-		workflowfile.RegisterOrgHostedLabels(opts.allowRunners)
-	}
-
 	// If profiling, use a profiled resolver that logs HTTP calls.
 	if prof != nil && newResolver == nil {
 		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
@@ -148,16 +141,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		r.SeedFromLockfile(store.AllDeps())
 	}
 	endSetup()
-
-	// Fetch org-level hosted runner labels so larger runners aren't flagged
-	// as self-hosted. Best-effort: 403 is silently ignored.
-	if gc := r.GHClient(); gc != nil {
-		if currentRepo, err := repository.Current(); err == nil {
-			if labels, err := gc.OrgHostedRunnerNames(ctx, currentRepo.Owner); err == nil && len(labels) > 0 {
-				workflowfile.RegisterOrgHostedLabels(labels)
-			}
-		}
-	}
 
 	opts.workflowPaths = paths
 
