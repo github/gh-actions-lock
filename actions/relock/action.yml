@@ -26,7 +26,15 @@ runs:
     - name: Relock
       shell: bash
       run: |
-        "$RUNNER_TEMP/gh-actions-lock" --no-interactive -A ${{ inputs.extra-flags }}
+        set +e
+        output=$("$RUNNER_TEMP/gh-actions-lock" --no-interactive -A ${{ inputs.extra-flags }} 2>&1)
+        exit_code=$?
+        echo "$output"
+        if [ $exit_code -ne 0 ] && echo "$output" | grep -q "repository not found or not accessible"; then
+          echo "::warning::Some actions could not be resolved because the workflow token lacks access to one or more private repositories. Run \`gh actions-lock\` locally with a token that has access to these repos."
+          exit 0
+        fi
+        exit $exit_code
       env:
         GH_TOKEN: ${{ github.token }}
 
