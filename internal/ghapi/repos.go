@@ -51,7 +51,7 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 				Protected bool `json:"protected"`
 			}
 			if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-				if IsSAMLEnforcement(err) && SSOFallbackEligible(owner) {
+				if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
 					return c.anonListBranches(ctx, owner, repo)
 				}
 				return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, err)
@@ -97,7 +97,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 			} `json:"commit"`
 		}
 		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			if IsSAMLEnforcement(err) && SSOFallbackEligible(owner) {
+			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
 				tags, anonErr := c.anonListTags(ctx, owner, repo)
 				if anonErr != nil {
 					return result{err: anonErr}, nil
@@ -156,7 +156,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 		}
 		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
 		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			if IsSAMLEnforcement(err) && SSOFallbackEligible(owner) {
+			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
 				if anonErr := c.anonGet(ctx, path, &resp); anonErr != nil {
 					return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
 				}
@@ -353,7 +353,7 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 				c.compareCache.Put(key, false)
 				return false, nil
 			}
-			if IsSAMLEnforcement(err) && SSOFallbackEligible(owner) {
+			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
 				contains, anonErr := c.anonCompareCommits(ctx, owner, repo, sha, branchHeadSHA)
 				if anonErr == nil {
 					c.compareCache.Put(key, contains)

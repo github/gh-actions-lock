@@ -97,7 +97,7 @@ func (c *Client) retrySSOWithAnonymous(ctx context.Context, refs []ActionFileReq
 		if r.Err == nil || ctx.Err() != nil {
 			continue
 		}
-		if !SSOFallbackEligible(refs[i].Owner) {
+		if !c.SSOFallbackEligible(ctx, refs[i].Owner) {
 			continue
 		}
 		if !strings.Contains(r.Err.Error(), "SSO authorization required") {

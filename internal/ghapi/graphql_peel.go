@@ -51,7 +51,7 @@ func (c *Client) PeelTagObject(ctx context.Context, owner, repo, sha string) (Pe
 	}
 	if err := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "peel"), tagObjectPeelQuery, vars, &resp); err != nil {
 		// SAML-blocked: return zero result (callers treat as "unknown type").
-		if IsSAMLEnforcement(err) && SSOFallbackEligible(owner) {
+		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
 			return PeelTagObjectResult{}, nil
 		}
 		return PeelTagObjectResult{}, err

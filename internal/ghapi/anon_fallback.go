@@ -8,20 +8,43 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
-// ssoFallbackOwners lists orgs whose repos are public and can be resolved
-// without authentication when the user's token is SAML-blocked. This avoids
-// hard failures in environments (like Codespaces) where SSO authorization
-// isn't possible for cross-enterprise orgs.
-var ssoFallbackOwners = map[string]bool{
-	"actions": true,
-}
+// anonProbeCache caches per-owner results of anonymous access probes.
+// true = anonymous access confirmed working, false = not accessible.
+var anonProbeCache sync.Map // map[string]bool
 
-// SSOFallbackEligible reports whether the given owner is eligible for
-// anonymous resolution when SSO blocks authenticated access.
-func SSOFallbackEligible(owner string) bool {
-	return ssoFallbackOwners[owner]
+// SSOFallbackEligible reports whether the given owner's repos can be
+// accessed anonymously when SSO blocks authenticated access. On first
+// call for an owner, it probes the GitHub API with an unauthenticated
+// request to determine accessibility, then caches the result.
+func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
+	key := c.anonBase() + "/" + owner
+	if v, ok := anonProbeCache.Load(key); ok {
+		return v.(bool)
+	}
+
+	// Probe: unauthenticated HEAD to /orgs/{owner} — 200 means the org
+	// is publicly visible and its public repos are anonymously accessible.
+	probeURL := fmt.Sprintf("%s/orgs/%s", c.anonBase(), url.PathEscape(owner))
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, probeURL, nil)
+	if err != nil {
+		anonProbeCache.Store(key, false)
+		return false
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		anonProbeCache.Store(key, false)
+		return false
+	}
+	resp.Body.Close()
+
+	eligible := resp.StatusCode == http.StatusOK
+	anonProbeCache.Store(key, eligible)
+	return eligible
 }
 
 // IsSAMLEnforcement reports whether err is a 403 caused by SAML/SSO

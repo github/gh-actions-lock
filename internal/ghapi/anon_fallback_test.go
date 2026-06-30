@@ -6,30 +6,44 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func TestSSOFallbackEligible(t *testing.T) {
-	tests := []struct {
-		owner string
-		want  bool
-	}{
-		{"actions", true},
-		{"Actions", false}, // case-sensitive
-		{"github", false},
-		{"myorg", false},
-	}
-	for _, tt := range tests {
-		if got := SSOFallbackEligible(tt.owner); got != tt.want {
-			t.Errorf("SSOFallbackEligible(%q) = %v, want %v", tt.owner, got, tt.want)
+	// Stand up a server that returns 200 for /orgs/actions and 404 for others.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orgs/actions":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
+	}))
+	defer srv.Close()
+
+	c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
+	ctx := context.Background()
+
+	// Reset the global cache between subtests.
+	anonProbeCache = sync.Map{}
+
+	if !c.SSOFallbackEligible(ctx, "actions") {
+		t.Error("expected actions org to be eligible")
+	}
+	if c.SSOFallbackEligible(ctx, "myorg") {
+		t.Error("expected myorg to NOT be eligible")
 	}
 }
 
 func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
+	anonProbeCache = sync.Map{} // reset cache
+
 	// Stand up a fake API server for anonymous resolution.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/orgs/actions":
+			w.WriteHeader(http.StatusOK)
 		case strings.Contains(r.URL.Path, "/commits/"):
 			json.NewEncoder(w).Encode(map[string]string{"sha": "abc123def456abc123def456abc123def456abc1"})
 		case strings.Contains(r.URL.Path, "/contents/"):
@@ -84,6 +98,14 @@ func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
 }
 
 func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
+	anonProbeCache = sync.Map{} // reset cache
+
+	// Probe server: returns 404 for /orgs/mycompany (private org).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return jsonHTTP(map[string]any{
 			"data": map[string]any{"a0": nil},
@@ -101,6 +123,7 @@ func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.anonBaseURL = srv.URL
 
 	refs := []ActionFileRequest{
 		{Owner: "mycompany", Repo: "private-action", Ref: "v1"},

@@ -58,7 +58,7 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 		var httpErr *api.HTTPError
 		if errors.As(gqlErr, &httpErr) {
 			// SAML-blocked GraphQL → fall back to REST compare for eligible orgs.
-			if IsSAMLEnforcement(gqlErr) && SSOFallbackEligible(owner) {
+			if IsSAMLEnforcement(gqlErr) && c.SSOFallbackEligible(ctx, owner) {
 				return c.anonBatchBranchContains(ctx, owner, repo, sha, branches)
 			}
 			return "", false, gqlErr
