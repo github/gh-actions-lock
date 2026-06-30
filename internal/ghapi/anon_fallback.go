@@ -159,6 +159,42 @@ func (c *Client) anonListTags(ctx context.Context, owner, repo string) ([]TagEnt
 	return tags, nil
 }
 
+// anonPeelTagObject determines whether sha is an annotated tag and, if so,
+// peels it to the underlying commit using unauthenticated REST.
+func (c *Client) anonPeelTagObject(ctx context.Context, owner, repo, sha string) (PeelTagObjectResult, error) {
+	// First, determine the object type via GET /repos/{owner}/{repo}/git/tags/{sha}.
+	// If it's not a tag (404), try the commit endpoint to confirm it's a commit.
+	tagPath := fmt.Sprintf("repos/%s/%s/git/tags/%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	var tagResp struct {
+		Object struct {
+			Type string `json:"type"`
+			SHA  string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := c.anonGet(ctx, tagPath, &tagResp); err == nil {
+		// It's an annotated tag — peel to the commit it points to.
+		result := PeelTagObjectResult{Typename: "Tag"}
+		if tagResp.Object.Type == "commit" {
+			result.CommitOID = tagResp.Object.SHA
+		}
+		return result, nil
+	}
+
+	// Not a tag object — check if it's a commit directly.
+	commitPath := fmt.Sprintf("repos/%s/%s/git/commits/%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	var commitResp struct {
+		SHA string `json:"sha"`
+	}
+	if err := c.anonGet(ctx, commitPath, &commitResp); err == nil {
+		return PeelTagObjectResult{Typename: "Commit", CommitOID: commitResp.SHA}, nil
+	}
+
+	// Can't determine type — return zero result like the GraphQL fallback.
+	return PeelTagObjectResult{}, nil
+}
+
 // anonCompareCommits reports whether sha is an ancestor of branchHeadSHA
 // using unauthenticated REST.
 func (c *Client) anonCompareCommits(ctx context.Context, owner, repo, sha, branchHeadSHA string) (bool, error) {
