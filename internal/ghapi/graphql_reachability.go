@@ -57,6 +57,10 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 	if gqlErr != nil {
 		var httpErr *api.HTTPError
 		if errors.As(gqlErr, &httpErr) {
+			// SAML-blocked GraphQL → fall back to REST compare for eligible orgs.
+			if IsSAMLEnforcement(gqlErr) && SSOFallbackEligible(owner) {
+				return c.anonBatchBranchContains(ctx, owner, repo, sha, branches)
+			}
 			return "", false, gqlErr
 		}
 		if data == nil {
@@ -97,6 +101,26 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 		}
 	}
 
+	return "", anyChecked, nil
+}
+
+// anonBatchBranchContains falls back to per-branch REST compare calls when
+// the GraphQL reachability query is SAML-blocked.
+func (c *Client) anonBatchBranchContains(ctx context.Context, owner, repo, sha string, branches []BranchHead) (string, bool, error) {
+	var anyChecked bool
+	for _, b := range branches {
+		if ctx.Err() != nil {
+			return "", anyChecked, ctx.Err()
+		}
+		contains, err := c.anonCompareCommits(ctx, owner, repo, sha, b.SHA)
+		if err != nil {
+			continue
+		}
+		anyChecked = true
+		if contains {
+			return b.Name, true, nil
+		}
+	}
 	return "", anyChecked, nil
 }
 
