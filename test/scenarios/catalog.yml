@@ -588,6 +588,122 @@ scenarios:
       exit: 1
       stdout_is_json: true
 
+  - name: verify_fresh_unpinned
+    category: output_modes
+    description: "--verify with unpinned deps — exits 1, read-only (equivalent to --rescan --no-fix)"
+    needs_token: true
+    flags: ["--verify"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_contains: ["not-pinned"]
+
+  - name: verify_pinned_valid
+    category: output_modes
+    description: "--verify with all deps pinned — full re-verification passes"
+    needs_token: true
+    flags: ["--verify"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+
+  - name: verify_json_combined
+    category: output_modes
+    description: "--verify --json produces JSON with findings"
+    needs_token: true
+    flags: ["--verify", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      stdout_is_json: true
+
+  - name: verify_local_all_covered
+    category: output_modes
+    description: "--verify-local with all refs covered — exits 0"
+    needs_stub: false
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      output_contains: ["complete lockfile coverage"]
+
+  - name: verify_local_missing_pin
+    category: output_modes
+    description: "--verify-local with uncovered ref — exits 1, names the action"
+    needs_stub: false
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4", "actions/setup-go@v5"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      output_contains: ["setup-go"]
+
+  - name: verify_local_json
+    category: output_modes
+    description: "--verify-local --json produces structured output without network"
+    needs_stub: false
+    flags: ["--verify-local", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      stdout_is_json: true
+
+  - name: verify_conflict_verify_local
+    category: output_modes
+    description: "--verify and --verify-local are mutually exclusive — errors before any work"
+    needs_stub: false
+    flags: ["--verify", "--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_contains: ["mutually exclusive"]
+
+  - name: verify_local_conflict_rescan
+    category: output_modes
+    description: "--verify-local --rescan is rejected — verify-local is offline"
+    needs_stub: false
+    flags: ["--verify-local", "--rescan"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      exit: 1
+      output_contains: ["offline"]
+
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║════════════════════════════ multi_workflow ═════════════════════════════║
   # ╚═════════════════════════════════════════════════════════════════════════╝
