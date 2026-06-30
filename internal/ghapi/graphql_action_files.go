@@ -100,7 +100,7 @@ func (c *Client) retrySSOWithAnonymous(ctx context.Context, refs []ActionFileReq
 		if !c.SSOFallbackEligible(ctx, refs[i].Owner) {
 			continue
 		}
-		if !strings.Contains(r.Err.Error(), "SSO authorization required") {
+		if !IsSAMLEnforcement(r.Err) {
 			continue
 		}
 		results[i] = c.resolveAnonymous(ctx, refs[i])

@@ -47,18 +47,23 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	return eligible
 }
 
-// IsSAMLEnforcement reports whether err is a 403 caused by SAML/SSO
-// enforcement (as opposed to rate limiting or other permission issues).
+// IsSAMLEnforcement reports whether err represents a SAML/SSO enforcement
+// block. It matches both REST 403s (api.HTTPError) and plain errors whose
+// message indicates SAML enforcement (e.g. from the GraphQL resolution path).
 func IsSAMLEnforcement(err error) bool {
 	if err == nil {
 		return false
 	}
-	code, ok := StatusCode(err)
-	if !ok || code != http.StatusForbidden {
-		return false
-	}
 	msg := err.Error()
-	return strings.Contains(msg, "SAML enforcement") || strings.Contains(msg, "SAML SSO")
+	if strings.Contains(msg, "SAML enforcement") || strings.Contains(msg, "SAML SSO") {
+		// For HTTPErrors, further verify it's a 403.
+		if code, ok := StatusCode(err); ok {
+			return code == http.StatusForbidden
+		}
+		// Plain errors from GraphQL SAML detection: trust the message.
+		return true
+	}
+	return false
 }
 
 // anonBase returns the base URL for anonymous REST calls.

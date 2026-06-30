@@ -140,4 +140,3 @@ func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
 		t.Fatalf("expected SSO error, got: %v", results[0].Err)
 	}
 }
-
