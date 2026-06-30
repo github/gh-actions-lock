@@ -108,18 +108,23 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 // the GraphQL reachability query is SAML-blocked.
 func (c *Client) anonBatchBranchContains(ctx context.Context, owner, repo, sha string, branches []BranchHead) (string, bool, error) {
 	var anyChecked bool
+	var lastErr error
 	for _, b := range branches {
 		if ctx.Err() != nil {
 			return "", anyChecked, ctx.Err()
 		}
 		contains, err := c.anonCompareCommits(ctx, owner, repo, sha, b.SHA)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 		anyChecked = true
 		if contains {
 			return b.Name, true, nil
 		}
+	}
+	if !anyChecked && lastErr != nil {
+		return "", false, fmt.Errorf("anonymous branch reachability: all compare calls failed: %w", lastErr)
 	}
 	return "", anyChecked, nil
 }

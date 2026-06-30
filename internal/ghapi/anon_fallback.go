@@ -30,14 +30,14 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	probeURL := fmt.Sprintf("%s/orgs/%s", c.anonBase(), url.PathEscape(owner))
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, probeURL, nil)
 	if err != nil {
-		anonProbeCache.Store(key, false)
+		// Construction error — don't cache, let next call retry.
 		return false
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	resp, err := c.anonClient().Do(req)
 	if err != nil {
-		anonProbeCache.Store(key, false)
+		// Transport error (network, context canceled) — don't cache.
 		return false
 	}
 	resp.Body.Close()
@@ -288,11 +288,13 @@ func (c *Client) anonGetCommitSHA(ctx context.Context, url string) (string, erro
 
 // anonGetFileContent fetches a file's content from a public repo without auth.
 func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref, path string) (string, error) {
+	// Escape each segment of the file path individually to preserve slashes.
+	escapedPath := escapeContentPath(path)
 	u := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
 		base,
 		url.PathEscape(owner),
 		url.PathEscape(repo),
-		path,
+		escapedPath,
 		url.QueryEscape(ref),
 	)
 
@@ -317,4 +319,14 @@ func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref,
 		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
 	return string(body), nil
+}
+
+// escapeContentPath URL-escapes each segment of a slash-delimited file path,
+// preserving the slash separators.
+func escapeContentPath(p string) string {
+	segments := strings.Split(p, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return strings.Join(segments, "/")
 }

@@ -52,7 +52,11 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 			}
 			if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 				if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-					return c.anonListBranches(ctx, owner, repo)
+					anon, anonErr := c.anonListBranches(ctx, owner, repo)
+					if anonErr == nil {
+						c.branchListCache.Put(key, anon)
+					}
+					return anon, anonErr
 				}
 				return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, err)
 			}
