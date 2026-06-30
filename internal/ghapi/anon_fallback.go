@@ -35,7 +35,7 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.anonClient().Do(req)
 	if err != nil {
 		anonProbeCache.Store(key, false)
 		return false
@@ -61,7 +61,9 @@ func IsSAMLEnforcement(err error) bool {
 	return strings.Contains(msg, "SAML enforcement") || strings.Contains(msg, "SAML SSO")
 }
 
-// anonBaseURL returns the base URL for anonymous REST calls.
+// anonBase returns the base URL for anonymous REST calls.
+// For stub-server hostnames (containing a port), it uses the hostname
+// directly without prepending "api.".
 func (c *Client) anonBase() string {
 	if c.anonBaseURL != "" {
 		return c.anonBaseURL
@@ -70,7 +72,19 @@ func (c *Client) anonBase() string {
 	if host == "" {
 		host = "github.com"
 	}
+	// Stub servers use IP:port — don't prepend "api." for those.
+	if strings.Contains(host, ":") {
+		return fmt.Sprintf("https://%s", host)
+	}
 	return fmt.Sprintf("https://api.%s", host)
+}
+
+// anonClient returns the HTTP client for anonymous requests.
+func (c *Client) anonClient() *http.Client {
+	if c.anonHTTP != nil {
+		return c.anonHTTP
+	}
+	return http.DefaultClient
 }
 
 // anonGet performs an unauthenticated GET and decodes JSON into dest.
@@ -82,7 +96,7 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.anonClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -173,7 +187,7 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		url.PathEscape(ref.Repo),
 		url.PathEscape(ref.Ref),
 	)
-	sha, err := anonGetCommitSHA(ctx, commitURL)
+	sha, err := c.anonGetCommitSHA(ctx, commitURL)
 	if err != nil {
 		result.Err = fmt.Errorf("anonymous fallback: %w", err)
 		return result
@@ -188,10 +202,10 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		yamlPath = ref.Path + "/action.yaml"
 	}
 
-	content, err := anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, ymlPath)
+	content, err := c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, ymlPath)
 	if err != nil {
 		// Try .yaml extension.
-		content, err = anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, yamlPath)
+		content, err = c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, yamlPath)
 		if err != nil {
 			// Not fatal — some actions don't have action.yml (reusable workflows).
 			return result
@@ -202,14 +216,14 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 }
 
 // anonGetCommitSHA fetches the commit SHA for a ref without authentication.
-func anonGetCommitSHA(ctx context.Context, url string) (string, error) {
+func (c *Client) anonGetCommitSHA(ctx context.Context, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.anonClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -232,7 +246,7 @@ func anonGetCommitSHA(ctx context.Context, url string) (string, error) {
 }
 
 // anonGetFileContent fetches a file's content from a public repo without auth.
-func anonGetFileContent(ctx context.Context, base, owner, repo, ref, path string) (string, error) {
+func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref, path string) (string, error) {
 	u := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
 		base,
 		url.PathEscape(owner),
@@ -247,7 +261,7 @@ func anonGetFileContent(ctx context.Context, base, owner, repo, ref, path string
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3.raw")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.anonClient().Do(req)
 	if err != nil {
 		return "", err
 	}
