@@ -29,6 +29,10 @@ type Client struct {
 	rest     *api.RESTClient
 	Hostname string
 
+	// anonBaseURL overrides the base URL for anonymous REST fallback calls.
+	// Empty uses the default "https://api.<Hostname>". Set in tests.
+	anonBaseURL string
+
 	// Caches for raw GitHub resources. These live here so all consumers
 	// (resolver, auditor, tag lister) share a single cache per CLI run.
 	compareCache         syncmap.Map[Compare, bool]
