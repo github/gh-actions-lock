@@ -69,7 +69,7 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 	}
 	results, batchErr := c.resolveActionFilesOnce(ctx, refs)
 	if batchErr == nil || len(refs) == 1 || ctx.Err() != nil {
-		return results
+		return c.retrySSOWithAnonymous(ctx, refs, results)
 	}
 	mid := len(refs) / 2
 	left := c.ResolveActionFiles(ctx, refs[:mid])
@@ -88,6 +88,24 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 	}
 	right := c.ResolveActionFiles(ctx, refs[mid:])
 	return append(left, right...)
+}
+
+// retrySSOWithAnonymous retries refs that failed with SSO errors for
+// fallback-eligible orgs (e.g. actions/*) using unauthenticated REST.
+func (c *Client) retrySSOWithAnonymous(ctx context.Context, refs []ActionFileRequest, results []ActionFileResult) []ActionFileResult {
+	for i, r := range results {
+		if r.Err == nil || ctx.Err() != nil {
+			continue
+		}
+		if !c.SSOFallbackEligible(ctx, refs[i].Owner) {
+			continue
+		}
+		if !IsSAMLEnforcement(r.Err) {
+			continue
+		}
+		results[i] = c.resolveAnonymous(ctx, refs[i])
+	}
+	return results
 }
 
 // resolveActionFilesOnce performs one batched round-trip. The returned error is

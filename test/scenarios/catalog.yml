@@ -141,6 +141,25 @@ scenarios:
       output_excludes:
         - "resolution failed:"
 
+  - name: sso_anon_fallback
+    category: sso_auth
+    description: "SSO-blocked public org falls back to anonymous access and resolves"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions:
+            - "actions/checkout@v4"
+    expect:
+      exit: 0
+      output_contains:
+        - "actions/checkout"
+      output_excludes:
+        - "SAML enforcement"
+        - "SSO authorization required"
+
   - name: sso_dedup
     category: sso_auth
     description: "11 actions from same org — SSO reason shown only once"

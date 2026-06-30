@@ -29,6 +29,15 @@ type Client struct {
 	rest     *api.RESTClient
 	Hostname string
 
+	// anonBaseURL overrides the base URL for anonymous REST fallback calls.
+	// Empty uses the default "https://api.<Hostname>". Set in tests.
+	anonBaseURL string
+
+	// anonHTTP is the HTTP client used for anonymous (unauthenticated)
+	// fallback requests. Configured at construction to honor
+	// GH_ACTIONS_LOCK_INSECURE (TLS skip) for integration tests.
+	anonHTTP *http.Client
+
 	// Caches for raw GitHub resources. These live here so all consumers
 	// (resolver, auditor, tag lister) share a single cache per CLI run.
 	compareCache         syncmap.Map[Compare, bool]
@@ -118,6 +127,19 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 
 	c.graphql = gql
 	c.rest = rest
+
+	// Build anonymous HTTP client for SSO fallback. Respects the same
+	// insecure TLS setting as the main client for integration tests.
+	if os.Getenv("GH_ACTIONS_LOCK_INSECURE") != "" {
+		c.anonHTTP = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // integration tests only
+			},
+		}
+	} else {
+		c.anonHTTP = http.DefaultClient
+	}
+
 	return c, nil
 }
 

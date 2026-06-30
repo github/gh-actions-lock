@@ -50,6 +50,10 @@ func (c *Client) PeelTagObject(ctx context.Context, owner, repo, sha string) (Pe
 		"expr":  sha + "^{commit}",
 	}
 	if err := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "peel"), tagObjectPeelQuery, vars, &resp); err != nil {
+		// SAML-blocked: fall back to anonymous REST peel.
+		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+			return c.anonPeelTagObject(ctx, owner, repo, sha)
+		}
 		return PeelTagObjectResult{}, err
 	}
 	if resp.Repository == nil || resp.Repository.Head == nil {
