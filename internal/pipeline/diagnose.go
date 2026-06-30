@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -77,14 +78,24 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 				})
 				return wr
 			}
-			// Low: we're surfacing the resolver failure itself, not a
-			// verdict about any specific dependency.
+			// A resolve failure means we could not verify these refs. Fail
+			// closed: an unverifiable pin must never pass as valid. Classify
+			// by whether the failure is definitive.
+			cat := checks.ReachabilityUnverified
+			conf := checks.ConfidenceLow
+			if errors.Is(resolveErr, ghapi.ErrUnresolvableCommit) {
+				// At least one full-SHA pin authoritatively resolves to no
+				// object upstream — the commit is missing/unreachable.
+				cat = checks.UnresolvableCommit
+				conf = checks.ConfidenceHigh
+			}
 			wr.Findings = append(wr.Findings, checks.Finding{
 				WorkflowPath: pw.Path,
-				Category:     checks.ReachabilityUnknown,
-				Severity:     checks.SeverityWarning,
-				Confidence:   checks.ConfidenceLow,
+				Category:     cat,
+				Severity:     checks.SeverityError,
+				Confidence:   conf,
 				Detail:       fmt.Sprintf("could not re-resolve actions: %s", resolveErr),
+				DocURL:       DocURLFor(cat),
 			})
 		}
 	}

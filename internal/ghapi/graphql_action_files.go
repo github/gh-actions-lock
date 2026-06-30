@@ -35,6 +35,14 @@ type ActionFileResult struct {
 	Err       error
 }
 
+// ErrUnresolvableCommit marks a definitive determination that a full-SHA pin
+// does not resolve to any object in the upstream repo — the commit is missing
+// or unreachable. It is attached only on a clean GraphQL null (no SAML, no
+// batch-level failure, no path-scoped error for the alias), so consumers can
+// treat it as authoritative rather than transient. errors.Is traverses the
+// per-ref wrapping (discovery.go) and errors.Join up to the diagnose funnel.
+var ErrUnresolvableCommit = errors.New("unresolvable commit")
+
 // repoResponse is the raw GraphQL response shape for a single repository alias.
 type repoResponse struct {
 	NameWithOwner string `json:"nameWithOwner"`
@@ -158,6 +166,25 @@ func batchLevelGraphQLErr(gqlErr *api.GraphQLError) error {
 	return nil
 }
 
+// aliasHasError reports whether gqlErr carries a path-scoped error item
+// targeting the given alias. A path-scoped error nulls just that alias's
+// object, so an object==null on an alias that has its own error is a transient
+// resolution failure — not proof the commit is unreachable.
+func aliasHasError(gqlErr *api.GraphQLError, alias string) bool {
+	if gqlErr == nil {
+		return false
+	}
+	for _, e := range gqlErr.Errors {
+		if len(e.Path) == 0 {
+			continue
+		}
+		if s, ok := e.Path[0].(string); ok && s == alias {
+			return true
+		}
+	}
+	return false
+}
+
 func buildActionFileQuery(refs []ActionFileRequest) (string, map[string]any, map[string]int) {
 	aliasMap := make(map[string]int, len(refs))
 	vars := make(map[string]any, len(refs)*5)
@@ -259,9 +286,19 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 			n := len(ref.Ref)
 			switch {
 			case isHexString(ref.Ref) && (n == 40 || n == 64):
-				// Full SHA that doesn't resolve — commit is unreachable/orphaned
-				results[idx].Err = fmt.Errorf("commit %s does not exist or is not reachable in %s/%s",
-					ref.Ref[:12], ref.Owner, ref.Repo)
+				// Full SHA that didn't resolve. Only a CLEAN null — no
+				// path-scoped GraphQL error for this alias and no batch-level
+				// failure — is authoritative proof the commit is unreachable.
+				// A path-scoped rate-limit/timeout can also null the object;
+				// that's transient, so withhold the definitive sentinel and
+				// let the diagnose funnel classify it reachability-unverified.
+				if aliasHasError(gqlErr, alias) || batchErr != nil {
+					results[idx].Err = fmt.Errorf("commit %s could not be verified in %s/%s (transient resolution error)",
+						ref.Ref[:12], ref.Owner, ref.Repo)
+				} else {
+					results[idx].Err = fmt.Errorf("commit %s does not exist or is not reachable in %s/%s: %w",
+						ref.Ref[:12], ref.Owner, ref.Repo, ErrUnresolvableCommit)
+				}
 			case isHexString(ref.Ref):
 				// Short hex — ambiguous, might be a truncated SHA
 				results[idx].Err = fmt.Errorf("version %q does not resolve — if this is a commit, use the full 40-character SHA", ref.Ref)

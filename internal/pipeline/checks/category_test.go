@@ -22,6 +22,8 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 		{RunOnly, "run-only"},
 		{AncestryUnknown, "ancestry-unknown"},
 		{ReachabilityUnknown, "reachability-unknown"},
+		{UnresolvableCommit, "unresolvable-commit"},
+		{ReachabilityUnverified, "reachability-unverified"},
 		{OnboardingRequired, "onboarding-required"},
 		{VersionRef, "version-ref"},
 		{LocalAction, "local-action"},
@@ -33,11 +35,14 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 	}
 }
 
-// TestCategoryIsInconclusive guards the inconclusive partition so a
-// new diagnostic category isn't silently treated as blocking by
-// consumers that key off this predicate.
+// TestCategoryIsInconclusive guards the inconclusive partition. Under the
+// fail-closed contract the only inconclusive (non-blocking) member is the
+// retained-but-unemitted legacy ReachabilityUnknown; every live "couldn't
+// verify" category — including the flipped AncestryUnknown and the new
+// UnresolvableCommit / ReachabilityUnverified — must NOT be inconclusive so
+// it routes through the blocking path.
 func TestCategoryIsInconclusive(t *testing.T) {
-	inconclusive := []Category{AncestryUnknown, ReachabilityUnknown}
+	inconclusive := []Category{ReachabilityUnknown}
 	for _, c := range inconclusive {
 		if !c.IsInconclusive() {
 			t.Errorf("%q must be inconclusive", string(c))
@@ -45,7 +50,8 @@ func TestCategoryIsInconclusive(t *testing.T) {
 	}
 	blocking := []Category{
 		NotPinned, ShaAsRef, RefChanged, RefMoved, Stale,
-		MisleadingSHA, LockfileForgery,
+		MisleadingSHA, LockfileForgery, AncestryUnknown,
+		UnresolvableCommit, ReachabilityUnverified,
 		Valid, RunOnly, OnboardingRequired, VersionRef, LocalAction,
 	}
 	for _, c := range blocking {

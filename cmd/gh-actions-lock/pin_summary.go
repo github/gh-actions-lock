@@ -31,6 +31,12 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 				if !acceptMoved {
 					return true
 				}
+			case checks.UnresolvableCommit, checks.ReachabilityUnverified, checks.AncestryUnknown:
+				// Fail-closed: a definitively unreachable pin, an
+				// unverifiable re-resolution, and an inconclusive ancestry
+				// verdict all block — in JSON mode too (this gate feeds the
+				// --json exit path, bypassing the terminal-only rescan gate).
+				return true
 			}
 		}
 	}

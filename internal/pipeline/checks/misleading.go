@@ -122,8 +122,13 @@ func checkOneRefMoved(ctx context.Context, pw ParsedWorkflow, ref parserlock.Act
 		f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — lockfile may have been tampered with", parserlock.ShortSHA(pin.SHA()), parserlock.ShortSHA(sha))
 		f.Remediation = "investigate immediately — verify the lockfile entry against upstream history"
 	case resolve.AncestryUnknown:
+		// Compare API didn't reach a verdict — typically rate-limited even
+		// after CheckAncestry's bounded retry. Fail-closed: emit at error
+		// severity so an unverifiable move blocks rather than passing, while
+		// keeping its own category so consumers can frame it as transient
+		// ("retry") instead of "tampered".
 		f.Category = AncestryUnknown
-		f.Severity = SeverityWarning
+		f.Severity = SeverityError
 		f.Confidence = ConfidenceMedium
 		f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()), suffixWith(ancestryDetail))
 		f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"

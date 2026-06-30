@@ -700,6 +700,66 @@ STUB_WIRING = {
     end
     s.env("GH_TOKEN" => "gho_fake_forgery_token")
   },
+
+  # Orphaned bare-SHA pin: GraphQL resolves the repo but the commit object is
+  # null and there is NO GraphQL error — a clean null, the definitive
+  # "unreachable" signal. Routes to unresolvable-commit (error/high).
+  dbot_unresolvable_blocks: ->(s) {
+    s.stub_server do |srv|
+      srv.on(:POST, %r{/graphql$}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({ data: { a0: { nameWithOwner: "actions/checkout", object: nil } } })]
+      end
+      checkout_repo_rest(srv)
+    end
+    s.env("GH_TOKEN" => "gho_fake_unresolvable_token")
+  },
+
+  # Transient: same null object, but accompanied by a path-scoped GraphQL
+  # error on the alias (rate limit). The transient-safety guard withholds the
+  # definitive sentinel, so this routes to reachability-unverified (error/low),
+  # NOT unresolvable-commit.
+  dbot_inconclusive_blocks: ->(s) {
+    s.stub_server do |srv|
+      srv.on(:POST, %r{/graphql$}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({
+           data: { a0: { nameWithOwner: "actions/checkout", object: nil } },
+           errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded", path: ["a0"] }]
+         })]
+      end
+      checkout_repo_rest(srv)
+    end
+    s.env("GH_TOKEN" => "gho_fake_inconclusive_token")
+  },
+
+  # Symbolic ref moved to a different SHA, but the Compare API is down (5xx)
+  # so ancestry can't be decided → ancestry-unknown (error/medium).
+  dbot_ancestry_unknown_blocks: ->(s) {
+    s.stub_server do |srv|
+      checkout_graphql_forgery(srv)
+      checkout_repo_rest(srv)
+      srv.on(:GET, %r{/repos/actions/checkout/compare/}) do |_req|
+        [500, { "Content-Type" => "application/json" }, JSON.generate({ message: "Server Error" })]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_ancestry_token")
+  },
+
+  # Negative control: live SHA matches the pin, ancestry is a no-op → clean.
+  dbot_clean_passes: ->(s) {
+    s.stub_server do |srv|
+      srv.on(:POST, %r{/graphql$}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({ data: { a0: {
+           nameWithOwner: "actions/checkout",
+           object: { oid: CHECKOUT_SHA, file: { object: { text: "name: Checkout\ndescription: Checkout\n" } } }
+         } } })]
+      end
+      checkout_repo_rest(srv)
+    end
+    s.env("GH_TOKEN" => "gho_fake_clean_token")
+  },
 }
 
 # ── Custom assertion wiring ─────────────────────────────────────────────

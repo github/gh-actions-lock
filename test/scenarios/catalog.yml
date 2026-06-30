@@ -1536,26 +1536,99 @@ scenarios:
         findings: []
         lockfile_version: v0.0.2
         valid: true
-  - name: dbot_impostor_blocks
+  - name: dbot_unresolvable_blocks
     category: dependabot
-    description: "Orphaned commit (no tag or branch) produces reachability-unknown warning in JSON findings"
-    needs_token: true
-    tags: [smoke]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=findings"]
+    description: "Orphaned bare-SHA pin resolves to no object (clean GraphQL null) -> unresolvable-commit/error, blocks in JSON (fail-closed)"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=valid,findings"]
     fixtures:
       workflows:
         ci.yml:
           name: CI
-          actions: ["nodeselector/actions-test-fixtures@7b403c9ec14bd3ae0bbf793c2bee8815a7ac920b"]
+          actions: ["actions/checkout@7b403c9ec14bd3ae0bbf793c2bee8815a7ac920b"]
     expect:
-      exit: 0
+      exit: 1
       stdout_is_json: true
       stdout_contains: ["does not exist or is not reachable"]
       jq:
+        - expr: '.valid'
+          equals: "false"
         - expr: '.findings | length'
           gt: 0
-        - expr: '.findings[0].category'
-          equals: 'reachability-unknown'
+        - expr: '.findings[] | select(.category == "unresolvable-commit") | .severity'
+          equals: "error"
+        - expr: '.findings[] | select(.category == "unresolvable-commit") | .confidence'
+          equals: "high"
+
+  - name: dbot_inconclusive_blocks
+    category: dependabot
+    description: "Transient: bare-SHA pin nulls out but carries a path-scoped GraphQL error (rate limit) -> reachability-unverified/error, fails closed (blocks) in JSON. NOT mislabeled unresolvable-commit."
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--no-fix", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"]
+    expect:
+      exit: 1
+      stdout_is_json: true
+      jq:
+        - expr: '.valid'
+          equals: "false"
+        - expr: '.findings[] | select(.category == "reachability-unverified") | .severity'
+          equals: "error"
+        - expr: '.findings[] | select(.category == "reachability-unverified") | .confidence'
+          equals: "low"
+        - expr: '[.findings[] | select(.category == "unresolvable-commit")] | length'
+          equals: "0"
+
+  - name: dbot_ancestry_unknown_blocks
+    category: dependabot
+    description: "Symbolic ref moved + Compare API 5xx -> ancestry indeterminate -> ancestry-unknown/error, blocks in JSON (fail-closed). Requires a SYMBOLIC ref; bare 40-char SHA pins skip the forgery/ancestry check entirely."
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--no-fix", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 1
+      stdout_is_json: true
+      stdout_contains: ["ancestry check inconclusive"]
+      jq:
+        - expr: '.valid'
+          equals: "false"
+        - expr: '.findings[] | select(.category == "ancestry-unknown") | .severity'
+          equals: "error"
+        - expr: '.findings[] | select(.category == "ancestry-unknown") | .confidence'
+          equals: "medium"
+
+  - name: dbot_clean_passes
+    category: dependabot
+    description: "Negative control: pin matches live SHA, nothing to flag -> no findings, exit 0. Proves the fail-closed set does not fire on healthy pins."
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--no-fix", "--json=valid,findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      stdout_is_json: true
+      jq:
+        - expr: '.valid'
+          equals: "true"
+        - expr: '.findings | length'
+          equals: "0"
 
   - name: dbot_forgery_blocks
     category: dependabot

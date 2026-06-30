@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,6 +159,45 @@ func TestParseActionFileResponse_SAMLSSO(t *testing.T) {
 	}
 	if strings.Contains(results[0].Err.Error(), "not found or not accessible") {
 		t.Fatal("SAML ref should not emit generic not-found")
+	}
+}
+
+// TestParseActionFileResponse_UnresolvableSentinelSplit verifies the
+// transient-safe split on the full-SHA object==null arm: a CLEAN null wraps
+// the definitive ErrUnresolvableCommit sentinel, while a path-scoped GraphQL
+// error on the same alias (transient) does NOT — so the diagnose funnel can
+// route it to reachability-unverified instead of unresolvable-commit.
+func TestParseActionFileResponse_UnresolvableSentinelSplit(t *testing.T) {
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	refs := []ActionFileRequest{
+		{Owner: "actions", Repo: "checkout", Ref: sha},
+		{Owner: "actions", Repo: "setup-go", Ref: sha},
+	}
+	aliases := map[string]int{"a0": 0, "a1": 1}
+	data := map[string]json.RawMessage{
+		"a0": json.RawMessage(`{"nameWithOwner":"actions/checkout","object":null}`),
+		"a1": json.RawMessage(`{"nameWithOwner":"actions/setup-go","object":null}`),
+	}
+	// Only a1 carries a path-scoped (transient) error.
+	gqlErr := &api.GraphQLError{
+		Errors: []api.GraphQLErrorItem{
+			{Type: "RATE_LIMITED", Message: "timeout", Path: []interface{}{"a1"}},
+		},
+	}
+
+	results := parseActionFileResponse(data, refs, aliases, gqlErr, "")
+
+	if !errors.Is(results[0].Err, ErrUnresolvableCommit) {
+		t.Fatalf("clean null must wrap ErrUnresolvableCommit, got %v", results[0].Err)
+	}
+	if !strings.Contains(results[0].Err.Error(), "does not exist or is not reachable") {
+		t.Fatalf("definitive message text changed (catalog depends on it): %v", results[0].Err)
+	}
+	if errors.Is(results[1].Err, ErrUnresolvableCommit) {
+		t.Fatalf("path-scoped transient error must NOT be definitive, got %v", results[1].Err)
+	}
+	if results[1].Err == nil || !strings.Contains(results[1].Err.Error(), "transient") {
+		t.Fatalf("transient null should surface a transient error, got %v", results[1].Err)
 	}
 }
 

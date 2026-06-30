@@ -346,8 +346,8 @@ func TestRunChecks(t *testing.T) {
 				if got[0].Confidence != ConfidenceMedium {
 					t.Errorf("Confidence: got %q, want %q (AncestryUnknown is the rate-limit fallback path)", got[0].Confidence, ConfidenceMedium)
 				}
-				if got[0].Severity != SeverityWarning {
-					t.Errorf("Severity: got %q, want %q (inconclusive findings stay warnings)", got[0].Severity, SeverityWarning)
+				if got[0].Severity != SeverityError {
+					t.Errorf("Severity: got %q, want %q (fail-closed: inconclusive ancestry blocks)", got[0].Severity, SeverityError)
 				}
 			},
 		},

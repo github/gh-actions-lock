@@ -432,14 +432,14 @@ jobs:
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
 	)
-	require.NoError(t, err, "ref-moved is a warning, should not error")
+	require.Error(t, err, "fail-closed: inconclusive ancestry blocks (exit 1)")
 
 	var payload struct {
 		Valid    bool             `json:"valid"`
 		Findings []format.Finding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
-	assert.True(t, payload.Valid, "ancestry-unknown is a warning, workflow is still valid")
+	assert.False(t, payload.Valid, "fail-closed: ancestry-unknown blocks, workflow is not valid")
 
 	categories := map[string]bool{}
 	for _, f := range payload.Findings {
@@ -501,10 +501,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
 `,
-		"actions/checkout@v6",
-		"actions/setup-go@v6",
+		"actions/checkout@v6=sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+		"actions/setup-go@v6=sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5",
 		// Transitive dependency (via actions/setup-go@v6).
-		"actions/cache@v4",
+		"actions/cache@v4=sha1-5a3ec84eff668545956fd18022155c47e93e2684",
 	)
 
 	// Test per-workflow dependencies view
@@ -579,8 +579,8 @@ jobs:
     steps:
       - uses: actions/setup-go@v6
 `,
-		"actions/setup-go@v6",
-		"actions/cache@v4",
+		"actions/setup-go@v6=sha1-d35c59abb061a4a6fb18e82ac0862c26744d6ab5",
+		"actions/cache@v4=sha1-5a3ec84eff668545956fd18022155c47e93e2684",
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
@@ -630,7 +630,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 `,
-		"actions/checkout@v6",
+		"actions/checkout@v6=sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd",
 	)
 
 	// --json with no value should use the default fields (valid,findings,workflows)

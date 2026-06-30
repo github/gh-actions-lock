@@ -38,16 +38,29 @@ const (
 	RunOnly Category = "run-only"
 	// AncestryUnknown means the Compare API couldn't decide whether
 	// the pinned SHA is in the ref's history (typically rate-limited
-	// or transient error). Non-blocking diagnostic: we know the SHAs
-	// differ but can't classify the move as benign-but-known
-	// (ref-moved) vs. tampered (lockfile-forgery).
+	// or transient error). Fail-closed: emitted at error severity so an
+	// unverifiable symbolic-ref pin blocks rather than passing as a
+	// benign-but-known (ref-moved) or tampered (lockfile-forgery) move.
 	AncestryUnknown Category = "ancestry-unknown"
-	// ReachabilityUnknown means branch_commits couldn't decide
-	// whether the pinned SHA is still reachable from any branch in
-	// the upstream repo (resolver failure, GraphQL rate limit, etc).
-	// Non-blocking diagnostic: surfaced so consumers can retry rather
-	// than treating the dep as verified.
+	// ReachabilityUnknown is a legacy inconclusive diagnostic. It is no
+	// longer emitted (the resolve funnel now produces the blocking
+	// reachability-unverified instead); the const and string are retained
+	// for schema-freeze compatibility and back-references. Do not emit it
+	// in new code — it routes through the non-blocking inconclusive path.
 	ReachabilityUnknown Category = "reachability-unknown"
+	// UnresolvableCommit means a full-SHA pin does not resolve to any
+	// object in the upstream repo — the commit is missing or unreachable.
+	// Emitted only on a definitive determination (clean GraphQL null, no
+	// SAML/rate-limit/path-scoped error in play), so it is blocking:
+	// error/high. Transient verification failures become
+	// reachability-unverified instead.
+	UnresolvableCommit Category = "unresolvable-commit"
+	// ReachabilityUnverified means a re-resolution failed for a reason we
+	// could not prove definitive — rate limit, SAML/SSO block, transport
+	// error, or a path-scoped GraphQL failure. Fail-closed: blocking
+	// (error/low) so an unverifiable pin can't pass, but framed to
+	// consumers as transient ("re-run") rather than "the pin is bad".
+	ReachabilityUnverified Category = "reachability-unverified"
 	// OnboardingRequired means a `check --no-onboard` run encountered a
 	// workflow (or an action within one) that has no existing entry in the
 	// lockfile. Under --no-onboard the tool refuses to add new entries: the
@@ -67,14 +80,15 @@ const (
 	LocalAction Category = "local-action"
 )
 
-// IsInconclusive reports whether c represents a diagnostic that
-// couldn't reach a verdict (network/rate-limit fallback). These are
-// surfaced as warnings but are not blocking: consumers (e.g.
-// Dependabot FindingMapper) treat them as "scan inconclusive, retry"
-// rather than "lockfile is bad".
+// IsInconclusive reports whether c is the legacy non-blocking inconclusive
+// diagnostic. Under the fail-closed contract this set has collapsed to a
+// single retained-but-unemitted member (ReachabilityUnknown); every live
+// "couldn't verify" path now emits a blocking error category instead
+// (unresolvable-commit, reachability-unverified, ancestry-unknown). Kept so
+// legacy references and rendering stay valid.
 func (c Category) IsInconclusive() bool {
 	switch c {
-	case AncestryUnknown, ReachabilityUnknown:
+	case ReachabilityUnknown:
 		return true
 	}
 	return false
