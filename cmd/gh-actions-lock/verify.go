@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/lockfile"
@@ -41,7 +42,7 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 	// Load the lockfile without a resolver (no network).
 	var store *lockfile.State
 	if workflowsDir != "" {
-		store, err = lockfile.LoadStateAt(fmt.Sprintf("%s/actions.lock", workflowsDir), nil)
+		store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), nil)
 	} else {
 		store, err = lockfile.LoadState(".", nil)
 	}
@@ -58,7 +59,7 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 			return err
 		}
 	} else {
-		format.PresentResults(console, report, valid, true)
+		format.PresentResults(console, report, valid, false)
 	}
 
 	if !valid {

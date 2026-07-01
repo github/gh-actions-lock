@@ -117,3 +117,20 @@ func TestVerifyLocalCoverage_LoadError(t *testing.T) {
 	assert.False(t, report.IsValid())
 	assert.Equal(t, checks.NotPinned, report.Workflows[0].Findings[0].Category)
 }
+
+func TestVerifyLocalCoverage_DepsError(t *testing.T) {
+	dir := t.TempDir()
+	store := writeTestLockfile(t, dir, testLockfileContent)
+
+	parsed := []checks.ParsedWorkflow{
+		{
+			Path:    ".github/workflows/ci.yml",
+			DepsErr: assert.AnError,
+		},
+	}
+
+	report := VerifyLocalCoverage(parsed, store)
+	assert.False(t, report.IsValid())
+	assert.Equal(t, checks.NotPinned, report.Workflows[0].Findings[0].Category)
+	assert.Contains(t, report.Workflows[0].Findings[0].Detail, "failed to read dependencies")
+}

@@ -35,6 +35,19 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 			continue
 		}
 
+		if pw.DepsErr != nil {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.NotPinned,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
+				Remediation:  "fix or regenerate the dependencies: section with `gh actions-lock`",
+			})
+			results = append(results, wr)
+			continue
+		}
+
 		if len(pw.Refs) == 0 && len(pw.LocalPaths) == 0 {
 			results = append(results, wr)
 			continue
