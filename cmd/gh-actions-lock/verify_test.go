@@ -48,18 +48,18 @@ func TestValidateOutputFlags_VerifyConflicts(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "verify and verify-local are mutually exclusive",
-			opts: checkOptions{verify: true, verifyLocal: true},
+			name:    "verify and verify-local are mutually exclusive",
+			opts:    checkOptions{verify: true, verifyLocal: true},
 			wantErr: "mutually exclusive",
 		},
 		{
-			name: "verify-local and rescan conflict",
-			opts: checkOptions{verifyLocal: true, rescan: true},
+			name:    "verify-local and rescan conflict",
+			opts:    checkOptions{verifyLocal: true, rescan: true},
 			wantErr: "offline",
 		},
 		{
-			name: "verify-local and accept-moved conflict",
-			opts: checkOptions{verifyLocal: true, acceptMoved: true},
+			name:    "verify-local and accept-moved conflict",
+			opts:    checkOptions{verifyLocal: true, acceptMoved: true},
 			wantErr: "offline",
 		},
 		{

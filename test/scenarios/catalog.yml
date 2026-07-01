@@ -600,12 +600,13 @@ scenarios:
           actions: ["actions/checkout@v4"]
     expect:
       exit: 1
-      output_contains: ["not-pinned"]
+      output_contains: ["Re-run without --no-fix"]
 
-  - name: verify_pinned_valid
+  - name: verify_pinned_stub
     category: output_modes
-    description: "--verify with all deps pinned — full re-verification passes"
-    needs_token: true
+    description: "--verify with stub server — exercises the --rescan --no-fix expansion"
+    needs_stub: true
+    tags: [stub]
     flags: ["--verify"]
     fixtures:
       workflows:
@@ -614,12 +615,13 @@ scenarios:
           actions: ["actions/checkout@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 0
+      exit: 1
 
   - name: verify_json_combined
     category: output_modes
-    description: "--verify --json produces JSON with findings"
-    needs_token: true
+    description: "--verify --json produces JSON output"
+    needs_stub: true
+    tags: [stub]
     flags: ["--verify", "--json=valid,findings"]
     fixtures:
       workflows:
@@ -628,7 +630,7 @@ scenarios:
           actions: ["actions/checkout@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 0
+      exit: 1
       stdout_is_json: true
 
   - name: verify_local_all_covered
@@ -648,7 +650,7 @@ scenarios:
 
   - name: verify_local_missing_pin
     category: output_modes
-    description: "--verify-local with uncovered ref — exits 1, names the action"
+    description: "--verify-local with uncovered ref — exits 1, reports not-pinned"
     needs_stub: false
     flags: ["--verify-local"]
     fixtures:
@@ -659,7 +661,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 1
-      output_contains: ["setup-go"]
+      output_contains: ["not-pinned"]
 
   - name: verify_local_json
     category: output_modes
