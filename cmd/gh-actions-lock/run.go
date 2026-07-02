@@ -55,6 +55,13 @@ type checkOptions struct {
 	// ref-moved: prunes the stale lockfile entry and re-pins to the
 	// current live SHA.
 	acceptMoved bool
+	// verify is a convenience alias for --rescan --no-fix: full
+	// re-verification of every pin with a non-zero exit on any finding.
+	verify bool
+	// verifyLocal performs a zero-network static check: every action ref
+	// in scanned workflows must have a corresponding lockfile entry.
+	// No auth, no resolution, no reachability — ideal for pre-commit hooks.
+	verifyLocal bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -72,13 +79,29 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or lockfile-forgery to their current live SHA")
+	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Full re-verification of every pin (equivalent to --rescan --no-fix)")
+	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
+		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
+			"No network calls, no authentication required — ideal for pre-commit hooks.")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
 // Wired as PreRunE so the error surfaces at the command layer before any work runs.
 func (opts *checkOptions) validateOutputFlags() error {
-	return format.ValidateJSONFields(opts.jsonFields)
+	if err := format.ValidateJSONFields(opts.jsonFields); err != nil {
+		return err
+	}
+	if opts.verify && opts.verifyLocal {
+		return fmt.Errorf("--verify and --verify-local are mutually exclusive")
+	}
+	if opts.verifyLocal && opts.rescan {
+		return fmt.Errorf("--verify-local is offline and cannot be combined with --rescan")
+	}
+	if opts.verifyLocal && opts.acceptMoved {
+		return fmt.Errorf("--verify-local is offline and cannot be combined with --accept-moved")
+	}
+	return nil
 }
 
 func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) error {
@@ -90,6 +113,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	errOut := cmd.ErrOrStderr()
 	console := ui.NewWithWriter(errOut)
 	defer console.StopProgress()
+
+	// Expand verify mode flags (see verify.go for both modes).
+	applyVerifyFlags(opts)
+
+	// --verify-local: offline static coverage check. Skip all network setup.
+	if opts.verifyLocal {
+		return runVerifyLocal(opts, out, console)
+	}
 
 	// Profiling: when --profile is set, start trace + CPU profile + HTTP log.
 	var prof *profile.Session
