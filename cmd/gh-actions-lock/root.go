@@ -114,7 +114,7 @@ $ gh actions-lock .github/workflows/ci.yml
 # Read-only check for CI integration (writes nothing, exits 1 if invalid)
 $ gh actions-lock --no-fix --json=valid,findings
 
-# All fields as JSON
+# All output as JSON
 $ gh actions-lock --json
 `),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
