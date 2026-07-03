@@ -431,6 +431,150 @@ func TestResolveAllRecursiveCompositeLocalPathError(t *testing.T) {
 	}
 }
 
+// TestResolveAllRecursiveSelfRepoNestedInComposite verifies that a `$/…`
+// self-reference inside a fetched composite is a same-tarball edge: it records
+// no new pin, but the BFS still descends into the sibling sub-action so its
+// cross-repo transitive deps are discovered. Mirrors the runner's
+// PrepareActions_SelfRepository_ResolvesNestedInComposite.
+func TestResolveAllRecursiveSelfRepoNestedInComposite(t *testing.T) {
+	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("org", "fixtures", "parent", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "parent", Ref: "main", SHA: tarballSHA},
+			actionYML: "name: Parent\nruns:\n  using: composite\n  steps:\n    - uses: $/child\n",
+		},
+		ghapi.ForActionRef("org", "fixtures", "child", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "child", Ref: "main", SHA: tarballSHA},
+			actionYML: "name: Child\nruns:\n  using: composite\n  steps:\n    - uses: other/repo@v2\n",
+		},
+		ghapi.ForActionRef("other", "repo", "", "v2"): {
+			dep:       dep.Dependency{NWO: "other/repo", Ref: "v2", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: Other\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, pm, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "parent", Ref: "main"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive error: %v", err)
+	}
+
+	// parent + child collapse to org/fixtures@main; other/repo@v2 is the
+	// cross-repo transitive discovered via the $/ sibling. Two unique deps.
+	keys := map[string]bool{}
+	for _, d := range deps {
+		keys[d.Key()] = true
+	}
+	if !keys["other/repo@v2"] {
+		t.Fatalf("expected $/ sibling's transitive other/repo@v2 to be discovered, got %v", keys)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 unique deps (tarball + transitive), got %d: %+v", len(deps), deps)
+	}
+	// The same-tarball $/ edge must not record a self-parent.
+	for _, p := range pm["org/fixtures@main"] {
+		if p == "org/fixtures@main" {
+			t.Errorf("unexpected same-tarball self-parent on org/fixtures@main: %v", pm["org/fixtures@main"])
+		}
+	}
+	// other/repo@v2's parent is the shared tarball.
+	if got := pm["other/repo@v2"]; len(got) != 1 || got[0] != "org/fixtures@main" {
+		t.Errorf("expected other/repo@v2 parent = [org/fixtures@main], got %v", got)
+	}
+}
+
+// TestResolveAllRecursiveSelfRepoResolvesToParentRepo verifies that a `$/…`
+// inside a CROSS-repo composite resolves against that composite's own repo and
+// ref — not the top-level workflow-run repo. Mirrors the runner's
+// _CrossRepoCompositeResolvesToParentRepo.
+func TestResolveAllRecursiveSelfRepoResolvesToParentRepo(t *testing.T) {
+	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("external", "foo", "", "v1"): {
+			dep:       dep.Dependency{NWO: "external/foo", Ref: "v1", SHA: tarballSHA},
+			actionYML: "name: Foo\nruns:\n  using: composite\n  steps:\n    - uses: $/lib/bar\n",
+		},
+		// Reachable only if $/lib/bar resolved under external/foo@v1.
+		ghapi.ForActionRef("external", "foo", "lib/bar", "v1"): {
+			dep:       dep.Dependency{NWO: "external/foo", Path: "lib/bar", Ref: "v1", SHA: tarballSHA},
+			actionYML: "name: Bar\nruns:\n  using: composite\n  steps:\n    - uses: someother/dep@v3\n",
+		},
+		ghapi.ForActionRef("someother", "dep", "", "v3"): {
+			dep:       dep.Dependency{NWO: "someother/dep", Ref: "v3", SHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			actionYML: "name: Dep\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "external", Repo: "foo", Ref: "v1"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive error: %v", err)
+	}
+
+	keys := map[string]bool{}
+	for _, d := range deps {
+		keys[d.Key()] = true
+	}
+	// If $/lib/bar had resolved against the wrong repo, its cross-repo dep
+	// would never be found.
+	if !keys["someother/dep@v3"] {
+		t.Fatalf("expected $/lib/bar to resolve under external/foo@v1 and discover someother/dep@v3, got %v", keys)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 unique deps (external/foo tarball + someother/dep), got %d: %+v", len(deps), deps)
+	}
+}
+
+// TestResolveAllRecursiveSelfRepoMultiLevelChain verifies a `$/a → $/b → $/c`
+// same-tarball chain descends all the way to c's cross-repo dep. Mirrors the
+// runner's _MultiLevelChain.
+func TestResolveAllRecursiveSelfRepoMultiLevelChain(t *testing.T) {
+	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	mk := func(path, use string) resolvedEntry {
+		return resolvedEntry{
+			dep:       dep.Dependency{NWO: "org/x", Path: path, Ref: "main", SHA: tarballSHA},
+			actionYML: "name: " + path + "\nruns:\n  using: composite\n  steps:\n    - uses: " + use + "\n",
+		}
+	}
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("org", "x", "root", "main"): mk("root", "$/a"),
+		ghapi.ForActionRef("org", "x", "a", "main"):    mk("a", "$/b"),
+		ghapi.ForActionRef("org", "x", "b", "main"):    mk("b", "$/c"),
+		ghapi.ForActionRef("org", "x", "c", "main"):    mk("c", "leaf/dep@v9"),
+		ghapi.ForActionRef("leaf", "dep", "", "v9"): {
+			dep:       dep.Dependency{NWO: "leaf/dep", Ref: "v9", SHA: "dddddddddddddddddddddddddddddddddddddddd"},
+			actionYML: "name: Leaf\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "x", Path: "root", Ref: "main"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive error: %v", err)
+	}
+
+	keys := map[string]bool{}
+	for _, d := range deps {
+		keys[d.Key()] = true
+	}
+	// All $/ hops collapse to org/x@main; leaf/dep@v9 is 3 levels deep.
+	if !keys["leaf/dep@v9"] {
+		t.Fatalf("expected 3-level $/ chain to reach leaf/dep@v9, got %v", keys)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 unique deps (org/x tarball + leaf/dep), got %d: %+v", len(deps), deps)
+	}
+}
+
 func TestNewAndLatestRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)

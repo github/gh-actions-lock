@@ -75,6 +75,20 @@ func TestDiagnoseOneParsed_InvalidSelfRepoRef(t *testing.T) {
 	assert.False(t, wr.IsValid())
 }
 
+func TestDiagnoseOneParsed_JobLevelSelfRepoRejected(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:                 ".github/workflows/ci.yml",
+		JobLevelSelfRepoRefs: []string{"$/.github/workflows/reusable.yml"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.InvalidSelfRepoRef, wr.Findings[0].Category)
+	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
+	assert.Contains(t, wr.Findings[0].Detail, "step-level")
+	assert.False(t, wr.IsValid())
+}
+
 func TestDiagnoseOneParsed_SelfRepoMixedWithRefs(t *testing.T) {
 	dir := t.TempDir()
 	store, err := lockfile.LoadState(dir, noopMeta{})

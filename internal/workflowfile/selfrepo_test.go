@@ -83,6 +83,70 @@ jobs:
 	assert.Equal(t, []string{"$/actions/foo"}, scan.SelfRepoRefs)
 }
 
+func TestExtractActionRefsSelfRepoJobLevel(t *testing.T) {
+	tests := []struct {
+		name         string
+		content      string
+		wantJobLevel []string
+		wantStep     []string
+	}{
+		{
+			name: "job-level $/ is rejected",
+			content: `on: push
+jobs:
+  call:
+    uses: $/.github/workflows/reusable.yml
+`,
+			wantJobLevel: []string{"$/.github/workflows/reusable.yml"},
+		},
+		{
+			name: "step-level $/ stays valid alongside a job-level one",
+			content: `on: push
+jobs:
+  call:
+    uses: $/.github/workflows/reusable.yml
+  build:
+    steps:
+      - uses: $/actions/foo
+`,
+			wantJobLevel: []string{"$/.github/workflows/reusable.yml"},
+			wantStep:     []string{"$/actions/foo"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Parse("wf.yml", []byte(tt.content))
+			require.NoError(t, err)
+
+			scan := f.ExtractActionRefs()
+			assert.Equal(t, tt.wantJobLevel, scan.JobLevelSelfRepoRefs)
+			assert.Equal(t, tt.wantStep, scan.SelfRepoRefs)
+			assert.Empty(t, scan.SelfRepoRefErrs)
+		})
+	}
+}
+
+func TestExtractLocalCompositeRefsSkipsSelfRepo(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	actionDir := filepath.Join(dir, "actions", "build")
+	require.NoError(t, os.MkdirAll(actionDir, 0o755))
+	// The local composite mixes a remote ref (pinnable) with a same-repo `$/`
+	// sibling (inherently pinned — must not be collected as a remote ref).
+	require.NoError(t, os.WriteFile(filepath.Join(actionDir, "action.yml"), []byte(
+		"runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n    - uses: $/actions/helper\n"), 0o644))
+
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	require.NoError(t, os.MkdirAll(wfDir, 0o755))
+	wfPath := filepath.Join(wfDir, "ci.yml")
+
+	refs, warnings := ExtractLocalCompositeRefs(wfPath, []string{"./actions/build"})
+	assert.Empty(t, warnings)
+	require.Len(t, refs, 1)
+	assert.Equal(t, "actions/checkout", refs[0].NWO())
+}
+
 func TestMigrateLocalActionsToSelfRepo(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))

@@ -195,6 +195,18 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 		return wr, true
 	}
 
+	if len(pw.JobLevelSelfRepoRefs) > 0 {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.InvalidSelfRepoRef,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       fmt.Sprintf("`$/…` is only valid for step-level actions, not job-level reusable-workflow `uses:`: %s", strings.Join(pw.JobLevelSelfRepoRefs, ", ")),
+			Remediation:  "call the reusable workflow by `owner/repo/.github/workflows/<file>@ref`; `$/…` cannot reference a reusable workflow",
+		})
+		return wr, true
+	}
+
 	if len(pw.SelfRepoRefErrs) > 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,

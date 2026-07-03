@@ -59,6 +59,9 @@ type RefScan struct {
 	SelfRepoRefs []string
 	// SelfRepoRefErrs are malformed `$/…@ref` values — the invalid form.
 	SelfRepoRefErrs []string
+	// JobLevelSelfRepoRefs are `$/…` values used at a job-level `uses:`
+	// (reusable-workflow calls). `$/…` is step-only, so these are invalid.
+	JobLevelSelfRepoRefs []string
 	// Warnings are non-fatal parse notes (e.g. expression-based uses:).
 	Warnings []string
 }
@@ -70,10 +73,7 @@ func (f *File) ExtractActionRefs() RefScan {
 	seenLocal := make(map[string]bool)
 	seenSelf := make(map[string]bool)
 
-	walkYAML(&f.root, func(key, value string) {
-		if key != "uses" {
-			return
-		}
+	walkUses(&f.root, func(value string, stepLevel bool) {
 		value = strings.TrimSpace(value)
 		if strings.Contains(value, "${") {
 			scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
@@ -84,9 +84,14 @@ func (f *File) ExtractActionRefs() RefScan {
 				return
 			}
 			seenSelf[value] = true
-			if SelfRepoRefHasVersion(value) {
+			switch {
+			case !stepLevel:
+				// `$/…` is step-only: illegal at a job-level reusable-workflow
+				// `uses:`. Matches parser/actionlint/zizmor behavior.
+				scan.JobLevelSelfRepoRefs = append(scan.JobLevelSelfRepoRefs, value)
+			case SelfRepoRefHasVersion(value):
 				scan.SelfRepoRefErrs = append(scan.SelfRepoRefErrs, value)
-			} else {
+			default:
 				scan.SelfRepoRefs = append(scan.SelfRepoRefs, value)
 			}
 			return
@@ -185,6 +190,12 @@ func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]pars
 		}
 
 		for _, use := range uses {
+			// `$/…` inside a local composite resolves to this same repo at the
+			// running ref — inherently pinned, so there is no remote SHA to
+			// record. Skip it (don't let ParseActionRef mis-handle it).
+			if IsSelfRepoAction(use) {
+				continue
+			}
 			actionRef := parserlock.ParseActionRef(use)
 			if actionRef != nil {
 				dedupKey := actionRef.FullName() + "@" + actionRef.Ref
@@ -199,12 +210,43 @@ func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]pars
 	return refs, warnings
 }
 
-func walkYAML(node *yaml.Node, fn func(key, value string)) {
-	walkYAMLNodes(node, func(keyNode, valueNode *yaml.Node) {
-		if keyNode.Kind == yaml.ScalarNode && valueNode.Kind == yaml.ScalarNode {
-			fn(keyNode.Value, valueNode.Value)
+// walkUses invokes fn for every `uses:` scalar in the tree, reporting whether
+// the use is step-level — an item inside a `steps:` sequence — as opposed to a
+// job-level or other `uses:`. Step level is what distinguishes a valid `$/…`
+// action reference from an illegal job-level reusable-workflow one.
+func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
+	walkUsesDepth(node, false, fn, 0)
+}
+
+func walkUsesDepth(node *yaml.Node, inStep bool, fn func(value string, stepLevel bool), depth int) {
+	if node == nil || depth > maxYAMLWalkDepth {
+		return
+	}
+	switch node.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, child := range node.Content {
+			walkUsesDepth(child, inStep, fn, depth+1)
 		}
-	})
+	case yaml.MappingNode:
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			val := node.Content[i+1]
+			childInStep := inStep
+			if key.Kind == yaml.ScalarNode {
+				switch key.Value {
+				case "uses":
+					if val.Kind == yaml.ScalarNode {
+						fn(val.Value, inStep)
+					}
+				case "steps":
+					// Elements of a `steps:` sequence (and everything below
+					// them) are step-level.
+					childInStep = true
+				}
+			}
+			walkUsesDepth(val, childInStep, fn, depth+1)
+		}
+	}
 }
 
 // maxYAMLWalkDepth bounds recursion in walkYAMLNodes so a hostile or
