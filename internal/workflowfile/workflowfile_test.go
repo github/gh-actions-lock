@@ -14,7 +14,8 @@ func TestLoadAndExtractActionRefs(t *testing.T) {
 	f, err := Load("testdata/simple.yml")
 	require.NoError(t, err)
 
-	refs, localPaths, warnings := f.ExtractActionRefs()
+	scan := f.ExtractActionRefs()
+	refs, localPaths, warnings := scan.Refs, scan.LocalPaths, scan.Warnings
 	assert.Len(t, refs, 2)
 	assert.Empty(t, localPaths)
 	assert.Empty(t, warnings)
@@ -29,7 +30,8 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	f, err := Load("testdata/mixed_refs.yml")
 	require.NoError(t, err)
 
-	refs, localPaths, warnings := f.ExtractActionRefs()
+	scan := f.ExtractActionRefs()
+	refs, localPaths, warnings := scan.Refs, scan.LocalPaths, scan.Warnings
 	assert.Len(t, refs, 3)
 	assert.Equal(t, "actions/checkout", refs[0].NWO())
 	assert.Equal(t, "actions/cache", refs[1].NWO())

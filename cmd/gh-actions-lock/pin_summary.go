@@ -25,7 +25,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction:
+			case checks.LocalAction, checks.InvalidSelfRepoRef:
 				return true
 			case checks.LockfileForgery:
 				if !acceptMoved {
@@ -48,7 +48,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 			if f.Severity != checks.SeverityError {
 				continue
 			}
-			if f.Category == checks.LocalAction {
+			if f.Category == checks.LocalAction || f.Category == checks.InvalidSelfRepoRef {
 				return true
 			}
 		}

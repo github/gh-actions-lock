@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
@@ -51,6 +52,10 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		return wr
 	}
 	wr.Deps = pw.ExistingDeps
+
+	if len(pw.SelfRepoRefs) > 0 {
+		wr.Findings = append(wr.Findings, selfRepoFinding(pw))
+	}
 
 	directNWOs := make(map[ghapi.Repo]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {
@@ -132,6 +137,18 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	return wr
 }
 
+// selfRepoFinding builds the informational finding for a workflow that
+// references same-repo actions via `$/…`. These are inherently pinned.
+func selfRepoFinding(pw checks.ParsedWorkflow) checks.Finding {
+	return checks.Finding{
+		WorkflowPath: pw.Path,
+		Category:     checks.SelfRepoAction,
+		Severity:     checks.SeverityInfo,
+		Confidence:   checks.ConfidenceHigh,
+		Detail:       fmt.Sprintf("references same-repo actions via `$/…` (inherently pinned): %s", strings.Join(pw.SelfRepoRefs, ", ")),
+	}
+}
+
 // precheckWorkflow handles terminal preconditions (load error, local-path
 // actions, non-hosted runner, no refs, unreadable deps). It returns true when
 // one fired; otherwise the report is seeded with ActionRefs/ParseWarnings.
@@ -163,7 +180,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
 				Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
-				Remediation:  "remove `uses: ./…` steps or move them to a separate workflow",
+				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions), or remove the `./…` steps",
 			})
 		} else {
 			wr.Findings = append(wr.Findings, checks.Finding{
@@ -172,12 +189,29 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Severity:     checks.SeverityWarning,
 				Confidence:   checks.ConfidenceHigh,
 				Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
+				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions)",
 			})
 		}
 		return wr, true
 	}
 
+	if len(pw.SelfRepoRefErrs) > 0 {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.InvalidSelfRepoRef,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepoRefErrs, ", ")),
+			Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+		})
+		return wr, true
+	}
+
 	if len(pw.Refs) == 0 {
+		if len(pw.SelfRepoRefs) > 0 {
+			wr.Findings = append(wr.Findings, selfRepoFinding(pw))
+			return wr, true
+		}
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
 			Category:     checks.RunOnly,

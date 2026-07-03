@@ -47,13 +47,28 @@ func Parse(path string, content []byte) (*File, error) {
 	return f, nil
 }
 
-// ExtractActionRefs finds all uses: references to repository actions in the workflow.
-func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) {
-	var refs []parserlock.ActionRef
-	var warnings []string
-	var localPaths []string
+// RefScan is the classified result of walking a workflow's `uses:` values.
+type RefScan struct {
+	// Refs are remote repository action references (owner/repo[/path]@ref).
+	Refs []parserlock.ActionRef
+	// LocalPaths are `./…` local composite action references (reusable
+	// workflows are excluded — they resolve differently).
+	LocalPaths []string
+	// SelfRepoRefs are valid `$/…` self-referencing actions. Inherently
+	// pinned: they resolve against the defining repo at the running ref.
+	SelfRepoRefs []string
+	// SelfRepoRefErrs are malformed `$/…@ref` values — the invalid form.
+	SelfRepoRefErrs []string
+	// Warnings are non-fatal parse notes (e.g. expression-based uses:).
+	Warnings []string
+}
+
+// ExtractActionRefs finds and classifies all uses: references in the workflow.
+func (f *File) ExtractActionRefs() RefScan {
+	var scan RefScan
 	seen := make(map[string]bool)
 	seenLocal := make(map[string]bool)
+	seenSelf := make(map[string]bool)
 
 	walkYAML(&f.root, func(key, value string) {
 		if key != "uses" {
@@ -61,7 +76,19 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 		}
 		value = strings.TrimSpace(value)
 		if strings.Contains(value, "${") {
-			warnings = append(warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
+			scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
+			return
+		}
+		if IsSelfRepoAction(value) {
+			if seenSelf[value] {
+				return
+			}
+			seenSelf[value] = true
+			if SelfRepoRefHasVersion(value) {
+				scan.SelfRepoRefErrs = append(scan.SelfRepoRefErrs, value)
+			} else {
+				scan.SelfRepoRefs = append(scan.SelfRepoRefs, value)
+			}
 			return
 		}
 		if strings.HasPrefix(value, "./") {
@@ -70,7 +97,7 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 			}
 			if !seenLocal[value] {
 				seenLocal[value] = true
-				localPaths = append(localPaths, value)
+				scan.LocalPaths = append(scan.LocalPaths, value)
 			}
 			return
 		}
@@ -79,12 +106,12 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 			dedupKey := actionRef.FullName() + "@" + actionRef.Ref
 			if !seen[dedupKey] {
 				seen[dedupKey] = true
-				refs = append(refs, *actionRef)
+				scan.Refs = append(scan.Refs, *actionRef)
 			}
 		}
 	})
 
-	return refs, localPaths, warnings
+	return scan
 }
 
 // DiscoverWorkflows finds all workflow files in .github/workflows/ relative to
