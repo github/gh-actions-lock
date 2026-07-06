@@ -17,13 +17,10 @@ type ParsedWorkflow struct {
 	SelfRepoRefs []string
 	// SelfRepoRefErrs holds malformed `$/…@ref` values (the invalid form).
 	SelfRepoRefErrs []string
-	// JobLevelSelfRepoRefs holds `$/…` values used at a job-level `uses:`.
-	// `$/…` is step-only, so these are invalid.
-	JobLevelSelfRepoRefs []string
-	ExistingDeps         []dep.Dependency
-	ParseWarnings        []string
-	LoadErr              error
-	DepsErr              error
+	ExistingDeps    []dep.Dependency
+	ParseWarnings   []string
+	LoadErr         error
+	DepsErr         error
 	// Resolved, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
 	// (ref-moved) are skipped and the engine relies on

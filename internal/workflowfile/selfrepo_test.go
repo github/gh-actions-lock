@@ -85,22 +85,31 @@ jobs:
 
 func TestExtractActionRefsSelfRepoJobLevel(t *testing.T) {
 	tests := []struct {
-		name         string
-		content      string
-		wantJobLevel []string
-		wantStep     []string
+		name        string
+		content     string
+		wantSelf    []string
+		wantSelfErr []string
 	}{
 		{
-			name: "job-level $/ is rejected",
+			name: "bare job-level $/ is a valid self-repo reference",
 			content: `on: push
 jobs:
   call:
     uses: $/.github/workflows/reusable.yml
 `,
-			wantJobLevel: []string{"$/.github/workflows/reusable.yml"},
+			wantSelf: []string{"$/.github/workflows/reusable.yml"},
 		},
 		{
-			name: "step-level $/ stays valid alongside a job-level one",
+			name: "job-level $/…@ref is invalid",
+			content: `on: push
+jobs:
+  call:
+    uses: $/.github/workflows/reusable.yml@v1
+`,
+			wantSelfErr: []string{"$/.github/workflows/reusable.yml@v1"},
+		},
+		{
+			name: "bare job-level and step-level $/ are both valid",
 			content: `on: push
 jobs:
   call:
@@ -109,8 +118,7 @@ jobs:
     steps:
       - uses: $/actions/foo
 `,
-			wantJobLevel: []string{"$/.github/workflows/reusable.yml"},
-			wantStep:     []string{"$/actions/foo"},
+			wantSelf: []string{"$/.github/workflows/reusable.yml", "$/actions/foo"},
 		},
 	}
 	for _, tt := range tests {
@@ -119,9 +127,8 @@ jobs:
 			require.NoError(t, err)
 
 			scan := f.ExtractActionRefs()
-			assert.Equal(t, tt.wantJobLevel, scan.JobLevelSelfRepoRefs)
-			assert.Equal(t, tt.wantStep, scan.SelfRepoRefs)
-			assert.Empty(t, scan.SelfRepoRefErrs)
+			assert.Equal(t, tt.wantSelf, scan.SelfRepoRefs)
+			assert.Equal(t, tt.wantSelfErr, scan.SelfRepoRefErrs)
 		})
 	}
 }

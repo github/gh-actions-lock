@@ -75,17 +75,29 @@ func TestDiagnoseOneParsed_InvalidSelfRepoRef(t *testing.T) {
 	assert.False(t, wr.IsValid())
 }
 
-func TestDiagnoseOneParsed_JobLevelSelfRepoRejected(t *testing.T) {
+func TestDiagnoseOneParsed_JobLevelSelfRepoValid(t *testing.T) {
 	pw := checks.ParsedWorkflow{
-		Path:                 ".github/workflows/ci.yml",
-		JobLevelSelfRepoRefs: []string{"$/.github/workflows/reusable.yml"},
+		Path:         ".github/workflows/ci.yml",
+		SelfRepoRefs: []string{"$/.github/workflows/reusable.yml"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.SelfRepoAction, wr.Findings[0].Category)
+	assert.Equal(t, checks.SeverityInfo, wr.Findings[0].Severity)
+	assert.True(t, wr.IsValid())
+}
+
+func TestDiagnoseOneParsed_JobLevelSelfRepoAtRefRejected(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:            ".github/workflows/ci.yml",
+		SelfRepoRefErrs: []string{"$/.github/workflows/reusable.yml@v1"},
 	}
 	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
 
 	require.Len(t, wr.Findings, 1)
 	assert.Equal(t, checks.InvalidSelfRepoRef, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
-	assert.Contains(t, wr.Findings[0].Detail, "step-level")
 	assert.False(t, wr.IsValid())
 }
 
