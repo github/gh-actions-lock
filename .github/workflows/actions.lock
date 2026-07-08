@@ -61,7 +61,7 @@ dependencies:
             - 'actions/setup-go@v5'
     'github/gh-actions-lock@main':
         ref: 'main'
-        commit: 'sha1-16d3b3fe6bec7e193855cd2dc87d43dd9824ee3d'
+        commit: 'sha1-fc7726d8f2ac7537d2b975eb8e9a6c978a2f7945'
         owner_id: 9919
         repo_id: 1217640442
         uses:
