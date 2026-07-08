@@ -7,8 +7,6 @@ workflows:
         - 'actions/checkout@v6.0.2'
         - 'cli/gh-extension-precompile@v2.1.0'
         - 'github/setup-goproxy@v1.1.0'
-    '.github/workflows/sync-early-access-release.yml':
-        - 'actions/checkout@v6.0.2'
     '.github/workflows/test.yml':
         - 'actions/checkout@v5.0.1'
         - 'actions/setup-go@v6.4.0'
@@ -63,7 +61,7 @@ dependencies:
             - 'actions/setup-go@v5'
     'github/gh-actions-lock@main':
         ref: 'main'
-        commit: 'sha1-6a5ff0d2d272de25b8db0223191fd13fc0b11aab'
+        commit: 'sha1-16d3b3fe6bec7e193855cd2dc87d43dd9824ee3d'
         owner_id: 9919
         repo_id: 1217640442
         uses:
