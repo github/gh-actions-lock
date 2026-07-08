@@ -7,7 +7,15 @@ Lock your workflow dependencies.
 > lockfile format, command flags, and behavior may change without notice between
 > releases. Use it, file issues, and expect rough edges.
 
-## Install
+## Background
+
+gh-actions-lock is part of GitHub's Workflow Dependency Pinning effort. It gives repositories a lockfile that pins every workflow dependency to a verified commit, so what runs on the runner is exactly what you locked. Development is ongoing and behavior may still change.
+
+Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
+
+## Requirements
+
+Requires the [`gh` CLI](https://cli.github.com/). Install it first, then install the extension:
 
 ```bash
 gh extension install github/gh-actions-lock
@@ -37,4 +45,16 @@ Finally, locked actions must have a branch that the commit being locked exists w
 
 There are currently eligibility limitations for workflows that can be onboarded to lockfiles:
 - Workflows in the lockfile cannot use local-path actions, these will be skipped for onboarding. This is also a short-term gap.
+
+## License
+
+This project is licensed under the terms of the MIT open source license. See [LICENSE](./LICENSE) for the full terms.
+
+## Maintainers
+
+gh-actions-lock is maintained by @github/actions-dispatch-reviewers. See [CODEOWNERS](./CODEOWNERS).
+
+## Support
+
+Support is best-effort and community-based. Please file bugs and feature requests as [GitHub issues](https://github.com/github/gh-actions-lock/issues). See [SUPPORT.md](./SUPPORT.md) for details.
 
