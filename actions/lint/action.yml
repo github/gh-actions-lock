@@ -1,0 +1,34 @@
+name: Lint actions.lock
+description: Check that actions.lock is in sync with workflow files
+
+inputs:
+  extra-flags:
+    description: Extra flags passed to gh actions-lock
+    required: false
+    default: ""
+  ignore-categories:
+    description: Comma-separated finding categories to treat as warnings instead of errors (e.g. "local-action")
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: OIDC Setup for goproxy
+      uses: github/setup-goproxy@v1.1.0
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/../../go.mod
+
+    - name: Build gh-actions-lock
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}/../.."
+        go build -o "$RUNNER_TEMP/gh-actions-lock" ./cmd/gh-actions-lock
+
+    - name: Check lockfile is in sync
+      shell: bash
+      run: ${{ github.action_path }}/../../script/lockfile-lint.sh "$RUNNER_TEMP/gh-actions-lock" "${{ inputs.ignore-categories }}" ${{ inputs.extra-flags }}
+      env:
+        GH_TOKEN: ${{ github.token }}

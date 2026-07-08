@@ -1,0 +1,84 @@
+# This workflow is managed by gh actions-lock.
+
+name: release
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: "Show the tag that would be created without pushing it"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  cut-tag:
+    if: github.event_name == 'workflow_dispatch'
+    name: Cut release tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard release branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases must be cut from main (got $GITHUB_REF)."
+          exit 1
+
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next version
+        id: version
+        run: |
+          latest=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$latest" ]; then
+            latest="v0.0.0"
+          fi
+          # Strip leading v
+          ver="${latest#v}"
+          IFS='.' read -r major minor patch <<< "$ver"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="v${major}.${minor}.${patch}"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "### Next release: \`$next\` (bump: ${{ inputs.bump }}, previous: $latest)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and push tag
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+  release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: OIDC Setup for goproxy
+        uses: github/setup-goproxy@v1.1.0
+      - uses: actions/checkout@v6.0.2
+      - uses: cli/gh-extension-precompile@v2.1.0
+        with:
+          generate_attestations: true
+          go_version_file: go.mod
+          go_build_options: ./cmd/gh-actions-lock

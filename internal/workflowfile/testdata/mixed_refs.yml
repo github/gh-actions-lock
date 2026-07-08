@@ -1,0 +1,15 @@
+name: mixed
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./local-action
+      - uses: docker://alpine:3.18
+      - uses: actions/cache/save@v4
+      - uses: ${{ matrix.action }}
+      - uses: owner/repo/.github/workflows/called.yml@v1
+      - uses: owner/repo/.github/workflows/called.yaml@main
+      - uses: actions/setup-node@v4
+      - uses: ./.github/workflows/reusable.yml
