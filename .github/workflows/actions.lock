@@ -3,6 +3,9 @@
 # Docs: https://gh.io/actions-lockfile
 version: 'v0.0.2'
 workflows:
+    '.github/workflows/dependency-review.yml':
+        - 'actions/checkout@v5.0.1'
+        - 'actions/dependency-review-action@v5.0.0'
     '.github/workflows/release.yml':
         - 'actions/checkout@v6.0.2'
         - 'cli/gh-extension-precompile@v2.1.0'
@@ -41,6 +44,11 @@ dependencies:
         commit: 'sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd'
         owner_id: 44036562
         repo_id: 197814629
+    'actions/dependency-review-action@v5.0.0':
+        ref: 'v5.0.0'
+        commit: 'sha1-a1d282b36b6f3519aa1f3fc636f609c47dddb294'
+        owner_id: 44036562
+        repo_id: 476372928
     'actions/setup-go@v5':
         ref: 'v5'
         commit: 'sha1-40f1582b2485089dde7abd97c1529aa768e1baff'
