@@ -16,7 +16,7 @@ import (
 // reportHasUnfixableErrors returns true when the report contains error-
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
-// don't count. LocalAction and LockfileIntegrity errors are unfixable --
+// don't count. LocalAction and UnreachablePin errors are unfixable --
 // the workflow or lockfile must be investigated.
 func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
@@ -27,7 +27,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 			switch f.Category {
 			case checks.LocalAction:
 				return true
-			case checks.LockfileIntegrity:
+			case checks.UnreachablePin:
 				if !acceptMoved {
 					return true
 				}
@@ -40,7 +40,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 // reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
 // but only matches categories that renderInvestigationAlerts does NOT
 // handle (LocalAction). Use this to gate the PresentResults call so
-// lockfile-integrity findings don't trigger a redundant (and stale) error
+// unreachable-pin findings don't trigger a redundant (and stale) error
 // summary.
 func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 	for _, wr := range report.Workflows {
@@ -133,13 +133,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	// findings surface on the terminal.
 	//
 	// Only trigger for categories NOT already rendered by
-	// renderInvestigationAlerts (which handles lockfile-integrity).
+	// renderInvestigationAlerts (which handles unreachable-pin).
 	// Without this gate PresentResults would also emit a stale summary
 	// line counting pre-fix not-pinned findings.
 	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,
-			checks.LockfileIntegrity)
+			checks.UnreachablePin)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {

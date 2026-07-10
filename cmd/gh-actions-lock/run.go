@@ -51,7 +51,7 @@ type checkOptions struct {
 	// removed in the next minor release.
 	allowRunners    []string
 	allowAllRunners bool
-	// acceptMoved re-resolves deps flagged as lockfile-integrity or
+	// acceptMoved re-resolves deps flagged as unreachable-pin or
 	// ref-moved: prunes the stale lockfile entry and re-pins to the
 	// current live SHA.
 	acceptMoved bool
@@ -78,7 +78,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 			"far more likely to resolve to exactly one commit for its entire lifetime.")
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
-	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or lockfile-integrity to their current live SHA")
+	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
 	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Full re-verification of every pin (equivalent to --rescan --no-fix)")
 	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+

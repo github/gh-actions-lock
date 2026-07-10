@@ -26,10 +26,13 @@ const (
 	// MisleadingSHA means a ref looks like a SHA but resolves to a
 	// different commit.
 	MisleadingSHA Category = "misleading-sha"
-	// LockfileIntegrity means the pinned SHA is not an ancestor of the
-	// current ref — the lockfile entry was likely injected or
-	// tampered with.
-	LockfileIntegrity Category = "lockfile-integrity"
+	// UnreachablePin means the pinned SHA is not an ancestor of, and
+	// not reachable from, the ref's current head. The pin points at a
+	// commit that was never in the ref's history or was dropped by an
+	// upstream history rewrite (squash/force-push) — or the lockfile
+	// entry was tampered with. The check can't distinguish those, so it
+	// fails closed without asserting an attack.
+	UnreachablePin Category = "unreachable-pin"
 	// Valid means the dependency is pinned and verified.
 	Valid Category = "valid"
 	// RunOnly means the workflow has no action refs (only run:
@@ -39,7 +42,7 @@ const (
 	// the pinned SHA is in the ref's history (typically rate-limited
 	// or transient error). Non-blocking diagnostic: we know the SHAs
 	// differ but can't classify the move as benign-but-known
-	// (ref-moved) vs. tampered (lockfile-integrity).
+	// (ref-moved) vs. tampered (unreachable-pin).
 	AncestryUnknown Category = "ancestry-unknown"
 	// ReachabilityUnknown means branch_commits couldn't decide
 	// whether the pinned SHA is still reachable from any branch in

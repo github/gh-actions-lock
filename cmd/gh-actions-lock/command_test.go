@@ -261,15 +261,15 @@ jobs:
 // Lockfile Forgery Detection Tests
 //
 // These tests verify that the ancestry check promotes ref-moved to
-// lockfile-integrity when the pinned SHA is not an ancestor of the live SHA.
+// unreachable-pin when the pinned SHA is not an ancestor of the live SHA.
 // This detects cases where someone manually injected a SHA into the lockfile
 // that was never part of the ref's legitimate history.
 // ==========================================================================
 
-// TestCheck_LockfileIntegrity_NotAncestor verifies that when the Compare API
+// TestCheck_UnreachablePin_NotAncestor verifies that when the Compare API
 // shows the pinned SHA is NOT an ancestor of the live SHA, the finding is
-// promoted from ref-moved to lockfile-integrity.
-func TestCheck_LockfileIntegrity_NotAncestor(t *testing.T) {
+// promoted from ref-moved to unreachable-pin.
+func TestCheck_UnreachablePin_NotAncestor(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -325,14 +325,14 @@ jobs:
 	for _, f := range payload.Findings {
 		categories[f.Category] = true
 	}
-	assert.True(t, categories["lockfile-integrity"], "should detect lockfile forgery: %+v", payload.Findings)
+	assert.True(t, categories["unreachable-pin"], "should detect lockfile forgery: %+v", payload.Findings)
 	assert.False(t, categories["ref-moved"], "should NOT have ref-moved (promoted to forgery): %+v", payload.Findings)
 }
 
-// TestCheck_LockfileIntegrity_LegitAncestor verifies that when the Compare API
+// TestCheck_UnreachablePin_LegitAncestor verifies that when the Compare API
 // confirms the pinned SHA IS an ancestor of the live SHA, the finding stays
 // as ref-moved (legitimate tag movement, not forgery).
-func TestCheck_LockfileIntegrity_LegitAncestor(t *testing.T) {
+func TestCheck_UnreachablePin_LegitAncestor(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -388,14 +388,14 @@ jobs:
 		categories[f.Category] = true
 	}
 	assert.True(t, categories["ref-moved"], "should keep as ref-moved for legit ancestor: %+v", payload.Findings)
-	assert.False(t, categories["lockfile-integrity"], "should NOT have lockfile-integrity: %+v", payload.Findings)
+	assert.False(t, categories["unreachable-pin"], "should NOT have unreachable-pin: %+v", payload.Findings)
 }
 
-// TestCheck_LockfileIntegrity_RateLimited verifies that when the ancestry
+// TestCheck_UnreachablePin_RateLimited verifies that when the ancestry
 // check is rate-limited, the finding surfaces as ancestry-unknown — not
 // ref-moved (which would imply a benign-but-known move) and not
-// lockfile-integrity (which requires an authoritative not-ancestor answer).
-func TestCheck_LockfileIntegrity_RateLimited(t *testing.T) {
+// unreachable-pin (which requires an authoritative not-ancestor answer).
+func TestCheck_UnreachablePin_RateLimited(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -446,7 +446,7 @@ jobs:
 		categories[f.Category] = true
 	}
 	assert.True(t, categories["ancestry-unknown"], "should classify as ancestry-unknown when rate limited: %+v", payload.Findings)
-	assert.False(t, categories["lockfile-integrity"], "should NOT have lockfile-integrity when rate limited: %+v", payload.Findings)
+	assert.False(t, categories["unreachable-pin"], "should NOT have unreachable-pin when rate limited: %+v", payload.Findings)
 	assert.False(t, categories["ref-moved"], "should NOT downgrade to ref-moved when rate limited: %+v", payload.Findings)
 	assert.False(t, categories["valid"], "rate-limited ancestry must not regress to CategoryValid: %+v", payload.Findings)
 

@@ -16,7 +16,7 @@ import "github.com/github/gh-actions-lock/internal/pipeline/checks"
 const securityHardeningBase = "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions"
 
 // PublisherTagReleasesDocURL points to GitHub's guidance for action publishers
-// on tagging releases from a branch. It's surfaced alongside lockfile-integrity
+// on tagging releases from a branch. It's surfaced alongside unreachable-pin
 // findings to help users escalate to the action's maintainer when the pinned
 // SHA is orphaned (off any branch) — a publisher behavior the consumer can't
 // fix locally beyond re-pinning to a sane release.
@@ -35,7 +35,7 @@ var docURLs = map[checks.Category]string{
 	checks.Stale:               securityHardeningBase + "#using-third-party-actions",
 	checks.MisleadingSHA:       securityHardeningBase + "#using-third-party-actions",
 	checks.RefMoved:            securityHardeningBase + "#using-third-party-actions",
-	checks.LockfileIntegrity:   securityHardeningBase + "#using-third-party-actions",
+	checks.UnreachablePin:      securityHardeningBase + "#using-third-party-actions",
 	checks.OnboardingRequired:  securityHardeningBase + "#using-third-party-actions",
 	checks.AncestryUnknown:     securityHardeningBase + "#using-third-party-actions",
 	checks.ReachabilityUnknown: securityHardeningBase + "#using-third-party-actions",

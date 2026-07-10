@@ -46,7 +46,7 @@ func TestHasIssues(t *testing.T) {
 		{
 			name: "error severity is always an issue",
 			findings: []checks.Finding{
-				{Category: checks.LockfileIntegrity, Severity: checks.SeverityError},
+				{Category: checks.UnreachablePin, Severity: checks.SeverityError},
 			},
 			want: true,
 		},
