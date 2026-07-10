@@ -47,6 +47,109 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 	renderWarnings(out, report, willRemediate)
 }
 
+// PresentReadOnlyFailures renders error-level findings directly to the
+// terminal for read-only modes (--no-fix / --verify). Those modes return
+// before the fix-mode summary (renderPinSummary) runs, so the error block
+// that renderErrorFindings emits via the narration helpers is discarded
+// when the log sink is io.Discard. This uses the Term* family instead so
+// failures actually reach the operator.
+//
+// It reports whether any failing finding is auto-fixable (i.e. not an
+// investigation-only category) so the caller can decide whether the
+// "re-run to fix" hint is honest.
+func PresentReadOnlyFailures(out *ui.UI, report *checks.Report) (hasFixable bool) {
+	type depGroup struct {
+		findings  []checks.Finding
+		workflows []string
+		seenWF    map[string]bool
+	}
+	var order []string
+	groups := map[string]*depGroup{}
+	var failedCount, checked int
+
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		checked++
+		if wr.IsValid() {
+			continue
+		}
+		failedCount++
+		for _, f := range wr.Findings {
+			if f.IsValid() {
+				continue
+			}
+			key := f.DepKey()
+			if key == "" {
+				key = wr.Path
+			}
+			g, ok := groups[key]
+			if !ok {
+				g = &depGroup{seenWF: map[string]bool{}}
+				groups[key] = g
+				order = append(order, key)
+			}
+			g.findings = append(g.findings, f)
+			if wr.Path != "" && !g.seenWF[wr.Path] {
+				g.seenWF[wr.Path] = true
+				g.workflows = append(g.workflows, wr.Path)
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		return false
+	}
+
+	out.TermBlank()
+	out.TermError("%d of %d %s failed verification",
+		failedCount, checked, ui.Pluralize(checked, "workflow", "workflows"))
+	for _, key := range order {
+		g := groups[key]
+		out.TermBlank()
+		for _, f := range g.findings {
+			if !IsAlertedCategory(f.Category) {
+				hasFixable = true
+			}
+			renderTermFindingDetail(out, f, key)
+		}
+		for _, wf := range g.workflows {
+			out.TermDetail("  ↳ %s", out.TermDim(wf))
+		}
+	}
+	return hasFixable
+}
+
+// renderTermFindingDetail is the Term* twin of renderFindingDetail: it
+// prints a single non-valid finding to the terminal (bypassing the
+// narration log) so read-only modes surface the same detail as fix mode.
+func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
+	label := strings.ToUpper(string(f.Category))
+	icon := "!"
+	if IsAlertedCategory(f.Category) {
+		icon = "✗"
+	}
+	out.TermDetail("%s %s %s", icon, out.TermDim(label), dep)
+	out.TermDetail("  %s", f.Detail)
+	if IsAlertedCategory(f.Category) && f.Remediation != "" {
+		out.TermDetail("  %s %s", ui.IconWarning, f.Remediation)
+	}
+	if f.RecommendedTag != "" {
+		nwo := ""
+		if f.Dependency != nil {
+			nwo = f.Dependency.NWO
+		}
+		sha := f.RecommendedSHA
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		out.TermDetail("  ↳ Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
+			nwo, f.RecommendedTag, sha)
+	}
+	if f.DocURL != "" {
+		out.TermDetail("  see: %s", out.TermDim(out.TermLink("docs", f.DocURL)))
+	}
+}
+
 // renderErrorFindings groups error-level findings by dependency and prints
 // per-dep detail lines followed by a category-count summary.
 func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked int, exclude map[checks.Category]bool) {

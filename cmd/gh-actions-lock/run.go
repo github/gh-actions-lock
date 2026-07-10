@@ -284,7 +284,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		}
 		if !valid {
 			if opts.jsonFields == "" {
-				console.TermDetail("Re-run without --no-fix to apply fixes.")
+				hasFixable := format.PresentReadOnlyFailures(console, report)
+				if hasFixable {
+					console.TermDetail("Re-run without --no-fix to apply fixes.")
+				}
 			}
 			return errSilent
 		}
