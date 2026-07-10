@@ -47,3 +47,40 @@ func TestDiagnoseOneParsed_LocalAction_AlreadyOnboarded(t *testing.T) {
 	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
 	assert.Contains(t, wr.Findings[0].Remediation, "remove")
 }
+
+func TestDiagnoseOneParsed_SelfRepoOnly(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:         ".github/workflows/ci.yml",
+		SelfRepoRefs: []string{"$/actions/foo"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.SelfRepoAction, wr.Findings[0].Category)
+	assert.Equal(t, checks.SeverityInfo, wr.Findings[0].Severity)
+}
+
+func TestDiagnoseOneParsed_SelfRepoReusableWorkflow(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:         ".github/workflows/ci.yml",
+		SelfRepoRefs: []string{"$/.github/workflows/reusable.yml"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.SelfRepoAction, wr.Findings[0].Category)
+	assert.Equal(t, checks.SeverityInfo, wr.Findings[0].Severity)
+}
+
+func TestDiagnoseOneParsed_InvalidSelfRepoRef(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:            ".github/workflows/ci.yml",
+		SelfRepoRefErrs: []string{"$/actions/foo@v1"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.InvalidSelfRepoRef, wr.Findings[0].Category)
+	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
+	assert.Contains(t, wr.Findings[0].Remediation, "@ref")
+}

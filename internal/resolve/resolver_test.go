@@ -296,6 +296,68 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	}
 }
 
+// TestResolveAllRecursiveSelfRepoNestedInComposite verifies that a `$/…`
+// self-reference inside a fetched composite resolves as a same-tarball
+// sibling: it is reconstructed from the enclosing composite's own repo+ref
+// plus the subpath, still traversed for cross-repo transitive deps, and
+// records no new pin (same tarball, same SHA). Mirrors the `./`-free
+// sibling-subpath case but using the `$/` self-repo syntax. Layout:
+//
+//	org/fixtures/nested-composite (main) -- uses: $/simple-composite -->
+//	org/fixtures/simple-composite (main, same tarball) -- uses -->
+//	org/fixtures-b                (main, different repo)
+func TestResolveAllRecursiveSelfRepoNestedInComposite(t *testing.T) {
+	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("org", "fixtures", "nested-composite", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "nested-composite", Ref: "main", SHA: tarballSHA},
+			actionYML: "name: Nested\nruns:\n  using: composite\n  steps:\n    - uses: $/simple-composite\n",
+		},
+		ghapi.ForActionRef("org", "fixtures", "simple-composite", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "simple-composite", Ref: "main", SHA: tarballSHA},
+			actionYML: "name: Simple\nruns:\n  using: composite\n  steps:\n    - uses: org/fixtures-b@main\n",
+		},
+		ghapi.ForActionRef("org", "fixtures-b", "", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures-b", Ref: "main", SHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			actionYML: "name: B\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, parentMapForTest, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "nested-composite", Ref: "main"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+
+	// The `$/` sibling collapses onto the same tarball (org/fixtures@main);
+	// org/fixtures-b is the only cross-repo transitive dep. Two unique deps.
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 unique deps, got %d: %+v", len(deps), deps)
+	}
+	foundB := false
+	for _, d := range deps {
+		if d.Key() == "org/fixtures-b@main" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("expected transitive org/fixtures-b@main discovered via `$/` sibling, got %+v", deps)
+	}
+
+	pm := parentMapForTest
+	for _, p := range pm["org/fixtures@main"] {
+		if p == "org/fixtures@main" {
+			t.Errorf("unexpected same-tarball self-parent edge on org/fixtures@main: %v", pm["org/fixtures@main"])
+		}
+	}
+	if got := pm["org/fixtures-b@main"]; len(got) != 1 || got[0] != "org/fixtures@main" {
+		t.Errorf("expected org/fixtures-b@main parent = [org/fixtures@main], got %v", got)
+	}
+}
+
 // TestResolveAllRecursiveCrossRefTransitive verifies that when a composite at
 // ref "updated" references a sibling subpath at a DIFFERENT ref "main", the
 // BFS discovers the full transitive closure through the second composite.

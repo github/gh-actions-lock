@@ -34,6 +34,11 @@ func IsCompositeLocalPath(err error) bool {
 	return errors.As(err, &target)
 }
 
+// selfRepoPrefix marks a `$/…` self-referencing action inside a composite's
+// nested uses. Kept local to avoid importing the workflowfile package into the
+// resolver; the sibling detection here is a plain prefix check.
+const selfRepoPrefix = "$/"
+
 // LatestRef returns the highest stable tag for an action repository.
 func (r *Resolver) LatestRef(ctx context.Context, owner, repo string) (string, error) {
 	key := ghapi.ForRepo(owner, repo)
@@ -176,6 +181,22 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 					continue
 				}
 				actionRef := parserlock.ParseActionRef(use)
+				if strings.HasPrefix(use, selfRepoPrefix) {
+					// `$/…` inside a composite is a same-tarball self-reference:
+					// it resolves within THIS composite's own repo at its own
+					// ref (the parent repo, not the workflow-run repo). No new
+					// SHA is ever fetched. Reconstruct the sibling subpath ref
+					// so BFS still descends into it for cross-repo transitive
+					// deps; it collapses back onto the parent tarball below
+					// (childKey == parentKey), recording no new pin or edge.
+					owner, repo := deps[i].OwnerRepo()
+					actionRef = &parserlock.ActionRef{
+						Owner: owner,
+						Repo:  repo,
+						Path:  strings.TrimPrefix(use, selfRepoPrefix),
+						Ref:   deps[i].Ref,
+					}
+				}
 				if actionRef == nil {
 					continue
 				}

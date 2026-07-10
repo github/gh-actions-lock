@@ -14,7 +14,8 @@ func TestLoadAndExtractActionRefs(t *testing.T) {
 	f, err := Load("testdata/simple.yml")
 	require.NoError(t, err)
 
-	refs, localPaths, warnings := f.ExtractActionRefs()
+	scan := f.ExtractActionRefs()
+	refs, localPaths, warnings := scan.Refs, scan.LocalPaths, scan.Warnings
 	assert.Len(t, refs, 2)
 	assert.Empty(t, localPaths)
 	assert.Empty(t, warnings)
@@ -29,7 +30,8 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	f, err := Load("testdata/mixed_refs.yml")
 	require.NoError(t, err)
 
-	refs, localPaths, warnings := f.ExtractActionRefs()
+	scan := f.ExtractActionRefs()
+	refs, localPaths, warnings := scan.Refs, scan.LocalPaths, scan.Warnings
 	assert.Len(t, refs, 3)
 	assert.Equal(t, "actions/checkout", refs[0].NWO())
 	assert.Equal(t, "actions/cache", refs[1].NWO())
@@ -41,6 +43,65 @@ func TestExtractActionRefsMixed(t *testing.T) {
 
 	assert.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "unparseable uses:")
+}
+
+func TestExtractActionRefs_SelfRepoClassification(t *testing.T) {
+	content := []byte(`
+name: ci
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: $/actions/foo
+      - uses: $/actions/foo
+      - uses: ./local-action
+  call:
+    uses: $/.github/workflows/reusable.yml
+  bad:
+    uses: $/actions/foo@v1
+`)
+	f, err := Parse("ci.yml", content)
+	require.NoError(t, err)
+
+	scan := f.ExtractActionRefs()
+
+	// Remote ref parsed normally.
+	require.Len(t, scan.Refs, 1)
+	assert.Equal(t, "actions/checkout", scan.Refs[0].NWO())
+
+	// `./` still collected as a local path.
+	assert.Equal(t, []string{"./local-action"}, scan.LocalPaths)
+
+	// Bare `$/…` valid at both step and job level, deduplicated.
+	assert.ElementsMatch(t,
+		[]string{"$/actions/foo", "$/.github/workflows/reusable.yml"},
+		scan.SelfRepoRefs,
+	)
+
+	// `$/…@ref` is the invalid form.
+	assert.Equal(t, []string{"$/actions/foo@v1"}, scan.SelfRepoRefErrs)
+}
+
+func TestExtractActionRefs_SelfRepoOnly(t *testing.T) {
+	content := []byte(`
+name: ci
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: $/actions/foo
+`)
+	f, err := Parse("ci.yml", content)
+	require.NoError(t, err)
+
+	scan := f.ExtractActionRefs()
+	assert.Empty(t, scan.Refs)
+	assert.Empty(t, scan.LocalPaths)
+	assert.Equal(t, []string{"$/actions/foo"}, scan.SelfRepoRefs)
+	assert.Empty(t, scan.SelfRepoRefErrs)
 }
 
 func TestDiscoverWorkflowsIn(t *testing.T) {

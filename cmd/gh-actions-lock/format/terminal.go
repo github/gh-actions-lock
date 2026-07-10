@@ -104,7 +104,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 	for _, cat := range []checks.Category{
 		checks.LockfileForgery,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
-		checks.LocalAction,
+		checks.LocalAction, checks.InvalidSelfRepoRef,
 		checks.Stale, checks.MisleadingSHA,
 	} {
 		if n, ok := catCounts[cat]; ok {

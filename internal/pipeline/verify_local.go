@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -46,6 +47,20 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 			})
 			results = append(results, wr)
 			continue
+		}
+
+		// `$/…@ref` is invalid regardless of lockfile coverage — a self
+		// reference always resolves to the running ref. Surface it in the
+		// offline check too; it needs no network to detect.
+		if len(pw.SelfRepoRefErrs) > 0 {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.InvalidSelfRepoRef,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepoRefErrs, ", ")),
+				Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+			})
 		}
 
 		if len(pw.Refs) == 0 && len(pw.LocalPaths) == 0 {

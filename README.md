@@ -33,6 +33,24 @@ After the initial run to onboard workflows, you will need to run `gh actions-loc
 - A new workflow is created that has `uses` dependencies.
 - An existing workflow adds or removes `uses` dependencies.
 
+### Self-referencing actions (`$/…`)
+
+`uses: $/…` references an action or reusable workflow in the **same repository** as
+the defining file, resolved at the **running commit**. Because it always resolves to
+the workflow's own SHA it is **inherently pinned** — no lockfile entry is required,
+and it is valid anywhere a relative `./…` reference is:
+
+```yaml
+steps:
+  - uses: $/actions/my-action          # same-repo action, inherently pinned
+jobs:
+  call:
+    uses: $/.github/workflows/reusable.yml  # same-repo reusable workflow
+```
+
+A trailing `@ref` (e.g. `$/actions/my-action@v1`) is rejected — the ref is always
+the running commit.
+
 ## How it works
 
 A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/actions.lock)) and workflows are onboarded to the lockfile on a per-workflow basis. 
