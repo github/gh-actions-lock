@@ -460,6 +460,19 @@ scenarios:
       exit: 1
       output_contains: ["local path actions", "composite"]
 
+  - name: composite_local_path_blocked_deep
+    category: workflow_parsing
+    description: "Remote composite whose $/ chain runs several levels deep before a leaf uses ./local-path — blocked transitively, not at the top level"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["nodeselector/actions-test-fixtures/deep-blocked@main"]
+    expect:
+      exit: 1
+      output_contains: ["local path actions", "composite", "deep-blocked-helper"]
+
   - name: sub_path_action
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"

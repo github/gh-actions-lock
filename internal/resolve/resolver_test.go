@@ -654,6 +654,45 @@ func TestResolveAllRecursiveCompositeLocalPathError(t *testing.T) {
 	}
 }
 
+func TestResolveAllRecursiveCompositeLocalPathErrorDeep(t *testing.T) {
+	// A `$/` self-reference chain three levels deep whose leaf uses a `./`
+	// local path. Every hop before the leaf is a valid same-tarball self
+	// reference, so the block must surface transitively rather than at the
+	// entry action. Mirrors the deep-blocked fixture in actions-test-fixtures.
+	const appSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	step := func(uses string) string { return "    - uses: " + uses + "\n" }
+
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("owner", "app", "l0", "main"): {
+			dep:       dep.Dependency{NWO: "owner/app", Path: "l0", Ref: "main", SHA: appSHA},
+			actionYML: "name: L0\nruns:\n  using: composite\n  steps:\n" + step("$/l1"),
+		},
+		ghapi.ForActionRef("owner", "app", "l1", "main"): {
+			dep:       dep.Dependency{NWO: "owner/app", Path: "l1", Ref: "main", SHA: appSHA},
+			actionYML: "name: L1\nruns:\n  using: composite\n  steps:\n" + step("$/l2"),
+		},
+		ghapi.ForActionRef("owner", "app", "l2", "main"): {
+			dep:       dep.Dependency{NWO: "owner/app", Path: "l2", Ref: "main", SHA: appSHA},
+			actionYML: "name: L2\nruns:\n  using: composite\n  steps:\n" + step("./leaf-helper"),
+		},
+	})
+
+	_, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "owner", Repo: "app", Path: "l0", Ref: "main"},
+	})
+	if err == nil {
+		t.Fatal("expected CompositeLocalPathError, got nil")
+	}
+	if !IsCompositeLocalPath(err) {
+		t.Fatalf("expected CompositeLocalPathError, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "./leaf-helper") {
+		t.Errorf("error should mention the transitive local path, got: %v", err)
+	}
+}
+
 func TestNewAndLatestRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
