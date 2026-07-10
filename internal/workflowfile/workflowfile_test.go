@@ -45,7 +45,7 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	assert.Contains(t, warnings[0], "unparseable uses:")
 }
 
-func TestExtractActionRefs_SelfRepoClassification(t *testing.T) {
+func TestExtractActionRefs_SelfRepositoryClassification(t *testing.T) {
 	content := []byte(`
 name: ci
 on: push
@@ -77,14 +77,14 @@ jobs:
 	// Bare `$/…` valid at both step and job level, deduplicated.
 	assert.ElementsMatch(t,
 		[]string{"$/actions/foo", "$/.github/workflows/reusable.yml"},
-		scan.SelfRepoRefs,
+		scan.SelfRepositoryRefs,
 	)
 
 	// `$/…@ref` is the invalid form.
-	assert.Equal(t, []string{"$/actions/foo@v1"}, scan.SelfRepoRefErrs)
+	assert.Equal(t, []string{"$/actions/foo@v1"}, scan.SelfRepositoryRefErrs)
 }
 
-func TestExtractActionRefs_SelfRepoOnly(t *testing.T) {
+func TestExtractActionRefs_SelfRepositoryOnly(t *testing.T) {
 	content := []byte(`
 name: ci
 on: push
@@ -100,11 +100,11 @@ jobs:
 	scan := f.ExtractActionRefs()
 	assert.Empty(t, scan.Refs)
 	assert.Empty(t, scan.LocalPaths)
-	assert.Equal(t, []string{"$/actions/foo"}, scan.SelfRepoRefs)
-	assert.Empty(t, scan.SelfRepoRefErrs)
+	assert.Equal(t, []string{"$/actions/foo"}, scan.SelfRepositoryRefs)
+	assert.Empty(t, scan.SelfRepositoryRefErrs)
 }
 
-func TestMigrateLocalActionsToSelfRepo(t *testing.T) {
+func TestMigrateLocalActionsToSelfRepository(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
@@ -124,7 +124,7 @@ func TestMigrateLocalActionsToSelfRepo(t *testing.T) {
 	f, err := Load(workflowPath)
 	require.NoError(t, err)
 
-	out, changed, err := f.MigrateLocalActionsToSelfRepo()
+	out, changed, err := f.MigrateLocalActionsToSelfRepository()
 	require.NoError(t, err)
 
 	// Only the path with an in-repo action file is rewritten.
@@ -133,12 +133,12 @@ func TestMigrateLocalActionsToSelfRepo(t *testing.T) {
 	assert.Contains(t, string(out), "uses: ./missing-action")
 }
 
-func TestMigrateLocalActionsToSelfRepo_NoLocalPaths(t *testing.T) {
+func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
 	content := []byte("jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n")
 	f, err := Parse("ci.yml", content)
 	require.NoError(t, err)
 
-	out, changed, err := f.MigrateLocalActionsToSelfRepo()
+	out, changed, err := f.MigrateLocalActionsToSelfRepository()
 	require.NoError(t, err)
 	assert.Equal(t, 0, changed)
 	assert.Equal(t, content, out)

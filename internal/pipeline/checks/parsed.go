@@ -11,16 +11,16 @@ import (
 // LoadErr / DepsErr capture early failures so DiagnoseParsed can surface them
 // as findings without re-loading the file.
 type ParsedWorkflow struct {
-	Path         string
-	Refs         []parserlock.ActionRef
-	LocalPaths   []string
-	SelfRepoRefs []string
-	// SelfRepoRefErrs holds malformed `$/…@ref` values (the invalid form).
-	SelfRepoRefErrs []string
-	ExistingDeps    []dep.Dependency
-	ParseWarnings   []string
-	LoadErr         error
-	DepsErr         error
+	Path               string
+	Refs               []parserlock.ActionRef
+	LocalPaths         []string
+	SelfRepositoryRefs []string
+	// SelfRepositoryRefErrs holds malformed `$/…@ref` values (the invalid form).
+	SelfRepositoryRefErrs []string
+	ExistingDeps          []dep.Dependency
+	ParseWarnings         []string
+	LoadErr               error
+	DepsErr               error
 	// Resolved, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
 	// (ref-moved) are skipped and the engine relies on

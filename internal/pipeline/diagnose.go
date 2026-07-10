@@ -53,8 +53,8 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 	wr.Deps = pw.ExistingDeps
 
-	if len(pw.SelfRepoRefs) > 0 {
-		wr.Findings = append(wr.Findings, selfRepoFinding(pw))
+	if len(pw.SelfRepositoryRefs) > 0 {
+		wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
 	}
 
 	directNWOs := make(map[ghapi.Repo]bool, len(pw.Refs))
@@ -137,15 +137,15 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	return wr
 }
 
-// selfRepoFinding builds the informational finding for a workflow that
+// selfRepositoryFinding builds the informational finding for a workflow that
 // references same-repo actions via `$/…`. These are inherently pinned.
-func selfRepoFinding(pw checks.ParsedWorkflow) checks.Finding {
+func selfRepositoryFinding(pw checks.ParsedWorkflow) checks.Finding {
 	return checks.Finding{
 		WorkflowPath: pw.Path,
-		Category:     checks.SelfRepoAction,
+		Category:     checks.SelfRepositoryAction,
 		Severity:     checks.SeverityInfo,
 		Confidence:   checks.ConfidenceHigh,
-		Detail:       fmt.Sprintf("references same-repo actions via `$/…` (inherently pinned): %s", strings.Join(pw.SelfRepoRefs, ", ")),
+		Detail:       fmt.Sprintf("references same-repo actions via `$/…` (inherently pinned): %s", strings.Join(pw.SelfRepositoryRefs, ", ")),
 	}
 }
 
@@ -195,21 +195,21 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 		return wr, true
 	}
 
-	if len(pw.SelfRepoRefErrs) > 0 {
+	if len(pw.SelfRepositoryRefErrs) > 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
-			Category:     checks.InvalidSelfRepoRef,
+			Category:     checks.InvalidSelfRepositoryRef,
 			Severity:     checks.SeverityError,
 			Confidence:   checks.ConfidenceHigh,
-			Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepoRefErrs, ", ")),
+			Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
 			Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
 		})
 		return wr, true
 	}
 
 	if len(pw.Refs) == 0 {
-		if len(pw.SelfRepoRefs) > 0 {
-			wr.Findings = append(wr.Findings, selfRepoFinding(pw))
+		if len(pw.SelfRepositoryRefs) > 0 {
+			wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
 			return wr, true
 		}
 		wr.Findings = append(wr.Findings, checks.Finding{

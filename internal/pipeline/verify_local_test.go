@@ -56,37 +56,37 @@ func TestVerifyLocalCoverage_AllPinned(t *testing.T) {
 	assert.Empty(t, report.Workflows[0].Findings)
 }
 
-func TestVerifyLocalCoverage_SelfRepoOnlyIsValid(t *testing.T) {
+func TestVerifyLocalCoverage_SelfRepositoryOnlyIsValid(t *testing.T) {
 	dir := t.TempDir()
 	store := writeTestLockfile(t, dir, testLockfileContent)
 
 	parsed := []checks.ParsedWorkflow{
 		{
-			Path:         ".github/workflows/self.yml",
-			SelfRepoRefs: []string{"$/actions/foo"},
+			Path:               ".github/workflows/self.yml",
+			SelfRepositoryRefs: []string{"$/actions/foo"},
 		},
 	}
 
 	report := VerifyLocalCoverage(parsed, store)
-	assert.True(t, report.IsValid(), "self-repo refs are inherently pinned")
+	assert.True(t, report.IsValid(), "self-reference refs are inherently pinned")
 	assert.Empty(t, report.Workflows[0].Findings)
 }
 
-func TestVerifyLocalCoverage_InvalidSelfRepoRef(t *testing.T) {
+func TestVerifyLocalCoverage_InvalidSelfRepositoryRef(t *testing.T) {
 	dir := t.TempDir()
 	store := writeTestLockfile(t, dir, testLockfileContent)
 
 	parsed := []checks.ParsedWorkflow{
 		{
-			Path:            ".github/workflows/self.yml",
-			SelfRepoRefErrs: []string{"$/actions/foo@v1"},
+			Path:                  ".github/workflows/self.yml",
+			SelfRepositoryRefErrs: []string{"$/actions/foo@v1"},
 		},
 	}
 
 	report := VerifyLocalCoverage(parsed, store)
 	assert.False(t, report.IsValid(), "`$/…@ref` must fail offline verification")
 	require.Len(t, report.Workflows[0].Findings, 1)
-	assert.Equal(t, checks.InvalidSelfRepoRef, report.Workflows[0].Findings[0].Category)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, report.Workflows[0].Findings[0].Category)
 	assert.Equal(t, checks.SeverityError, report.Workflows[0].Findings[0].Severity)
 }
 

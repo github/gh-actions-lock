@@ -102,14 +102,14 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 	return []byte(strings.Join(lines, "\n")), changed, nil
 }
 
-// MigrateLocalActionsToSelfRepo rewrites same-repo `./…` composite action
+// MigrateLocalActionsToSelfRepository rewrites same-repo `./…` composite action
 // references to the inherently-pinned `$/…` form. Only local paths that
 // resolve to an in-repo action file are rewritten — that in-repo existence is
 // the same-repo equivalence guard that makes `$/` a safe replacement for
 // `./`. Local reusable workflows are never candidates (ExtractActionRefs
 // excludes them). Returns the new content and the number of `uses:` lines
 // changed.
-func (f *File) MigrateLocalActionsToSelfRepo() ([]byte, int, error) {
+func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	scan := f.ExtractActionRefs()
 	if len(scan.LocalPaths) == 0 {
 		return append([]byte(nil), f.Content...), 0, nil
@@ -121,7 +121,7 @@ func (f *File) MigrateLocalActionsToSelfRepo() ([]byte, int, error) {
 		if repoRoot != "" && !localActionExists(repoRoot, localPath) {
 			continue
 		}
-		replacements[localPath] = selfRepoPrefix + strings.TrimPrefix(localPath, "./")
+		replacements[localPath] = selfRepositoryPrefix + strings.TrimPrefix(localPath, "./")
 	}
 	if len(replacements) == 0 {
 		return append([]byte(nil), f.Content...), 0, nil

@@ -296,17 +296,17 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 	}
 }
 
-// TestResolveAllRecursiveSelfRepoNestedInComposite verifies that a `$/…`
+// TestResolveAllRecursiveSelfRepositoryNestedInComposite verifies that a `$/…`
 // self-reference inside a fetched composite resolves as a same-tarball
 // sibling: it is reconstructed from the enclosing composite's own repo+ref
 // plus the subpath, still traversed for cross-repo transitive deps, and
 // records no new pin (same tarball, same SHA). Mirrors the `./`-free
-// sibling-subpath case but using the `$/` self-repo syntax. Layout:
+// sibling-subpath case but using the `$/` self-reference syntax. Layout:
 //
 //	org/fixtures/nested-composite (main) -- uses: $/simple-composite -->
 //	org/fixtures/simple-composite (main, same tarball) -- uses -->
 //	org/fixtures-b                (main, different repo)
-func TestResolveAllRecursiveSelfRepoNestedInComposite(t *testing.T) {
+func TestResolveAllRecursiveSelfRepositoryNestedInComposite(t *testing.T) {
 	const tarballSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
@@ -358,7 +358,7 @@ func TestResolveAllRecursiveSelfRepoNestedInComposite(t *testing.T) {
 	}
 }
 
-// TestResolveAllRecursiveSelfRepoDeepMultiLevel exercises a deliberately gnarly
+// TestResolveAllRecursiveSelfRepositoryDeepMultiLevel exercises a deliberately gnarly
 // graph: four levels of `$/` self-references chained inside one repo, a shared
 // `$/` child reached via two parents (dedup), a `$/` nested inside a *different*
 // repo (proving `$/` resolves relative to whichever tarball it appears in, not
@@ -385,7 +385,7 @@ func TestResolveAllRecursiveSelfRepoNestedInComposite(t *testing.T) {
 //
 // Expected unique tarball deps: org/app@main, vendor/x@main, vendor/y@main,
 // vendor/z@main, thirdparty/deep@main (5).
-func TestResolveAllRecursiveSelfRepoDeepMultiLevel(t *testing.T) {
+func TestResolveAllRecursiveSelfRepositoryDeepMultiLevel(t *testing.T) {
 	const (
 		appSHA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		xSHA    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

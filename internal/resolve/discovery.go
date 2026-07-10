@@ -34,10 +34,10 @@ func IsCompositeLocalPath(err error) bool {
 	return errors.As(err, &target)
 }
 
-// selfRepoPrefix marks a `$/…` self-referencing action inside a composite's
+// selfRepositoryPrefix marks a `$/…` self-referencing action inside a composite's
 // nested uses. Kept local to avoid importing the workflowfile package into the
 // resolver; the sibling detection here is a plain prefix check.
-const selfRepoPrefix = "$/"
+const selfRepositoryPrefix = "$/"
 
 // LatestRef returns the highest stable tag for an action repository.
 func (r *Resolver) LatestRef(ctx context.Context, owner, repo string) (string, error) {
@@ -181,7 +181,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 					continue
 				}
 				actionRef := parserlock.ParseActionRef(use)
-				if strings.HasPrefix(use, selfRepoPrefix) {
+				if strings.HasPrefix(use, selfRepositoryPrefix) {
 					// `$/…` inside a composite is a same-tarball self-reference:
 					// it resolves within THIS composite's own repo at its own
 					// ref (the parent repo, not the workflow-run repo). No new
@@ -193,7 +193,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 					actionRef = &parserlock.ActionRef{
 						Owner: owner,
 						Repo:  repo,
-						Path:  strings.TrimPrefix(use, selfRepoPrefix),
+						Path:  strings.TrimPrefix(use, selfRepositoryPrefix),
 						Ref:   deps[i].Ref,
 					}
 				}

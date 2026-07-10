@@ -52,13 +52,13 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 		// `$/…@ref` is invalid regardless of lockfile coverage — a self
 		// reference always resolves to the running ref. Surface it in the
 		// offline check too; it needs no network to detect.
-		if len(pw.SelfRepoRefErrs) > 0 {
+		if len(pw.SelfRepositoryRefErrs) > 0 {
 			wr.Findings = append(wr.Findings, checks.Finding{
 				WorkflowPath: pw.Path,
-				Category:     checks.InvalidSelfRepoRef,
+				Category:     checks.InvalidSelfRepositoryRef,
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepoRefErrs, ", ")),
+				Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
 				Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
 			})
 		}

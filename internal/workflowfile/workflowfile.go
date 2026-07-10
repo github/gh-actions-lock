@@ -55,11 +55,11 @@ type RefScan struct {
 	// LocalPaths are `./…` local composite action references (reusable
 	// workflows are excluded — they resolve differently).
 	LocalPaths []string
-	// SelfRepoRefs are valid `$/…` self-referencing actions. Inherently
+	// SelfRepositoryRefs are valid `$/…` self-referencing actions. Inherently
 	// pinned: they resolve against the defining repo at the running ref.
-	SelfRepoRefs []string
-	// SelfRepoRefErrs are malformed `$/…@ref` values — the invalid form.
-	SelfRepoRefErrs []string
+	SelfRepositoryRefs []string
+	// SelfRepositoryRefErrs are malformed `$/…@ref` values — the invalid form.
+	SelfRepositoryRefErrs []string
 	// Warnings are non-fatal parse notes (e.g. expression-based uses:).
 	Warnings []string
 }
@@ -80,19 +80,19 @@ func (f *File) ExtractActionRefs() RefScan {
 			scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
 			return
 		}
-		if IsSelfRepoAction(value) {
+		if IsSelfRepositoryAction(value) {
 			if seenSelf[value] {
 				return
 			}
 			seenSelf[value] = true
-			// Bare `$/…` is a legal self-repo reference at both step level
+			// Bare `$/…` is a legal self-reference at both step level
 			// (action dir) and job level (reusable-workflow file): "this repo
 			// at the running SHA", inherently pinned. Only the `@ref` form is
 			// invalid — a self-reference has no external ref to pin.
-			if SelfRepoRefHasVersion(value) {
-				scan.SelfRepoRefErrs = append(scan.SelfRepoRefErrs, value)
+			if SelfRepositoryRefHasVersion(value) {
+				scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, value)
 			} else {
-				scan.SelfRepoRefs = append(scan.SelfRepoRefs, value)
+				scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, value)
 			}
 			return
 		}
@@ -159,7 +159,7 @@ func FindRepoRoot(startPath string) string {
 // DiscoverCompositeActionFiles walks the repository rooted at root and returns
 // the paths of all action definition files (action.yml / action.yaml). The
 // .git directory is skipped. Non-composite action files are included; callers
-// migrate them with MigrateLocalActionsToSelfRepo, which no-ops when a file has
+// migrate them with MigrateLocalActionsToSelfRepository, which no-ops when a file has
 // no local `./…` steps.
 func DiscoverCompositeActionFiles(root string) ([]string, error) {
 	if root == "" {

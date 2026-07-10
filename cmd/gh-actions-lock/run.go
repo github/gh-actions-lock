@@ -503,7 +503,7 @@ func migrateLocalActions(paths []string) (int, error) {
 		if err != nil {
 			return total, fmt.Errorf("loading %s: %w", path, err)
 		}
-		content, changed, err := wf.MigrateLocalActionsToSelfRepo()
+		content, changed, err := wf.MigrateLocalActionsToSelfRepository()
 		if err != nil {
 			return total, fmt.Errorf("migrating %s: %w", path, err)
 		}

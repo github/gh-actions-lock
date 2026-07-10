@@ -48,39 +48,39 @@ func TestDiagnoseOneParsed_LocalAction_AlreadyOnboarded(t *testing.T) {
 	assert.Contains(t, wr.Findings[0].Remediation, "remove")
 }
 
-func TestDiagnoseOneParsed_SelfRepoOnly(t *testing.T) {
+func TestDiagnoseOneParsed_SelfRepositoryOnly(t *testing.T) {
 	pw := checks.ParsedWorkflow{
-		Path:         ".github/workflows/ci.yml",
-		SelfRepoRefs: []string{"$/actions/foo"},
+		Path:               ".github/workflows/ci.yml",
+		SelfRepositoryRefs: []string{"$/actions/foo"},
 	}
 	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
 
 	require.Len(t, wr.Findings, 1)
-	assert.Equal(t, checks.SelfRepoAction, wr.Findings[0].Category)
+	assert.Equal(t, checks.SelfRepositoryAction, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityInfo, wr.Findings[0].Severity)
 }
 
-func TestDiagnoseOneParsed_SelfRepoReusableWorkflow(t *testing.T) {
+func TestDiagnoseOneParsed_SelfRepositoryReusableWorkflow(t *testing.T) {
 	pw := checks.ParsedWorkflow{
-		Path:         ".github/workflows/ci.yml",
-		SelfRepoRefs: []string{"$/.github/workflows/reusable.yml"},
+		Path:               ".github/workflows/ci.yml",
+		SelfRepositoryRefs: []string{"$/.github/workflows/reusable.yml"},
 	}
 	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
 
 	require.Len(t, wr.Findings, 1)
-	assert.Equal(t, checks.SelfRepoAction, wr.Findings[0].Category)
+	assert.Equal(t, checks.SelfRepositoryAction, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityInfo, wr.Findings[0].Severity)
 }
 
-func TestDiagnoseOneParsed_InvalidSelfRepoRef(t *testing.T) {
+func TestDiagnoseOneParsed_InvalidSelfRepositoryRef(t *testing.T) {
 	pw := checks.ParsedWorkflow{
-		Path:            ".github/workflows/ci.yml",
-		SelfRepoRefErrs: []string{"$/actions/foo@v1"},
+		Path:                  ".github/workflows/ci.yml",
+		SelfRepositoryRefErrs: []string{"$/actions/foo@v1"},
 	}
 	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
 
 	require.Len(t, wr.Findings, 1)
-	assert.Equal(t, checks.InvalidSelfRepoRef, wr.Findings[0].Category)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
 	assert.Contains(t, wr.Findings[0].Remediation, "@ref")
 }

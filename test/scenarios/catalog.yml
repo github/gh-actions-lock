@@ -832,7 +832,7 @@ scenarios:
       output_contains:
         - "transitive"
 
-  - name: self_repo_deep_transitive
+  - name: self_reference_deep_transitive
     category: multi_workflow
     description: "Remote composite whose internals chain `$/` self-references three levels deep — the tool fetches the tarball, walks the `$/` chain, and pins the cross-repo transitive closure (actions-test-fixtures-b) reached through it"
     needs_token: true
@@ -1134,7 +1134,7 @@ scenarios:
       exit: 0
       output_contains: [".github/workflows/deploy.yml"]
 
-  - name: self_repo_action_valid
+  - name: self_reference_action_valid
     category: workflow_parsing
     description: "Bare $/ self-reference at step level is inherently pinned — offline verify passes with no lockfile entry required"
     needs_token: false
@@ -1155,7 +1155,7 @@ scenarios:
       exit: 0
       output_contains: ["complete lockfile coverage"]
 
-  - name: self_repo_reusable_workflow_valid
+  - name: self_reference_reusable_workflow_valid
     category: workflow_parsing
     description: "$/ self-reference at reusable-workflow call level (jobs.<id>.uses) is inherently pinned — offline verify passes"
     needs_token: false
@@ -1174,7 +1174,7 @@ scenarios:
       exit: 0
       output_contains: ["complete lockfile coverage"]
 
-  - name: self_repo_ref_rejected
+  - name: self_reference_ref_rejected
     category: workflow_parsing
     description: "$/…@ref is rejected — a self-reference always resolves to the running commit, so an explicit @ref is invalid"
     needs_token: false
@@ -1193,7 +1193,7 @@ scenarios:
                   - uses: $/actions/foo@v1
     expect:
       exit: 1
-      output_contains: ["must not carry an @ref", "invalid-self-repo-ref"]
+      output_contains: ["must not carry an @ref", "invalid-self-reference"]
 
   - name: fresh_no_narrow_keeps_major
     category: narrowing

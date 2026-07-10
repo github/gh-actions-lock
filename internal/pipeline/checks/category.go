@@ -65,15 +65,15 @@ const (
 	// workflows that reference local actions — the entire workflow is
 	// skipped.
 	LocalAction Category = "local-action"
-	// SelfRepoAction means the workflow references a same-repo action via
+	// SelfRepositoryAction means the workflow references a same-repo action via
 	// the self-referencing `$/…` syntax. These resolve against the defining
 	// repo at the running ref, so they are inherently pinned and need no
 	// lockfile entry — always in compliance.
-	SelfRepoAction Category = "self-repo-action"
-	// InvalidSelfRepoRef means a `$/…` reference carries an `@ref` suffix
+	SelfRepositoryAction Category = "self-reference-action"
+	// InvalidSelfRepositoryRef means a `$/…` reference carries an `@ref` suffix
 	// (e.g. $/actions/foo@v1). Self-repo refs always resolve to the running
 	// ref, so the suffix is invalid and must be removed.
-	InvalidSelfRepoRef Category = "invalid-self-repo-ref"
+	InvalidSelfRepositoryRef Category = "invalid-self-reference"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

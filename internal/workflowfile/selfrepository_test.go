@@ -6,15 +6,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIsSelfRepoAction(t *testing.T) {
+func TestIsSelfRepositoryAction(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string
 		want  bool
 	}{
-		{"bare self-repo action", "$/actions/foo", true},
-		{"self-repo reusable workflow", "$/.github/workflows/x.yml", true},
-		{"self-repo with ref", "$/actions/foo@v1", true},
+		{"bare self-reference action", "$/actions/foo", true},
+		{"self-reference reusable workflow", "$/.github/workflows/x.yml", true},
+		{"self-reference with ref", "$/actions/foo@v1", true},
 		{"leading whitespace", "  $/actions/foo", true},
 		{"local action", "./actions/foo", false},
 		{"remote action", "actions/checkout@v4", false},
@@ -23,12 +23,12 @@ func TestIsSelfRepoAction(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, IsSelfRepoAction(tt.value))
+			assert.Equal(t, tt.want, IsSelfRepositoryAction(tt.value))
 		})
 	}
 }
 
-func TestSelfRepoRefHasVersion(t *testing.T) {
+func TestSelfRepositoryRefHasVersion(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string
@@ -38,12 +38,12 @@ func TestSelfRepoRefHasVersion(t *testing.T) {
 		{"reusable workflow no ref", "$/.github/workflows/x.yml", false},
 		{"action with ref", "$/actions/foo@v1", true},
 		{"reusable workflow with ref", "$/.github/workflows/x.yml@v1", true},
-		{"local action with at (not self-repo)", "./actions/foo@v1", false},
-		{"remote action with ref (not self-repo)", "actions/checkout@v4", false},
+		{"local action with at (not self-reference)", "./actions/foo@v1", false},
+		{"remote action with ref (not self-reference)", "actions/checkout@v4", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, SelfRepoRefHasVersion(tt.value))
+			assert.Equal(t, tt.want, SelfRepositoryRefHasVersion(tt.value))
 		})
 	}
 }

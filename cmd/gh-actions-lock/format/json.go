@@ -24,7 +24,7 @@ func skipFindingInJSON(f checks.Finding) bool {
 	if f.Category == checks.LocalAction && f.Severity != checks.SeverityError {
 		return true
 	}
-	if f.Category == checks.SelfRepoAction {
+	if f.Category == checks.SelfRepositoryAction {
 		return true
 	}
 	return false
