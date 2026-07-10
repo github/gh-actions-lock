@@ -123,7 +123,7 @@ func PresentReadOnlyFailures(out *ui.UI, report *checks.Report) (hasFixable bool
 // prints a single non-valid finding to the terminal (bypassing the
 // narration log) so read-only modes surface the same detail as fix mode.
 func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
-	label := strings.ToUpper(string(f.Category))
+	label := categoryLabel(f.Category)
 	icon := "!"
 	if IsAlertedCategory(f.Category) {
 		icon = "✗"
@@ -142,12 +142,32 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 		if len(sha) > 7 {
 			sha = sha[:7]
 		}
-		out.TermDetail("  ↳ Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
+		out.TermDetail("  ↳ Suggested pin: %s@%s (%s) — newest release currently on that branch",
 			nwo, f.RecommendedTag, sha)
 	}
 	if f.DocURL != "" {
-		out.TermDetail("  see: %s", out.TermDim(out.TermLink("docs", f.DocURL)))
+		out.TermDetail("  see: %s", out.TermDim(out.TermLink("how to fix this", f.DocURL)))
 	}
+}
+
+// categoryLabel returns a human-readable label for a finding category,
+// e.g. "lockfile-forgery" -> "Lockfile forgery". Falls back to a
+// hyphen-to-space title for unmapped categories so new slugs still read
+// cleanly.
+func categoryLabel(c checks.Category) string {
+	switch c {
+	case checks.NotPinned:
+		return "Not pinned"
+	case checks.RefChanged:
+		return "Ref changed"
+	case checks.MisleadingSHA:
+		return "Misleading SHA"
+	case checks.LockfileForgery:
+		return "Lockfile forgery"
+	case checks.Stale:
+		return "Unused lockfile entry"
+	}
+	return strings.ReplaceAll(string(c), "-", " ")
 }
 
 // renderErrorFindings groups error-level findings by dependency and prints

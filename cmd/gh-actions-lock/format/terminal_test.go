@@ -475,7 +475,7 @@ func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
 
 	for _, want := range []string{
 		"1 of 1 workflow failed",
-		"LOCKFILE-FORGERY",
+		"Lockfile forgery",
 		"octo/action@main",
 		"pinned aaaa is not an ancestor of bbbb",
 		"investigate immediately",
