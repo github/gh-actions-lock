@@ -769,6 +769,22 @@ scenarios:
       output_contains:
         - "transitive"
 
+  - name: self_repo_deep_transitive
+    category: multi_workflow
+    description: "Remote composite whose internals chain `$/` self-references three levels deep — the tool fetches the tarball, walks the `$/` chain, and pins the cross-repo transitive closure (actions-test-fixtures-b) reached through it"
+    needs_token: true
+    tags: [real_repo]
+    live_repo: nodeselector/actions-test-fixtures
+    fixtures:
+      delete_lockfile: true
+    expect:
+      exit: 1
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "'.github/workflows/deep-self-ref.yml':"
+        - "nodeselector/actions-test-fixtures-b@main"
+
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════════ security ════════════════════════════════║
   # ╚═════════════════════════════════════════════════════════════════════════╝

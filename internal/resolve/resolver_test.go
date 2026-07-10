@@ -358,6 +358,167 @@ func TestResolveAllRecursiveSelfRepoNestedInComposite(t *testing.T) {
 	}
 }
 
+// TestResolveAllRecursiveSelfRepoDeepMultiLevel exercises a deliberately gnarly
+// graph: four levels of `$/` self-references chained inside one repo, a shared
+// `$/` child reached via two parents (dedup), a `$/` nested inside a *different*
+// repo (proving `$/` resolves relative to whichever tarball it appears in, not
+// the entry repo), and a diamond where a deep leaf re-references an
+// already-seen cross-repo tarball. The full transitive closure must be
+// discovered, every `$/` sibling must collapse onto its enclosing tarball
+// (no extra deps, no self-parent edges), and cross-repo parents must be
+// tracked exactly.
+//
+// Graph (running SHA in parens; all `$/` within a repo share that tarball):
+//
+//	org/app@main (A)
+//	  l0        -> $/l1a, $/l1b
+//	  l1a       -> $/l2, vendor/x@main
+//	  l1b       -> $/l2                     (shared child: dedup)
+//	  l2        -> $/l3, vendor/y@main
+//	  l3        -> vendor/z@main            (4th `$/` level, then cross-repo)
+//	vendor/x@main (X)
+//	  (root)    -> $/xnested                (self within vendor/x)
+//	  xnested   -> thirdparty/deep@main     (same tarball as vendor/x)
+//	vendor/y@main (Y)  node20 leaf
+//	vendor/z@main (Z)  -> vendor/x@main     (diamond back to already-seen X)
+//	thirdparty/deep@main (T)  node20 leaf
+//
+// Expected unique tarball deps: org/app@main, vendor/x@main, vendor/y@main,
+// vendor/z@main, thirdparty/deep@main (5).
+func TestResolveAllRecursiveSelfRepoDeepMultiLevel(t *testing.T) {
+	const (
+		appSHA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		xSHA    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		ySHA    = "cccccccccccccccccccccccccccccccccccccccc"
+		zSHA    = "dddddddddddddddddddddddddddddddddddddddd"
+		deepSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	)
+	step := func(uses string) string { return "    - uses: " + uses + "\n" }
+
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		// org/app self-reference chain (all one tarball, appSHA).
+		ghapi.ForActionRef("org", "app", "l0", "main"): {
+			dep:       dep.Dependency{NWO: "org/app", Path: "l0", Ref: "main", SHA: appSHA},
+			actionYML: "name: L0\nruns:\n  using: composite\n  steps:\n" + step("$/l1a") + step("$/l1b"),
+		},
+		ghapi.ForActionRef("org", "app", "l1a", "main"): {
+			dep:       dep.Dependency{NWO: "org/app", Path: "l1a", Ref: "main", SHA: appSHA},
+			actionYML: "name: L1a\nruns:\n  using: composite\n  steps:\n" + step("$/l2") + step("vendor/x@main"),
+		},
+		ghapi.ForActionRef("org", "app", "l1b", "main"): {
+			dep:       dep.Dependency{NWO: "org/app", Path: "l1b", Ref: "main", SHA: appSHA},
+			actionYML: "name: L1b\nruns:\n  using: composite\n  steps:\n" + step("$/l2"),
+		},
+		ghapi.ForActionRef("org", "app", "l2", "main"): {
+			dep:       dep.Dependency{NWO: "org/app", Path: "l2", Ref: "main", SHA: appSHA},
+			actionYML: "name: L2\nruns:\n  using: composite\n  steps:\n" + step("$/l3") + step("vendor/y@main"),
+		},
+		ghapi.ForActionRef("org", "app", "l3", "main"): {
+			dep:       dep.Dependency{NWO: "org/app", Path: "l3", Ref: "main", SHA: appSHA},
+			actionYML: "name: L3\nruns:\n  using: composite\n  steps:\n" + step("vendor/z@main"),
+		},
+
+		// vendor/x with its own `$/` self-reference (tarball xSHA).
+		ghapi.ForActionRef("vendor", "x", "", "main"): {
+			dep:       dep.Dependency{NWO: "vendor/x", Ref: "main", SHA: xSHA},
+			actionYML: "name: X\nruns:\n  using: composite\n  steps:\n" + step("$/xnested"),
+		},
+		ghapi.ForActionRef("vendor", "x", "xnested", "main"): {
+			dep:       dep.Dependency{NWO: "vendor/x", Path: "xnested", Ref: "main", SHA: xSHA},
+			actionYML: "name: Xnested\nruns:\n  using: composite\n  steps:\n" + step("thirdparty/deep@main"),
+		},
+
+		ghapi.ForActionRef("vendor", "y", "", "main"): {
+			dep:       dep.Dependency{NWO: "vendor/y", Ref: "main", SHA: ySHA},
+			actionYML: "name: Y\nruns:\n  using: node20\n",
+		},
+		ghapi.ForActionRef("vendor", "z", "", "main"): {
+			dep:       dep.Dependency{NWO: "vendor/z", Ref: "main", SHA: zSHA},
+			actionYML: "name: Z\nruns:\n  using: composite\n  steps:\n" + step("vendor/x@main"),
+		},
+		ghapi.ForActionRef("thirdparty", "deep", "", "main"): {
+			dep:       dep.Dependency{NWO: "thirdparty/deep", Ref: "main", SHA: deepSHA},
+			actionYML: "name: Deep\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, parentMap, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "app", Path: "l0", Ref: "main"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveAllRecursive returned error: %v", err)
+	}
+
+	keys := map[string]bool{}
+	for _, d := range deps {
+		if keys[d.Key()] {
+			t.Errorf("duplicate dep key in result: %s", d.Key())
+		}
+		keys[d.Key()] = true
+	}
+	want := []string{
+		"org/app@main",
+		"vendor/x@main",
+		"vendor/y@main",
+		"vendor/z@main",
+		"thirdparty/deep@main",
+	}
+	for _, k := range want {
+		if !keys[k] {
+			t.Errorf("expected dep %q in closure, got keys %v", k, keysOf(keys))
+		}
+	}
+	if len(deps) != len(want) {
+		t.Fatalf("expected %d unique tarball deps, got %d: %v", len(want), len(deps), keysOf(keys))
+	}
+
+	// `$/` siblings must never manufacture a self-parent edge on their tarball.
+	for _, tarball := range []string{"org/app@main", "vendor/x@main"} {
+		for _, p := range parentMap[tarball] {
+			if p == tarball {
+				t.Errorf("unexpected self-parent edge on %s: %v", tarball, parentMap[tarball])
+			}
+		}
+	}
+
+	// vendor/x is reached from org/app (via l1a) AND vendor/z (diamond): two parents.
+	assertParents(t, parentMap, "vendor/x@main", []string{"org/app@main", "vendor/z@main"})
+	// vendor/y and vendor/z hang off the org/app tarball.
+	assertParents(t, parentMap, "vendor/y@main", []string{"org/app@main"})
+	assertParents(t, parentMap, "vendor/z@main", []string{"org/app@main"})
+	// thirdparty/deep is reached through vendor/x's own `$/xnested`, so its
+	// parent is the vendor/x tarball — proof that `$/` bound to the enclosing
+	// repo, not the entry repo (org/app).
+	assertParents(t, parentMap, "thirdparty/deep@main", []string{"vendor/x@main"})
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func assertParents(t *testing.T, pm dep.ParentMap, child string, want []string) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, p := range pm[child] {
+		got[p] = true
+	}
+	if len(got) != len(want) {
+		t.Errorf("%s: expected parents %v, got %v", child, want, pm[child])
+		return
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("%s: expected parent %q among %v", child, w, pm[child])
+		}
+	}
+}
+
 // TestResolveAllRecursiveCrossRefTransitive verifies that when a composite at
 // ref "updated" references a sibling subpath at a DIFFERENT ref "main", the
 // BFS discovers the full transitive closure through the second composite.
