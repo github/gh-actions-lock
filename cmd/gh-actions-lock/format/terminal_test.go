@@ -544,3 +544,56 @@ func TestPresentReadOnlyFailures_ValidReportSilent(t *testing.T) {
 		t.Errorf("valid report should produce no output, got:\n%s", got)
 	}
 }
+
+// TestPresentReadOnlyFailures_LocalActionNotFixable guards the inference bug
+// where hasFixable was derived from !IsAlertedCategory: local-action is an
+// error the tool can't auto-remediate, so the "Re-run without --no-fix" hint
+// must not be offered for it.
+func TestPresentReadOnlyFailures_LocalActionNotFixable(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.LocalAction,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "local action ./my-action",
+			}},
+		}},
+	}
+
+	hasFixable := PresentReadOnlyFailures(u, report)
+	if got := buf.String(); !strings.Contains(got, "local action ./my-action") {
+		t.Errorf("expected local-action detail in output:\n%s", got)
+	}
+	if hasFixable {
+		t.Errorf("local-action is not auto-fixable; hasFixable should be false")
+	}
+}
+
+// TestPresentReadOnlyFailures_UnreachablePinShowsReleases verifies the
+// read-only renderer includes the upstream releases link for an
+// unreachable-pin finding, matching the detailed (fix-mode) renderer.
+func TestPresentReadOnlyFailures_UnreachablePinShowsReleases(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.UnreachablePin,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "main", SHA: "aaaa"},
+				Detail:       "pinned aaaa is not an ancestor of bbbb",
+			}},
+		}},
+	}
+
+	PresentReadOnlyFailures(u, report)
+	if got := buf.String(); !strings.Contains(got, "https://github.com/octo/action/releases") {
+		t.Errorf("expected upstream releases link in read-only output:\n%s", got)
+	}
+}

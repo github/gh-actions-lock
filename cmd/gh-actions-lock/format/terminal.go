@@ -107,7 +107,7 @@ func PresentReadOnlyFailures(out *ui.UI, report *checks.Report) (hasFixable bool
 		g := groups[key]
 		out.TermBlank()
 		for _, f := range g.findings {
-			if !IsAlertedCategory(f.Category) {
+			if IsAutoFixable(f.Category) {
 				hasFixable = true
 			}
 			renderTermFindingDetail(out, f, key)
@@ -130,6 +130,12 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	}
 	out.TermDetail("%s %s %s", icon, out.TermDim(label), dep)
 	out.TermDetail("  %s", f.Detail)
+	if f.Category == checks.UnreachablePin && f.Dependency != nil {
+		owner, repo := f.Dependency.OwnerRepo()
+		if owner != "" {
+			out.TermDetail("  ↳ %s", out.TermDim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
+		}
+	}
 	if IsAlertedCategory(f.Category) && f.Remediation != "" {
 		out.TermDetail("  %s %s", ui.IconWarning, f.Remediation)
 	}
@@ -401,6 +407,20 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
 	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired:
+		return true
+	}
+	return false
+}
+
+// IsAutoFixable reports whether a plain `gh actions-lock` run (no --no-fix)
+// re-pins the finding without operator intervention. Only structural drift
+// qualifies: a missing, changed, or orphaned lock entry. Integrity failures
+// (unreachable-pin, misleading-sha) need investigation or --accept-moved, and
+// local-path actions aren't supported at all — so none of those should
+// trigger the "Re-run without --no-fix to apply fixes" hint.
+func IsAutoFixable(c checks.Category) bool {
+	switch c {
+	case checks.NotPinned, checks.RefChanged, checks.Stale:
 		return true
 	}
 	return false
