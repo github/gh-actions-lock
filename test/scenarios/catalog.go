@@ -44,6 +44,11 @@ type Fixtures struct {
 	Workflows        map[string]WorkflowFixture `yaml:"workflows"`
 	Lockfile         string                     `yaml:"lockfile"`
 	LockfileTemplate string                     `yaml:"lockfile_template"`
+	// Files lays down arbitrary repo-relative files before the run, e.g.
+	// in-repo composite action.yml definitions that `--migrate-local-actions`
+	// should also rewrite. Paths are relative to the repo root, not the
+	// workflows dir.
+	Files map[string]string `yaml:"files"`
 }
 
 // WorkflowFixture is either a structured action list or raw YAML.
@@ -65,16 +70,25 @@ type JQCheck struct {
 
 // Expect declares assertions on the scenario outcome.
 type Expect struct {
-	Exit           *int                   `yaml:"exit"`
-	ExitAny        []int                  `yaml:"exit_any"`
-	OutputContains []string               `yaml:"output_contains"`
-	OutputExcludes []string               `yaml:"output_excludes"`
-	StdoutContains []string               `yaml:"stdout_contains"`
-	StdoutIsJSON   bool                   `yaml:"stdout_is_json"`
-	LockfileExists bool                   `yaml:"lockfile_exists"`
-	Custom         string                 `yaml:"custom"`
-	JQ             []JQCheck              `yaml:"jq,omitempty"`
-	GoldenJSON     map[string]interface{} `yaml:"golden_json,omitempty"`
+	Exit           *int     `yaml:"exit"`
+	ExitAny        []int    `yaml:"exit_any"`
+	OutputContains []string `yaml:"output_contains"`
+	OutputExcludes []string `yaml:"output_excludes"`
+	StdoutContains []string `yaml:"stdout_contains"`
+	StdoutIsJSON   bool     `yaml:"stdout_is_json"`
+	LockfileExists bool     `yaml:"lockfile_exists"`
+	// LockfileExcludes asserts the generated lockfile does NOT contain each
+	// substring — e.g. `$/` self refs, which are inherently pinned and must
+	// never be recorded.
+	LockfileExcludes []string `yaml:"lockfile_excludes,omitempty"`
+	// FilesContain / FilesExclude assert substrings in repo-relative files
+	// after the run, used to verify `./`→`$/` rewrites in workflows and
+	// in-repo composite action.yml files.
+	FilesContain map[string][]string    `yaml:"files_contain,omitempty"`
+	FilesExclude map[string][]string    `yaml:"files_exclude,omitempty"`
+	Custom       string                 `yaml:"custom"`
+	JQ           []JQCheck              `yaml:"jq,omitempty"`
+	GoldenJSON   map[string]interface{} `yaml:"golden_json,omitempty"`
 }
 
 // HasTag reports whether the scenario has the given tag.

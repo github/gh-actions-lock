@@ -153,6 +153,7 @@ module ActionsPin
         @name = name
         @workflows = {}
         @lockfile = nil
+        @files = {}
         @stub_server = nil
         @env = {}
         @args = []
@@ -174,6 +175,14 @@ module ActionsPin
 
       def lockfile(content)
         @lockfile = content
+        self
+      end
+
+      # files lays down arbitrary repo-relative files (e.g. in-repo composite
+      # action.yml definitions) before the run. Paths are relative to the repo
+      # root, not the workflows dir.
+      def files(hash)
+        @files.merge!(hash)
         self
       end
 
@@ -267,6 +276,44 @@ module ActionsPin
             content = File.read(lockpath) rescue ""
             assert_match("lockfile contains #{pat.inspect}", content, pat)
           }
+        end
+        self
+      end
+
+      def assert_lockfile_excludes(*patterns)
+        patterns.each do |pat|
+          @assertions << -> (r) {
+            lockpath = File.join(r.dir, ".github", "workflows", "actions.lock")
+            content = File.read(lockpath) rescue ""
+            assert_no_match("lockfile excludes #{pat.inspect}", content, pat)
+          }
+        end
+        self
+      end
+
+      # assert_files_contain checks repo-relative files for substrings after
+      # the run. Used to verify ./ -> $/ rewrites in workflows and in-repo
+      # composite action.yml files.
+      def assert_files_contain(map)
+        map.each do |rel, patterns|
+          Array(patterns).each do |pat|
+            @assertions << -> (r) {
+              content = File.read(File.join(r.dir, rel)) rescue ""
+              assert_match("#{rel} contains #{pat.inspect}", content, pat)
+            }
+          end
+        end
+        self
+      end
+
+      def assert_files_exclude(map)
+        map.each do |rel, patterns|
+          Array(patterns).each do |pat|
+            @assertions << -> (r) {
+              content = File.read(File.join(r.dir, rel)) rescue ""
+              assert_no_match("#{rel} excludes #{pat.inspect}", content, pat)
+            }
+          end
         end
         self
       end
@@ -388,6 +435,12 @@ module ActionsPin
           lock_path = File.join(dir, ".github", "workflows", "actions.lock")
           FileUtils.mkdir_p(File.dirname(lock_path))
           File.write(lock_path, @lockfile)
+        end
+
+        @files.each do |rel, content|
+          full = File.join(dir, rel)
+          FileUtils.mkdir_p(File.dirname(full))
+          File.write(full, content)
         end
 
         Dir.chdir(dir) do

@@ -180,6 +180,18 @@ def hydrate_assertions(s, expect, needs_token: false)
     s.assert_lockfile_contains(*expect["lockfile_contains"])
   end
 
+  if expect["lockfile_excludes"]
+    s.assert_lockfile_excludes(*expect["lockfile_excludes"])
+  end
+
+  if expect["files_contain"]
+    s.assert_files_contain(expect["files_contain"])
+  end
+
+  if expect["files_exclude"]
+    s.assert_files_exclude(expect["files_exclude"])
+  end
+
   if expect["lockfile_deps_cover_direct"]
     s.assert_lockfile_deps_cover_direct
     # Also verify lockfile workflow refs match the actual YAML files.
@@ -750,6 +762,11 @@ catalog["scenarios"].each do |spec|
     elsif fixtures["lockfile_template"]
       tmpl = LOCKFILE_TEMPLATES[fixtures["lockfile_template"]]
       s.lockfile(tmpl.call) if tmpl
+    end
+
+    # Hydrate arbitrary repo-relative files (e.g. in-repo composite action.yml)
+    if fixtures["files"]
+      s.files(fixtures["files"])
     end
 
     # CLI flags

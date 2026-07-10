@@ -473,6 +473,56 @@ scenarios:
       exit: 1
       output_contains: ["local path actions", "composite", "deep-blocked-helper"]
 
+  - name: migrate_local_actions_rewrite
+    category: workflow_parsing
+    description: "--migrate-local-actions rewrites ./ to $/ in the workflow and in in-repo composite action.yml files (nested), while the lockfile pins the real remote dep and records nothing for the $/ self refs"
+    needs_token: true
+    flags: ["--migrate-local-actions"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./my-action
+                  - uses: actions/checkout@v4
+      files:
+        my-action/action.yml: |
+          name: My Action
+          runs:
+            using: composite
+            steps:
+              - uses: ./helper
+              - uses: ./nonexistent
+        helper/action.yml: |
+          name: Helper
+          runs:
+            using: composite
+            steps:
+              - uses: ./nested/deep
+        nested/deep/action.yml: |
+          name: Deep
+          runs:
+            using: composite
+            steps:
+              - run: echo deep
+                shell: bash
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_excludes: ["$/"]
+      files_contain:
+        ".github/workflows/ci.yml": ["uses: $/my-action", "uses: actions/checkout@v4"]
+        "my-action/action.yml": ["uses: $/helper", "uses: ./nonexistent"]
+        "helper/action.yml": ["uses: $/nested/deep"]
+      files_exclude:
+        ".github/workflows/ci.yml": ["uses: ./my-action"]
+
   - name: sub_path_action
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"
