@@ -1055,6 +1055,67 @@ scenarios:
       exit: 0
       output_contains: [".github/workflows/deploy.yml"]
 
+  - name: self_repo_action_valid
+    category: workflow_parsing
+    description: "Bare $/ self-reference at step level is inherently pinned — offline verify passes with no lockfile entry required"
+    needs_token: false
+    needs_stub: false
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/.github/actions/my-action
+    expect:
+      exit: 0
+      output_contains: ["complete lockfile coverage"]
+
+  - name: self_repo_reusable_workflow_valid
+    category: workflow_parsing
+    description: "$/ self-reference at reusable-workflow call level (jobs.<id>.uses) is inherently pinned — offline verify passes"
+    needs_token: false
+    needs_stub: false
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              call:
+                uses: $/.github/workflows/reusable.yml
+    expect:
+      exit: 0
+      output_contains: ["complete lockfile coverage"]
+
+  - name: self_repo_ref_rejected
+    category: workflow_parsing
+    description: "$/…@ref is rejected — a self-reference always resolves to the running commit, so an explicit @ref is invalid"
+    needs_token: false
+    needs_stub: false
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/actions/foo@v1
+    expect:
+      exit: 1
+      output_contains: ["must not carry an @ref", "invalid-self-repo-ref"]
+
   - name: fresh_no_narrow_keeps_major
     category: narrowing
     description: "--no-narrow: splat ref v4 stays v4 in lockfile (not narrowed to v4.x.y)"
