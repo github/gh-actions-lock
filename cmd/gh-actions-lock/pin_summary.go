@@ -109,8 +109,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
 		if skippedRescan > 0 {
-			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
-				skippedRescan, ui.Pluralize(skippedRescan, "workflow", "workflows"))
+			// Immutable pins were re-verified above; only mutable refs
+			// (branch/partial-version, which legitimately move) were
+			// trusted without a live check. Keep the nudge scoped to them
+			// so it doesn't contradict "valid".
+			console.TermDetail("%d mutable %s trusted without a live check — branch or partial-version pins (e.g. v4, main) that can move; run `gh actions-lock --rescan` to re-verify %s.",
+				skippedRescan, ui.Pluralize(skippedRescan, "ref", "refs"),
+				ui.Pluralize(skippedRescan, "it", "them"))
 		}
 		return nil
 	}
