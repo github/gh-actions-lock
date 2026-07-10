@@ -12,9 +12,9 @@ func TestIsSelfRepositoryAction(t *testing.T) {
 		value string
 		want  bool
 	}{
-		{"bare self-reference action", "$/actions/foo", true},
-		{"self-reference reusable workflow", "$/.github/workflows/x.yml", true},
-		{"self-reference with ref", "$/actions/foo@v1", true},
+		{"bare self repository action", "$/actions/foo", true},
+		{"self repository reusable workflow", "$/.github/workflows/x.yml", true},
+		{"self repository with ref", "$/actions/foo@v1", true},
 		{"leading whitespace", "  $/actions/foo", true},
 		{"local action", "./actions/foo", false},
 		{"remote action", "actions/checkout@v4", false},
@@ -38,8 +38,8 @@ func TestSelfRepositoryRefHasVersion(t *testing.T) {
 		{"reusable workflow no ref", "$/.github/workflows/x.yml", false},
 		{"action with ref", "$/actions/foo@v1", true},
 		{"reusable workflow with ref", "$/.github/workflows/x.yml@v1", true},
-		{"local action with at (not self-reference)", "./actions/foo@v1", false},
-		{"remote action with ref (not self-reference)", "actions/checkout@v4", false},
+		{"local action with at (not self repository)", "./actions/foo@v1", false},
+		{"remote action with ref (not self repository)", "actions/checkout@v4", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

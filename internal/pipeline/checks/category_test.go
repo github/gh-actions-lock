@@ -25,8 +25,8 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 		{OnboardingRequired, "onboarding-required"},
 		{VersionRef, "version-ref"},
 		{LocalAction, "local-action"},
-		{SelfRepositoryAction, "self-reference-action"},
-		{InvalidSelfRepositoryRef, "invalid-self-reference"},
+		{SelfRepositoryAction, "self-repository-action"},
+		{InvalidSelfRepositoryRef, "invalid-self-repository-ref"},
 	}
 	for _, c := range cases {
 		if string(c.got) != c.want {

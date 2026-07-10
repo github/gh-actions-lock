@@ -2,12 +2,12 @@ package workflowfile
 
 import "strings"
 
-// selfRepositoryPrefix marks a self-referencing action `uses:` value. Such a
+// selfRepositoryPrefix marks a self repository action `uses:` value. Such a
 // reference resolves an action from the workflow's own repository at the
 // running ref, so it is inherently pinned and carries no `@ref` suffix.
 const selfRepositoryPrefix = "$/"
 
-// IsSelfRepositoryAction reports whether a `uses:` value is a self-referencing
+// IsSelfRepositoryAction reports whether a `uses:` value is a self repository
 // action reference (`$/…`). These resolve against the defining repo at the
 // running commit and need no lockfile SHA.
 func IsSelfRepositoryAction(value string) bool {
@@ -15,7 +15,7 @@ func IsSelfRepositoryAction(value string) bool {
 }
 
 // SelfRepositoryRefHasVersion reports whether a `$/…` value carries an `@ref`
-// suffix. A self-reference always resolves to the running ref, so any
+// suffix. A self repository reference always resolves to the running ref, so any
 // `@ref` is invalid — the malformed form `$/actions/foo@v1`.
 func SelfRepositoryRefHasVersion(value string) bool {
 	return IsSelfRepositoryAction(value) && strings.Contains(value, "@")

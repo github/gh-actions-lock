@@ -297,11 +297,11 @@ func TestResolveAllRecursiveSiblingSubpathTransitive(t *testing.T) {
 }
 
 // TestResolveAllRecursiveSelfRepositoryNestedInComposite verifies that a `$/…`
-// self-reference inside a fetched composite resolves as a same-tarball
+// A self repository reference inside a fetched composite resolves as a same-tarball
 // sibling: it is reconstructed from the enclosing composite's own repo+ref
 // plus the subpath, still traversed for cross-repo transitive deps, and
 // records no new pin (same tarball, same SHA). Mirrors the `./`-free
-// sibling-subpath case but using the `$/` self-reference syntax. Layout:
+// sibling-subpath case but using the `$/` self repository syntax. Layout:
 //
 //	org/fixtures/nested-composite (main) -- uses: $/simple-composite -->
 //	org/fixtures/simple-composite (main, same tarball) -- uses -->
@@ -359,7 +359,7 @@ func TestResolveAllRecursiveSelfRepositoryNestedInComposite(t *testing.T) {
 }
 
 // TestResolveAllRecursiveSelfRepositoryDeepMultiLevel exercises a deliberately gnarly
-// graph: four levels of `$/` self-references chained inside one repo, a shared
+// graph: four levels of `$/` self repository references chained inside one repo, a shared
 // `$/` child reached via two parents (dedup), a `$/` nested inside a *different*
 // repo (proving `$/` resolves relative to whichever tarball it appears in, not
 // the entry repo), and a diamond where a deep leaf re-references an
@@ -398,7 +398,7 @@ func TestResolveAllRecursiveSelfRepositoryDeepMultiLevel(t *testing.T) {
 	r := seedCache(&Resolver{
 		MaxRecursionDepth: DefaultMaxRecursionDepth,
 	}, map[ghapi.ActionRef]resolvedEntry{
-		// org/app self-reference chain (all one tarball, appSHA).
+		// org/app self repository chain (all one tarball, appSHA).
 		ghapi.ForActionRef("org", "app", "l0", "main"): {
 			dep:       dep.Dependency{NWO: "org/app", Path: "l0", Ref: "main", SHA: appSHA},
 			actionYML: "name: L0\nruns:\n  using: composite\n  steps:\n" + step("$/l1a") + step("$/l1b"),
@@ -420,7 +420,7 @@ func TestResolveAllRecursiveSelfRepositoryDeepMultiLevel(t *testing.T) {
 			actionYML: "name: L3\nruns:\n  using: composite\n  steps:\n" + step("vendor/z@main"),
 		},
 
-		// vendor/x with its own `$/` self-reference (tarball xSHA).
+		// vendor/x with its own `$/` self repository reference (tarball xSHA).
 		ghapi.ForActionRef("vendor", "x", "", "main"): {
 			dep:       dep.Dependency{NWO: "vendor/x", Ref: "main", SHA: xSHA},
 			actionYML: "name: X\nruns:\n  using: composite\n  steps:\n" + step("$/xnested"),
@@ -655,7 +655,7 @@ func TestResolveAllRecursiveCompositeLocalPathError(t *testing.T) {
 }
 
 func TestResolveAllRecursiveCompositeLocalPathErrorDeep(t *testing.T) {
-	// A `$/` self-reference chain three levels deep whose leaf uses a `./`
+	// A `$/` self repository chain three levels deep whose leaf uses a `./`
 	// local path. Every hop before the leaf is a valid same-tarball self
 	// reference, so the block must surface transitively rather than at the
 	// entry action. Mirrors the deep-blocked fixture in actions-test-fixtures.

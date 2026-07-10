@@ -55,7 +55,7 @@ type RefScan struct {
 	// LocalPaths are `./…` local composite action references (reusable
 	// workflows are excluded — they resolve differently).
 	LocalPaths []string
-	// SelfRepositoryRefs are valid `$/…` self-referencing actions. Inherently
+	// SelfRepositoryRefs are valid `$/…` self repository actions. Inherently
 	// pinned: they resolve against the defining repo at the running ref.
 	SelfRepositoryRefs []string
 	// SelfRepositoryRefErrs are malformed `$/…@ref` values — the invalid form.
@@ -85,10 +85,10 @@ func (f *File) ExtractActionRefs() RefScan {
 				return
 			}
 			seenSelf[value] = true
-			// Bare `$/…` is a legal self-reference at both step level
+			// Bare `$/…` is a legal self repository reference at both step level
 			// (action dir) and job level (reusable-workflow file): "this repo
 			// at the running SHA", inherently pinned. Only the `@ref` form is
-			// invalid — a self-reference has no external ref to pin.
+			// invalid — a self repository reference has no external ref to pin.
 			if SelfRepositoryRefHasVersion(value) {
 				scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, value)
 			} else {

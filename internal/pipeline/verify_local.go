@@ -58,7 +58,7 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 				Category:     checks.InvalidSelfRepositoryRef,
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
-				Detail:       fmt.Sprintf("self-referencing actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
+				Detail:       fmt.Sprintf("self repository actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
 				Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
 			})
 		}

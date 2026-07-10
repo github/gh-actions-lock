@@ -34,7 +34,7 @@ func IsCompositeLocalPath(err error) bool {
 	return errors.As(err, &target)
 }
 
-// selfRepositoryPrefix marks a `$/…` self-referencing action inside a composite's
+// selfRepositoryPrefix marks a `$/…` self repository action inside a composite's
 // nested uses. Kept local to avoid importing the workflowfile package into the
 // resolver; the sibling detection here is a plain prefix check.
 const selfRepositoryPrefix = "$/"
@@ -182,7 +182,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 				}
 				actionRef := parserlock.ParseActionRef(use)
 				if strings.HasPrefix(use, selfRepositoryPrefix) {
-					// `$/…` inside a composite is a same-tarball self-reference:
+					// `$/…` inside a composite is a same-tarball self repository reference:
 					// it resolves within THIS composite's own repo at its own
 					// ref (the parent repo, not the workflow-run repo). No new
 					// SHA is ever fetched. Reconstruct the sibling subpath ref
@@ -210,7 +210,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 				// can pull in cross-repo transitive deps the parent never
 				// references directly (e.g. nested-composite → simple-composite
 				// → other-repo). The path-aware seen{} set keys on FullName@Ref
-				// and so prevents re-resolving an exact self-reference, making
+				// and so prevents re-resolving an exact self repository reference, making
 				// this enqueue loop-safe.
 				if childKey == parentKey {
 					nextPending = append(nextPending, *actionRef)

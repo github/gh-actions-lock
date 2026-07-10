@@ -33,7 +33,7 @@ After the initial run to onboard workflows, you will need to run `gh actions-loc
 - A new workflow is created that has `uses` dependencies.
 - An existing workflow adds or removes `uses` dependencies.
 
-### Self-referencing actions (`$/…`)
+### Self repository actions (`$/…`)
 
 `uses: $/…` references an action or reusable workflow in the **same repository** as
 the defining file, resolved at the **running commit**. Because it always resolves to

@@ -68,7 +68,7 @@ func TestVerifyLocalCoverage_SelfRepositoryOnlyIsValid(t *testing.T) {
 	}
 
 	report := VerifyLocalCoverage(parsed, store)
-	assert.True(t, report.IsValid(), "self-reference refs are inherently pinned")
+	assert.True(t, report.IsValid(), "self repository refs are inherently pinned")
 	assert.Empty(t, report.Workflows[0].Findings)
 }
 
