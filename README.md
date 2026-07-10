@@ -51,6 +51,14 @@ jobs:
 A trailing `@ref` (e.g. `$/actions/my-action@v1`) is rejected — the ref is always
 the running commit.
 
+To convert existing same-repo `./…` composite action references to `$/…`, run with
+`--migrate-local-actions`. Only `./…` paths that resolve to an in-repo action file
+are rewritten:
+
+```bash
+gh actions-lock --migrate-local-actions
+```
+
 ## How it works
 
 A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/actions.lock)) and workflows are onboarded to the lockfile on a per-workflow basis. 

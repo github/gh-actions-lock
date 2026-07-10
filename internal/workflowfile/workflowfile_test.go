@@ -104,6 +104,46 @@ jobs:
 	assert.Empty(t, scan.SelfRepoRefErrs)
 }
 
+func TestMigrateLocalActionsToSelfRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
+
+	// An in-repo composite action exists → eligible for migration.
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, "local-action"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "local-action", "action.yml"),
+		[]byte("runs:\n  using: composite\n"), 0o644))
+
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+	content := []byte("jobs:\n  build:\n    steps:\n" +
+		"      - uses: ./local-action\n" +
+		"      - uses: ./missing-action\n")
+	require.NoError(t, os.WriteFile(workflowPath, content, 0o644))
+
+	f, err := Load(workflowPath)
+	require.NoError(t, err)
+
+	out, changed, err := f.MigrateLocalActionsToSelfRepo()
+	require.NoError(t, err)
+
+	// Only the path with an in-repo action file is rewritten.
+	assert.Equal(t, 1, changed)
+	assert.Contains(t, string(out), "uses: $/local-action")
+	assert.Contains(t, string(out), "uses: ./missing-action")
+}
+
+func TestMigrateLocalActionsToSelfRepo_NoLocalPaths(t *testing.T) {
+	content := []byte("jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n")
+	f, err := Parse("ci.yml", content)
+	require.NoError(t, err)
+
+	out, changed, err := f.MigrateLocalActionsToSelfRepo()
+	require.NoError(t, err)
+	assert.Equal(t, 0, changed)
+	assert.Equal(t, content, out)
+}
+
 func TestDiscoverWorkflowsIn(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ci.yml"), []byte("name: ci\n"), 0o644))

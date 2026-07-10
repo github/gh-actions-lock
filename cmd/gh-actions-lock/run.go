@@ -23,6 +23,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/spf13/cobra"
 )
 
@@ -62,6 +63,10 @@ type checkOptions struct {
 	// in scanned workflows must have a corresponding lockfile entry.
 	// No auth, no resolution, no reachability — ideal for pre-commit hooks.
 	verifyLocal bool
+	// migrateLocalActions rewrites same-repo `./…` composite action refs to
+	// the inherently-pinned `$/…` form before scanning. Opt-in: it changes
+	// `uses:` values on disk.
+	migrateLocalActions bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -84,6 +89,9 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication required — ideal for pre-commit hooks.")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
+	cmd.Flags().BoolVar(&opts.migrateLocalActions, "migrate-local-actions", false,
+		"Rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form.\n"+
+			"Only local paths that resolve to an in-repo action file are rewritten.")
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
@@ -174,6 +182,19 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endSetup()
 
 	opts.workflowPaths = paths
+
+	// --migrate-local-actions: rewrite same-repo `./…` action refs to the
+	// inherently-pinned `$/…` form before scanning, so the diagnosis sees
+	// compliant refs. Read-only runs (--no-fix) never touch disk.
+	if opts.migrateLocalActions && !opts.noFix {
+		migrated, err := migrateLocalActions(opts.workflowPaths)
+		if err != nil {
+			return err
+		}
+		if migrated > 0 && opts.jsonFields == "" {
+			console.TermSuccess("Migrated %d local %s to `$/…`", migrated, ui.Pluralize(migrated, "action", "actions"))
+		}
+	}
 
 	// Detailed narration is suppressed from the terminal during the run so the
 	// output stays limited to phase labels, prompts, and the final summary.
@@ -452,4 +473,29 @@ func cliVersion() string {
 		return info.Main.Version
 	}
 	return "unknown"
+}
+
+// migrateLocalActions rewrites same-repo `./…` action refs to `$/…` across the
+// given workflow files, writing changes to disk. Returns the total number of
+// `uses:` lines rewritten.
+func migrateLocalActions(paths []string) (int, error) {
+	total := 0
+	for _, path := range paths {
+		wf, err := workflowfile.Load(path)
+		if err != nil {
+			return total, fmt.Errorf("loading %s: %w", path, err)
+		}
+		content, changed, err := wf.MigrateLocalActionsToSelfRepo()
+		if err != nil {
+			return total, fmt.Errorf("migrating %s: %w", path, err)
+		}
+		if changed == 0 {
+			continue
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			return total, fmt.Errorf("writing %s: %w", path, err)
+		}
+		total += changed
+	}
+	return total, nil
 }
