@@ -151,7 +151,7 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 }
 
 // categoryLabel returns a human-readable label for a finding category,
-// e.g. "lockfile-forgery" -> "Lockfile forgery". Falls back to a
+// e.g. "lockfile-integrity" -> "Lockfile integrity". Falls back to a
 // hyphen-to-space title for unmapped categories so new slugs still read
 // cleanly.
 func categoryLabel(c checks.Category) string {
@@ -162,8 +162,8 @@ func categoryLabel(c checks.Category) string {
 		return "Ref changed"
 	case checks.MisleadingSHA:
 		return "Misleading SHA"
-	case checks.LockfileForgery:
-		return "Lockfile forgery"
+	case checks.LockfileIntegrity:
+		return "Lockfile integrity"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}
@@ -225,7 +225,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 
 	parts := []string{}
 	for _, cat := range []checks.Category{
-		checks.LockfileForgery,
+		checks.LockfileIntegrity,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction,
 		checks.Stale, checks.MisleadingSHA,
@@ -251,7 +251,7 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	}
 	out.Detail("%s %s %s", icon, out.Dim(label), dep)
 	out.Detail("  %s", f.Detail)
-	if f.Category == checks.LockfileForgery && f.Dependency != nil {
+	if f.Category == checks.LockfileIntegrity && f.Dependency != nil {
 		owner, repo := f.Dependency.OwnerRepo()
 		if owner != "" {
 			out.Detail("  ↳ %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
@@ -400,7 +400,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.LockfileForgery, checks.MisleadingSHA, checks.OnboardingRequired:
+	case checks.LockfileIntegrity, checks.MisleadingSHA, checks.OnboardingRequired:
 		return true
 	}
 	return false

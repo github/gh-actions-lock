@@ -330,7 +330,7 @@ func TestPresentResults_ParseWarningsSurface(t *testing.T) {
 // TestPresentResults_ExcludeCategoriesSkipsImpostor verifies that excluded
 // categories are not rendered in the error findings block. This prevents
 // duplication when renderInvestigationAlerts already surfaced the same
-// findings (e.g. lockfile-forgery).
+// findings (e.g. lockfile-integrity).
 func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 	var buf bytes.Buffer
 	u := ui.NewPlain(&buf)
@@ -341,7 +341,7 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 				Findings: []checks.Finding{
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
-						Category:     checks.LockfileForgery,
+						Category:     checks.LockfileIntegrity,
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
@@ -360,17 +360,17 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.LockfileForgery)
+	PresentResults(u, report, false, false, checks.LockfileIntegrity)
 	got := buf.String()
 
-	if strings.Contains(got, "LOCKFILE-FORGERY") {
-		t.Errorf("excluded lockfile-forgery should not appear:\n%s", got)
+	if strings.Contains(got, "LOCKFILE-INTEGRITY") {
+		t.Errorf("excluded lockfile-integrity should not appear:\n%s", got)
 	}
 	if strings.Contains(got, "lockfile entry was not a prior state") {
 		t.Errorf("excluded forgery detail should not appear:\n%s", got)
 	}
 	// The summary line should not count the excluded category.
-	if strings.Contains(got, "lockfile-forgery") {
+	if strings.Contains(got, "lockfile-integrity") {
 		t.Errorf("excluded category should not appear in summary:\n%s", got)
 	}
 }
@@ -387,7 +387,7 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 				Findings: []checks.Finding{
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
-						Category:     checks.LockfileForgery,
+						Category:     checks.LockfileIntegrity,
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
@@ -405,11 +405,11 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.LockfileForgery)
+	PresentResults(u, report, false, false, checks.LockfileIntegrity)
 	got := buf.String()
 
-	if strings.Contains(got, "LOCKFILE-FORGERY") {
-		t.Errorf("excluded lockfile-forgery should not appear:\n%s", got)
+	if strings.Contains(got, "LOCKFILE-INTEGRITY") {
+		t.Errorf("excluded lockfile-integrity should not appear:\n%s", got)
 	}
 	if !strings.Contains(got, "LOCAL-ACTION") {
 		t.Errorf("non-excluded local-action should still appear:\n%s", got)
@@ -452,7 +452,7 @@ func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
 			Path: ".github/workflows/ci.yml",
 			Findings: []checks.Finding{{
 				WorkflowPath: ".github/workflows/ci.yml",
-				Category:     checks.LockfileForgery,
+				Category:     checks.LockfileIntegrity,
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
 				Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "main", SHA: "aaaa"},
@@ -466,7 +466,7 @@ func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
 	// Prove the pre-fix behavior: PresentResults leaves the error block in
 	// the discarded log, so nothing surfaces.
 	PresentResults(u, report, false, false)
-	if strings.Contains(buf.String(), "LOCKFILE-FORGERY") {
+	if strings.Contains(buf.String(), "LOCKFILE-INTEGRITY") {
 		t.Fatalf("guard invalid: PresentResults unexpectedly surfaced the error block:\n%s", buf.String())
 	}
 
@@ -475,7 +475,7 @@ func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
 
 	for _, want := range []string{
 		"1 of 1 workflow failed",
-		"Lockfile forgery",
+		"Lockfile integrity",
 		"octo/action@main",
 		"pinned aaaa is not an ancestor of bbbb",
 		"investigate immediately",

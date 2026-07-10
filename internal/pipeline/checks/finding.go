@@ -29,7 +29,7 @@ type Finding struct {
 	Remediation string
 	// ObservedSHA is the SHA the resolver got at scan time, recorded when
 	// it differs from the pinned SHA (e.g. ref-moved, misleading-sha,
-	// lockfile-forgery).
+	// lockfile-integrity).
 	ObservedSHA string
 	// DocURL points to docs explaining the finding. Populated by the
 	// engine adapter so it's parity-aligned with the editor's
