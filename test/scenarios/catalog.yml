@@ -38,7 +38,7 @@ categories:
   - name: multi_workflow
     description: "Cross-workflow scenarios and dependency tracking"
   - name: security
-    description: "Impostor commit, lockfile forgery, reachability"
+    description: "Impostor commit, unreachable pin, reachability"
   - name: narrowing
     description: "Tag narrowing, --no-narrow, sticky precision, and version-ref nudges"
   - name: onboarding
@@ -1682,7 +1682,7 @@ scenarios:
 
   - name: dbot_forgery_blocks
     category: dependabot
-    description: "Lockfile forgery (pin doesn't match resolved commit) produces lockfile-forgery/error finding"
+    description: "Stale pin (lockfile SHA not reachable from the ref head) produces unreachable-pin/error finding"
     needs_stub: true
     tags: [stub]
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
@@ -1700,9 +1700,9 @@ scenarios:
           equals: "false"
         - expr: '.findings | length'
           greater_than: 0
-        - expr: '.findings[] | select(.category == "lockfile-forgery") | .category'
-          equals: "lockfile-forgery"
-        - expr: '.findings[] | select(.category == "lockfile-forgery") | .severity'
+        - expr: '.findings[] | select(.category == "unreachable-pin") | .category'
+          equals: "unreachable-pin"
+        - expr: '.findings[] | select(.category == "unreachable-pin") | .severity'
           equals: "error"
 
       golden_json:
@@ -1710,7 +1710,7 @@ scenarios:
         lockfile_version: v0.0.2
         valid: false
         findings:
-          - category: lockfile-forgery
+          - category: unreachable-pin
             confidence: high
             dependency: actions/checkout@v4
             detail: "pinned de0fac2e4500 is not an ancestor of bbbbbbbbbbbb \u2014 lockfile may have been tampered with"
@@ -1726,7 +1726,7 @@ scenarios:
 
   - name: accept_moved_resolves_forgery
     category: security
-    description: "--accept-moved re-resolves a lockfile-forgery dep to the current live SHA"
+    description: "--accept-moved re-resolves an unreachable-pin dep to the current live SHA"
     needs_token: true
     tags: [smoke]
     flags: ["--accept-moved", "--no-narrow"]
