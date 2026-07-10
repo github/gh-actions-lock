@@ -52,8 +52,9 @@ A trailing `@ref` (e.g. `$/actions/my-action@v1`) is rejected — the ref is alw
 the running commit.
 
 To convert existing same-repo `./…` composite action references to `$/…`, run with
-`--migrate-local-actions`. Only `./…` paths that resolve to an in-repo action file
-are rewritten:
+`--migrate-local-actions`. This rewrites `./…` steps both in your workflows and in
+your in-repo composite action definitions (`action.yml`). Only `./…` paths that
+resolve to an in-repo action file are rewritten:
 
 ```bash
 gh actions-lock --migrate-local-actions

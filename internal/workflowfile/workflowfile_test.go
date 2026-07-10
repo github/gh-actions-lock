@@ -144,6 +144,38 @@ func TestMigrateLocalActionsToSelfRepo_NoLocalPaths(t *testing.T) {
 	assert.Equal(t, content, out)
 }
 
+func TestDiscoverCompositeActionFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string) {
+		full := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte("runs:\n  using: composite\n"), 0o644))
+	}
+	write("action.yml")
+	write("nested/deep/action.yaml")
+	write(".github/actions/thing/action.yml")
+	write("not-an-action.yml")
+	// A stray file inside .git must be skipped.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "action.yml"), []byte("x"), 0o644))
+
+	got, err := DiscoverCompositeActionFiles(root)
+	require.NoError(t, err)
+
+	want := []string{
+		filepath.Join(root, ".github/actions/thing/action.yml"),
+		filepath.Join(root, "action.yml"),
+		filepath.Join(root, "nested/deep/action.yaml"),
+	}
+	assert.Equal(t, want, got)
+}
+
+func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
+	got, err := DiscoverCompositeActionFiles("")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
 func TestDiscoverWorkflowsIn(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ci.yml"), []byte("name: ci\n"), 0o644))

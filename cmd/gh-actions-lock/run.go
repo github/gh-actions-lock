@@ -475,12 +475,30 @@ func cliVersion() string {
 	return "unknown"
 }
 
-// migrateLocalActions rewrites same-repo `./…` action refs to `$/…` across the
-// given workflow files, writing changes to disk. Returns the total number of
-// `uses:` lines rewritten.
+// migrateLocalActions rewrites same-repo `./…` action refs to `$/…` and writes
+// changes to disk. It covers two kinds of files: the discovered workflow files,
+// and every in-repo composite action definition file (action.yml/action.yaml)
+// found under the repository root. The latter is why a composite action that
+// internally uses `uses: ./helper` gets fixed too, not just the workflow that
+// calls it. Returns the total number of `uses:` lines rewritten.
 func migrateLocalActions(paths []string) (int, error) {
+	files := append([]string(nil), paths...)
+
+	// Also sweep in-repo composite action files. The repo root is derived from
+	// a workflow path (they live under .github/workflows/); onboarding only
+	// runs when workflows exist, so an empty paths list means nothing to do.
+	if len(paths) > 0 {
+		if root := workflowfile.FindRepoRoot(paths[0]); root != "" {
+			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
+			if err != nil {
+				return 0, err
+			}
+			files = append(files, actionFiles...)
+		}
+	}
+
 	total := 0
-	for _, path := range paths {
+	for _, path := range files {
 		wf, err := workflowfile.Load(path)
 		if err != nil {
 			return total, fmt.Errorf("loading %s: %w", path, err)
