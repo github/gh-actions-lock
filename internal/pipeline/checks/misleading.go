@@ -46,7 +46,7 @@ func checkMisleadingSha(ctx context.Context, pw ParsedWorkflow, r CheckResolver)
 // checkRefMovedAndForgery emits RefMoved when the upstream ref
 // resolves to a different SHA than the lockfile. If CheckAncestry confirms
 // the locked SHA is NOT an ancestor of the observed SHA, the finding is
-// upgraded to LockfileForgery (mutually exclusive with ref-moved).
+// upgraded to UnreachablePin (mutually exclusive with ref-moved).
 // When the observed SHA is itself unreachable from any branch of the
 // upstream repo (tag-moved-to-fork-network), an additional
 // lockfile-tampering claim is stronger.
@@ -116,7 +116,7 @@ func checkOneRefMoved(ctx context.Context, pw ParsedWorkflow, ref parserlock.Act
 	f.Dependency = synthDep(ref, pin.SHA())
 	switch ancestry {
 	case resolve.AncestryNotAncestor:
-		f.Category = LockfileForgery
+		f.Category = UnreachablePin
 		f.Severity = SeverityError
 		f.Confidence = ConfidenceHigh
 		f.Detail = fmt.Sprintf("pinned %s is not an ancestor of %s — lockfile may have been tampered with", parserlock.ShortSHA(pin.SHA()), parserlock.ShortSHA(sha))
@@ -126,7 +126,7 @@ func checkOneRefMoved(ctx context.Context, pw ParsedWorkflow, ref parserlock.Act
 		f.Severity = SeverityWarning
 		f.Confidence = ConfidenceMedium
 		f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s (ancestry check inconclusive%s)", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()), suffixWith(ancestryDetail))
-		f.Remediation = "retry when the Compare API is available to classify this as ref-moved or lockfile-forgery"
+		f.Remediation = "retry when the Compare API is available to classify this as ref-moved or unreachable-pin"
 	default:
 		f.Category = RefMoved
 		f.Severity = SeverityWarning

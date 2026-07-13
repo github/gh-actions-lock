@@ -1,5 +1,5 @@
 name: Lint actions.lock
-description: Check that actions.lock is in sync with workflow files
+description: Check that actions.lock is in sync with workflows and every pin still resolves upstream
 
 inputs:
   extra-flags:

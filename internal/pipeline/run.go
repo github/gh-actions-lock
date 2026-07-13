@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -30,7 +31,7 @@ type RunOptions struct {
 type RunResult struct {
 	Report        *checks.Report
 	Valid         bool
-	SkippedRescan int // already-pinned workflows trusted without network calls
+	SkippedRescan int // mutable recorded refs (v4, branches) trusted without a live re-check
 }
 
 // Run executes the full diagnostic pipeline: parse → trust-check →
@@ -51,31 +52,32 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Fast path: trust fully-recorded workflows. For partially-recorded
 	// workflows, seed the resolver cache with recorded deps so only
 	// unrecorded refs hit the network.
+	//
+	// Immutable full-semver pins (e.g. v4.2.1) are NOT trusted blindly:
+	// they're routed through live resolution + ancestry so a stale or
+	// unreachable pin is caught on the default path, not just under
+	// --rescan. Mutable recorded refs (v4, v4.2, branches) legitimately
+	// move, so they stay trusted (seeded from the lockfile) until --rescan.
 	skippedRescan := 0
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	if !opts.Rescan {
 		for i := range parsed {
-			// Local-path workflows are skipped at diagnose time; don't
-			// waste network calls resolving their refs.
-			if len(parsed[i].LocalPaths) > 0 {
+			plan := planFastPath(parsed[i])
+			// Mutable recorded refs are trusted without a live re-check
+			// (surfaced in the summary so the operator can --rescan them).
+			skippedRescan += len(plan.mutableRefs)
+			if plan.resolved {
 				parsed[i].Resolved = true
 				continue
 			}
-			recorded, unrecorded := parsed[i].PartitionRefs()
-			if len(parsed[i].Refs) == 0 || len(unrecorded) == 0 {
-				parsed[i].Resolved = true
-				skippedRescan++
-			} else {
-				// Collect deps covered by recorded refs for cache
-				// seeding. These refs have matching lockfile entries,
-				// so their resolve results can be served from the
-				// lockfile rather than the network.
-				rd := parsed[i].RecordedDeps(recorded)
-				seedDeps = append(seedDeps, rd...)
-				for _, r := range recorded {
-					recordedKeys[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = true
-				}
+			// Seed only the mutable recorded deps so they resolve from
+			// the lockfile (trusted); immutable and unrecorded refs are
+			// left to resolve live from the network.
+			rd := parsed[i].RecordedDeps(plan.mutableRefs)
+			seedDeps = append(seedDeps, rd...)
+			for _, rr := range plan.mutableRefs {
+				recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
 			}
 		}
 	}
@@ -142,4 +144,43 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		Valid:         valid,
 		SkippedRescan: skippedRescan,
 	}, nil
+}
+
+// fastPathPlan describes how the pre-resolution fast path treats one
+// recorded workflow.
+type fastPathPlan struct {
+	// resolved is true when the workflow needs no live resolution: it has
+	// no refs, is a local-path action, or every recorded ref is a trusted
+	// mutable pin.
+	resolved bool
+	// mutableRefs are recorded refs (v4, v4.2, branches) trusted from the
+	// lockfile without a live re-check.
+	mutableRefs []parserlock.ActionRef
+}
+
+// planFastPath decides, without touching the network, whether a parsed
+// workflow can skip live resolution and which of its recorded refs are
+// trusted mutable pins. Immutable full-semver pins (v4.2.1) are never
+// trusted blindly: their presence forces live resolution so a stale or
+// unreachable pin is caught on the default path, not just under --rescan.
+func planFastPath(pw checks.ParsedWorkflow) fastPathPlan {
+	// Local-path workflows are handled at diagnose time; don't waste
+	// network calls resolving their refs.
+	if len(pw.LocalPaths) > 0 {
+		return fastPathPlan{resolved: true}
+	}
+	recorded, unrecorded := pw.PartitionRefs()
+
+	var mutable []parserlock.ActionRef
+	immutableCount := 0
+	for _, rr := range recorded {
+		if checks.IsImmutableRef(rr.Ref) {
+			immutableCount++
+		} else {
+			mutable = append(mutable, rr)
+		}
+	}
+
+	resolved := len(pw.Refs) == 0 || (len(unrecorded) == 0 && immutableCount == 0)
+	return fastPathPlan{resolved: resolved, mutableRefs: mutable}
 }

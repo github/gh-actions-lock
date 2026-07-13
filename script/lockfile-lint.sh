@@ -16,14 +16,17 @@ else
   jq_ignore_filter='[]'
 fi
 
-# Run the check, capture JSON stdout separately from stderr
+# Run the check, capture JSON stdout separately from stderr.
+# --rescan re-verifies every recorded pin against upstream (bypasses the
+# lockfile fast path) so CI catches stale/unreachable pins, not just
+# structural drift. GH_TOKEN (wired by the action) covers resolution.
 exit_code=0
-json_output=$($binary --no-fix --no-interactive --json=valid,findings,workflows "$@" 2>/dev/null) || exit_code=$?
+json_output=$($binary --no-fix --rescan --no-interactive --json=valid,findings,workflows "$@" 2>/dev/null) || exit_code=$?
 
 # If exit code 2, the tool itself failed — re-run to show stderr
 if [ "$exit_code" -eq 2 ]; then
   echo "::error::gh-actions-lock failed:"
-  $binary --no-fix --no-interactive "$@" 2>&1 || true
+  $binary --no-fix --rescan --no-interactive "$@" 2>&1 || true
   exit 2
 fi
 
