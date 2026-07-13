@@ -30,21 +30,51 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 		}
 	}
 
-	var validCount, failedCount int
-	for _, wr := range report.Workflows {
-		if wr.IsValid() {
-			validCount++
-		} else {
-			failedCount++
+	// A workflow whose only non-valid findings are NotPinned is not
+	// failing when this run is about to pin it — it's remediable, not
+	// broken. Don't count it as failed (and drop not-pinned from the
+	// error block below), otherwise a plain onboarding run reports
+	// "N of N workflows failed" for work it's actively doing.
+	var failedCount int
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		if wr.IsValid() || isRemediableOnly(wr, willRemediate) {
+			continue
 		}
+		failedCount++
 	}
-	checked := validCount + failedCount
+	checked := len(report.Workflows)
 
-	if !valid && checked > 0 {
+	if failedCount > 0 {
+		if willRemediate {
+			exclude[checks.NotPinned] = true
+		}
 		renderErrorFindings(out, report, failedCount, checked, exclude)
 	}
 
 	renderWarnings(out, report, willRemediate)
+}
+
+// isRemediableOnly reports whether a workflow's only integrity problems
+// are unpinned dependencies that this run is about to pin. Such a
+// workflow is being remediated, not failing, so it must not be counted
+// or labeled as failed. Returns false in read-only modes
+// (willRemediate == false), where not-pinned is a genuine coverage gap.
+func isRemediableOnly(wr *checks.WorkflowReport, willRemediate bool) bool {
+	if !willRemediate {
+		return false
+	}
+	sawNotPinned := false
+	for _, f := range wr.Findings {
+		if f.IsValid() {
+			continue
+		}
+		if f.Category != checks.NotPinned {
+			return false
+		}
+		sawNotPinned = true
+	}
+	return sawNotPinned
 }
 
 // PresentReadOnlyFailures renders error-level findings directly to the
