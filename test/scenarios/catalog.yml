@@ -81,11 +81,13 @@ scenarios:
       lockfile_deps_cover_direct: true
       lockfile_contains: ["'actions/checkout@v4':"]
       lockfile_comment_excludes: 'actions/checkout@v4\.\d'
-      # v4 is a mutable pin: trusted without a live check, and the summary
-      # says so honestly instead of asserting "valid" then telling you to
-      # --rescan to actually verify it.
-      output_contains: ["trusted without a live check"]
-      output_excludes: ["re-verify reachability"]
+      # v4 is a partial-semver pin: with narrowing on (default), the
+      # version-ref nudge is the single actionable message (pin precisely,
+      # which also earns live re-verification). The summary must NOT add a
+      # competing --rescan line, and must not resurrect the old "re-verify
+      # reachability" contradiction.
+      output_contains: ["pinned without a full semver tag", "lock precisely"]
+      output_excludes: ["trusted without a live check", "re-verify reachability"]
 
   - name: multi_action_happy
     category: happy_path

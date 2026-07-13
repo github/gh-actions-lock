@@ -108,11 +108,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
 		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
-		if skippedRescan > 0 {
-			// Immutable pins were re-verified above; only mutable refs
-			// (branch/partial-version, which legitimately move) were
-			// trusted without a live check. Keep the nudge scoped to them
-			// so it doesn't contradict "valid".
+		if noNarrow && skippedRescan > 0 {
+			// Mutable refs (v4, main) were trusted without a live check.
+			// With narrowing on, the version-ref nudge above already tells
+			// the user to pin precisely — which also buys live
+			// re-verification — so we don't add a competing --rescan line.
+			// Under --no-narrow that nudge is suppressed, so this is the
+			// only place the trust gap and its escape hatch surface.
 			console.TermDetail("%d mutable %s trusted without a live check — branch or partial-version pins (e.g. v4, main) that can move; run `gh actions-lock --rescan` to re-verify %s.",
 				skippedRescan, ui.Pluralize(skippedRescan, "ref", "refs"),
 				ui.Pluralize(skippedRescan, "it", "them"))
