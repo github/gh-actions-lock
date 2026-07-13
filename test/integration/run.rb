@@ -755,6 +755,12 @@ catalog["scenarios"].each do |spec|
     # CLI flags
     s.args(*flags) unless flags.empty?
 
+    # Declarative env overrides (nil value unsets the var). Used by
+    # offline/unauthed scenarios to strip ambient auth and redirect GH_HOST.
+    if spec["env"].is_a?(Hash)
+      spec["env"].each { |k, v| s.env(k => v) }
+    end
+
     # Token-required scenarios: use explicit GH_TOKEN if set, otherwise
     # fall back to gh CLI auth (go-gh resolves this automatically).
     # Only skip if neither is available.

@@ -549,7 +549,7 @@ module ActionsPin
       # corresponding response is written to the PTY's stdin.
       def run_pty(input_prompts: nil, extra_args: [])
         cmd = @cmd + extra_args
-        flat_env = @env.map { |k, v| "#{k}=#{Shellwords.shellescape(v)}" }
+        flat_env = @env.reject { |_, v| v.nil? }.map { |k, v| "#{k}=#{Shellwords.shellescape(v)}" }
         # Unset CI so the binary's interactive prompt isn't suppressed
         # (GitHub Actions always exports CI=true).
         flat_env.unshift("CI=")
@@ -617,7 +617,9 @@ module ActionsPin
       end
 
       def env_exports
-        @env.map { |k, v| "export #{k}=#{Shellwords.shellescape(v)}" }.join("\n")
+        @env.map do |k, v|
+          v.nil? ? "unset #{k}" : "export #{k}=#{Shellwords.shellescape(v)}"
+        end.join("\n")
       end
 
       def cmd_string(extra_args: [])

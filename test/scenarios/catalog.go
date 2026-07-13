@@ -35,6 +35,11 @@ type Scenario struct {
 	Flags       []string `yaml:"flags"`
 	LiveRepo    string   `yaml:"live_repo"`
 
+	// Env sets or unsets process environment variables for the run. A nil
+	// value unsets the variable (YAML null), letting scenarios strip ambient
+	// auth or redirect GH_HOST to prove offline behavior.
+	Env map[string]*string `yaml:"env,omitempty"`
+
 	Fixtures Fixtures `yaml:"fixtures"`
 	Expect   Expect   `yaml:"expect"`
 }

@@ -685,6 +685,29 @@ scenarios:
       exit: 0
       stdout_is_json: true
 
+  - name: verify_local_offline_unauthed
+    category: output_modes
+    description: "--verify-local succeeds with no token and GH_HOST pointed at a refused address — proves the offline path never touches the network or auth"
+    needs_stub: false
+    flags: ["--verify-local"]
+    env:
+      # Any network call is a connection refused; stored github.com auth does
+      # not apply to this host either, so the run is effectively unauthed.
+      GH_HOST: "127.0.0.1:1"
+      # Strip ambient tokens so nothing is authed.
+      GH_TOKEN:
+      GITHUB_TOKEN:
+      GH_ENTERPRISE_TOKEN:
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout
+    expect:
+      exit: 0
+      output_contains: ["complete lockfile coverage"]
+
   - name: verify_conflict_verify_local
     category: output_modes
     description: "--verify and --verify-local are mutually exclusive — errors before any work"
