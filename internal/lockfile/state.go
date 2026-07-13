@@ -188,6 +188,41 @@ func (s *State) HasWorkflow(workflowKey string) bool {
 	return ok
 }
 
+// WorkflowKeys returns the workflow paths currently recorded in the lockfile's
+// workflows{} map. Order is undefined. Intended for callers that need to
+// reconcile the recorded set against the workflows present on disk.
+func (s *State) WorkflowKeys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.file.Workflows))
+	for k := range s.file.Workflows {
+		out = append(out, k)
+	}
+	return out
+}
+
+// PruneWorkflows removes every workflow entry whose key is not in keep and
+// returns the removed keys in sorted order. Dependency entries left orphaned
+// by the removal are not deleted here: Save's existing orphan GC drops any pin
+// no surviving workflow references.
+//
+// Callers must only pass a keep set derived from a full-directory scan. A
+// partial invocation (an explicit subset of workflow paths) has no authority to
+// decide a workflow is deleted and must not call this.
+func (s *State) PruneWorkflows(keep map[string]bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var removed []string
+	for k := range s.file.Workflows {
+		if !keep[k] {
+			removed = append(removed, k)
+			delete(s.file.Workflows, k)
+		}
+	}
+	sort.Strings(removed)
+	return removed
+}
+
 // Get returns the dependencies recorded for workflowKey (e.g.
 // ".github/workflows/ci.yml"). Returns nil when the workflow has no entry.
 func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {

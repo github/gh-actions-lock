@@ -67,6 +67,11 @@ const (
 	// workflows that reference local actions — the entire workflow is
 	// skipped.
 	LocalAction Category = "local-action"
+	// StaleWorkflow is an informational, repo-level notice: the lockfile
+	// records a workflow entry whose file no longer exists on disk. On a
+	// default (full-directory) fix run these are pruned automatically; in
+	// read-only mode they are surfaced but not removed. Non-blocking.
+	StaleWorkflow Category = "stale-workflow"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

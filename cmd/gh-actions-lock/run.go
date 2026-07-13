@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -23,6 +24,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/spf13/cobra"
 )
 
@@ -152,6 +154,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	endSetup := prof.Phase("setup (discover + lockfile)")
+	// A full-directory scan (no explicit workflow-path args) is the only
+	// invocation with the authority to declare a workflow deleted. Capture
+	// this before newRun overwrites opts.workflowPaths with the discovered
+	// set.
+	fullScan := len(opts.workflowPaths) == 0
 	// check fix mode can rebuild a deleted lockfile, so interactive sessions
 	// may delete-and-recreate an unreadable one. --no-fix is read-only and
 	// must not delete; it fails instead.
@@ -174,6 +181,25 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endSetup()
 
 	opts.workflowPaths = paths
+
+	// Reconcile the lockfile's recorded workflow set against what's on disk.
+	// Only a full-directory scan can prove a workflow was deleted; a partial
+	// invocation (explicit paths) has no authority to prune out-of-scope
+	// entries. keep is authoritative only when fullScan is true.
+	var keepWorkflows map[string]bool
+	var staleWorkflows []string
+	if fullScan {
+		keepWorkflows = make(map[string]bool, len(paths))
+		for _, p := range paths {
+			keepWorkflows[workflowfile.KeyFromPath(p)] = true
+		}
+		for _, k := range store.WorkflowKeys() {
+			if !keepWorkflows[k] {
+				staleWorkflows = append(staleWorkflows, k)
+			}
+		}
+		sort.Strings(staleWorkflows)
+	}
 
 	// Detailed narration is suppressed from the terminal during the run so the
 	// output stays limited to phase labels, prompts, and the final summary.
@@ -235,6 +261,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	report := result.Report
 	valid := result.Valid
 	skippedRescan := result.SkippedRescan
+
+	// Read-only modes never touch the lockfile, so surface stale entries as
+	// non-blocking info findings instead of pruning them. Fix mode prunes
+	// them below (before the lockfile is saved) and reports that instead.
+	if opts.noFix && len(staleWorkflows) > 0 {
+		appendStaleWorkflowFindings(report, staleWorkflows, false)
+	}
 
 	// --no-onboard: refuse to onboard new workflows or actions. Rewrite the
 	// relevant not-pinned findings to onboarding-required and drop their refs
@@ -323,6 +356,14 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return fmt.Errorf("planning pins: %w", planErr)
 	}
 
+	// Prune stale workflow entries before the commit persists the lockfile.
+	// Removing the keys orphans their pins, which Save's existing GC then
+	// drops. Only reached in fix mode (--no-fix returns earlier) and only on
+	// a full scan (staleWorkflows is empty otherwise).
+	if len(staleWorkflows) > 0 {
+		store.PruneWorkflows(keepWorkflows)
+	}
+
 	// Commit: write all changes to disk atomically (fast local I/O, no
 	// spinner label — it finishes before the user could read one).
 	endCommit := prof.Phase("pin.Commit (disk writes)")
@@ -333,6 +374,12 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endCommit()
 
 	console.StopProgress()
+
+	// Record the prune in the report so --json consumers see what was
+	// dropped. The terminal surface reports it via the pin summary instead.
+	if len(staleWorkflows) > 0 {
+		appendStaleWorkflowFindings(report, staleWorkflows, true)
+	}
 
 	// Inject info-severity findings for non-semver refs so they appear
 	// in --json output. Suppressed when --no-narrow is set (user chose
@@ -367,7 +414,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// Terminal summary.
 	hasInconclusive := opts.rescan && report.HasInconclusive()
-	summaryErr := renderPinSummary(ctx, console, record, report, r, skippedRescan, hasInconclusive, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion())
+	summaryErr := renderPinSummary(ctx, console, record, report, r, skippedRescan, hasInconclusive, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
 
 	if summaryErr != nil {
 		return summaryErr
@@ -444,6 +491,26 @@ func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
 				),
 			})
 		}
+	}
+}
+
+// appendStaleWorkflowFindings records a repo-level info finding for each
+// workflow key whose file no longer exists on disk. pruned controls the
+// wording: true after the entry was dropped, false when it was only reported
+// (read-only run).
+func appendStaleWorkflowFindings(report *checks.Report, workflows []string, pruned bool) {
+	for _, wf := range workflows {
+		detail := fmt.Sprintf("lockfile records deleted workflow %s — run `gh actions-lock` to prune it", wf)
+		if pruned {
+			detail = fmt.Sprintf("pruned stale lockfile entry for deleted workflow %s", wf)
+		}
+		report.RepoFindings = append(report.RepoFindings, checks.Finding{
+			WorkflowPath: wf,
+			Category:     checks.StaleWorkflow,
+			Severity:     checks.SeverityInfo,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       detail,
+		})
 	}
 }
 
