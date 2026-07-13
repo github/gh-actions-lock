@@ -1067,3 +1067,93 @@ func TestCheckCommand_JSONLoadErrorIsInvalid(t *testing.T) {
 	require.Len(t, payload.Findings, 1)
 	assert.Equal(t, "error", payload.Findings[0].Severity)
 }
+
+// TestCheck_Relock_BumpsMovedBranchRef covers github/actions-dispatch#751:
+// a branch ref (main) whose upstream head advanced is trusted as-is on a
+// normal run and merely flagged ref-moved under --rescan. --relock must
+// re-resolve it and rewrite the lockfile to the new live SHA.
+func TestCheck_Relock_BumpsMovedBranchRef(t *testing.T) {
+	reg := &httpmock.Registry{}
+
+	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+			},
+		}),
+	)
+	// staleSHA is a legitimate ancestor of liveSHA (branch advanced) → ref-moved.
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": staleSHA,
+			},
+		}),
+	)
+	// Reverse-lookup stubs: main resolves to the live head; no tags.
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/branches"),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "main", "commit": map[string]any{"sha": liveSHA}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/tags"),
+		httpmock.JSONResponse([]any{}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`,
+		"example/action@main=sha1-"+staleSHA,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--relock", "--no-narrow", workflowPath,
+	)
+	require.NoError(t, err, "stdout:\n%s", stdout)
+
+	pins := readTempLockfilePins(t)
+	assert.Contains(t, pins, liveSHA, "--relock should rewrite the lockfile to the live SHA")
+	assert.NotContains(t, pins, staleSHA, "--relock should drop the stale SHA")
+}
+
+// TestCheck_DefaultRun_DoesNotBumpBranchRef is the counterpart to the relock
+// test: without --relock a mutable branch ref is trusted from the lockfile
+// (fast path, no network) and its recorded SHA is left as-is.
+func TestCheck_DefaultRun_DoesNotBumpBranchRef(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t) // no stubs should be hit on the fast path
+
+	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`,
+		"example/action@main=sha1-"+staleSHA,
+	)
+
+	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+
+	assert.Contains(t, readTempLockfilePins(t), staleSHA,
+		"a default run must not bump a trusted branch ref")
+}

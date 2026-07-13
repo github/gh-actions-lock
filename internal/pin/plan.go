@@ -35,6 +35,12 @@ type PlanOptions struct {
 	// re-resolved to their current live SHA.
 	AcceptMoved bool
 
+	// Relock treats ref-moved findings (a branch or partial-version ref
+	// that legitimately advanced) as resolvable, re-pinning them to the
+	// current live SHA. Unlike AcceptMoved it leaves unreachable-pin
+	// findings untouched so possible tampering stays a hard error.
+	Relock bool
+
 	// prevImpreciseNWO is computed once in Plan() from the global lockfile
 	// state. It holds lowercased NWOs that are already recorded with a
 	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
@@ -119,9 +125,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
-	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved)
+	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
 
-	if !wr.NeedsAttention() {
+	if !needsRepin(wr, opts) {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
@@ -241,7 +247,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, directTracker, inventorySHA)...)
 
 	// Record findings that are informational (ref-moved, misleading-sha).
-	entries = append(entries, informationalEntries(wr)...)
+	entries = append(entries, informationalEntries(wr, opts)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
 }
@@ -471,30 +477,42 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 }
 
 // informationalEntries records ref-moved and misleading-sha findings as
-// Investigate entries.
-func informationalEntries(wr checks.WorkflowReport) []Entry {
+// Investigate entries. When the run re-pins moved refs (--relock or
+// --accept-moved), ref-moved is resolved by the re-pin and is not recorded
+// for investigation.
+func informationalEntries(wr checks.WorkflowReport, opts PlanOptions) []Entry {
+	repinsMoved := opts.Relock || opts.AcceptMoved
 	var out []Entry
 	for _, f := range wr.Findings {
 		switch f.Category {
-		case checks.MisleadingSHA, checks.RefMoved:
-			nwo := ""
-			ref := ""
-			if f.ActionRef != nil {
-				nwo = f.ActionRef.Owner + "/" + f.ActionRef.Repo
-				ref = f.ActionRef.Ref
+		case checks.RefMoved:
+			if repinsMoved {
+				continue
 			}
-			out = append(out, Entry{
-				NWO:         nwo,
-				Ref:         ref,
-				ObservedSHA: f.ObservedSHA,
-				Resolution:  Investigate,
-				Issue:       string(f.Category),
-				Reason:      f.Detail,
-				Workflows:   []string{wr.Path},
-			})
+			out = append(out, informationalEntry(f, wr.Path))
+		case checks.MisleadingSHA:
+			out = append(out, informationalEntry(f, wr.Path))
 		}
 	}
 	return out
+}
+
+func informationalEntry(f checks.Finding, path string) Entry {
+	nwo := ""
+	ref := ""
+	if f.ActionRef != nil {
+		nwo = f.ActionRef.Owner + "/" + f.ActionRef.Repo
+		ref = f.ActionRef.Ref
+	}
+	return Entry{
+		NWO:         nwo,
+		Ref:         ref,
+		ObservedSHA: f.ObservedSHA,
+		Resolution:  Investigate,
+		Issue:       string(f.Category),
+		Reason:      f.Detail,
+		Workflows:   []string{path},
+	}
 }
 
 // partitionByInventory splits refs into those with a matching inventory
@@ -519,17 +537,29 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 
 // pruneStaleInventory drops inventory entries matching a stale finding (a pin
 // the workflow no longer references), so a fix-mode re-pin converges.
-func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved bool) []checks.InventoryEntry {
+// acceptMoved additionally prunes ref-moved and unreachable-pin deps; relock
+// prunes ref-moved deps only, so a benign branch/version advance can be
+// re-pinned without accepting a possibly-tampered unreachable pin.
+func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved, relock bool) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {
-		switch {
-		case f.Category == checks.Stale && f.Dependency != nil:
-			d := f.Dependency
-			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
-		case acceptMoved && (f.Category == checks.UnreachablePin || f.Category == checks.RefMoved) && f.Dependency != nil:
-			d := f.Dependency
-			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
+		if f.Dependency == nil {
+			continue
 		}
+		markStale := false
+		switch f.Category {
+		case checks.Stale:
+			markStale = true
+		case checks.UnreachablePin:
+			markStale = acceptMoved
+		case checks.RefMoved:
+			markStale = acceptMoved || relock
+		}
+		if !markStale {
+			continue
+		}
+		d := f.Dependency
+		stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
 	}
 	if len(stale) == 0 {
 		return inventory
@@ -543,6 +573,26 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 		out = append(out, inv)
 	}
 	return out
+}
+
+// needsRepin reports whether a workflow must flow through the live re-pin
+// path instead of the trust-inventory fast path. Beyond the shared
+// NeedsAttention signal, --relock and --accept-moved opt moved refs back into
+// re-resolution: a ref-moved finding is benign (NeedsAttention is false) but
+// still needs re-resolving to advance the pin to the current SHA.
+func needsRepin(wr checks.WorkflowReport, opts PlanOptions) bool {
+	if wr.NeedsAttention() {
+		return true
+	}
+	if !opts.Relock && !opts.AcceptMoved {
+		return false
+	}
+	for _, f := range wr.Findings {
+		if f.Category == checks.RefMoved {
+			return true
+		}
+	}
+	return false
 }
 
 // verifiedEntries builds Verified plan entries for every inventory item.

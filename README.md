@@ -33,6 +33,19 @@ After the initial run to onboard workflows, you will need to run `gh actions-loc
 - A new workflow is created that has `uses` dependencies.
 - An existing workflow adds or removes `uses` dependencies.
 
+Pins to branches or partial versions (e.g. `main`, `v4`) are trusted from the
+lockfile and not re-resolved on a normal run. To bump them to the current
+upstream commit, run:
+
+```bash
+gh actions-lock --relock
+```
+
+`--relock` re-resolves refs that have legitimately moved and rewrites the
+lockfile to the new SHA. Suspicious pins whose recorded commit is no longer
+reachable upstream are left as errors — use `--accept-moved` to re-resolve
+those as well.
+
 ## How it works
 
 A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/actions.lock)) and workflows are onboarded to the lockfile on a per-workflow basis. 

@@ -41,6 +41,24 @@ func TestApplyVerifyFlags(t *testing.T) {
 	}
 }
 
+func TestApplyRescanImplications(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       checkOptions
+		wantRescan bool
+	}{
+		{name: "relock implies rescan", opts: checkOptions{relock: true}, wantRescan: true},
+		{name: "accept-moved implies rescan", opts: checkOptions{acceptMoved: true}, wantRescan: true},
+		{name: "neither leaves rescan off", opts: checkOptions{}, wantRescan: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.opts.applyRescanImplications()
+			assert.Equal(t, tt.wantRescan, tt.opts.rescan)
+		})
+	}
+}
+
 func TestValidateOutputFlags_VerifyConflicts(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -60,6 +78,11 @@ func TestValidateOutputFlags_VerifyConflicts(t *testing.T) {
 		{
 			name:    "verify-local and accept-moved conflict",
 			opts:    checkOptions{verifyLocal: true, acceptMoved: true},
+			wantErr: "offline",
+		},
+		{
+			name:    "verify-local and relock conflict",
+			opts:    checkOptions{verifyLocal: true, relock: true},
 			wantErr: "offline",
 		},
 		{
