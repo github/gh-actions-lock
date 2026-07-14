@@ -190,6 +190,16 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 			return resolve.New(hostname, pool)
 		}
 	}
+
+	// An empty full scan is only meaningful when the lockfile still records
+	// workflows to prune. With nothing on disk and nothing recorded, there's
+	// genuinely no work — keep the original "no workflow files" error, and
+	// emit it before auth so an empty repo doesn't complain about a missing
+	// token.
+	if len(paths) == 0 && len(store.WorkflowKeys()) == 0 {
+		return nil, nil, nil, noWorkflowsError(workflowsDir)
+	}
+
 	r, err := newResolver(resolveHostname(hostname), pool)
 	if err != nil {
 		return nil, nil, nil, err
@@ -199,13 +209,6 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 	// for the store and re-seed branch hints.
 	store.SetMetadataResolver(r)
 	r.SeedBranchHints(store.AllDeps())
-
-	// An empty full scan is only meaningful when the lockfile still records
-	// workflows to prune. With nothing on disk and nothing recorded, there's
-	// genuinely no work — keep the original "no workflow files" error.
-	if len(paths) == 0 && len(store.WorkflowKeys()) == 0 {
-		return nil, nil, nil, noWorkflowsError(workflowsDir)
-	}
 
 	return paths, r, store, nil
 }
