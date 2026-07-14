@@ -30,23 +30,34 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 		}
 	}
 
-	// A workflow whose only non-valid findings are NotPinned is not
-	// failing when this run is about to pin it — it's remediable, not
+	// A workflow whose only non-valid findings are dep-level NotPinned is
+	// not failing when this run is about to pin it — it's remediable, not
 	// broken. Don't count it as failed (and drop not-pinned from the
 	// error block below), otherwise a plain onboarding run reports
 	// "N of N workflows failed" for work it's actively doing.
 	var failedCount int
+	sawOtherFailure := false
 	for i := range report.Workflows {
 		wr := &report.Workflows[i]
 		if wr.IsValid() || isRemediableOnly(wr, willRemediate) {
 			continue
 		}
 		failedCount++
+		for _, f := range wr.Findings {
+			if !f.IsValid() && f.Category != checks.NotPinned {
+				sawOtherFailure = true
+			}
+		}
 	}
 	checked := len(report.Workflows)
 
 	if failedCount > 0 {
-		if willRemediate {
+		// Suppress not-pinned from the failure summary only when another
+		// category already explains the failure. If not-pinned is the sole
+		// reason a workflow failed — e.g. a fatal load/deps error that
+		// diagnose.go reports as workflow-level NotPinned with no
+		// ActionRef — keep it so the summary isn't left blank.
+		if willRemediate && sawOtherFailure {
 			exclude[checks.NotPinned] = true
 		}
 		renderErrorFindings(out, report, failedCount, checked, exclude)
@@ -64,17 +75,21 @@ func isRemediableOnly(wr *checks.WorkflowReport, willRemediate bool) bool {
 	if !willRemediate {
 		return false
 	}
-	sawNotPinned := false
+	sawRemediable := false
 	for _, f := range wr.Findings {
 		if f.IsValid() {
 			continue
 		}
-		if f.Category != checks.NotPinned {
+		// Only a dep-level NotPinned (an actual uses: ref this run will
+		// pin) is remediable. A NotPinned with no ActionRef is a
+		// workflow-level fatal error (failed to load / read deps), which
+		// remediation cannot fix, so the workflow is genuinely failing.
+		if f.Category != checks.NotPinned || f.ActionRef == nil {
 			return false
 		}
-		sawNotPinned = true
+		sawRemediable = true
 	}
-	return sawNotPinned
+	return sawRemediable
 }
 
 // PresentReadOnlyFailures renders error-level findings directly to the

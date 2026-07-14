@@ -608,10 +608,22 @@ func TestPresentResults_RemediableNotCountedFailed(t *testing.T) {
 		return checks.Finding{
 			WorkflowPath: wf,
 			Category:     checks.NotPinned,
-			Severity:     checks.SeverityWarning,
+			Severity:     checks.SeverityError,
 			Confidence:   checks.ConfidenceHigh,
 			ActionRef:    &parserlock.ActionRef{Owner: "octo", Repo: "action", Ref: "v1"},
 			Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1"},
+		}
+	}
+	// loadError models diagnose.go's workflow-level NotPinned for a
+	// failed load/deps read: SeverityError, no ActionRef. It is fatal, not
+	// remediable, so a run that pins everything else must still fail it.
+	loadError := func(wf string) checks.Finding {
+		return checks.Finding{
+			WorkflowPath: wf,
+			Category:     checks.NotPinned,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       "failed to load workflow: yaml: line 3: bad indent",
 		}
 	}
 	unreachable := func(wf string) checks.Finding {
@@ -658,6 +670,24 @@ func TestPresentResults_RemediableNotCountedFailed(t *testing.T) {
 				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{notPinned(".github/workflows/a.yml")}},
 			},
 			wantOutput: []string{"1 of 1 workflow failed", "1 not-pinned"},
+		},
+		{
+			name:          "fatal load error is not remediable and keeps its reason",
+			willRemediate: true,
+			workflows: []checks.WorkflowReport{
+				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{notPinned(".github/workflows/a.yml")}},
+				{Path: ".github/workflows/b.yml", Findings: []checks.Finding{loadError(".github/workflows/b.yml")}},
+			},
+			wantOutput: []string{"1 of 2 workflows failed", "not-pinned"},
+		},
+		{
+			name:          "fatal load error alongside another failure still fails",
+			willRemediate: true,
+			workflows: []checks.WorkflowReport{
+				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{loadError(".github/workflows/a.yml")}},
+				{Path: ".github/workflows/b.yml", Findings: []checks.Finding{unreachable(".github/workflows/b.yml")}},
+			},
+			wantOutput: []string{"2 of 2 workflows failed", "unreachable-pin"},
 		},
 	}
 
