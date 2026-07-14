@@ -127,3 +127,96 @@ func TestCheck_NoFix_ReportsStaleWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(lockBefore), string(lockAfter), "--no-fix must not modify the lockfile")
 }
+
+// writeLastWorkflowDeletedRepo builds a scratch repo whose lockfile records a
+// single workflow that no longer exists on disk (the workflows directory holds
+// only the lockfile). It chdirs into the repo and returns the lockfile path.
+func writeLastWorkflowDeletedRepo(t *testing.T) string {
+	t.Helper()
+	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+
+	lockYAML := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  'actions/setup-go@v6':\n" +
+		"    ref: 'v6'\n    commit: 'sha1-" + setupGoSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"workflows:\n" +
+		"  '.github/workflows/deleted.yml':\n    - 'actions/setup-go@v6'\n"
+	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(lockYAML), 0o600))
+	t.Chdir(dir)
+	return lockPath
+}
+
+// TestCheck_FullScan_PrunesLastDeletedWorkflow proves that deleting the final
+// workflow doesn't strand its lockfile entry: a full scan that discovers zero
+// workflows still loads the lockfile and prunes the stale entry (and its
+// orphaned dep) instead of aborting with "no workflow files found".
+func TestCheck_FullScan_PrunesLastDeletedWorkflow(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	lockPath := writeLastWorkflowDeletedRepo(t)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--json=valid,workflows")
+	require.NoError(t, err, "an empty scan with a stale lockfile must prune, not error")
+
+	// Pruning the last workflow empties the lockfile; the tool cleans up the
+	// now-empty file. Either way the stale entry must not survive.
+	lockAfter, err := os.ReadFile(lockPath)
+	if err == nil {
+		got := string(lockAfter)
+		assert.NotContains(t, got, "deleted.yml", "stale workflow entry must be pruned")
+		assert.NotContains(t, got, "setup-go", "orphaned dep must be garbage-collected")
+	} else {
+		assert.True(t, os.IsNotExist(err), "unexpected error reading lockfile: %v", err)
+	}
+}
+
+// TestCheck_NoFix_ReportsLastDeletedWorkflow proves read-only mode still
+// surfaces the stale entry when the last workflow is gone, without touching the
+// lockfile.
+func TestCheck_NoFix_ReportsLastDeletedWorkflow(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	lockPath := writeLastWorkflowDeletedRepo(t)
+	lockBefore, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--no-fix", "--json=valid,findings")
+	require.NoError(t, err, "stale-workflow is non-blocking, exit stays 0")
+
+	var payload struct {
+		Findings []format.Finding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	var found bool
+	for i := range payload.Findings {
+		if payload.Findings[i].Category == "stale-workflow" {
+			found = true
+			assert.Contains(t, payload.Findings[i].Detail, "deleted.yml")
+		}
+	}
+	assert.True(t, found, "expected a stale-workflow finding: %+v", payload.Findings)
+
+	lockAfter, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(lockBefore), string(lockAfter), "--no-fix must not modify the lockfile")
+}
+
+// TestCheck_EmptyRepo_NoLockfile_Errors proves the helpful "no workflow files"
+// error is preserved when there's nothing on disk and nothing to prune.
+func TestCheck_EmptyRepo_NoLockfile_Errors(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	t.Chdir(dir)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--json=valid,workflows")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow files found")
+}

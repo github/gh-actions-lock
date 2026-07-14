@@ -146,7 +146,12 @@ $ gh actions-lock --json
 // Compare walk. newResolver is the DI seam; pass nil for production wiring.
 func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc, onCorrupt lockRecovery) ([]string, *resolve.Resolver, *lockfile.State, error) {
 	workflowsDir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR")
-	paths, err := discoverWorkflowPaths(workflowPaths, workflowsDir)
+	// A full-directory scan (no explicit paths) may legitimately find zero
+	// workflows when the last one was deleted; it must still load the
+	// lockfile so the now-stale entry can be pruned. Explicit-path runs keep
+	// erroring on a missing file.
+	fullScan := len(workflowPaths) == 0
+	paths, err := discoverWorkflowPaths(workflowPaths, workflowsDir, fullScan)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -195,10 +200,17 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 	store.SetMetadataResolver(r)
 	r.SeedBranchHints(store.AllDeps())
 
+	// An empty full scan is only meaningful when the lockfile still records
+	// workflows to prune. With nothing on disk and nothing recorded, there's
+	// genuinely no work — keep the original "no workflow files" error.
+	if len(paths) == 0 && len(store.WorkflowKeys()) == 0 {
+		return nil, nil, nil, noWorkflowsError(workflowsDir)
+	}
+
 	return paths, r, store, nil
 }
 
-func discoverWorkflowPaths(existing []string, workflowsDir string) ([]string, error) {
+func discoverWorkflowPaths(existing []string, workflowsDir string, allowEmpty bool) ([]string, error) {
 	if len(existing) > 0 {
 		return expandWorkflowPaths(existing)
 	}
@@ -208,7 +220,7 @@ func discoverWorkflowPaths(existing []string, workflowsDir string) ([]string, er
 		if err != nil {
 			return nil, err
 		}
-		if len(paths) == 0 {
+		if len(paths) == 0 && !allowEmpty {
 			return nil, fmt.Errorf("no workflow files found in %s", workflowsDir)
 		}
 		return paths, nil
@@ -218,10 +230,19 @@ func discoverWorkflowPaths(existing []string, workflowsDir string) ([]string, er
 	if err != nil {
 		return nil, err
 	}
-	if len(paths) == 0 {
+	if len(paths) == 0 && !allowEmpty {
 		return nil, fmt.Errorf("no workflow files found in .github/workflows/")
 	}
 	return paths, nil
+}
+
+// noWorkflowsError returns the error emitted when a scan finds no workflow
+// files, matching the location it searched.
+func noWorkflowsError(workflowsDir string) error {
+	if workflowsDir != "" {
+		return fmt.Errorf("no workflow files found in %s", workflowsDir)
+	}
+	return fmt.Errorf("no workflow files found in .github/workflows/")
 }
 
 func expandWorkflowPaths(paths []string) ([]string, error) {
