@@ -1346,6 +1346,25 @@ scenarios:
     expect:
       exit: 0
 
+  - name: onboarding_pin_run_not_reported_failed
+    category: onboarding
+    description: "github/actions-dispatch#802 — a fresh run that pins every workflow must not report 'N of N workflows failed'; about-to-be-pinned deps are remediable, not failures"
+    needs_token: true
+    fixtures:
+      workflows:
+        a.yml:
+          name: A
+          actions: ["actions/checkout@v4"]
+        b.yml:
+          name: B
+          actions: ["actions/setup-go@v5"]
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      output_excludes:
+        - "workflows failed"
+        - "not-pinned"
+
   # ═══════════════════════════════════════════════════════════════════════
   # CATEGORY: lockfile (additional scenarios)
   # ═══════════════════════════════════════════════════════════════════════
