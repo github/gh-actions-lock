@@ -134,9 +134,33 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
+	// --relock must not rewrite a workflow that still carries an
+	// unreachable-pin finding: re-resolving a moved sibling pulls the whole
+	// tree (including the possibly-tampered unreachable dep, which may be
+	// transitive and absent from the direct-only inventory) through
+	// ResolveAllRecursive, and buildPinnedEntries would commit it at a live
+	// SHA before the hard-error gate runs. Leave the workflow untouched from
+	// its original inventory; the unreachable-pin error still fails the run.
+	// --accept-moved deliberately accepts these, so it is exempt.
+	if opts.Relock && !opts.AcceptMoved && hasUnreachablePin(wr) && hasRefMoved(wr) {
+		entries = verifiedEntries(wr.Inventory, wr.Path)
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
+		return planResult{entries: entries, wplans: wplans}, nil
+	}
+
 	// Per-dep trust: recorded deps skip the network path.
 	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
 	entries = verifiedEntries(inventory, wr.Path)
+
+	// A moved *transitive* dep is pruned from inventory but is not a direct
+	// ActionRef, so partitionByInventory marks nothing unrecorded and the
+	// verified fast path would silently drop it instead of bumping it. Force
+	// the workflow's direct roots through recursive resolution so the moved
+	// transitive is re-pinned to its current SHA.
+	if len(unrecordedRefs) == 0 && repinsMoved(opts) && hasRefMoved(wr) {
+		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
+		entries = verifiedEntries(nil, wr.Path)
+	}
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts)
@@ -481,12 +505,11 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 // --accept-moved), ref-moved is resolved by the re-pin and is not recorded
 // for investigation.
 func informationalEntries(wr checks.WorkflowReport, opts PlanOptions) []Entry {
-	repinsMoved := opts.Relock || opts.AcceptMoved
 	var out []Entry
 	for _, f := range wr.Findings {
 		switch f.Category {
 		case checks.RefMoved:
-			if repinsMoved {
+			if repinsMoved(opts) {
 				continue
 			}
 			out = append(out, informationalEntry(f, wr.Path))
@@ -584,11 +607,32 @@ func needsRepin(wr checks.WorkflowReport, opts PlanOptions) bool {
 	if wr.NeedsAttention() {
 		return true
 	}
-	if !opts.Relock && !opts.AcceptMoved {
+	if !repinsMoved(opts) {
 		return false
 	}
+	return hasRefMoved(wr)
+}
+
+// repinsMoved reports whether this run re-resolves benign ref-moved deps.
+func repinsMoved(opts PlanOptions) bool {
+	return opts.Relock || opts.AcceptMoved
+}
+
+// hasRefMoved reports whether the workflow has a ref-moved finding.
+func hasRefMoved(wr checks.WorkflowReport) bool {
 	for _, f := range wr.Findings {
 		if f.Category == checks.RefMoved {
+			return true
+		}
+	}
+	return false
+}
+
+// hasUnreachablePin reports whether the workflow has an unreachable-pin
+// finding (a recorded SHA that is no longer reachable upstream).
+func hasUnreachablePin(wr checks.WorkflowReport) bool {
+	for _, f := range wr.Findings {
+		if f.Category == checks.UnreachablePin {
 			return true
 		}
 	}
