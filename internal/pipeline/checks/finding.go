@@ -61,8 +61,11 @@ type InventoryEntry struct {
 type WorkflowReport struct {
 	Path     string
 	Findings []Finding
-	// ActionRefs are all action references found in the workflow.
+	// ActionRefs are all remote dependency roots attributed to the workflow,
+	// including refs found inside in-repo `$/…` actions.
 	ActionRefs []parserlock.ActionRef
+	// RewriteRefs are the workflow-YAML refs eligible for source rewriting.
+	RewriteRefs []parserlock.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []dep.Dependency
 	// Inventory lists all dependencies with direct/transitive classification.

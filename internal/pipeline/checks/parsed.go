@@ -11,16 +11,23 @@ import (
 // LoadErr / DepsErr capture early failures so DiagnoseParsed can surface them
 // as findings without re-loading the file.
 type ParsedWorkflow struct {
-	Path               string
-	Refs               []parserlock.ActionRef
+	Path string
+	// Refs are all remote dependency roots attributed to the workflow. This
+	// includes refs found inside in-repo `$/…` actions.
+	Refs []parserlock.ActionRef
+	// RewriteRefs are workflow-YAML refs that pinning may rewrite. A ref also
+	// used inside a `$/…` action is excluded because rewriting only the workflow
+	// occurrence would leave the action file and lockfile out of sync.
+	RewriteRefs        []parserlock.ActionRef
 	LocalPaths         []string
 	SelfRepositoryRefs []string
 	// SelfRepositoryRefErrs holds malformed `$/…@ref` values (the invalid form).
-	SelfRepositoryRefErrs []string
-	ExistingDeps          []dep.Dependency
-	ParseWarnings         []string
-	LoadErr               error
-	DepsErr               error
+	SelfRepositoryRefErrs        []string
+	SelfRepositoryResolutionErrs []string
+	ExistingDeps                 []dep.Dependency
+	ParseWarnings                []string
+	LoadErr                      error
+	DepsErr                      error
 	// Resolved, when true, instructs DiagnoseParsed to run this
 	// workflow's diagnostics with a nil resolver. Network-bound checks
 	// (ref-moved) are skipped and the engine relies on

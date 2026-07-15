@@ -55,8 +55,8 @@ func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 }
 
 // TestMigrateLocalActions_EndToEnd runs the real command with
-// --migrate-local-actions against a scratch repo that mixes local composite
-// refs (`./…`) with a pinnable remote action, then asserts on BOTH sides of
+// --migrate-local-actions against a scratch repo whose local composite chain
+// reaches a pinnable remote action, then asserts on BOTH sides of
 // the mutation: the rewritten workflow/action files AND the generated
 // lockfile. It proves the two behaviours compose correctly in one pass:
 //   - `./…` same-repo refs are rewritten to `$/…` in the workflow and in the
@@ -113,8 +113,8 @@ func TestMigrateLocalActions_EndToEnd(t *testing.T) {
 	}
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
-	// Workflow mixes a local composite ref (migrated to $/) with a genuine
-	// remote action (pinned in the lockfile, ref kept in the file).
+	// The workflow only names the local composite. The remote dependency lives
+	// three levels down the in-repo action chain.
 	write(".github/workflows/workflow.yml", strings.TrimSpace(`
 name: ci
 on: push
@@ -123,12 +123,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: ./my-action
-      - uses: actions/setup-go@v6.0.0
 `)+"\n")
 	// In-repo composite chain, all same-repo local refs.
 	write("my-action/action.yml", "name: My Action\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n")
 	write("helper/action.yml", "name: Helper\nruns:\n  using: composite\n  steps:\n    - uses: ./nested/deep\n")
-	write("nested/deep/action.yml", "name: Deep\nruns:\n  using: composite\n  steps:\n    - run: echo deep\n      shell: bash\n")
+	write("nested/deep/action.yml", "name: Deep\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-go@v6\n")
 
 	t.Chdir(dir)
 
@@ -143,19 +142,21 @@ jobs:
 		return string(b)
 	}
 
-	// Workflow: local ref migrated, remote ref untouched (pin lives in lock).
+	// Workflow: local ref migrated; the remote ref remains in the action file.
 	wf := read(".github/workflows/workflow.yml")
 	assert.Contains(t, wf, "uses: $/my-action")
 	assert.NotContains(t, wf, "uses: ./my-action")
-	assert.Contains(t, wf, "uses: actions/setup-go@v6.0.0")
+	assert.NotContains(t, wf, "actions/setup-go")
 
 	// In-repo composite action files migrated, including the nested one.
 	assert.Contains(t, read("my-action/action.yml"), "uses: $/helper")
 	assert.Contains(t, read("helper/action.yml"), "uses: $/nested/deep")
+	assert.Contains(t, read("nested/deep/action.yml"), "uses: actions/setup-go@v6")
 
 	// Lockfile: pins the remote dep, records nothing for the self refs.
 	lock := readTempLockfilePins(t)
 	assert.Contains(t, lock, "actions/setup-go", "remote dep should be pinned")
+	assert.Contains(t, lock, "'actions/setup-go@v6':", "nested refs keep the author's ref instead of being narrowed as workflow source")
 	assert.Contains(t, lock, setupGoSHA)
 	assert.NotContains(t, lock, "$/", "self refs are inherently pinned; no lockfile entry")
 	assert.NotContains(t, lock, "my-action", "in-repo composite must not be pinned")

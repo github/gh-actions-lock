@@ -37,8 +37,8 @@ After the initial run to onboard workflows, you will need to run `gh actions-loc
 
 `uses: $/…` references an action or reusable workflow in the **same repository** as
 the defining file, resolved at the **running commit**. Because it always resolves to
-the workflow's own SHA it is **inherently pinned** — no lockfile entry is required,
-and it is valid anywhere a relative `./…` reference is:
+that repository's running SHA it is **inherently pinned** — no lockfile entry is
+required, and it is valid anywhere a relative `./…` reference is:
 
 ```yaml
 steps:
@@ -84,4 +84,3 @@ gh-actions-lock is maintained by @github/actions-dispatch-reviewers. See [CODEOW
 ## Support
 
 Support is best-effort and community-based. Please file bugs and feature requests as [GitHub issues](https://github.com/github/gh-actions-lock/issues). See [SUPPORT.md](./SUPPORT.md) for details.
-

@@ -116,9 +116,12 @@ func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	}
 
 	repoRoot := findRepoRoot(f.Path)
+	if repoRoot == "" {
+		return append([]byte(nil), f.Content...), 0, nil
+	}
 	replacements := make(map[string]string, len(scan.LocalPaths))
 	for _, localPath := range scan.LocalPaths {
-		if repoRoot != "" && !localActionExists(repoRoot, localPath) {
+		if !localActionExists(repoRoot, localPath) {
 			continue
 		}
 		replacements[localPath] = selfRepositoryPrefix + strings.TrimPrefix(localPath, "./")

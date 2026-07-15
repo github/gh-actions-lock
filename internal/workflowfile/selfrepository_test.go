@@ -12,6 +12,7 @@ func TestIsSelfRepositoryAction(t *testing.T) {
 		value string
 		want  bool
 	}{
+		{"repository root action", "$/", true},
 		{"bare self repository action", "$/actions/foo", true},
 		{"self repository reusable workflow", "$/.github/workflows/x.yml", true},
 		{"self repository with ref", "$/actions/foo@v1", true},
@@ -34,6 +35,7 @@ func TestSelfRepositoryRefHasVersion(t *testing.T) {
 		value string
 		want  bool
 	}{
+		{"repository root action no ref", "$/", false},
 		{"bare action no ref", "$/actions/foo", false},
 		{"reusable workflow no ref", "$/.github/workflows/x.yml", false},
 		{"action with ref", "$/actions/foo@v1", true},

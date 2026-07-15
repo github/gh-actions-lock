@@ -54,28 +54,31 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	skippedRescan := 0
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
-	if !opts.Rescan {
-		for i := range parsed {
-			// Local-path workflows are skipped at diagnose time; don't
-			// waste network calls resolving their refs.
-			if len(parsed[i].LocalPaths) > 0 {
-				parsed[i].Resolved = true
-				continue
-			}
-			recorded, unrecorded := parsed[i].PartitionRefs()
-			if len(parsed[i].Refs) == 0 || len(unrecorded) == 0 {
-				parsed[i].Resolved = true
-				skippedRescan++
-			} else {
-				// Collect deps covered by recorded refs for cache
-				// seeding. These refs have matching lockfile entries,
-				// so their resolve results can be served from the
-				// lockfile rather than the network.
-				rd := parsed[i].RecordedDeps(recorded)
-				seedDeps = append(seedDeps, rd...)
-				for _, r := range recorded {
-					recordedKeys[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = true
-				}
+	for i := range parsed {
+		// Structural blockers are terminal at diagnose time. Do not perform
+		// unrelated network work for a workflow the planner must reject.
+		if len(parsed[i].LocalPaths) > 0 ||
+			len(parsed[i].SelfRepositoryRefErrs) > 0 ||
+			len(parsed[i].SelfRepositoryResolutionErrs) > 0 {
+			parsed[i].Resolved = true
+			continue
+		}
+		if opts.Rescan {
+			continue
+		}
+		recorded, unrecorded := parsed[i].PartitionRefs()
+		if len(parsed[i].Refs) == 0 || len(unrecorded) == 0 {
+			parsed[i].Resolved = true
+			skippedRescan++
+		} else {
+			// Collect deps covered by recorded refs for cache
+			// seeding. These refs have matching lockfile entries,
+			// so their resolve results can be served from the
+			// lockfile rather than the network.
+			rd := parsed[i].RecordedDeps(recorded)
+			seedDeps = append(seedDeps, rd...)
+			for _, r := range recorded {
+				recordedKeys[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = true
 			}
 		}
 	}

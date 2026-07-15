@@ -45,12 +45,16 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			continue
 		}
 		scan := wf.ExtractActionRefs()
-		pw.Refs = scan.Refs
-		pw.LocalPaths = scan.LocalPaths
-		pw.SelfRepositoryRefs = scan.SelfRepositoryRefs
-		pw.SelfRepositoryRefErrs = scan.SelfRepositoryRefErrs
-		pw.ParseWarnings = scan.Warnings
-		if len(pw.Refs) > 0 {
+		selfScan := workflowfile.ScanSelfRepositoryActions(path, scan.SelfRepositoryActionRefs)
+
+		pw.RewriteRefs = excludeActionRefs(scan.Refs, selfScan.Refs)
+		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
+		pw.LocalPaths = mergeStrings(scan.LocalPaths, selfScan.LocalPaths)
+		pw.SelfRepositoryRefs = mergeStrings(scan.SelfRepositoryRefs, selfScan.SelfRepositoryRefs)
+		pw.SelfRepositoryRefErrs = mergeStrings(scan.SelfRepositoryRefErrs, selfScan.SelfRepositoryRefErrs)
+		pw.SelfRepositoryResolutionErrs = selfScan.Errors
+		pw.ParseWarnings = append(scan.Warnings, selfScan.Warnings...)
+		if len(pw.Refs) > 0 && store != nil {
 			wfKey := workflowfile.KeyFromPath(path)
 			deps, depsErr := store.Get(wfKey)
 			if depsErr != nil {
@@ -62,6 +66,55 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		out = append(out, pw)
 	}
 	return out
+}
+
+func mergeActionRefs(groups ...[]parserlock.ActionRef) []parserlock.ActionRef {
+	seen := make(map[string]bool)
+	var refs []parserlock.ActionRef
+	for _, group := range groups {
+		for _, ref := range group {
+			key := ref.FullName() + "@" + ref.Ref
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func excludeActionRefs(refs, excluded []parserlock.ActionRef) []parserlock.ActionRef {
+	excludedKeys := make(map[string]bool, len(excluded))
+	for _, ref := range excluded {
+		excludedKeys[actionRefLockKey(ref)] = true
+	}
+	out := make([]parserlock.ActionRef, 0, len(refs))
+	for _, ref := range refs {
+		if !excludedKeys[actionRefLockKey(ref)] {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func actionRefLockKey(ref parserlock.ActionRef) string {
+	return strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
+}
+
+func mergeStrings(groups ...[]string) []string {
+	seen := make(map[string]bool)
+	var values []string
+	for _, group := range groups {
+		for _, value := range group {
+			if seen[value] {
+				continue
+			}
+			seen[value] = true
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 // CollectResolvable returns the deduplicated union of refs and existing deps

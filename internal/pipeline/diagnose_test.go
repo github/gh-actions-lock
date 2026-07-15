@@ -84,3 +84,30 @@ func TestDiagnoseOneParsed_InvalidSelfRepositoryRef(t *testing.T) {
 	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
 	assert.Contains(t, wr.Findings[0].Remediation, "@ref")
 }
+
+func TestDiagnoseOneParsed_InvalidSelfRepositoryRefWithLocalAction(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:                  ".github/workflows/ci.yml",
+		LocalPaths:            []string{"./local"},
+		SelfRepositoryRefErrs: []string{"$/actions/foo@v1"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 2)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, wr.Findings[0].Category)
+	assert.Equal(t, checks.LocalAction, wr.Findings[1].Category)
+	assert.False(t, wr.IsValid())
+}
+
+func TestDiagnoseOneParsed_SelfRepositoryResolutionError(t *testing.T) {
+	pw := checks.ParsedWorkflow{
+		Path:                         ".github/workflows/ci.yml",
+		SelfRepositoryResolutionErrs: []string{"can't inspect self repository action $/missing"},
+	}
+	wr := diagnoseOneParsed(context.Background(), pw, nil, nil, nil)
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, wr.Findings[0].Category)
+	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
+	assert.False(t, wr.IsValid())
+}

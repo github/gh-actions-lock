@@ -12,6 +12,8 @@ import (
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // seedCache populates r.cache with the supplied entries and returns r so it can
@@ -356,6 +358,56 @@ func TestResolveAllRecursiveSelfRepositoryNestedInComposite(t *testing.T) {
 	if got := pm["org/fixtures-b@main"]; len(got) != 1 || got[0] != "org/fixtures@main" {
 		t.Errorf("expected org/fixtures-b@main parent = [org/fixtures@main], got %v", got)
 	}
+}
+
+func TestResolveAllRecursiveSelfRepositoryNestedFetchesParentSHA(t *testing.T) {
+	const parentSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.GraphQLForRepo("org", "fixtures"),
+		httpmock.GraphQLQuery(`{"data":{"a0":{"nameWithOwner":"org/fixtures","object":{"oid":"`+parentSHA+`","file":{"object":{"text":"runs:\n  using: composite\n  steps:\n    - uses: $/child\n"}}}}}}`, func(_ string, variables map[string]any) {
+			assert.Equal(t, "main^{commit}", variables["expr0"])
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("org", "fixtures"),
+		httpmock.GraphQLQuery(`{"data":{"a0":{"nameWithOwner":"org/fixtures","object":{"oid":"`+parentSHA+`","file":{"object":{"text":"runs:\n  using: node20\n"}}}}}}`, func(_ string, variables map[string]any) {
+			assert.Equal(t, parentSHA+"^{commit}", variables["expr0"])
+		}),
+	)
+
+	r, err := New("github.com", pinpool.New(1, nil), WithTransport(reg))
+	require.NoError(t, err)
+
+	deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "parent", Ref: "main"},
+	})
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, "main", deps[0].Ref)
+	assert.Equal(t, parentSHA, deps[0].SHA)
+}
+
+func TestResolveAllRecursiveRejectsNestedSelfRepositoryRefWithVersion(t *testing.T) {
+	r := seedCache(&Resolver{
+		MaxRecursionDepth: DefaultMaxRecursionDepth,
+	}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("org", "fixtures", "parent", "main"): {
+			dep:       dep.Dependency{NWO: "org/fixtures", Path: "parent", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "runs:\n  using: composite\n  steps:\n    - uses: $/child@v1\n",
+		},
+	})
+
+	deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "org", Repo: "fixtures", Path: "parent", Ref: "main"},
+	})
+
+	require.Error(t, err)
+	assert.True(t, IsInvalidSelfRepositoryRef(err))
+	assert.Contains(t, err.Error(), "$/child@v1")
+	require.Len(t, deps, 1)
 }
 
 // TestResolveAllRecursiveSelfRepositoryDeepMultiLevel exercises a deliberately gnarly

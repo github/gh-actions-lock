@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -71,6 +72,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		var resolveErr error
 		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
 		if resolveErr != nil {
+			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {
 				wr.Findings = append(wr.Findings, checks.Finding{
 					WorkflowPath: pw.Path,
@@ -80,6 +82,26 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 					Detail:       fmt.Sprintf("a composite action uses local path actions whose transitive dependencies cannot be resolved: %s", resolveErr),
 					Remediation:  "the composite action must reference dependencies by owner/repo/path@ref instead of ./path",
 				})
+				blockingResolverError = true
+			}
+			if resolve.IsInvalidSelfRepositoryRef(resolveErr) {
+				var invalidRef *resolve.InvalidSelfRepositoryRefError
+				_ = errors.As(resolveErr, &invalidRef)
+				detail := fmt.Sprintf("a composite action uses an invalid self repository reference: %s", resolveErr)
+				if invalidRef != nil {
+					detail = fmt.Sprintf("self repository actions must not carry an @ref: %s in %s", invalidRef.Ref, invalidRef.Parent)
+				}
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: pw.Path,
+					Category:     checks.InvalidSelfRepositoryRef,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					Detail:       detail,
+					Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+				})
+				blockingResolverError = true
+			}
+			if blockingResolverError {
 				return wr
 			}
 			// Low: we're surfacing the resolver failure itself, not a
@@ -145,7 +167,7 @@ func selfRepositoryFinding(pw checks.ParsedWorkflow) checks.Finding {
 		Category:     checks.SelfRepositoryAction,
 		Severity:     checks.SeverityInfo,
 		Confidence:   checks.ConfidenceHigh,
-		Detail:       fmt.Sprintf("references same-repo actions via `$/…` (inherently pinned): %s", strings.Join(pw.SelfRepositoryRefs, ", ")),
+		Detail:       fmt.Sprintf("references `$/…` self repository actions (inherently pinned): %s", strings.Join(pw.SelfRepositoryRefs, ", ")),
 	}
 }
 
@@ -169,7 +191,36 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	}
 
 	wr.ActionRefs = pw.Refs
+	wr.RewriteRefs = pw.RewriteRefs
+	if wr.RewriteRefs == nil {
+		wr.RewriteRefs = pw.Refs
+	}
 	wr.ParseWarnings = pw.ParseWarnings
+
+	hasTerminalFinding := false
+	if len(pw.SelfRepositoryRefErrs) > 0 {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.InvalidSelfRepositoryRef,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       fmt.Sprintf("self repository actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
+			Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+		})
+		hasTerminalFinding = true
+	}
+
+	for _, resolutionErr := range pw.SelfRepositoryResolutionErrs {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.InvalidSelfRepositoryRef,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       resolutionErr,
+			Remediation:  "fix the `$/…` action path so its dependencies can be inspected",
+		})
+		hasTerminalFinding = true
+	}
 
 	if len(pw.LocalPaths) > 0 {
 		wfKey := workflowfile.KeyFromPath(pw.Path)
@@ -192,18 +243,10 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions)",
 			})
 		}
-		return wr, true
+		hasTerminalFinding = true
 	}
 
-	if len(pw.SelfRepositoryRefErrs) > 0 {
-		wr.Findings = append(wr.Findings, checks.Finding{
-			WorkflowPath: pw.Path,
-			Category:     checks.InvalidSelfRepositoryRef,
-			Severity:     checks.SeverityError,
-			Confidence:   checks.ConfidenceHigh,
-			Detail:       fmt.Sprintf("self repository actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
-			Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
-		})
+	if hasTerminalFinding {
 		return wr, true
 	}
 

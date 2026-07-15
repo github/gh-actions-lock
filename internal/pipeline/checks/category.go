@@ -70,9 +70,8 @@ const (
 	// repo at the running ref, so they are inherently pinned and need no
 	// lockfile entry — always in compliance.
 	SelfRepositoryAction Category = "self-repository-action"
-	// InvalidSelfRepositoryRef means a `$/…` reference carries an `@ref` suffix
-	// (e.g. $/actions/foo@v1). Self-repo refs always resolve to the running
-	// ref, so the suffix is invalid and must be removed.
+	// InvalidSelfRepositoryRef means a `$/…` reference is malformed or its
+	// target cannot be inspected. This includes a forbidden `@ref` suffix.
 	InvalidSelfRepositoryRef Category = "invalid-self-repository-ref"
 )
 

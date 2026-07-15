@@ -542,7 +542,44 @@ def checkout_graphql_forgery(srv)
     else
       [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
     end
+
   end
+end
+
+def checkout_graphql_success(srv)
+  srv.on(:POST, %r{/graphql$}) do |req|
+    body = JSON.parse(req.body) rescue {}
+    query = body["query"] || ""
+
+    if query.include?("expression")
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate({ data: { a0: {
+         nameWithOwner: "actions/checkout",
+         object: {
+           oid: CHECKOUT_SHA,
+           file: {
+             object: {
+               text: "name: Checkout\ndescription: Checkout\nruns:\n  using: node20\n  main: dist/index.js\n"
+             }
+           }
+         }
+       } } })]
+    else
+      [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
+    end
+  end
+end
+
+def wire_checkout_success(s, token)
+  s.stub_server do |srv|
+    checkout_graphql_success(srv)
+    checkout_repo_rest(srv)
+    srv.on(:GET, %r{/repos/actions/checkout/releases}) do |_req|
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate([{ tag_name: "v4.2.2", published_at: "2024-01-01T00:00:00Z", immutable: false }])]
+    end
+  end
+  s.env("GH_TOKEN" => token)
 end
 
 # ── Stub server wiring per scenario ────────────────────────────────────
@@ -551,6 +588,13 @@ end
 # not listed here either use no stub or rely on catalog-level config.
 
 STUB_WIRING = {
+  migrate_local_actions_rewrite: ->(s) {
+    wire_checkout_success(s, "gho_fake_migrate_token")
+  },
+  self_repository_shared_dependency: ->(s) {
+    wire_checkout_success(s, "gho_fake_self_repository_token")
+  },
+
   # SSO scenarios: catch-all 403 with X-GitHub-SSO header
   sso_auth_failure: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
@@ -717,6 +761,15 @@ STUB_WIRING = {
 # ── Custom assertion wiring ─────────────────────────────────────────────
 
 CUSTOM_ASSERTIONS = {
+  self_repository_shared_dependency: ->(s) {
+    s.assert_custom do |r|
+      binary = File.expand_path("../../gh-actions-lock", __dir__)
+      stdout, stderr, status = Open3.capture3(binary, "--verify-local", chdir: r.dir)
+      unless status.success?
+        s.failures << "second-pass --verify-local failed (lockfile did not converge):\n#{stdout}#{stderr}"
+      end
+    end
+  },
   sso_dedup: ->(s) {
     s.assert_custom do |r|
       count = r.output.scan("SAML enforcement").size

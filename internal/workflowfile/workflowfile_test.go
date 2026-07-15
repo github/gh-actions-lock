@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: $/
       - uses: $/actions/foo
       - uses: $/actions/foo
       - uses: ./local-action
@@ -76,9 +78,10 @@ jobs:
 
 	// Bare `$/…` valid at both step and job level, deduplicated.
 	assert.ElementsMatch(t,
-		[]string{"$/actions/foo", "$/.github/workflows/reusable.yml"},
+		[]string{"$/", "$/actions/foo", "$/.github/workflows/reusable.yml"},
 		scan.SelfRepositoryRefs,
 	)
+	assert.Equal(t, []string{"$/", "$/actions/foo"}, scan.SelfRepositoryActionRefs)
 
 	// `$/…@ref` is the invalid form.
 	assert.Equal(t, []string{"$/actions/foo@v1"}, scan.SelfRepositoryRefErrs)
@@ -102,6 +105,27 @@ jobs:
 	assert.Empty(t, scan.LocalPaths)
 	assert.Equal(t, []string{"$/actions/foo"}, scan.SelfRepositoryRefs)
 	assert.Empty(t, scan.SelfRepositoryRefErrs)
+}
+
+func TestExtractActionRefs_SelfRepositoryActionAfterReusableWorkflow(t *testing.T) {
+	content := []byte(`
+name: ci
+on: push
+jobs:
+  call:
+    uses: $/shared
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: $/shared
+`)
+	f, err := Parse("ci.yml", content)
+	require.NoError(t, err)
+
+	scan := f.ExtractActionRefs()
+
+	assert.Equal(t, []string{"$/shared"}, scan.SelfRepositoryRefs)
+	assert.Equal(t, []string{"$/shared"}, scan.SelfRepositoryActionRefs)
 }
 
 func TestMigrateLocalActionsToSelfRepository(t *testing.T) {
@@ -142,6 +166,70 @@ func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, changed)
 	assert.Equal(t, content, out)
+}
+
+func TestMigrateLocalActionsToSelfRepository_NoRepoRoot(t *testing.T) {
+	content := []byte("jobs:\n  build:\n    steps:\n      - uses: ./local-action\n")
+	f, err := Parse(filepath.Join(t.TempDir(), "ci.yml"), content)
+	require.NoError(t, err)
+
+	out, changed, err := f.MigrateLocalActionsToSelfRepository()
+	require.NoError(t, err)
+	assert.Equal(t, 0, changed)
+	assert.Equal(t, content, out)
+}
+
+func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+	require.NoError(t, os.WriteFile(workflowPath, []byte("name: ci\n"), 0o644))
+
+	writeAction := func(path, content string) {
+		actionPath := filepath.Join(repoRoot, path, "action.yml")
+		require.NoError(t, os.MkdirAll(filepath.Dir(actionPath), 0o755))
+		require.NoError(t, os.WriteFile(actionPath, []byte(content), 0o644))
+	}
+	writeAction("actions/root", `runs:
+  using: composite
+  steps:
+    - uses: $/actions/child
+    - uses: vendor/tool@v1
+`)
+	writeAction("actions/child", `runs:
+  using: composite
+  steps:
+    - uses: $/actions/root
+    - uses: actions/checkout@v4
+    - uses: ./workspace-relative
+    - uses: $/actions/bad@v2
+`)
+
+	scan := ScanSelfRepositoryActions(workflowPath, []string{"$/actions/root"})
+
+	assert.ElementsMatch(t, []string{"vendor/tool@v1", "actions/checkout@v4"}, actionRefStrings(scan.Refs))
+	assert.ElementsMatch(t, []string{"$/actions/child", "$/actions/root"}, scan.SelfRepositoryRefs)
+	assert.Equal(t, []string{"$/actions/bad@v2"}, scan.SelfRepositoryRefErrs)
+	assert.Equal(t, []string{"./workspace-relative"}, scan.LocalPaths)
+	assert.Empty(t, scan.Errors)
+	assert.Empty(t, scan.Warnings)
+}
+
+func TestScanSelfRepositoryActions_NoRepoRoot(t *testing.T) {
+	scan := ScanSelfRepositoryActions(filepath.Join(t.TempDir(), "ci.yml"), []string{"$/actions/root"})
+
+	require.Len(t, scan.Errors, 1)
+	assert.Contains(t, scan.Errors[0], "not in a git repository")
+	assert.Empty(t, scan.Refs)
+}
+
+func actionRefStrings(refs []parserlock.ActionRef) []string {
+	values := make([]string, len(refs))
+	for i, ref := range refs {
+		values[i] = ref.FullName() + "@" + ref.Ref
+	}
+	return values
 }
 
 func TestDiscoverCompositeActionFiles(t *testing.T) {
