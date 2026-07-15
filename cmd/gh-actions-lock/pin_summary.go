@@ -16,7 +16,7 @@ import (
 // reportHasUnfixableErrors returns true when the report contains error-
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
-// don't count. LocalAction and LockfileForgery errors are unfixable --
+// don't count. LocalAction and UnreachablePin errors are unfixable --
 // the workflow or lockfile must be investigated.
 func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
@@ -27,7 +27,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 			switch f.Category {
 			case checks.LocalAction, checks.InvalidSelfRepositoryRef:
 				return true
-			case checks.LockfileForgery:
+			case checks.UnreachablePin:
 				if !acceptMoved {
 					return true
 				}
@@ -40,7 +40,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 // reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors
 // but only matches categories that renderInvestigationAlerts does NOT
 // handle (LocalAction). Use this to gate the PresentResults call so
-// lockfile-forgery findings don't trigger a redundant (and stale) error
+// unreachable-pin findings don't trigger a redundant (and stale) error
 // summary.
 func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 	for _, wr := range report.Workflows {
@@ -108,9 +108,16 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
 		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
-		if skippedRescan > 0 {
-			console.TermDetail("Trusted lockfile for %d already-pinned %s; run `gh actions-lock --rescan` to re-verify reachability.",
-				skippedRescan, ui.Pluralize(skippedRescan, "workflow", "workflows"))
+		if noNarrow && skippedRescan > 0 {
+			// Mutable refs (v4, main) were trusted without a live check.
+			// With narrowing on, the version-ref nudge above already tells
+			// the user to pin precisely — which also buys live
+			// re-verification — so we don't add a competing --rescan line.
+			// Under --no-narrow that nudge is suppressed, so this is the
+			// only place the trust gap and its escape hatch surface.
+			console.TermDetail("%d mutable %s trusted without a live check — branch or partial-version pins (e.g. v4, main) that can move; run `gh actions-lock --rescan` to re-verify %s.",
+				skippedRescan, ui.Pluralize(skippedRescan, "ref", "refs"),
+				ui.Pluralize(skippedRescan, "it", "them"))
 		}
 		return nil
 	}
@@ -133,13 +140,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	// findings surface on the terminal.
 	//
 	// Only trigger for categories NOT already rendered by
-	// renderInvestigationAlerts (which handles lockfile-forgery).
+	// renderInvestigationAlerts (which handles unreachable-pin).
 	// Without this gate PresentResults would also emit a stale summary
 	// line counting pre-fix not-pinned findings.
 	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,
-			checks.LockfileForgery)
+			checks.UnreachablePin)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {

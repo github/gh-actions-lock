@@ -17,6 +17,80 @@ func mkDep(nwo, ref, sha string) dep.Dependency {
 	return dep.Dependency{NWO: nwo, Ref: ref, SHA: sha}
 }
 
+func TestPlanFastPath(t *testing.T) {
+	tests := []struct {
+		name         string
+		pw           checks.ParsedWorkflow
+		wantResolved bool
+		wantMutable  int
+	}{
+		{
+			name: "all mutable recorded → trusted, no live resolution",
+			pw: checks.ParsedWorkflow{
+				Refs:         []parserlock.ActionRef{ref("actions", "checkout", "", "v4")},
+				ExistingDeps: []dep.Dependency{mkDep("actions/checkout", "v4", "aaa")},
+			},
+			wantResolved: true,
+			wantMutable:  1,
+		},
+		{
+			name: "immutable recorded pin → forces live resolution (the #819 fix)",
+			pw: checks.ParsedWorkflow{
+				Refs:         []parserlock.ActionRef{ref("actions", "checkout", "", "v4.2.1")},
+				ExistingDeps: []dep.Dependency{mkDep("actions/checkout", "v4.2.1", "aaa")},
+			},
+			wantResolved: false,
+			wantMutable:  0,
+		},
+		{
+			name: "mixed immutable + mutable → resolve live, trust the mutable one",
+			pw: checks.ParsedWorkflow{
+				Refs: []parserlock.ActionRef{
+					ref("actions", "checkout", "", "v4.2.1"),
+					ref("actions", "setup-go", "", "v5"),
+				},
+				ExistingDeps: []dep.Dependency{
+					mkDep("actions/checkout", "v4.2.1", "aaa"),
+					mkDep("actions/setup-go", "v5", "bbb"),
+				},
+			},
+			wantResolved: false,
+			wantMutable:  1,
+		},
+		{
+			name: "unrecorded ref → resolve live, nothing trusted",
+			pw: checks.ParsedWorkflow{
+				Refs:         []parserlock.ActionRef{ref("actions", "checkout", "", "v4")},
+				ExistingDeps: nil,
+			},
+			wantResolved: false,
+			wantMutable:  0,
+		},
+		{
+			name:         "no refs → resolved, nothing to do",
+			pw:           checks.ParsedWorkflow{},
+			wantResolved: true,
+			wantMutable:  0,
+		},
+		{
+			name: "local-path workflow → resolved, refs untouched",
+			pw: checks.ParsedWorkflow{
+				LocalPaths: []string{"./my-local-action"},
+				Refs:       []parserlock.ActionRef{ref("actions", "checkout", "", "v4.2.1")},
+			},
+			wantResolved: true,
+			wantMutable:  0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := planFastPath(tt.pw)
+			assert.Equal(t, tt.wantResolved, plan.resolved, "resolved")
+			assert.Len(t, plan.mutableRefs, tt.wantMutable, "mutableRefs")
+		})
+	}
+}
+
 func TestPartitionRefs(t *testing.T) {
 	tests := []struct {
 		name             string

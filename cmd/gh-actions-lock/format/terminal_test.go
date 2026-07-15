@@ -330,7 +330,7 @@ func TestPresentResults_ParseWarningsSurface(t *testing.T) {
 // TestPresentResults_ExcludeCategoriesSkipsImpostor verifies that excluded
 // categories are not rendered in the error findings block. This prevents
 // duplication when renderInvestigationAlerts already surfaced the same
-// findings (e.g. lockfile-forgery).
+// findings (e.g. unreachable-pin).
 func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 	var buf bytes.Buffer
 	u := ui.NewPlain(&buf)
@@ -341,7 +341,7 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 				Findings: []checks.Finding{
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
-						Category:     checks.LockfileForgery,
+						Category:     checks.UnreachablePin,
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
@@ -360,17 +360,17 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.LockfileForgery)
+	PresentResults(u, report, false, false, checks.UnreachablePin)
 	got := buf.String()
 
-	if strings.Contains(got, "LOCKFILE-FORGERY") {
-		t.Errorf("excluded lockfile-forgery should not appear:\n%s", got)
+	if strings.Contains(got, "UNREACHABLE-PIN") {
+		t.Errorf("excluded unreachable-pin should not appear:\n%s", got)
 	}
 	if strings.Contains(got, "lockfile entry was not a prior state") {
 		t.Errorf("excluded forgery detail should not appear:\n%s", got)
 	}
 	// The summary line should not count the excluded category.
-	if strings.Contains(got, "lockfile-forgery") {
+	if strings.Contains(got, "unreachable-pin") {
 		t.Errorf("excluded category should not appear in summary:\n%s", got)
 	}
 }
@@ -387,7 +387,7 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 				Findings: []checks.Finding{
 					{
 						WorkflowPath: ".github/workflows/ci.yml",
-						Category:     checks.LockfileForgery,
+						Category:     checks.UnreachablePin,
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1", SHA: "aaaa"},
@@ -405,11 +405,11 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.LockfileForgery)
+	PresentResults(u, report, false, false, checks.UnreachablePin)
 	got := buf.String()
 
-	if strings.Contains(got, "LOCKFILE-FORGERY") {
-		t.Errorf("excluded lockfile-forgery should not appear:\n%s", got)
+	if strings.Contains(got, "UNREACHABLE-PIN") {
+		t.Errorf("excluded unreachable-pin should not appear:\n%s", got)
 	}
 	if !strings.Contains(got, "LOCAL-ACTION") {
 		t.Errorf("non-excluded local-action should still appear:\n%s", got)
@@ -437,5 +437,163 @@ func TestPresentResults_RepoFindingsSurface(t *testing.T) {
 	}
 	if !strings.Contains(got, "example.com/docs") {
 		t.Errorf("RepoFindings DocURL missing from terminal output:\n%s", got)
+	}
+}
+
+// TestPresentReadOnlyFailures_ForgeryReachesTerminal is the regression guard
+// for the --verify/--no-fix output bug: an error-level finding must reach the
+// terminal even when the narration log sinks to io.Discard. PresentResults
+// alone routes the error block through the discarded log, so read-only modes
+// exited non-zero showing nothing about which workflow failed.
+func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.UnreachablePin,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "main", SHA: "aaaa"},
+				Detail:       "pinned aaaa is not an ancestor of bbbb",
+				Remediation:  "investigate immediately",
+				DocURL:       "https://example.com/docs",
+			}},
+		}},
+	}
+
+	// Prove the pre-fix behavior: PresentResults leaves the error block in
+	// the discarded log, so nothing surfaces.
+	PresentResults(u, report, false, false)
+	if strings.Contains(buf.String(), "UNREACHABLE-PIN") {
+		t.Fatalf("guard invalid: PresentResults unexpectedly surfaced the error block:\n%s", buf.String())
+	}
+
+	hasFixable := PresentReadOnlyFailures(u, report)
+	got := buf.String()
+
+	for _, want := range []string{
+		"1 of 1 workflow failed",
+		"Unreachable pin",
+		"octo/action@main",
+		"pinned aaaa is not an ancestor of bbbb",
+		"investigate immediately",
+		".github/workflows/ci.yml",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PresentReadOnlyFailures output missing %q\nfull output:\n%s", want, got)
+		}
+	}
+	if hasFixable {
+		t.Errorf("forgery is investigation-only; hasFixable should be false")
+	}
+}
+
+// TestPresentReadOnlyFailures_FixableReported verifies an auto-fixable
+// error-level finding (a directly-used unpinned action) surfaces and reports
+// hasFixable=true so the caller can honestly print the re-run hint.
+func TestPresentReadOnlyFailures_FixableReported(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.NotPinned,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				ActionRef:    &parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v4"},
+				Dependency:   &dep.Dependency{NWO: "actions/checkout", Ref: "v4"},
+				Detail:       "no lockfile entry",
+			}},
+		}},
+	}
+
+	hasFixable := PresentReadOnlyFailures(u, report)
+	got := buf.String()
+
+	if !strings.Contains(got, "actions/checkout@v4") {
+		t.Errorf("expected failing dep in output:\n%s", got)
+	}
+	if !hasFixable {
+		t.Errorf("not-pinned is auto-fixable; hasFixable should be true")
+	}
+}
+
+// TestPresentReadOnlyFailures_ValidReportSilent verifies a clean report
+// produces no output and reports nothing fixable.
+func TestPresentReadOnlyFailures_ValidReportSilent(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.Valid,
+				Severity:     checks.SeverityOK,
+				Confidence:   checks.ConfidenceHigh,
+			}},
+		}},
+	}
+
+	if hasFixable := PresentReadOnlyFailures(u, report); hasFixable {
+		t.Errorf("valid report should report nothing fixable")
+	}
+	if got := buf.String(); got != "" {
+		t.Errorf("valid report should produce no output, got:\n%s", got)
+	}
+}
+
+// TestPresentReadOnlyFailures_LocalActionNotFixable guards the inference bug
+// where hasFixable was derived from !IsAlertedCategory: local-action is an
+// error the tool can't auto-remediate, so the "Re-run without --no-fix" hint
+// must not be offered for it.
+func TestPresentReadOnlyFailures_LocalActionNotFixable(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.LocalAction,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "local action ./my-action",
+			}},
+		}},
+	}
+
+	hasFixable := PresentReadOnlyFailures(u, report)
+	if got := buf.String(); !strings.Contains(got, "local action ./my-action") {
+		t.Errorf("expected local-action detail in output:\n%s", got)
+	}
+	if hasFixable {
+		t.Errorf("local-action is not auto-fixable; hasFixable should be false")
+	}
+}
+
+// TestPresentReadOnlyFailures_UnreachablePinShowsReleases verifies the
+// read-only renderer includes the upstream releases link for an
+// unreachable-pin finding, matching the detailed (fix-mode) renderer.
+func TestPresentReadOnlyFailures_UnreachablePinShowsReleases(t *testing.T) {
+	u, buf := newTestUI()
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/ci.yml",
+				Category:     checks.UnreachablePin,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "main", SHA: "aaaa"},
+				Detail:       "pinned aaaa is not an ancestor of bbbb",
+			}},
+		}},
+	}
+
+	PresentReadOnlyFailures(u, report)
+	if got := buf.String(); !strings.Contains(got, "https://github.com/octo/action/releases") {
+		t.Errorf("expected upstream releases link in read-only output:\n%s", got)
 	}
 }

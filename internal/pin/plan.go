@@ -30,7 +30,7 @@ type PlanOptions struct {
 	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
 	NoNarrow bool
 
-	// AcceptMoved treats ref-moved and lockfile-forgery findings as
+	// AcceptMoved treats ref-moved and unreachable-pin findings as
 	// resolvable: affected deps are pruned from the inventory and
 	// re-resolved to their current live SHA.
 	AcceptMoved bool
@@ -538,7 +538,7 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 		case f.Category == checks.Stale && f.Dependency != nil:
 			d := f.Dependency
 			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
-		case acceptMoved && (f.Category == checks.LockfileForgery || f.Category == checks.RefMoved) && f.Dependency != nil:
+		case acceptMoved && (f.Category == checks.UnreachablePin || f.Category == checks.RefMoved) && f.Dependency != nil:
 			d := f.Dependency
 			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
 		}

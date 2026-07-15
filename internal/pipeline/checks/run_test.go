@@ -227,7 +227,7 @@ func TestRunChecks(t *testing.T) {
 			},
 		},
 		{
-			name: "lockfile-forgery: pinned sha is not an ancestor of upstream",
+			name: "unreachable-pin: pinned sha is not an ancestor of upstream",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaImpostor)},
 			},
@@ -243,7 +243,7 @@ func TestRunChecks(t *testing.T) {
 			extra: func(t *testing.T, got []Finding) {
 				hasForgery := false
 				for _, f := range got {
-					if f.Category == LockfileForgery {
+					if f.Category == UnreachablePin {
 						hasForgery = true
 						if f.Severity != SeverityError {
 							t.Fatalf("expected error severity, got %s", f.Severity)
@@ -257,7 +257,7 @@ func TestRunChecks(t *testing.T) {
 					}
 				}
 				if !hasForgery {
-					t.Fatalf("expected a lockfile-forgery finding, got %v", findingCategories(got))
+					t.Fatalf("expected a unreachable-pin finding, got %v", findingCategories(got))
 				}
 			},
 		},
@@ -325,7 +325,7 @@ func TestRunChecks(t *testing.T) {
 		{
 			// Compare API rate-limit fallback: ancestry is unknown so
 			// the SHA mismatch can't be classified as ref-moved or
-			// lockfile-forgery. Emit AncestryUnknown so
+			// unreachable-pin. Emit AncestryUnknown so
 			// consumers don't conflate "scan inconclusive" with valid.
 			name: "ancestry unknown emits ancestry-unknown, not ref-moved",
 			lockfile: map[string][]string{
@@ -450,12 +450,12 @@ func TestRunChecks(t *testing.T) {
 			extra: func(t *testing.T, got []Finding) {
 				hasForgery := false
 				for _, c := range findingCategories(got) {
-					if c == string(LockfileForgery) {
+					if c == string(UnreachablePin) {
 						hasForgery = true
 					}
 				}
 				if !hasForgery {
-					t.Fatalf("expected lockfile-forgery, got %v", findingCategories(got))
+					t.Fatalf("expected unreachable-pin, got %v", findingCategories(got))
 				}
 			},
 		},
@@ -527,7 +527,7 @@ func TestRunChecks(t *testing.T) {
 			},
 			extra: func(t *testing.T, got []Finding) {
 				for _, f := range got {
-					if f.Category == RefMoved || f.Category == LockfileForgery || f.Category == AncestryUnknown {
+					if f.Category == RefMoved || f.Category == UnreachablePin || f.Category == AncestryUnknown {
 						t.Fatalf("unexpected ref-moved/forgery finding for current transitive dep: %#v", f)
 					}
 				}
