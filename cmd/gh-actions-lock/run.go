@@ -500,23 +500,50 @@ func migrateLocalActions(paths []string) (int, error) {
 		}
 	}
 
-	total := 0
+	type plannedMigration struct {
+		path    string
+		content []byte
+		changed int
+	}
+	var migrations []plannedMigration
+	seen := make(map[string]bool)
 	for _, path := range files {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return 0, fmt.Errorf("resolving migration path %s: %w", path, err)
+		}
+		if seen[absPath] {
+			continue
+		}
+		seen[absPath] = true
+
+		if root := workflowfile.FindRepoRoot(path); root != "" {
+			if err := workflowfile.ValidatePathWithinRoot(root, path); err != nil {
+				return 0, fmt.Errorf("refusing to migrate %s: %w", path, err)
+			}
+		}
 		wf, err := workflowfile.Load(path)
 		if err != nil {
-			return total, fmt.Errorf("loading %s: %w", path, err)
+			return 0, fmt.Errorf("loading %s: %w", path, err)
 		}
 		content, changed, err := wf.MigrateLocalActionsToSelfRepository()
 		if err != nil {
-			return total, fmt.Errorf("migrating %s: %w", path, err)
+			return 0, fmt.Errorf("refusing to migrate %s: %w", path, err)
 		}
 		if changed == 0 {
 			continue
 		}
-		if err := os.WriteFile(path, content, 0o644); err != nil {
-			return total, fmt.Errorf("writing %s: %w", path, err)
-		}
-		total += changed
+		migrations = append(migrations, plannedMigration{path: path, content: content, changed: changed})
 	}
-	return total, nil
+
+	// Do not write anything until every candidate has passed structural and
+	// repository-boundary validation.
+	written := 0
+	for _, plan := range migrations {
+		if err := os.WriteFile(plan.path, plan.content, 0o644); err != nil {
+			return written, fmt.Errorf("writing %s: %w", plan.path, err)
+		}
+		written += plan.changed
+	}
+	return written, nil
 }

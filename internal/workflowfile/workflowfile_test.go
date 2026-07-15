@@ -190,6 +190,40 @@ func TestMigrateLocalActionsToSelfRepository_NoRepoRoot(t *testing.T) {
 	assert.Equal(t, content, out)
 }
 
+func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local-action"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoRoot, "local-action", "action.yml"),
+		[]byte("runs:\n  using: composite\n"), 0o644))
+
+	tests := []struct {
+		name    string
+		invalid string
+	}{
+		{"forbidden ref", "$/actions/bad@v1"},
+		{"expression ref", "$/actions/bad@${{ matrix.ref }}"},
+		{"missing action", "$/actions/missing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workflowPath := filepath.Join(repoRoot, ".github", "workflows", strings.ReplaceAll(tt.name, " ", "-")+".yml")
+			content := []byte("jobs:\n  build:\n    steps:\n" +
+				"      - uses: ./local-action\n" +
+				"      - uses: '" + tt.invalid + "'\n")
+			f, err := Parse(workflowPath, content)
+			require.NoError(t, err)
+
+			out, changed, err := f.MigrateLocalActionsToSelfRepository()
+
+			require.Error(t, err)
+			assert.Zero(t, changed)
+			assert.Equal(t, content, out)
+		})
+	}
+}
+
 func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
@@ -304,6 +338,23 @@ func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
 	got, err := DiscoverCompositeActionFiles("")
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+func TestDiscoverCompositeActionFiles_RejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "action.yml")
+	require.NoError(t, os.WriteFile(outside, []byte("runs:\n  using: composite\n"), 0o644))
+	actionDir := filepath.Join(root, "actions", "escape")
+	require.NoError(t, os.MkdirAll(actionDir, 0o755))
+	if err := os.Symlink(outside, filepath.Join(actionDir, "action.yml")); err != nil {
+		t.Skipf("creating symlink: %v", err)
+	}
+
+	paths, err := DiscoverCompositeActionFiles(root)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside repository root")
+	assert.Empty(t, paths)
 }
 
 func TestDiscoverWorkflowsIn(t *testing.T) {

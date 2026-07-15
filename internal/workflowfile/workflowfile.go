@@ -300,6 +300,16 @@ func DiscoverCompositeActionFiles(root string) ([]string, error) {
 			return nil
 		}
 		if d.Name() == "action.yml" || d.Name() == "action.yaml" {
+			if err := ValidatePathWithinRoot(root, p); err != nil {
+				return err
+			}
+			info, err := os.Stat(p)
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("action definition %s is not a regular file", p)
+			}
 			paths = append(paths, p)
 		}
 		return nil
@@ -468,11 +478,19 @@ func isWithinRoot(root, candidate string) bool {
 // ValidatePathWithinRoot resolves symlinks in candidate and rejects paths that
 // leave root. Callers use it before reading or rewriting repository-owned YAML.
 func ValidatePathWithinRoot(root, candidate string) error {
-	resolvedRoot, err := filepath.EvalSymlinks(root)
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return fmt.Errorf("resolving repository root %s: %w", root, err)
 	}
-	resolvedCandidate, err := filepath.EvalSymlinks(candidate)
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return fmt.Errorf("resolving repository root %s: %w", root, err)
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
+	}
+	resolvedCandidate, err := filepath.EvalSymlinks(absCandidate)
 	if err != nil {
 		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
 	}

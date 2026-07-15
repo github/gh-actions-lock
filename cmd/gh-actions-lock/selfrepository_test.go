@@ -57,3 +57,40 @@ jobs:
 		assert.ErrorIs(t, readErr, os.ErrNotExist)
 	}
 }
+
+func TestInvalidSelfRepositoryRefPreventsMigrationAndNetwork(t *testing.T) {
+	transport := &requestCountingTransport{}
+
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	localActionPath := filepath.Join(dir, "actions", "local", "action.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(localActionPath), 0o755))
+	require.NoError(t, os.WriteFile(localActionPath, []byte("runs:\n  using: composite\n"), 0o600))
+
+	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+	workflow := []byte(`name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./actions/local
+      - uses: "$/actions/bad@${{ matrix.ref }}"
+      - uses: actions/checkout@v4
+`)
+	require.NoError(t, os.WriteFile(workflowPath, workflow, 0o600))
+	t.Chdir(dir)
+
+	_, _, err := runCommandWithHTTP(t, transport, "--migrate-local-actions", workflowPath)
+
+	require.Error(t, err)
+	assert.Zero(t, transport.calls.Load(), "invalid syntax should stop migration before dependency resolution")
+	gotWorkflow, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflow, gotWorkflow)
+	assert.NotContains(t, string(gotWorkflow), workflowfile.SentinelComment)
+	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
+	_, readErr = os.Stat(lockPath)
+	assert.ErrorIs(t, readErr, os.ErrNotExist)
+}

@@ -2,6 +2,7 @@ package workflowfile
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,9 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 // changed.
 func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	scan := f.ExtractActionRefs()
+	if err := f.validateSelfRepositoryMigration(scan); err != nil {
+		return append([]byte(nil), f.Content...), 0, err
+	}
 	if len(scan.LocalPaths) == 0 {
 		return append([]byte(nil), f.Content...), 0, nil
 	}
@@ -133,6 +137,20 @@ func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	return f.RewriteActionRefs(replacements)
 }
 
+func (f *File) validateSelfRepositoryMigration(scan RefScan) error {
+	if len(scan.SelfRepositoryRefErrs) > 0 {
+		return fmt.Errorf("invalid self repository reference %q", scan.SelfRepositoryRefErrs[0])
+	}
+	selfScan := ScanSelfRepositoryActions(f.Path, scan.SelfRepositoryActionRefs)
+	if len(selfScan.SelfRepositoryRefErrs) > 0 {
+		return fmt.Errorf("invalid self repository reference %q", selfScan.SelfRepositoryRefErrs[0])
+	}
+	if len(selfScan.Errors) > 0 {
+		return fmt.Errorf("invalid self repository action: %s", selfScan.Errors[0])
+	}
+	return nil
+}
+
 // localActionExists reports whether a `./…` path resolves to an action file
 // (action.yml or action.yaml) within the repo root.
 func localActionExists(repoRoot, localPath string) bool {
@@ -142,7 +160,12 @@ func localActionExists(repoRoot, localPath string) bool {
 		return false
 	}
 	for _, name := range []string{"action.yml", "action.yaml"} {
-		if _, err := os.Stat(filepath.Join(actionDir, name)); err == nil {
+		actionPath := filepath.Join(actionDir, name)
+		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
+			continue
+		}
+		info, err := os.Stat(actionPath)
+		if err == nil && info.Mode().IsRegular() {
 			return true
 		}
 	}

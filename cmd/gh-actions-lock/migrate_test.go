@@ -54,6 +54,63 @@ func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 	assert.Contains(t, read("my-action/action.yml"), "uses: ./nonexistent")
 }
 
+func TestMigrateLocalActions_StructuralErrorPreventsAllWrites(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) string {
+		full := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
+		return full
+	}
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	write("local/action.yml", "runs:\n  using: composite\n")
+	firstPath := write(".github/workflows/first.yml",
+		"jobs:\n  build:\n    steps:\n      - uses: ./local\n")
+	secondPath := write(".github/workflows/second.yml",
+		"jobs:\n  build:\n    steps:\n      - uses: $/bad@v1\n")
+	firstBefore, err := os.ReadFile(firstPath)
+	require.NoError(t, err)
+
+	total, err := migrateLocalActions([]string{firstPath, secondPath})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid self repository reference")
+	assert.Zero(t, total)
+	firstAfter, readErr := os.ReadFile(firstPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, firstBefore, firstAfter)
+}
+
+func TestMigrateLocalActions_RejectsActionFileSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+	workflow := []byte("jobs:\n  build:\n    steps:\n      - uses: ./escape\n")
+	require.NoError(t, os.WriteFile(workflowPath, workflow, 0o644))
+
+	outsidePath := filepath.Join(t.TempDir(), "action.yml")
+	outside := []byte("runs:\n  using: composite\n  steps:\n    - uses: ./helper\n")
+	require.NoError(t, os.WriteFile(outsidePath, outside, 0o644))
+	escapeDir := filepath.Join(dir, "escape")
+	require.NoError(t, os.MkdirAll(escapeDir, 0o755))
+	if err := os.Symlink(outsidePath, filepath.Join(escapeDir, "action.yml")); err != nil {
+		t.Skipf("creating symlink: %v", err)
+	}
+
+	total, err := migrateLocalActions([]string{workflowPath})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside repository root")
+	assert.Zero(t, total)
+	gotWorkflow, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflow, gotWorkflow)
+	gotOutside, readErr := os.ReadFile(outsidePath)
+	require.NoError(t, readErr)
+	assert.Equal(t, outside, gotOutside)
+}
+
 // TestMigrateLocalActions_EndToEnd runs the real command with
 // --migrate-local-actions against a scratch repo whose local composite chain
 // reaches a pinnable remote action, then asserts on BOTH sides of
