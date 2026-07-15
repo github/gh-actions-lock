@@ -58,11 +58,14 @@ jobs:
       - uses: $/
       - uses: $/actions/foo
       - uses: $/actions/foo
+      - uses: "$/actions/expression@${{ matrix.ref }}"
       - uses: ./local-action
   call:
     uses: $/.github/workflows/reusable.yml
   bad:
     uses: $/actions/foo@v1
+  bad-expression:
+    uses: "$/.github/workflows/reusable.yml@${{ inputs.ref }}"
 `)
 	f, err := Parse("ci.yml", content)
 	require.NoError(t, err)
@@ -84,7 +87,15 @@ jobs:
 	assert.Equal(t, []string{"$/", "$/actions/foo"}, scan.SelfRepositoryActionRefs)
 
 	// `$/…@ref` is the invalid form.
-	assert.Equal(t, []string{"$/actions/foo@v1"}, scan.SelfRepositoryRefErrs)
+	assert.ElementsMatch(t,
+		[]string{
+			"$/actions/expression@${{ matrix.ref }}",
+			"$/actions/foo@v1",
+			"$/.github/workflows/reusable.yml@${{ inputs.ref }}",
+		},
+		scan.SelfRepositoryRefErrs,
+	)
+	assert.Empty(t, scan.Warnings)
 }
 
 func TestExtractActionRefs_SelfRepositoryOnly(t *testing.T) {
@@ -204,13 +215,17 @@ func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
     - uses: actions/checkout@v4
     - uses: ./workspace-relative
     - uses: $/actions/bad@v2
+    - uses: "$/actions/expression@${{ matrix.ref }}"
 `)
 
 	scan := ScanSelfRepositoryActions(workflowPath, []string{"$/actions/root"})
 
 	assert.ElementsMatch(t, []string{"vendor/tool@v1", "actions/checkout@v4"}, actionRefStrings(scan.Refs))
 	assert.ElementsMatch(t, []string{"$/actions/child", "$/actions/root"}, scan.SelfRepositoryRefs)
-	assert.Equal(t, []string{"$/actions/bad@v2"}, scan.SelfRepositoryRefErrs)
+	assert.ElementsMatch(t,
+		[]string{"$/actions/bad@v2", "$/actions/expression@${{ matrix.ref }}"},
+		scan.SelfRepositoryRefErrs,
+	)
 	assert.Equal(t, []string{"./workspace-relative"}, scan.LocalPaths)
 	assert.Empty(t, scan.Errors)
 	assert.Empty(t, scan.Warnings)
@@ -221,6 +236,33 @@ func TestScanSelfRepositoryActions_NoRepoRoot(t *testing.T) {
 
 	require.Len(t, scan.Errors, 1)
 	assert.Contains(t, scan.Errors[0], "not in a git repository")
+	assert.Empty(t, scan.Refs)
+}
+
+func TestScanSelfRepositoryActions_RejectsSymlinkEscape(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+	require.NoError(t, os.WriteFile(workflowPath, []byte("name: ci\n"), 0o644))
+
+	outsideRoot := t.TempDir()
+	outsideAction := filepath.Join(outsideRoot, "action.yml")
+	require.NoError(t, os.WriteFile(outsideAction, []byte(`runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+`), 0o644))
+	actionDir := filepath.Join(repoRoot, "actions", "escape")
+	require.NoError(t, os.MkdirAll(actionDir, 0o755))
+	if err := os.Symlink(outsideAction, filepath.Join(actionDir, "action.yml")); err != nil {
+		t.Skipf("creating symlink: %v", err)
+	}
+
+	scan := ScanSelfRepositoryActions(workflowPath, []string{"$/actions/escape"})
+
+	require.Len(t, scan.Errors, 1)
+	assert.Contains(t, scan.Errors[0], "outside repository root")
 	assert.Empty(t, scan.Refs)
 }
 

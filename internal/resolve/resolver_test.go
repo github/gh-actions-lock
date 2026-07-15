@@ -391,23 +391,27 @@ func TestResolveAllRecursiveSelfRepositoryNestedFetchesParentSHA(t *testing.T) {
 }
 
 func TestResolveAllRecursiveRejectsNestedSelfRepositoryRefWithVersion(t *testing.T) {
-	r := seedCache(&Resolver{
-		MaxRecursionDepth: DefaultMaxRecursionDepth,
-	}, map[ghapi.ActionRef]resolvedEntry{
-		ghapi.ForActionRef("org", "fixtures", "parent", "main"): {
-			dep:       dep.Dependency{NWO: "org/fixtures", Path: "parent", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-			actionYML: "runs:\n  using: composite\n  steps:\n    - uses: $/child@v1\n",
-		},
-	})
+	for _, invalidRef := range []string{"$/child@v1", "$/child@${{ inputs.ref }}"} {
+		t.Run(invalidRef, func(t *testing.T) {
+			r := seedCache(&Resolver{
+				MaxRecursionDepth: DefaultMaxRecursionDepth,
+			}, map[ghapi.ActionRef]resolvedEntry{
+				ghapi.ForActionRef("org", "fixtures", "parent", "main"): {
+					dep:       dep.Dependency{NWO: "org/fixtures", Path: "parent", Ref: "main", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					actionYML: "runs:\n  using: composite\n  steps:\n    - uses: '" + invalidRef + "'\n",
+				},
+			})
 
-	deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
-		{Owner: "org", Repo: "fixtures", Path: "parent", Ref: "main"},
-	})
+			deps, _, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+				{Owner: "org", Repo: "fixtures", Path: "parent", Ref: "main"},
+			})
 
-	require.Error(t, err)
-	assert.True(t, IsInvalidSelfRepositoryRef(err))
-	assert.Contains(t, err.Error(), "$/child@v1")
-	require.Len(t, deps, 1)
+			require.Error(t, err)
+			assert.True(t, IsInvalidSelfRepositoryRef(err))
+			assert.Contains(t, err.Error(), invalidRef)
+			require.Len(t, deps, 1)
+		})
+	}
 }
 
 // TestResolveAllRecursiveSelfRepositoryDeepMultiLevel exercises a deliberately gnarly

@@ -5,6 +5,7 @@
 package workflowfile
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,6 +16,8 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"gopkg.in/yaml.v3"
 )
+
+var errPathOutsideRoot = errors.New("path resolves outside repository root")
 
 // File is the parsed workflow YAML the CLI rewrites in-place.
 // It carries the original byte content alongside the parsed node tree so
@@ -78,6 +81,13 @@ func (f *File) ExtractActionRefs() RefScan {
 
 	walkUses(&f.root, func(value string, stepLevel bool) {
 		value = strings.TrimSpace(value)
+		if SelfRepositoryRefHasVersion(value) {
+			if !seenSelf[value] {
+				seenSelf[value] = true
+				scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, value)
+			}
+			return
+		}
 		if strings.Contains(value, "${") {
 			scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
 			return
@@ -87,20 +97,13 @@ func (f *File) ExtractActionRefs() RefScan {
 			// (action dir) and job level (reusable-workflow file): "this repo
 			// at the running SHA", inherently pinned. Only the `@ref` form is
 			// invalid — a self repository reference has no external ref to pin.
-			if SelfRepositoryRefHasVersion(value) {
-				if !seenSelf[value] {
-					seenSelf[value] = true
-					scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, value)
-				}
-			} else {
-				if !seenSelf[value] {
-					seenSelf[value] = true
-					scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, value)
-				}
-				if stepLevel && !seenSelfAction[value] {
-					seenSelfAction[value] = true
-					scan.SelfRepositoryActionRefs = append(scan.SelfRepositoryActionRefs, value)
-				}
+			if !seenSelf[value] {
+				seenSelf[value] = true
+				scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, value)
+			}
+			if stepLevel && !seenSelfAction[value] {
+				seenSelfAction[value] = true
+				scan.SelfRepositoryActionRefs = append(scan.SelfRepositoryActionRefs, value)
 			}
 			return
 		}
@@ -196,7 +199,7 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 			continue
 		}
 
-		uses, err := readActionUses(actionDir)
+		uses, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
@@ -204,16 +207,14 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 		for _, rawUse := range uses {
 			use := strings.TrimSpace(rawUse)
 			switch {
+			case SelfRepositoryRefHasVersion(use):
+				if !seenInvalid[use] {
+					seenInvalid[use] = true
+					scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, use)
+				}
 			case strings.Contains(use, "${"):
 				scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q in %s (expressions are not supported)", use, current.ref))
 			case IsSelfRepositoryAction(use):
-				if SelfRepositoryRefHasVersion(use) {
-					if !seenInvalid[use] {
-						seenInvalid[use] = true
-						scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, use)
-					}
-					continue
-				}
 				if !seenSelf[use] {
 					seenSelf[use] = true
 					scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, use)
@@ -464,6 +465,23 @@ func isWithinRoot(root, candidate string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
 }
 
+// ValidatePathWithinRoot resolves symlinks in candidate and rejects paths that
+// leave root. Callers use it before reading or rewriting repository-owned YAML.
+func ValidatePathWithinRoot(root, candidate string) error {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolving repository root %s: %w", root, err)
+	}
+	resolvedCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
+	}
+	if !isWithinRoot(resolvedRoot, resolvedCandidate) {
+		return fmt.Errorf("%w: %s is outside %s", errPathOutsideRoot, candidate, root)
+	}
+	return nil
+}
+
 func parseActionYAMLForUses(content []byte) ([]string, error) {
 	var action struct {
 		Runs struct {
@@ -489,10 +507,18 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 	return uses, nil
 }
 
-func readActionUses(actionDir string) ([]string, error) {
+func readActionUses(repoRoot, actionDir string) ([]string, error) {
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
-		content, err := os.ReadFile(filepath.Join(actionDir, name))
+		actionPath := filepath.Join(actionDir, name)
+		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
+			if errors.Is(err, errPathOutsideRoot) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+		content, err := os.ReadFile(actionPath)
 		if err != nil {
 			lastErr = err
 			continue
