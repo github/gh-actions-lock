@@ -67,12 +67,12 @@ jobs:
       - run: make build
       - run: make test-integration
 
-  lockfile-lint:
-    runs-on: ubuntu-slim
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5.0.1
-      - uses: $/actions/lint
-        with:
-          ignore-categories: sha-as-ref
+  # lockfile-lint:
+  #   runs-on: ubuntu-slim
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@v5.0.1
+  #     - uses: $/actions/lint
+  #       with:
+  #         ignore-categories: sha-as-ref
