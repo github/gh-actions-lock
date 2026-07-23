@@ -30,21 +30,66 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 		}
 	}
 
-	var validCount, failedCount int
-	for _, wr := range report.Workflows {
-		if wr.IsValid() {
-			validCount++
-		} else {
-			failedCount++
+	// A workflow whose only non-valid findings are dep-level NotPinned is
+	// not failing when this run is about to pin it — it's remediable, not
+	// broken. Don't count it as failed (and drop not-pinned from the
+	// error block below), otherwise a plain onboarding run reports
+	// "N of N workflows failed" for work it's actively doing.
+	var failedCount int
+	sawOtherFailure := false
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		if wr.IsValid() || isRemediableOnly(wr, willRemediate) {
+			continue
+		}
+		failedCount++
+		for _, f := range wr.Findings {
+			if !f.IsValid() && f.Category != checks.NotPinned {
+				sawOtherFailure = true
+			}
 		}
 	}
-	checked := validCount + failedCount
+	checked := len(report.Workflows)
 
-	if !valid && checked > 0 {
+	if failedCount > 0 {
+		// Suppress not-pinned from the failure summary only when another
+		// category already explains the failure. If not-pinned is the sole
+		// reason a workflow failed — e.g. a fatal load/deps error that
+		// diagnose.go reports as workflow-level NotPinned with no
+		// ActionRef — keep it so the summary isn't left blank.
+		if willRemediate && sawOtherFailure {
+			exclude[checks.NotPinned] = true
+		}
 		renderErrorFindings(out, report, failedCount, checked, exclude)
 	}
 
 	renderWarnings(out, report, willRemediate)
+}
+
+// isRemediableOnly reports whether a workflow's only integrity problems
+// are unpinned dependencies that this run is about to pin. Such a
+// workflow is being remediated, not failing, so it must not be counted
+// or labeled as failed. Returns false in read-only modes
+// (willRemediate == false), where not-pinned is a genuine coverage gap.
+func isRemediableOnly(wr *checks.WorkflowReport, willRemediate bool) bool {
+	if !willRemediate {
+		return false
+	}
+	sawRemediable := false
+	for _, f := range wr.Findings {
+		if f.IsValid() {
+			continue
+		}
+		// Only a dep-level NotPinned (an actual uses: ref this run will
+		// pin) is remediable. A NotPinned with no ActionRef is a
+		// workflow-level fatal error (failed to load / read deps), which
+		// remediation cannot fix, so the workflow is genuinely failing.
+		if f.Category != checks.NotPinned || f.ActionRef == nil {
+			return false
+		}
+		sawRemediable = true
+	}
+	return sawRemediable
 }
 
 // PresentReadOnlyFailures renders error-level findings directly to the
