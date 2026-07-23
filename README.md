@@ -3,7 +3,7 @@
 Lock your workflow dependencies.
 
 > [!WARNING]
-> **Public preview.** gh-actions-lock is pre-1.0 and under active development. The
+> **Technical Preview.** gh-actions-lock is pre-1.0 and under active development. The
 > lockfile format, command flags, and behavior may change without notice between
 > releases. Use it, file issues, and expect rough edges.
 
