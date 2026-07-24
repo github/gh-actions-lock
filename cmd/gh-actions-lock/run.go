@@ -56,6 +56,11 @@ type checkOptions struct {
 	// ref-moved: prunes the stale lockfile entry and re-pins to the
 	// current live SHA.
 	acceptMoved bool
+	// relock re-resolves deps whose branch or partial-version ref has
+	// legitimately advanced (ref-moved) to the current upstream SHA.
+	// Unlike acceptMoved it does NOT accept unreachable-pin findings
+	// (possible tampering), which stay hard errors.
+	relock bool
 	// verify is a convenience alias for --rescan --no-fix: full
 	// re-verification of every pin with a non-zero exit on any finding.
 	verify bool
@@ -84,6 +89,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
+	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Bump moved branch/version refs (e.g. main, v4) to their current upstream SHA; leaves unreachable pins as errors")
 	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Full re-verification of every pin (equivalent to --rescan --no-fix)")
 	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
@@ -103,11 +109,8 @@ func (opts *checkOptions) validateOutputFlags() error {
 	if opts.verify && opts.verifyLocal {
 		return fmt.Errorf("--verify and --verify-local are mutually exclusive")
 	}
-	if opts.verifyLocal && opts.rescan {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --rescan")
-	}
-	if opts.verifyLocal && opts.acceptMoved {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --accept-moved")
+	if opts.verifyLocal && (opts.rescan || opts.acceptMoved || opts.relock) {
+		return fmt.Errorf("--verify-local cannot be combined with --rescan, --accept-moved, or --relock because it runs offline")
 	}
 	return nil
 }
@@ -171,8 +174,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Pre-warm resolver caches from the lockfile so repeat runs skip
 	// redundant GraphQL and REST calls. Skipped when --rescan is set:
 	// a full re-verification must hit the network to detect ref movement.
-	// --accept-moved implies --rescan (must detect what moved).
-	if opts.acceptMoved {
+	// --accept-moved and --relock both imply --rescan (must detect what
+	// moved before re-pinning).
+	if opts.acceptMoved || opts.relock {
 		opts.rescan = true
 	}
 	trustLockfileCaches := !opts.rescan
@@ -337,6 +341,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Version:     cliVersion(),
 		NoNarrow:    opts.noNarrow,
 		AcceptMoved: opts.acceptMoved,
+		Relock:      opts.relock,
 	})
 	endPlan()
 	if planErr != nil {

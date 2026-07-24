@@ -2003,6 +2003,26 @@ scenarios:
         - "ref: 'v4'"
         - "commit: 'sha1-"
 
+  - name: relock_bumps_stale_branch_ref
+    category: security
+    description: "--relock bumps a moved branch ref (main) from a stale ancestor SHA to the live head"
+    needs_stub: true
+    flags: ["--relock", "--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+      lockfile_template: pinned_checkout_main
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "'actions/checkout@main':"
+        - "ref: 'main'"
+        - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+      lockfile_comment_excludes: "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+
   - name: onboard_roundtrip_v002
     category: onboarding
     description: "Fresh onboard writes a v0.0.2 lockfile with correct key format, ref field, and commit field"
