@@ -224,7 +224,7 @@ func discoverWorkflowPaths(existing []string, workflowsDir string, allowEmpty bo
 			return nil, err
 		}
 		if len(paths) == 0 && !allowEmpty {
-			return nil, fmt.Errorf("no workflow files found in %s", workflowsDir)
+			return nil, noWorkflowsError(workflowsDir)
 		}
 		return paths, nil
 	}
@@ -234,7 +234,7 @@ func discoverWorkflowPaths(existing []string, workflowsDir string, allowEmpty bo
 		return nil, err
 	}
 	if len(paths) == 0 && !allowEmpty {
-		return nil, fmt.Errorf("no workflow files found in .github/workflows/")
+		return nil, noWorkflowsError(workflowsDir)
 	}
 	return paths, nil
 }
