@@ -310,16 +310,7 @@ func TestReverseLookup_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) {
 }
 
 func TestReverseLookup_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
-	// dep.Ref="v4", dep.SHA="abc". main HEAD=="abc" → exact match.
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(httpmock.BranchListResponse("main", "abc")),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc")),
-	)
 
 	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
 	if err != nil {
@@ -340,8 +331,8 @@ func TestReverseLookup_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 	if deps[0].Ref != "v4" {
 		t.Errorf("ref should be unchanged, got %q", deps[0].Ref)
 	}
-	if deps[0].Tag != "v4" || deps[0].Branch != "main" {
-		t.Errorf("expected Tag=v4 Branch=main, got Tag=%q Branch=%q", deps[0].Tag, deps[0].Branch)
+	if deps[0].Tag != "v4" || deps[0].Branch != "" {
+		t.Errorf("expected Tag=v4 Branch empty, got Tag=%q Branch=%q", deps[0].Tag, deps[0].Branch)
 	}
 	reg.Verify(t)
 }
@@ -382,7 +373,11 @@ func TestReverseLookup_FailsClosedOnImpostor(t *testing.T) {
 	}
 
 	deps := []dep.Dependency{
-		{NWO: "actions/checkout", Ref: "poisoned", SHA: "dead"},
+		{
+			NWO: "actions/checkout",
+			Ref: "deaddeaddeaddeaddeaddeaddeaddeaddeaddead",
+			SHA: "deaddeaddeaddeaddeaddeaddeaddeaddeaddead",
+		},
 	}
 	_, issues, err := r.ReverseLookup(context.Background(), deps)
 	if err != nil {
@@ -403,17 +398,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestReverseLookup_PreservesBranchRefOverTag(t *testing.T) {
-	// User wrote @main — main HEAD=="abc" → exact match.
-	// Tag discovery finds v4 and v4.3.1 but branch ref is preserved.
 	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(httpmock.BranchListResponse("main", "abc", "releases/v4", "xyz")),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc", "v4.3.1", "abc")),
-	)
 
 	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
 	if err != nil {
@@ -434,8 +419,8 @@ func TestReverseLookup_PreservesBranchRefOverTag(t *testing.T) {
 	if deps[0].Ref != "main" {
 		t.Errorf("expected Ref=main (preserved), got %q", deps[0].Ref)
 	}
-	if deps[0].Tag != "v4.3.1" {
-		t.Errorf("expected Tag populated (highest semver), got %q", deps[0].Tag)
+	if deps[0].Tag != "" {
+		t.Errorf("expected Tag empty, got %q", deps[0].Tag)
 	}
 	if deps[0].Branch != "main" {
 		t.Errorf("expected Branch=main, got %q", deps[0].Branch)

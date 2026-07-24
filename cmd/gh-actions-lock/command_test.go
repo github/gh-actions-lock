@@ -794,15 +794,13 @@ jobs:
 // read-only switch: a bare --json run (no --no-fix) still autofixes. setup-go
 // is unpinned but fixable, so the pipeline pins it, writes the lockfile, and
 // exits 0 — while stdout carries the JSON render. The single dep uses a
-// full-semver ref (v6.0.0) so tag-narrowing skips the network; the remaining
-// stubs cover the reverse-lookup (default branch → containing branch → tag)
-// and the lockfile write (numeric owner/repo IDs).
+// full-semver ref (v6.0.0), so neither tag narrowing nor reverse lookup needs
+// the network; the remaining metadata stub covers the lockfile write.
 func TestCheck_DefaultJSON_AutofixWrites(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
-	mainSHA := "1111111111111111111111111111111111111111"
 
 	// Resolve setup-go@v6.0.0 → setupGoSHA.
 	reg.Register(
@@ -813,35 +811,9 @@ func TestCheck_DefaultJSON_AutofixWrites(t *testing.T) {
 			},
 		}),
 	)
-	// Reverse lookup: default branch HEAD (main), then compare confirms the
-	// SHA is contained, then tags maps the SHA back to v6.0.0.
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/setup-go/git/ref/heads/main`),
-		httpmock.JSONResponse(map[string]any{
-			"ref":    "refs/heads/main",
-			"object": map[string]any{"sha": mainSHA, "type": "commit"},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/setup-go/compare/`),
-		httpmock.JSONResponse(map[string]any{
-			"status":            "identical",
-			"merge_base_commit": map[string]any{"sha": setupGoSHA},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/setup-go/tags`),
-		httpmock.JSONResponse([]map[string]any{
-			{"name": "v6.0.0", "commit": map[string]any{"sha": setupGoSHA}},
-		}),
-	)
-	// GetDefaultBranch (reverse lookup) and RepoIDs (lockfile write) now share
-	// a single repos/{owner}/{repo} fetch, so one stub serves both. It carries
-	// the fields either caller reads.
 	repoMeta := httpmock.JSONResponse(map[string]any{
-		"default_branch": "main",
-		"id":             2,
-		"owner":          map[string]any{"id": 1},
+		"id":    2,
+		"owner": map[string]any{"id": 1},
 	})
 	reg.Register(httpmock.REST("GET", `repos/actions/setup-go$`), repoMeta)
 

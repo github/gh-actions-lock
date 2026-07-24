@@ -126,7 +126,6 @@ func TestMigrateLocalActions_EndToEnd(t *testing.T) {
 	defer reg.Verify(t)
 
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
-	mainSHA := "1111111111111111111111111111111111111111"
 
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "setup-go"),
@@ -134,20 +133,6 @@ func TestMigrateLocalActions_EndToEnd(t *testing.T) {
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
 			},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/setup-go/git/ref/heads/main`),
-		httpmock.JSONResponse(map[string]any{
-			"ref":    "refs/heads/main",
-			"object": map[string]any{"sha": mainSHA, "type": "commit"},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/setup-go/compare/`),
-		httpmock.JSONResponse(map[string]any{
-			"status":            "identical",
-			"merge_base_commit": map[string]any{"sha": setupGoSHA},
 		}),
 	)
 	reg.Register(

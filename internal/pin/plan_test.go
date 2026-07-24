@@ -44,23 +44,6 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 		}),
 	)
 
-	// Reverse lookup stubs for good/action: branch listing and tags.
-	reg.Register(
-		httpmock.REST("GET", `repos/good/action/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": goodSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/good/action/tags`),
-		httpmock.JSONResponse([]any{
-			map[string]any{
-				"name":   "v1",
-				"commit": map[string]any{"sha": goodSHA},
-			},
-		}),
-	)
-
 	pool := pinpool.New(2, nil)
 	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
@@ -206,40 +189,6 @@ func newTransitivePlanFixture(t *testing.T, compSHA, transSHA string) (*resolve.
 			},
 		}),
 	)
-	reg.Register(
-		httpmock.REST("GET", `repos/comp/action$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/comp/action/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": compSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/comp/action/tags`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "v1.0.0", "commit": map[string]any{"sha": compSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/trans/dep$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/trans/dep/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": transSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/trans/dep/tags`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "v2", "commit": map[string]any{"sha": transSHA}},
-			map[string]any{"name": "v2.3.4", "commit": map[string]any{"sha": transSHA}},
-		}),
-	)
-
 	pool := pinpool.New(2, nil)
 	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
@@ -433,10 +382,10 @@ func TestPlanWorkflow_InvalidSelfRepositoryRefDoesNotMutateWorkflow(t *testing.T
 func TestNoNarrow_BareSHA(t *testing.T) {
 	const sha = "abc1230000000000000000000000000000000000"
 
-	// newSlowPathFixtures wires up a Resolver (GraphQL resolve + ReverseLookup
-	// branch/tag listing) and a Tagger that would narrow the SHA to v4.2.1.
+	// newSlowPathFixtures wires up a Resolver and a Tagger that would narrow
+	// the SHA to v4.2.1.
 	// The report has a Finding so NeedsAttention() is true and the slow path runs.
-	newSlowPathFixtures := func(t *testing.T) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
+	newSlowPathFixtures := func(t *testing.T, reverseLookup bool) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
 		t.Helper()
 		reg := &httpmock.Registry{}
 
@@ -456,13 +405,14 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			}),
 		)
 
-		// ReverseLookup: branch + tag listing — would rewrite the SHA to v4.2.1.
-		reg.Register(
-			httpmock.REST("GET", `repos/actions/checkout/branches`),
-			httpmock.JSONResponse([]any{
-				map[string]any{"name": "main", "commit": map[string]any{"sha": sha}},
-			}),
-		)
+		if reverseLookup {
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/branches`),
+				httpmock.JSONResponse([]any{
+					map[string]any{"name": "main", "commit": map[string]any{"sha": sha}},
+				}),
+			)
+		}
 		reg.Register(
 			httpmock.REST("GET", `repos/actions/checkout/tags`),
 			httpmock.JSONResponse([]any{
@@ -494,7 +444,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	}
 
 	t.Run("no-narrow preserves bare SHA through ReverseLookup", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t, true)
 
 		opts := PlanOptions{
 			Resolver: resolver,
@@ -520,17 +470,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	})
 
 	t.Run("default narrows bare SHA to tag", func(t *testing.T) {
-		resolver, tagger, wr, reg := newSlowPathFixtures(t)
-
-		// ReverseLookup after narrowing resolves the new ref (v4.2.1) and
-		// lists tags again — register a second stub for that round-trip.
-		reg.Register(
-			httpmock.REST("GET", `repos/actions/checkout/tags`),
-			httpmock.JSONResponse([]any{
-				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
-				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
-			}),
-		)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
 
 		opts := PlanOptions{
 			Resolver: resolver,
@@ -617,39 +557,6 @@ func TestPlanWorkflow_CrossRefTransitiveClosure(t *testing.T) {
 				},
 			},
 		}),
-	)
-
-	// Reverse lookup stubs — one set per unique NWO.
-	// org/fixtures: branches include both "updated" and "main" tips.
-	reg.Register(
-		httpmock.REST("GET", `repos/org/fixtures$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/org/fixtures/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": simpleSHA}},
-			map[string]any{"name": "updated", "commit": map[string]any{"sha": nestedSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/org/fixtures/tags`),
-		httpmock.JSONResponse([]any{}),
-	)
-	// cross/dep
-	reg.Register(
-		httpmock.REST("GET", `repos/cross/dep$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/cross/dep/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": crossSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/cross/dep/tags`),
-		httpmock.JSONResponse([]any{}),
 	)
 
 	pool := pinpool.New(2, nil)

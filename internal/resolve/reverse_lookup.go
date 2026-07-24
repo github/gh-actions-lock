@@ -250,15 +250,15 @@ type LookupIssue struct {
 	Message string // human-readable reason
 }
 
-// ReverseLookup performs a reverse lookup (SHA → containing tag/branch)
-// for every entry in deps via DiscoverContaining, populates dep.Tag and
-// dep.Branch, and computes the canonical @ref. The ref priority is:
+// ReverseLookup classifies symbolic refs locally and reverse-lookups bare SHA
+// refs via DiscoverContaining. It populates dep.Tag and dep.Branch and computes
+// the canonical @ref. The ref priority is:
 // tag (semver-ish release) > protected branch > default branch > any branch.
 // When the canonical ref differs from dep.Ref the change is recorded in
 // the returned rewrites map and dep.Ref is updated in place.
 //
-// Deps that cannot be resolved (orphaned commits, bare SHAs with no
-// containing ref) are skipped and reported in the returned issues slice.
+// Bare SHA deps with no containing ref are skipped and reported in the
+// returned issues slice.
 // Only transient/API errors are returned as err.
 func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (map[string]string, []LookupIssue, error) {
 	rewrites := map[string]string{}
@@ -267,6 +267,10 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		d := &deps[i]
 		owner, repo := d.OwnerRepo()
 		if owner == "" || repo == "" {
+			continue
+		}
+		if !LooksLikeSHA(d.Ref) {
+			d.Tag, d.Branch = parserlock.SplitRef(d.Ref)
 			continue
 		}
 		tag, branch, err := r.DiscoverContaining(ctx, owner, repo, d.SHA, d.Ref)
