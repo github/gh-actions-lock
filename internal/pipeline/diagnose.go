@@ -271,6 +271,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 			Category:     checks.NotPinned,
 			Severity:     checks.SeverityError,
 			Confidence:   checks.ConfidenceHigh,
+			Remediable:   true,
 			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
 			Remediation:  "fix or regenerate the dependencies: section with `gh actions-lock`",
 			DocURL:       DocURLFor(checks.NotPinned),

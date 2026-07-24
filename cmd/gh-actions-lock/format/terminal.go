@@ -49,7 +49,7 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 }
 
 func findingExcluded(f checks.Finding, exclude map[checks.Category]bool, willRemediate bool) bool {
-	if f.Category == checks.NotPinned && f.ActionRef == nil {
+	if f.Category == checks.NotPinned && !f.IsRemediableNotPinned() {
 		// Workflow-level NotPinned is a load failure, not a pin finding.
 		return false
 	}
@@ -201,6 +201,9 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 				continue
 			}
 			depKey := f.DepKey()
+			if depKey == "" {
+				depKey = wr.Path
+			}
 			if dg, ok := depMap[depKey]; ok {
 				dg.findings = append(dg.findings, f)
 			} else {
@@ -220,7 +223,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 				continue
 			}
 			catCounts[f.Category]++
-			if f.Category != checks.NotPinned {
+			if f.Category != checks.NotPinned || !f.IsRemediableNotPinned() {
 				allSkip = false
 			}
 		}
@@ -231,7 +234,8 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 		// Self-hosted-runner findings are no longer generated; render
 		// remaining non-excluded, non-not-pinned findings directly.
 		for _, f := range dg.findings {
-			if f.Category == checks.NotPinned || findingExcluded(f, exclude, willRemediate) {
+			if findingExcluded(f, exclude, willRemediate) ||
+				f.IsRemediableNotPinned() {
 				continue
 			}
 			renderFindingDetail(out, f, dep)

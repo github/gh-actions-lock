@@ -19,6 +19,8 @@ type Finding struct {
 	Confidence Confidence
 	// ActionRef is the action reference this finding relates to (nil for workflow-level findings).
 	ActionRef *parserlock.ActionRef
+	// Remediable is true for workflow-level findings that pinning can repair.
+	Remediable bool
 	// Dependency is the existing pinned dep if any.
 	Dependency *dep.Dependency
 	// ParentNWO is the dep key of the direct action that pulls in this transitive dep (empty if direct).
@@ -131,10 +133,15 @@ func (f *Finding) IsWarning() bool {
 	case f.Category.IsInconclusive():
 		return true
 	case f.Category == NotPinned && f.ActionRef == nil:
-		return true
+		return f.Severity != SeverityError
 	default:
 		return false
 	}
+}
+
+// IsRemediableNotPinned reports whether pinning can resolve this finding.
+func (f *Finding) IsRemediableNotPinned() bool {
+	return f.Category == NotPinned && (f.ActionRef != nil || f.Remediable)
 }
 
 // DepKey returns a dependency identifier for display grouping.

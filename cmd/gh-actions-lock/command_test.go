@@ -1068,6 +1068,28 @@ func TestCheckCommand_JSONLoadErrorIsInvalid(t *testing.T) {
 	assert.Equal(t, "error", payload.Findings[0].Severity)
 }
 
+func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "migration enabled"},
+		{name: "migration disabled", args: []string{"--no-migrate-local-actions"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+
+			workflowPath := writeTempWorkflow(t, "name: [")
+			args := append(tt.args, workflowPath)
+			_, stderr, err := runCommandWithHTTP(t, reg, args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "parsing workflow YAML")
+			assert.NotContains(t, stderr, "All 1 workflow valid")
+		})
+	}
+}
+
 // TestCheck_Relock_BumpsMovedBranchRef covers github/actions-dispatch#751:
 // a branch ref (main) whose upstream head advanced is trusted as-is on a
 // normal run and merely flagged ref-moved under --rescan. --relock must

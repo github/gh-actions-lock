@@ -39,6 +39,36 @@ func TestRenderPinnedEntries_WorkflowSharedAcrossActions(t *testing.T) {
 	}
 }
 
+func TestReportHasUnfixableErrors_ClassifiesWorkflowNotPinned(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		remediable  bool
+		wantBlocked bool
+	}{
+		{name: "workflow load error", wantBlocked: true},
+		{name: "dependency inventory error", remediable: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &checks.Report{
+				Workflows: []checks.WorkflowReport{{
+					Findings: []checks.Finding{{
+						Category:   checks.NotPinned,
+						Severity:   checks.SeverityError,
+						Remediable: tt.remediable,
+					}},
+				}},
+			}
+
+			if got := reportHasUnfixableErrors(report, false); got != tt.wantBlocked {
+				t.Errorf("reportHasUnfixableErrors() = %v, want %v", got, tt.wantBlocked)
+			}
+			if got := reportHasNonInvestigatedUnfixableErrors(report); got != tt.wantBlocked {
+				t.Errorf("reportHasNonInvestigatedUnfixableErrors() = %v, want %v", got, tt.wantBlocked)
+			}
+		})
+	}
+}
+
 func TestRenderInvestigationAlerts_DeduplicatesByNWORef(t *testing.T) {
 	entries := []pin.Entry{
 		{
