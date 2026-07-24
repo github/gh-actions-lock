@@ -56,6 +56,80 @@ func TestVerifyLocalCoverage_AllPinned(t *testing.T) {
 	assert.Empty(t, report.Workflows[0].Findings)
 }
 
+func TestVerifyLocalCoverage_SelfRepositoryOnlyIsValid(t *testing.T) {
+	dir := t.TempDir()
+	store := writeTestLockfile(t, dir, testLockfileContent)
+
+	parsed := []checks.ParsedWorkflow{
+		{
+			Path:               ".github/workflows/self.yml",
+			SelfRepositoryRefs: []string{"$/actions/foo"},
+		},
+	}
+
+	report := VerifyLocalCoverage(parsed, store)
+	assert.True(t, report.IsValid(), "self repository refs are inherently pinned")
+	assert.Empty(t, report.Workflows[0].Findings)
+}
+
+func TestVerifyLocalCoverage_InvalidSelfRepositoryRef(t *testing.T) {
+	dir := t.TempDir()
+	store := writeTestLockfile(t, dir, testLockfileContent)
+
+	parsed := []checks.ParsedWorkflow{
+		{
+			Path:                  ".github/workflows/self.yml",
+			SelfRepositoryRefErrs: []string{"$/actions/foo@v1"},
+		},
+	}
+
+	report := VerifyLocalCoverage(parsed, store)
+	assert.False(t, report.IsValid(), "`$/…@ref` must fail offline verification")
+	require.Len(t, report.Workflows[0].Findings, 1)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, report.Workflows[0].Findings[0].Category)
+	assert.Equal(t, checks.SeverityError, report.Workflows[0].Findings[0].Severity)
+}
+
+func TestVerifyLocalCoverage_InvalidSelfRepositoryRefWithPinnedRemote(t *testing.T) {
+	dir := t.TempDir()
+	store := writeTestLockfile(t, dir, testLockfileContent)
+
+	parsed := []checks.ParsedWorkflow{
+		{
+			Path: ".github/workflows/ci.yml",
+			Refs: []parserlock.ActionRef{
+				{Owner: "actions", Repo: "checkout", Ref: "v4"},
+			},
+			SelfRepositoryRefErrs: []string{"$/actions/foo@v1"},
+			ExistingDeps: []dep.Dependency{
+				{NWO: "actions/checkout", Ref: "v4", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+	}
+
+	report := VerifyLocalCoverage(parsed, store)
+
+	assert.False(t, report.IsValid())
+	require.Len(t, report.Workflows[0].Findings, 1)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, report.Workflows[0].Findings[0].Category)
+}
+
+func TestVerifyLocalCoverage_SelfRepositoryResolutionError(t *testing.T) {
+	dir := t.TempDir()
+	store := writeTestLockfile(t, dir, testLockfileContent)
+
+	parsed := []checks.ParsedWorkflow{{
+		Path:                         ".github/workflows/self.yml",
+		SelfRepositoryResolutionErrs: []string{"can't inspect self repository action $/missing"},
+	}}
+
+	report := VerifyLocalCoverage(parsed, store)
+
+	assert.False(t, report.IsValid())
+	require.Len(t, report.Workflows[0].Findings, 1)
+	assert.Equal(t, checks.InvalidSelfRepositoryRef, report.Workflows[0].Findings[0].Category)
+}
+
 func TestVerifyLocalCoverage_MissingPin(t *testing.T) {
 	dir := t.TempDir()
 	store := writeTestLockfile(t, dir, testLockfileContent)

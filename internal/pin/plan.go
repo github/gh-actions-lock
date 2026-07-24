@@ -116,6 +116,16 @@ type planResult struct {
 func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, status func(string)) (planResult, error) {
 	var entries []Entry
 	var wplans []WorkflowPlan
+	for _, finding := range wr.Findings {
+		if finding.Category == checks.InvalidSelfRepositoryRef {
+			return planResult{}, nil
+		}
+	}
+	rewriteRefs := wr.RewriteRefs
+	if rewriteRefs == nil {
+		rewriteRefs = wr.ActionRefs
+	}
+	rewriteRefKeys := actionRefKeys(rewriteRefs)
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
@@ -123,7 +133,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if !wr.NeedsAttention() {
 		entries = verifiedEntries(inventory, wr.Path)
-		rw := narrowVerifiedEntries(ctx, entries, opts)
+		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -133,7 +143,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = verifiedEntries(inventory, wr.Path)
 
 	if len(unrecordedRefs) == 0 {
-		rw := narrowVerifiedEntries(ctx, entries, opts)
+		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -150,11 +160,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		// Fall through with partial deps to pin what we can.
 	}
 
-	// Snapshot direct-dep matching before narrowing/ReverseLookup mutate
-	// dep.Ref — the tracker records index-aligned booleans at construction,
-	// then Keys() reads post-mutation refs. Must be built while deps and
-	// ActionRefs still share the same ref strings.
-	directTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
+	// Root refs are recorded directly under the workflow in the lockfile.
+	// Workflow refs are the narrower subset eligible for source rewrites.
+	// Keep separate trackers because a remote dependency found inside an
+	// in-repo `$/…` action is a lockfile root but does not appear in the
+	// workflow YAML.
+	rootTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
+	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
 
 	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
 	// to a symbolic tag when one exists.
@@ -162,11 +174,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	rewrites := make(map[string]string)
 	narrowedNWOs := make(map[string]bool) // NWOs where narrowing chose a tag
 
-	narrowDirectDeps(ctx, opts, deps, directTracker, rewrites, narrowedNWOs)
+	narrowDirectDeps(ctx, opts, deps, rewriteTracker, rewrites, narrowedNWOs)
 
 	// ReverseLookup canonicalizes each dep's ref while preserving the tags
 	// narrowing chose and transitive deps' declared refs.
-	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
+	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, rewriteTracker, narrowedNWOs)
 	if err != nil {
 		return planResult{}, err
 	}
@@ -194,8 +206,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			}
 		}
 		deps = filtered
-		// Rebuild direct tracker against the filtered slice.
-		directTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
+		// Rebuild the root tracker against the filtered slice.
+		rootTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
 	}
 	for k, v := range rlRewrites {
 		rewrites[k] = v
@@ -221,7 +233,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Record workflow plan if there are rewrites.
 	// Also narrow any verified (already-recorded) entries that have imprecise refs.
-	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts); len(verifiedRW) > 0 {
+	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys); len(verifiedRW) > 0 {
 		for k, v := range verifiedRW {
 			rewrites[k] = v
 		}
@@ -238,7 +250,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
-	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, directTracker, inventorySHA)...)
+	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA)...)
 
 	// Record findings that are informational (ref-moved, misleading-sha).
 	entries = append(entries, informationalEntries(wr)...)
@@ -565,7 +577,7 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 // narrowVerifiedEntries upgrades already-recorded direct deps to full semver
 // tags when possible, returning the workflow-YAML rewrites. Skipped for
 // --no-narrow, transitive deps, and refs the user kept imprecise (sticky v4).
-func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions) map[string]string {
+func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions, rewriteRefKeys map[string]bool) map[string]string {
 	if opts.NoNarrow || opts.Tagger == nil {
 		return nil
 	}
@@ -573,6 +585,9 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 	for i := range entries {
 		e := &entries[i]
 		if !e.Direct {
+			continue
+		}
+		if !rewriteRefKeys[strings.ToLower(e.NWO)+"@"+e.Ref] {
 			continue
 		}
 		owner, repo := splitNWO(e.NWO)
@@ -619,6 +634,14 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		return nil
 	}
 	return rewrites
+}
+
+func actionRefKeys(refs []parserlock.ActionRef) map[string]bool {
+	keys := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		keys[strings.ToLower(ref.Owner+"/"+ref.Repo)+"@"+ref.Ref] = true
+	}
+	return keys
 }
 
 // splitNWO splits "owner/repo" or "owner/repo/sub" into (owner, repo).

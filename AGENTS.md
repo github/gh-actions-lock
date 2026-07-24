@@ -33,3 +33,35 @@ When in doubt, fewer words. If a comment reads like marketing or a victory lap, 
 - Table-driven by default; subtests named with what they assert, not how.
 - One assertion per logical claim; multiple `assert.X` calls beat one giant struct compare.
 - Don't golden-snapshot what you can assert structurally.
+
+### Where does a test belong?
+
+There are two test layers with different guarantees. Put a test in the
+cheapest layer that can actually prove the thing, and don't restate the same
+claim in both.
+
+- **Go unit** (`internal/**/*_test.go`) — internal logic: traversal, ref
+  classification, error types, dedup. Fast, hermetic, no token. This is the
+  primary safety net. Logic like BFS or `$/` classification can *only* live
+  here; it can't be expressed in the catalog.
+- **Go command test** (`cmd/**/*_test.go` with `httpmock`) — full CLI wiring
+  end to end, but with a stubbed resolver so it stays deterministic. Runs in
+  the blocking `test` CI job with no token. Reach for this to prove the
+  command plumbs its pieces together.
+- **Catalog scenario** (`test/scenarios/catalog.yml`, run by the Ruby
+  harness) — the *real compiled binary* against the real API or a stub
+  server. Use it only for what a Go mock can't prove: real arg parsing, the
+  real lockfile emitter, live transitive resolution over real fixtures.
+
+Pitfalls that have bitten us:
+
+- **`needs_token: true` scenarios do not guard merge.** They run only in the
+  non-blocking `integration-live` CI job. Never let a token-gated scenario be
+  the *only* coverage for a behavior — back it with a Go test.
+- **Only `stub`-tagged scenarios run in the blocking `integration-stub`
+  job.** An untagged, no-token scenario runs nowhere in required CI.
+- **Same-assertion duplication is not defense-in-depth.** If a Go command
+  test already asserts the observable behavior deterministically, add a
+  catalog scenario only for the real-binary / real-API delta, and say so in
+  its `description`. Otherwise you're paying for a second, slower, flakier
+  copy of a test you already have.

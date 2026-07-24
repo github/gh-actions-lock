@@ -61,24 +61,33 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	skippedRescan := 0
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
-	if !opts.Rescan {
-		for i := range parsed {
-			plan := planFastPath(parsed[i])
-			// Mutable recorded refs are trusted without a live re-check
-			// (surfaced in the summary so the operator can --rescan them).
-			skippedRescan += len(plan.mutableRefs)
-			if plan.resolved {
-				parsed[i].Resolved = true
-				continue
-			}
-			// Seed only the mutable recorded deps so they resolve from
-			// the lockfile (trusted); immutable and unrecorded refs are
-			// left to resolve live from the network.
-			rd := parsed[i].RecordedDeps(plan.mutableRefs)
-			seedDeps = append(seedDeps, rd...)
-			for _, rr := range plan.mutableRefs {
-				recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
-			}
+	for i := range parsed {
+		// Structural blockers are terminal at diagnose time. Do not perform
+		// unrelated network work for a workflow the planner must reject.
+		if len(parsed[i].LocalPaths) > 0 ||
+			len(parsed[i].SelfRepositoryRefErrs) > 0 ||
+			len(parsed[i].SelfRepositoryResolutionErrs) > 0 {
+			parsed[i].Resolved = true
+			continue
+		}
+		if opts.Rescan {
+			continue
+		}
+		plan := planFastPath(parsed[i])
+		// Mutable recorded refs are trusted without a live re-check
+		// (surfaced in the summary so the operator can --rescan them).
+		skippedRescan += len(plan.mutableRefs)
+		if plan.resolved {
+			parsed[i].Resolved = true
+			continue
+		}
+		// Seed only the mutable recorded deps so they resolve from
+		// the lockfile (trusted); immutable and unrecorded refs are
+		// left to resolve live from the network.
+		rd := parsed[i].RecordedDeps(plan.mutableRefs)
+		seedDeps = append(seedDeps, rd...)
+		for _, rr := range plan.mutableRefs {
+			recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
 		}
 	}
 
