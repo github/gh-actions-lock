@@ -59,7 +59,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string, prunedWorkflows []string) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 	narrowed := record.Narrowed()
@@ -94,6 +94,10 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	if total == 0 {
 		console.TermNeutral("No workflows to check")
 		return nil
+	}
+
+	if n := len(prunedWorkflows); n > 0 {
+		console.TermDetail("Pruned %d deleted %s from the lockfile", n, ui.Pluralize(n, "workflow", "workflows"))
 	}
 
 	// Surface lockfile schema upgrade when the on-disk version differs from

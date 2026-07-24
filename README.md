@@ -33,6 +33,8 @@ After the initial run to onboard workflows, you will need to run `gh actions-loc
 - A new workflow is created that has `uses` dependencies.
 - An existing workflow adds or removes `uses` dependencies.
 
+A full-directory run (`gh actions-lock` with no path arguments) also prunes lockfile entries for workflows that have been deleted from `.github/workflows/`, dropping any dependencies left orphaned by the removal. Scoped runs that name specific workflows never prune out-of-scope entries.
+
 Pins to branches or partial versions (e.g. `main`, `v4`) are trusted from the
 lockfile and not re-resolved on a normal run. To bump them to the current
 upstream commit, run:

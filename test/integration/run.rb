@@ -400,6 +400,35 @@ LOCKFILE_TEMPLATES = {
       }
     )
   },
+  # pinned_checkout plus a recorded workflow (deleted.yml) that no longer
+  # exists on disk. A full-directory fix scan should prune the stale entry
+  # and GC its orphaned setup-go dep.
+  "pinned_checkout_plus_deleted" => -> {
+    build_lockfile(
+      workflows: {
+        ".github/workflows/ci.yml" => [
+          "actions/checkout@v4"
+        ],
+        ".github/workflows/deleted.yml" => [
+          "actions/setup-go@v5"
+        ]
+      },
+      dependencies: {
+        "actions/checkout@v4" => {
+          "ref" => "v4",
+          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "owner_id" => 44036562,
+          "repo_id" => 197814629
+        },
+        "actions/setup-go@v5" => {
+          "ref" => "v5",
+          "commit" => "sha1-#{SETUP_GO_SHA}",
+          "owner_id" => 44036562,
+          "repo_id" => 197814629
+        }
+      }
+    )
+  },
   # Lockfile with a fully-narrowed dep key (v4.2.0) — represents a
   # workflow that was previously onboarded with default narrowing.
   "pinned_checkout_full" => -> {

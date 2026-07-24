@@ -319,6 +319,23 @@ scenarios:
       lockfile_exists: true
       lockfile_deps_cover_direct: true
 
+  - name: prune_deleted_workflow_full_scan
+    category: lockfile
+    description: "github/actions-dispatch#816 — a full-directory fix scan prunes a lockfile entry whose workflow file was deleted, and GCs its orphaned dep"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      lockfile_template: pinned_checkout_plus_deleted
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      output_contains: ["Pruned 1 deleted workflow"]
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_comment_excludes: "deleted\\.yml|setup-go"
+
   - name: onboarded_corrupt_recovery
     category: lockfile
     description: "Corrupt YAML lockfile — user confirms delete, lockfile rewritten from scratch"

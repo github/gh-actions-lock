@@ -34,7 +34,7 @@ func applyVerifyFlags(opts *checkOptions) {
 // entry — no network, no auth required.
 func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 	workflowsDir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR")
-	paths, err := discoverWorkflowPaths(opts.workflowPaths, workflowsDir)
+	paths, err := discoverWorkflowPaths(opts.workflowPaths, workflowsDir, false)
 	if err != nil {
 		return err
 	}

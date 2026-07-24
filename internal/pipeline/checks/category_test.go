@@ -25,6 +25,7 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 		{OnboardingRequired, "onboarding-required"},
 		{VersionRef, "version-ref"},
 		{LocalAction, "local-action"},
+		{StaleWorkflow, "stale-workflow"},
 		{SelfRepositoryAction, "self-repository-action"},
 		{InvalidSelfRepositoryRef, "invalid-self-repository-ref"},
 	}
@@ -49,6 +50,7 @@ func TestCategoryIsInconclusive(t *testing.T) {
 		NotPinned, ShaAsRef, RefChanged, RefMoved, Stale,
 		MisleadingSHA, UnreachablePin,
 		Valid, RunOnly, OnboardingRequired, VersionRef, LocalAction,
+		StaleWorkflow,
 		SelfRepositoryAction, InvalidSelfRepositoryRef,
 	}
 	for _, c := range blocking {
