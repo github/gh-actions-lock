@@ -143,14 +143,12 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	// so they didn't reach stderr. Temporarily detach the log so the
 	// findings surface on the terminal.
 	//
-	// Only trigger for categories NOT already rendered by
-	// renderInvestigationAlerts (which handles unreachable-pin).
-	// Without this gate PresentResults would also emit a stale summary
-	// line counting pre-fix not-pinned findings.
+	// Exclude findings already handled elsewhere and pre-fix not-pinned
+	// findings that may have been committed for other workflows.
 	if reportHasNonInvestigatedUnfixableErrors(report) {
 		console.SetLog(nil)
 		format.PresentResults(console, report, false, false,
-			checks.UnreachablePin)
+			checks.UnreachablePin, checks.NotPinned)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {

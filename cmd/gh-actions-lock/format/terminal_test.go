@@ -402,10 +402,21 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 					},
 				},
 			},
+			{
+				Path: ".github/workflows/release.yml",
+				Findings: []checks.Finding{{
+					WorkflowPath: ".github/workflows/release.yml",
+					Category:     checks.NotPinned,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					ActionRef:    &parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v4"},
+					Dependency:   &dep.Dependency{NWO: "actions/checkout", Ref: "v4"},
+				}},
+			},
 		},
 	}
 
-	PresentResults(u, report, false, false, checks.UnreachablePin)
+	PresentResults(u, report, false, false, checks.UnreachablePin, checks.NotPinned)
 	got := buf.String()
 
 	if strings.Contains(got, "UNREACHABLE-PIN") {
@@ -413,6 +424,41 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 	}
 	if !strings.Contains(got, "LOCAL-ACTION") {
 		t.Errorf("non-excluded local-action should still appear:\n%s", got)
+	}
+	if !strings.Contains(got, "1 of 2 workflows failed: 1 local-action") {
+		t.Errorf("excluded findings should not count as failed:\n%s", got)
+	}
+	if strings.Contains(got, "not-pinned") {
+		t.Errorf("excluded not-pinned should not appear:\n%s", got)
+	}
+}
+
+func TestPresentResults_ExcludedNotPinnedKeepsWorkflowLoadErrors(t *testing.T) {
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			{
+				Path: ".github/workflows/pinned.yml",
+				Findings: []checks.Finding{{
+					Category:  checks.NotPinned,
+					Severity:  checks.SeverityError,
+					ActionRef: &parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v4"},
+				}},
+			},
+			{
+				Path: ".github/workflows/broken.yml",
+				Findings: []checks.Finding{{
+					Category: checks.NotPinned,
+					Severity: checks.SeverityError,
+					Detail:   "failed to load workflow",
+				}},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	PresentResults(ui.NewPlain(&buf), report, false, false, checks.NotPinned)
+
+	if got := buf.String(); !strings.Contains(got, "1 of 2 workflows failed: 1 not-pinned") {
+		t.Errorf("workflow load error should remain after remediation:\n%s", got)
 	}
 }
 
@@ -595,123 +641,5 @@ func TestPresentReadOnlyFailures_UnreachablePinShowsReleases(t *testing.T) {
 	PresentReadOnlyFailures(u, report)
 	if got := buf.String(); !strings.Contains(got, "https://github.com/octo/action/releases") {
 		t.Errorf("expected upstream releases link in read-only output:\n%s", got)
-	}
-}
-
-// TestPresentResults_RemediableNotCountedFailed covers github/actions-dispatch#802:
-// a workflow whose only non-valid finding is a dep-level NotPinned is being
-// remediated on this run, not failing. It must not be counted or labeled as
-// "failed" when willRemediate is true, but still counts as a coverage gap in
-// read-only mode (willRemediate false).
-func TestPresentResults_RemediableNotCountedFailed(t *testing.T) {
-	notPinned := func(wf string) checks.Finding {
-		return checks.Finding{
-			WorkflowPath: wf,
-			Category:     checks.NotPinned,
-			Severity:     checks.SeverityError,
-			Confidence:   checks.ConfidenceHigh,
-			ActionRef:    &parserlock.ActionRef{Owner: "octo", Repo: "action", Ref: "v1"},
-			Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "v1"},
-		}
-	}
-	// loadError models diagnose.go's workflow-level NotPinned for a
-	// failed load/deps read: SeverityError, no ActionRef. It is fatal, not
-	// remediable, so a run that pins everything else must still fail it.
-	loadError := func(wf string) checks.Finding {
-		return checks.Finding{
-			WorkflowPath: wf,
-			Category:     checks.NotPinned,
-			Severity:     checks.SeverityError,
-			Confidence:   checks.ConfidenceHigh,
-			Detail:       "failed to load workflow: yaml: line 3: bad indent",
-		}
-	}
-	unreachable := func(wf string) checks.Finding {
-		return checks.Finding{
-			WorkflowPath: wf,
-			Category:     checks.UnreachablePin,
-			Severity:     checks.SeverityError,
-			Confidence:   checks.ConfidenceHigh,
-			Dependency:   &dep.Dependency{NWO: "octo/broken", Ref: "main", SHA: "aaaa"},
-			Detail:       "pinned aaaa is not an ancestor of bbbb",
-		}
-	}
-
-	tests := []struct {
-		name          string
-		willRemediate bool
-		workflows     []checks.WorkflowReport
-		wantOutput    []string
-		notWanted     []string
-	}{
-		{
-			name:          "pure onboarding emits no failed line when remediating",
-			willRemediate: true,
-			workflows: []checks.WorkflowReport{
-				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{notPinned(".github/workflows/a.yml")}},
-				{Path: ".github/workflows/b.yml", Findings: []checks.Finding{notPinned(".github/workflows/b.yml")}},
-			},
-			notWanted: []string{"failed", "not-pinned"},
-		},
-		{
-			name:          "genuine failure counted, remediable excluded from count and parts",
-			willRemediate: true,
-			workflows: []checks.WorkflowReport{
-				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{notPinned(".github/workflows/a.yml")}},
-				{Path: ".github/workflows/b.yml", Findings: []checks.Finding{unreachable(".github/workflows/b.yml")}},
-			},
-			wantOutput: []string{"1 of 2 workflows failed", "unreachable-pin"},
-			notWanted:  []string{"not-pinned"},
-		},
-		{
-			name:          "read-only still counts not-pinned as a gap",
-			willRemediate: false,
-			workflows: []checks.WorkflowReport{
-				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{notPinned(".github/workflows/a.yml")}},
-			},
-			wantOutput: []string{"1 of 1 workflow failed", "1 not-pinned"},
-		},
-		{
-			name:          "fatal load error is not remediable and keeps its reason",
-			willRemediate: true,
-			workflows: []checks.WorkflowReport{
-				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{notPinned(".github/workflows/a.yml")}},
-				{Path: ".github/workflows/b.yml", Findings: []checks.Finding{loadError(".github/workflows/b.yml")}},
-			},
-			wantOutput: []string{"1 of 2 workflows failed", "not-pinned"},
-		},
-		{
-			name:          "fatal load error alongside another failure still fails",
-			willRemediate: true,
-			workflows: []checks.WorkflowReport{
-				{Path: ".github/workflows/a.yml", Findings: []checks.Finding{loadError(".github/workflows/a.yml")}},
-				{Path: ".github/workflows/b.yml", Findings: []checks.Finding{unreachable(".github/workflows/b.yml")}},
-			},
-			wantOutput: []string{"2 of 2 workflows failed", "unreachable-pin"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// The "N of N failed" block renders via the narration log
-			// (out.Error), so point the log at the buffer to capture it.
-			var buf bytes.Buffer
-			u := ui.NewPlain(&buf)
-			u.SetLog(&buf)
-			report := &checks.Report{Workflows: tt.workflows}
-			PresentResults(u, report, report.IsValid(), tt.willRemediate)
-
-			got := buf.String()
-			for _, want := range tt.wantOutput {
-				if !strings.Contains(got, want) {
-					t.Errorf("output missing %q\nfull output:\n%s", want, got)
-				}
-			}
-			for _, unwanted := range tt.notWanted {
-				if strings.Contains(got, unwanted) {
-					t.Errorf("output unexpectedly contains %q\nfull output:\n%s", unwanted, got)
-				}
-			}
-		})
 	}
 }

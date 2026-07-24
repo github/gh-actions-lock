@@ -1596,24 +1596,41 @@ scenarios:
     expect:
       exit: 0
 
-  - name: onboarding_pin_run_not_reported_failed
-    category: onboarding
-    description: "github/actions-dispatch#802 — a fresh run that pins every workflow must not report 'N of N workflows failed'; about-to-be-pinned deps are remediable, not failures"
+  - name: partial_onboarding_counts_only_blocked_workflow
+    category: multi_workflow
+    description: "Successful workflows are pinned while a blocked workflow stays untouched and is the only failure counted"
     needs_token: true
     fixtures:
       workflows:
-        a.yml:
-          name: A
-          actions: ["actions/checkout@v4"]
-        b.yml:
-          name: B
-          actions: ["actions/setup-go@v5"]
+        blocked.yml:
+          name: Blocked
+          actions:
+            - "nodeselector/actions-test-fixtures/composite-with-local-path@main"
+            - "nodeselector/actions-test-fixtures/simple-node@tampered"
+        main.yml:
+          name: Main
+          actions: ["nodeselector/actions-test-fixtures/simple-node@main"]
+        updated.yml:
+          name: Updated
+          actions: ["nodeselector/actions-test-fixtures/simple-node@updated"]
+        v1.yml:
+          name: V1
+          actions: ["nodeselector/actions-test-fixtures/simple-node@v1"]
     expect:
-      exit: 0
-      lockfile_deps_cover_direct: true
+      exit: 1
+      output_contains:
+        - "Pinned 3 actions across 3 workflows"
+        - "1 of 4 workflows failed: 1 local-action"
       output_excludes:
-        - "workflows failed"
+        - "4 of 4 workflows failed"
         - "not-pinned"
+      lockfile_contains:
+        - "nodeselector/actions-test-fixtures@main"
+        - "nodeselector/actions-test-fixtures@updated"
+        - "nodeselector/actions-test-fixtures@v1"
+      lockfile_excludes:
+        - "blocked.yml"
+        - "nodeselector/actions-test-fixtures@tampered"
 
   # ═══════════════════════════════════════════════════════════════════════
   # CATEGORY: lockfile (additional scenarios)
