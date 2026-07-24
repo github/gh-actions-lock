@@ -4,7 +4,9 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
@@ -52,6 +54,10 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 	wr.Deps = pw.ExistingDeps
 
+	if len(pw.SelfRepositoryRefs) > 0 {
+		wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
+	}
+
 	directNWOs := make(map[ghapi.Repo]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {
 		directNWOs[ghapi.ForRepo(ref.Owner, ref.Repo)] = true
@@ -66,6 +72,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		var resolveErr error
 		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
 		if resolveErr != nil {
+			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {
 				wr.Findings = append(wr.Findings, checks.Finding{
 					WorkflowPath: pw.Path,
@@ -75,6 +82,26 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 					Detail:       fmt.Sprintf("a composite action uses local path actions whose transitive dependencies cannot be resolved: %s", resolveErr),
 					Remediation:  "the composite action must reference dependencies by owner/repo/path@ref instead of ./path",
 				})
+				blockingResolverError = true
+			}
+			if resolve.IsInvalidSelfRepositoryRef(resolveErr) {
+				var invalidRef *resolve.InvalidSelfRepositoryRefError
+				_ = errors.As(resolveErr, &invalidRef)
+				detail := fmt.Sprintf("a composite action uses an invalid self repository reference: %s", resolveErr)
+				if invalidRef != nil {
+					detail = fmt.Sprintf("self repository actions must not carry an @ref: %s in %s", invalidRef.Ref, invalidRef.Parent)
+				}
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: pw.Path,
+					Category:     checks.InvalidSelfRepositoryRef,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					Detail:       detail,
+					Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+				})
+				blockingResolverError = true
+			}
+			if blockingResolverError {
 				return wr
 			}
 			// Low: we're surfacing the resolver failure itself, not a
@@ -132,6 +159,18 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	return wr
 }
 
+// selfRepositoryFinding builds the informational finding for a workflow that
+// references same-repo actions via `$/…`. These are inherently pinned.
+func selfRepositoryFinding(pw checks.ParsedWorkflow) checks.Finding {
+	return checks.Finding{
+		WorkflowPath: pw.Path,
+		Category:     checks.SelfRepositoryAction,
+		Severity:     checks.SeverityInfo,
+		Confidence:   checks.ConfidenceHigh,
+		Detail:       fmt.Sprintf("references `$/…` self repository actions (inherently pinned): %s", strings.Join(pw.SelfRepositoryRefs, ", ")),
+	}
+}
+
 // precheckWorkflow handles terminal preconditions (load error, local-path
 // actions, non-hosted runner, no refs, unreadable deps). It returns true when
 // one fired; otherwise the report is seeded with ActionRefs/ParseWarnings.
@@ -152,7 +191,36 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	}
 
 	wr.ActionRefs = pw.Refs
+	wr.RewriteRefs = pw.RewriteRefs
+	if wr.RewriteRefs == nil {
+		wr.RewriteRefs = pw.Refs
+	}
 	wr.ParseWarnings = pw.ParseWarnings
+
+	hasTerminalFinding := false
+	if len(pw.SelfRepositoryRefErrs) > 0 {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.InvalidSelfRepositoryRef,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       fmt.Sprintf("self repository actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
+			Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+		})
+		hasTerminalFinding = true
+	}
+
+	for _, resolutionErr := range pw.SelfRepositoryResolutionErrs {
+		wr.Findings = append(wr.Findings, checks.Finding{
+			WorkflowPath: pw.Path,
+			Category:     checks.InvalidSelfRepositoryRef,
+			Severity:     checks.SeverityError,
+			Confidence:   checks.ConfidenceHigh,
+			Detail:       resolutionErr,
+			Remediation:  "fix the `$/…` action path so its dependencies can be inspected",
+		})
+		hasTerminalFinding = true
+	}
 
 	if len(pw.LocalPaths) > 0 {
 		wfKey := workflowfile.KeyFromPath(pw.Path)
@@ -163,7 +231,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
 				Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
-				Remediation:  "remove `uses: ./…` steps or move them to a separate workflow",
+				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions), or remove the `./…` steps",
 			})
 		} else {
 			wr.Findings = append(wr.Findings, checks.Finding{
@@ -172,12 +240,21 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Severity:     checks.SeverityWarning,
 				Confidence:   checks.ConfidenceHigh,
 				Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
+				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions)",
 			})
 		}
+		hasTerminalFinding = true
+	}
+
+	if hasTerminalFinding {
 		return wr, true
 	}
 
 	if len(pw.Refs) == 0 {
+		if len(pw.SelfRepositoryRefs) > 0 {
+			wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
+			return wr, true
+		}
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
 			Category:     checks.RunOnly,

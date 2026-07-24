@@ -364,6 +364,69 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	})
 }
 
+func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {
+	const sha = "abc1230000000000000000000000000000000000"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
+			map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
+		}),
+	)
+
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/ci.yml",
+		Findings: []checks.Finding{{
+			Category:   checks.SelfRepositoryAction,
+			Severity:   checks.SeverityInfo,
+			Confidence: checks.ConfidenceHigh,
+		}},
+		ActionRefs: []parserlock.ActionRef{
+			{Owner: "actions", Repo: "checkout", Ref: "v4"},
+		},
+		RewriteRefs: []parserlock.ActionRef{},
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "actions/checkout", Ref: "v4", SHA: sha},
+			File:   ".github/workflows/ci.yml",
+			Direct: true,
+		}},
+	}
+
+	result, err := planWorkflow(context.Background(), wr, PlanOptions{
+		Tagger: tag.NewListerForTest(t, reg),
+	}, func(string) {})
+	require.NoError(t, err)
+
+	require.Len(t, result.entries, 1)
+	assert.Equal(t, "v4", result.entries[0].Ref)
+	require.Len(t, result.wplans, 1)
+	assert.Empty(t, result.wplans[0].Rewrites)
+}
+
+func TestPlanWorkflow_InvalidSelfRepositoryRefDoesNotMutateWorkflow(t *testing.T) {
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/ci.yml",
+		Findings: []checks.Finding{{
+			Category:   checks.InvalidSelfRepositoryRef,
+			Severity:   checks.SeverityError,
+			Confidence: checks.ConfidenceHigh,
+		}},
+		ActionRefs: []parserlock.ActionRef{
+			{Owner: "actions", Repo: "checkout", Ref: "v4"},
+		},
+		RewriteRefs: []parserlock.ActionRef{
+			{Owner: "actions", Repo: "checkout", Ref: "v4"},
+		},
+	}
+
+	result, err := planWorkflow(context.Background(), wr, PlanOptions{}, func(string) {})
+	require.NoError(t, err)
+	assert.Empty(t, result.entries)
+	assert.Empty(t, result.wplans)
+}
+
 // TestNoNarrow_BareSHA exercises bare-SHA narrowing through the full slow path
 // (Resolver + ReverseLookup + Tagger), confirming that --no-narrow protects the
 // SHA from rewriting and that the default path still narrows it to a tag.

@@ -13,10 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
-      - name: OIDC Setup for goproxy
-        uses: github/setup-goproxy@v1.1.0
       - uses: actions/checkout@v5.0.1
       - uses: actions/setup-go@v6.4.0
         with:
@@ -36,10 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
-      - name: OIDC Setup for goproxy
-        uses: github/setup-goproxy@v1.1.0
       - uses: actions/checkout@v5.0.1
       - uses: actions/setup-go@v6.4.0
         with:
@@ -58,12 +52,9 @@ jobs:
     continue-on-error: true
     permissions:
       contents: read
-      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: OIDC Setup for goproxy
-        uses: github/setup-goproxy@v1.1.0
       - uses: actions/checkout@v5.0.1
       - uses: actions/setup-go@v6.4.0
         with:
@@ -76,11 +67,12 @@ jobs:
       - run: make build
       - run: make test-integration
 
-  lockfile-lint:
-    runs-on: ubuntu-slim
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5.0.1
-      - uses: github/gh-actions-lock/actions/lint@main
+  # lockfile-lint:
+  #   runs-on: ubuntu-slim
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@v5.0.1
+  #     - uses: $/actions/lint
+  #       with:
+  #         ignore-categories: sha-as-ref

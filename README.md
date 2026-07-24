@@ -3,7 +3,7 @@
 Lock your workflow dependencies.
 
 > [!WARNING]
-> **Public preview.** gh-actions-lock is pre-1.0 and under active development. The
+> **Technical Preview.** gh-actions-lock is pre-1.0 and under active development. The
 > lockfile format, command flags, and behavior may change without notice between
 > releases. Use it, file issues, and expect rough edges.
 
@@ -46,6 +46,33 @@ lockfile to the new SHA. Suspicious pins whose recorded commit is no longer
 reachable upstream are left as errors — use `--accept-moved` to re-resolve
 those as well.
 
+### Self repository actions (`$/…`)
+
+`uses: $/…` references an action or reusable workflow in the **same repository** as
+the defining file, resolved at the **running commit**. Because it always resolves to
+that repository's running SHA it is **inherently pinned** — no lockfile entry is
+required, and it is valid anywhere a relative `./…` reference is:
+
+```yaml
+steps:
+  - uses: $/actions/my-action          # same-repo action, inherently pinned
+jobs:
+  call:
+    uses: $/.github/workflows/reusable.yml  # same-repo reusable workflow
+```
+
+A trailing `@ref` (e.g. `$/actions/my-action@v1`) is rejected — the ref is always
+the running commit.
+
+To convert existing same-repo `./…` composite action references to `$/…`, run with
+`--migrate-local-actions`. This rewrites `./…` steps both in your workflows and in
+your in-repo composite action definitions (`action.yml`). Only `./…` paths that
+resolve to an in-repo action file are rewritten:
+
+```bash
+gh actions-lock --migrate-local-actions
+```
+
 ## How it works
 
 A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/actions.lock)) and workflows are onboarded to the lockfile on a per-workflow basis. 
@@ -70,4 +97,3 @@ gh-actions-lock is maintained by @github/actions-dispatch-reviewers. See [CODEOW
 ## Support
 
 Support is best-effort and community-based. Please file bugs and feature requests as [GitHub issues](https://github.com/github/gh-actions-lock/issues). See [SUPPORT.md](./SUPPORT.md) for details.
-

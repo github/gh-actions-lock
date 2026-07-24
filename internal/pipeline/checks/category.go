@@ -67,6 +67,14 @@ const (
 	// workflows that reference local actions — the entire workflow is
 	// skipped.
 	LocalAction Category = "local-action"
+	// SelfRepositoryAction means the workflow references a same-repo action via
+	// the self repository `$/…` syntax. These resolve against the defining
+	// repo at the running ref, so they are inherently pinned and need no
+	// lockfile entry — always in compliance.
+	SelfRepositoryAction Category = "self-repository-action"
+	// InvalidSelfRepositoryRef means a `$/…` reference is malformed or its
+	// target cannot be inspected. This includes a forbidden `@ref` suffix.
+	InvalidSelfRepositoryRef Category = "invalid-self-repository-ref"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that
