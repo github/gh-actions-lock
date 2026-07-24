@@ -101,14 +101,8 @@ func (opts *checkOptions) validateOutputFlags() error {
 	if opts.verify && opts.verifyLocal {
 		return fmt.Errorf("--verify and --verify-local are mutually exclusive")
 	}
-	if opts.verifyLocal && opts.rescan {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --rescan")
-	}
-	if opts.verifyLocal && opts.acceptMoved {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --accept-moved")
-	}
-	if opts.verifyLocal && opts.relock {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --relock")
+	if opts.verifyLocal && (opts.rescan || opts.acceptMoved || opts.relock) {
+		return fmt.Errorf("--verify-local cannot be combined with --rescan, --accept-moved, or --relock because it runs offline")
 	}
 	return nil
 }
@@ -174,7 +168,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// a full re-verification must hit the network to detect ref movement.
 	// --accept-moved and --relock both imply --rescan (must detect what
 	// moved before re-pinning).
-	opts.applyRescanImplications()
+	if opts.acceptMoved || opts.relock {
+		opts.rescan = true
+	}
 	trustLockfileCaches := !opts.rescan
 	if trustLockfileCaches {
 		r.SeedFromLockfile(store.AllDeps())

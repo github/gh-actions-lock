@@ -1779,7 +1779,7 @@ scenarios:
         ci.yml:
           name: CI
           actions: ["actions/checkout@main"]
-      lockfile_template: stale_checkout_main
+      lockfile_template: pinned_checkout_main
     expect:
       exit: 0
       lockfile_deps_cover_direct: true

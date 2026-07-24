@@ -171,17 +171,11 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	}
 }
 
-// TestPlanWorkflow_TransitiveDepUsesDiscoveredRef verifies that a transitive
-// dependency keeps the composite's declared ref when it's a valid symbolic ref
-// (tag/branch). Only bare-SHA refs are replaced by ReverseLookup's discovery.
-func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
+func newTransitivePlanFixture(t *testing.T, compSHA, transSHA string) (*resolve.Resolver, *pinpool.Pool, *tag.Lister) {
+	t.Helper()
 	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
+	t.Cleanup(func() { reg.Verify(t) })
 
-	compSHA := "1111111111111111111111111111111111111111"
-	transSHA := "2222222222222222222222222222222222222222"
-
-	// Depth 0: the direct composite. Its action.yml uses trans/dep@v2.
 	reg.Register(
 		httpmock.GraphQLForRepo("comp", "action"),
 		httpmock.JSONResponse(map[string]any{
@@ -198,7 +192,6 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 			},
 		}),
 	)
-	// Depth 1: the transitive leaf.
 	reg.Register(
 		httpmock.GraphQLForRepo("trans", "dep"),
 		httpmock.JSONResponse(map[string]any{
@@ -213,11 +206,6 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 			},
 		}),
 	)
-
-	// Reverse-lookup stubs for both repos: repo metadata (default branch),
-	// branch listing, and tag listing. Stubbing the repo-metadata call keeps
-	// DiscoverContaining on its representative path instead of the
-	// default-branch-unknown fallback.
 	reg.Register(
 		httpmock.REST("GET", `repos/comp/action$`),
 		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
@@ -244,9 +232,6 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 			map[string]any{"name": "main", "commit": map[string]any{"sha": transSHA}},
 		}),
 	)
-	// trans/dep publishes a narrower full-semver tag at the same commit. If
-	// narrowing were (wrongly) applied to this transitive dep, the Tagger would
-	// rewrite v2 -> v2.3.4. The gate must prevent that.
 	reg.Register(
 		httpmock.REST("GET", `repos/trans/dep/tags`),
 		httpmock.JSONResponse([]any{
@@ -258,6 +243,16 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 	pool := pinpool.New(2, nil)
 	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
 	require.NoError(t, err)
+	return resolver, pool, tag.NewListerForTest(t, reg)
+}
+
+// TestPlanWorkflow_TransitiveDepUsesDiscoveredRef verifies that a transitive
+// dependency keeps the composite's declared ref when it's a valid symbolic ref
+// (tag/branch). Only bare-SHA refs are replaced by ReverseLookup's discovery.
+func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
+	compSHA := "1111111111111111111111111111111111111111"
+	transSHA := "2222222222222222222222222222222222222222"
+	resolver, pool, tagger := newTransitivePlanFixture(t, compSHA, transSHA)
 
 	wr := checks.WorkflowReport{
 		Path: ".github/workflows/test.yml",
@@ -277,9 +272,7 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 	opts := PlanOptions{
 		Resolver: resolver,
 		Pool:     pool,
-		// A real Tagger makes the narrowing path live; the gate, not the
-		// absence of a Tagger, is what must spare the transitive dep.
-		Tagger: tag.NewListerForTest(t, reg),
+		Tagger:   tagger,
 	}
 
 	result, err := planWorkflow(context.Background(), wr, opts, func(string) {})

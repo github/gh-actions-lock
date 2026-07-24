@@ -126,8 +126,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
+	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
 
-	if !needsRepin(wr, opts) {
+	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
@@ -142,7 +143,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// SHA before the hard-error gate runs. Leave the workflow untouched from
 	// its original inventory; the unreachable-pin error still fails the run.
 	// --accept-moved deliberately accepts these, so it is exempt.
-	if opts.Relock && !opts.AcceptMoved && hasUnreachablePin(wr) && hasRefMoved(wr) {
+	if opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0 && repinMoved {
 		entries = verifiedEntries(wr.Inventory, wr.Path)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 		return planResult{entries: entries, wplans: wplans}, nil
@@ -157,7 +158,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// verified fast path would silently drop it instead of bumping it. Force
 	// the workflow's direct roots through recursive resolution so the moved
 	// transitive is re-pinned to its current SHA.
-	if len(unrecordedRefs) == 0 && repinsMoved(opts) && hasRefMoved(wr) {
+	if len(unrecordedRefs) == 0 && repinMoved {
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
@@ -566,19 +567,13 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved, relock bool) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {
-		if f.Dependency == nil {
+		switch {
+		case f.Dependency == nil:
 			continue
-		}
-		markStale := false
-		switch f.Category {
-		case checks.Stale:
-			markStale = true
-		case checks.UnreachablePin:
-			markStale = acceptMoved
-		case checks.RefMoved:
-			markStale = acceptMoved || relock
-		}
-		if !markStale {
+		case f.Category == checks.Stale,
+			f.Category == checks.UnreachablePin && acceptMoved,
+			f.Category == checks.RefMoved && (acceptMoved || relock):
+		default:
 			continue
 		}
 		d := f.Dependency
@@ -598,45 +593,9 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 	return out
 }
 
-// needsRepin reports whether a workflow must flow through the live re-pin
-// path instead of the trust-inventory fast path. Beyond the shared
-// NeedsAttention signal, --relock and --accept-moved opt moved refs back into
-// re-resolution: a ref-moved finding is benign (NeedsAttention is false) but
-// still needs re-resolving to advance the pin to the current SHA.
-func needsRepin(wr checks.WorkflowReport, opts PlanOptions) bool {
-	if wr.NeedsAttention() {
-		return true
-	}
-	if !repinsMoved(opts) {
-		return false
-	}
-	return hasRefMoved(wr)
-}
-
 // repinsMoved reports whether this run re-resolves benign ref-moved deps.
 func repinsMoved(opts PlanOptions) bool {
 	return opts.Relock || opts.AcceptMoved
-}
-
-// hasRefMoved reports whether the workflow has a ref-moved finding.
-func hasRefMoved(wr checks.WorkflowReport) bool {
-	for _, f := range wr.Findings {
-		if f.Category == checks.RefMoved {
-			return true
-		}
-	}
-	return false
-}
-
-// hasUnreachablePin reports whether the workflow has an unreachable-pin
-// finding (a recorded SHA that is no longer reachable upstream).
-func hasUnreachablePin(wr checks.WorkflowReport) bool {
-	for _, f := range wr.Findings {
-		if f.Category == checks.UnreachablePin {
-			return true
-		}
-	}
-	return false
 }
 
 // verifiedEntries builds Verified plan entries for every inventory item.

@@ -74,123 +74,16 @@ func TestPruneStaleInventory_Relock(t *testing.T) {
 	}
 }
 
-func TestNeedsRepin_RefMoved(t *testing.T) {
-	refMovedOnly := checks.WorkflowReport{
-		Findings: []checks.Finding{{Category: checks.RefMoved, Severity: checks.SeverityWarning}},
-	}
-
-	tests := []struct {
-		name string
-		opts PlanOptions
-		want bool
-	}{
-		{name: "no flags: ref-moved does not repin", want: false},
-		{name: "relock repins ref-moved", opts: PlanOptions{Relock: true}, want: true},
-		{name: "accept-moved repins ref-moved", opts: PlanOptions{AcceptMoved: true}, want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := needsRepin(refMovedOnly, tt.opts); got != tt.want {
-				t.Errorf("needsRepin = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// A workflow with an unreachable-pin already NeedsAttention, so it always
-// re-pins regardless of flags — but relock must not turn it into an accepted
-// (silently re-pinned) fix; that gate lives in reportHasUnfixableErrors.
-func TestNeedsRepin_UnreachablePinAlwaysRepins(t *testing.T) {
-	wr := checks.WorkflowReport{
-		Findings: []checks.Finding{{Category: checks.UnreachablePin, Severity: checks.SeverityError}},
-	}
-	if !needsRepin(wr, PlanOptions{}) {
-		t.Errorf("unreachable-pin should always need re-pin via NeedsAttention")
-	}
-}
-
 // A moved *transitive* dep is pruned from inventory but is not a direct
 // ActionRef, so the per-dep trust fast path would silently keep its stale SHA.
 // Under --relock, planWorkflow must force the direct roots through recursive
 // resolution and bump the transitive to its current SHA. Covers the reviewer
 // request to exercise a moved transitive in a resolution test.
 func TestPlanWorkflow_Relock_BumpsMovedTransitive(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-
 	compSHA := "1111111111111111111111111111111111111111"
 	oldTransSHA := "2222222222222222222222222222222222222222"
 	newTransSHA := "3333333333333333333333333333333333333333"
-
-	// Direct composite (unchanged). Its action.yml uses trans/dep@v2.
-	reg.Register(
-		httpmock.GraphQLForRepo("comp", "action"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": map[string]any{
-					"nameWithOwner": "comp/action",
-					"object": map[string]any{
-						"oid": compSHA,
-						"file": map[string]any{"object": map[string]any{
-							"text": "name: Comp\nruns:\n  using: composite\n  steps:\n    - uses: trans/dep@v2\n",
-						}},
-					},
-				},
-			},
-		}),
-	)
-	// Transitive leaf, now at newTransSHA.
-	reg.Register(
-		httpmock.GraphQLForRepo("trans", "dep"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": map[string]any{
-					"nameWithOwner": "trans/dep",
-					"object": map[string]any{
-						"oid":  newTransSHA,
-						"file": map[string]any{"object": map[string]any{"text": "name: Trans\nruns:\n  using: node20\n"}},
-					},
-				},
-			},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/comp/action$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/comp/action/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": compSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/comp/action/tags`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "v1.0.0", "commit": map[string]any{"sha": compSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/trans/dep$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/trans/dep/branches`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "main", "commit": map[string]any{"sha": newTransSHA}},
-		}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/trans/dep/tags`),
-		httpmock.JSONResponse([]any{
-			map[string]any{"name": "v2", "commit": map[string]any{"sha": newTransSHA}},
-		}),
-	)
-
-	pool := pinpool.New(2, nil)
-	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
-	require.NoError(t, err)
+	resolver, pool, tagger := newTransitivePlanFixture(t, compSHA, newTransSHA)
 
 	wr := checks.WorkflowReport{
 		Path: ".github/workflows/test.yml",
@@ -209,7 +102,7 @@ func TestPlanWorkflow_Relock_BumpsMovedTransitive(t *testing.T) {
 	opts := PlanOptions{
 		Resolver: resolver,
 		Pool:     pool,
-		Tagger:   tag.NewListerForTest(t, reg),
+		Tagger:   tagger,
 		Relock:   true,
 	}
 

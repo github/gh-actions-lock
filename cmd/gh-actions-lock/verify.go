@@ -29,15 +29,6 @@ func applyVerifyFlags(opts *checkOptions) {
 	}
 }
 
-// applyRescanImplications forces --rescan for modes that re-pin moved refs:
-// both --accept-moved and --relock must hit the network to detect what moved
-// before they can advance a pin.
-func (opts *checkOptions) applyRescanImplications() {
-	if opts.acceptMoved || opts.relock {
-		opts.rescan = true
-	}
-}
-
 // runVerifyLocal performs the offline lockfile coverage check. It parses all
 // workflows and verifies that every action ref has a corresponding lockfile
 // entry — no network, no auth required.
