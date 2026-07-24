@@ -1207,6 +1207,16 @@ scenarios:
             jobs:
               call:
                 uses: $/.github/workflows/reusable.yml
+      files:
+        .github/workflows/reusable.yml: |
+          name: Reusable
+          on:
+            workflow_call:
+          jobs:
+            run:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo reusable
     expect:
       exit: 0
       output_contains: ["complete lockfile coverage"]

@@ -58,13 +58,15 @@ type RefScan struct {
 	// LocalPaths are `./…` local composite action references (reusable
 	// workflows are excluded — they resolve differently).
 	LocalPaths []string
-	// SelfRepositoryRefs are valid `$/…` self repository actions. Inherently
-	// pinned: they resolve against the defining repo at the running ref.
+	// SelfRepositoryRefs are valid `$/…` self repository references. They are
+	// inherently pinned to the defining repository's running ref.
 	SelfRepositoryRefs []string
 	// SelfRepositoryActionRefs are the step-level subset that must be scanned
-	// locally for remote dependencies. Job-level refs point at reusable
-	// workflows, which the workflow discovery pass scans independently.
+	// locally for remote dependencies.
 	SelfRepositoryActionRefs []string
+	// SelfRepositoryWorkflowRefs are the job-level subset that point at
+	// reusable workflows.
+	SelfRepositoryWorkflowRefs []string
 	// SelfRepositoryRefErrs are malformed `$/…@ref` values — the invalid form.
 	SelfRepositoryRefErrs []string
 	// Warnings are non-fatal parse notes (e.g. expression-based uses:).
@@ -78,6 +80,7 @@ func (f *File) ExtractActionRefs() RefScan {
 	seenLocal := make(map[string]bool)
 	seenSelf := make(map[string]bool)
 	seenSelfAction := make(map[string]bool)
+	seenSelfWorkflow := make(map[string]bool)
 
 	walkUses(&f.root, func(value string, stepLevel bool) {
 		value = strings.TrimSpace(value)
@@ -105,6 +108,10 @@ func (f *File) ExtractActionRefs() RefScan {
 				seenSelfAction[value] = true
 				scan.SelfRepositoryActionRefs = append(scan.SelfRepositoryActionRefs, value)
 			}
+			if !stepLevel && !seenSelfWorkflow[value] {
+				seenSelfWorkflow[value] = true
+				scan.SelfRepositoryWorkflowRefs = append(scan.SelfRepositoryWorkflowRefs, value)
+			}
 			return
 		}
 		if strings.HasPrefix(value, "./") {
@@ -130,9 +137,9 @@ func (f *File) ExtractActionRefs() RefScan {
 	return scan
 }
 
-// SelfRepositoryActionScan is the transitive dependency scan of in-repo
-// actions reached from step-level `$/…` references.
-type SelfRepositoryActionScan struct {
+// SelfRepositoryDependencyScan is the transitive dependency scan of in-repo files
+// reached through `$/…` references.
+type SelfRepositoryDependencyScan struct {
 	Refs                  []parserlock.ActionRef
 	SelfRepositoryRefs    []string
 	SelfRepositoryRefErrs []string
@@ -141,32 +148,34 @@ type SelfRepositoryActionScan struct {
 	Warnings              []string
 }
 
-// ScanSelfRepositoryActions recursively reads in-repo actions reached through
-// step-level `$/…` references. The self repository actions themselves remain
-// inherently pinned; only remote dependencies found inside them are returned
-// in Refs.
-func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRepositoryActionScan {
-	var scan SelfRepositoryActionScan
-	if len(actionRefs) == 0 {
+// ScanSelfRepositoryDependencies recursively reads in-repo actions and reusable
+// workflows reached through `$/…` references.
+func ScanSelfRepositoryDependencies(workflowPath string, actionRefs, workflowRefs []string) SelfRepositoryDependencyScan {
+	var scan SelfRepositoryDependencyScan
+	if len(actionRefs) == 0 && len(workflowRefs) == 0 {
 		return scan
 	}
 
 	repoRoot := findRepoRoot(workflowPath)
 	if repoRoot == "" {
-		scan.Errors = append(scan.Errors, "can't inspect self repository actions: not in a git repository")
+		scan.Errors = append(scan.Errors, "can't inspect self repository dependencies: not in a git repository")
 		return scan
 	}
 
-	type pendingAction struct {
-		ref   string
-		depth int
+	type pendingDependency struct {
+		ref      string
+		workflow bool
+		depth    int
 	}
-	pending := make([]pendingAction, 0, len(actionRefs))
+	pending := make([]pendingDependency, 0, len(actionRefs)+len(workflowRefs))
 	for _, ref := range actionRefs {
-		pending = append(pending, pendingAction{ref: strings.TrimSpace(ref)})
+		pending = append(pending, pendingDependency{ref: strings.TrimSpace(ref)})
+	}
+	for _, ref := range workflowRefs {
+		pending = append(pending, pendingDependency{ref: strings.TrimSpace(ref), workflow: true})
 	}
 
-	seenActions := make(map[string]bool)
+	seenFiles := make(map[string]bool)
 	seenRefs := make(map[string]bool)
 	seenSelf := make(map[string]bool)
 	seenInvalid := make(map[string]bool)
@@ -175,13 +184,14 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 	for len(pending) > 0 {
 		current := pending[0]
 		pending = pending[1:]
-		if seenActions[current.ref] {
+		seenKey := fmt.Sprintf("%t:%s", current.workflow, current.ref)
+		if seenFiles[seenKey] {
 			continue
 		}
-		seenActions[current.ref] = true
+		seenFiles[seenKey] = true
 
 		if current.depth > maxYAMLWalkDepth {
-			scan.Errors = append(scan.Errors, fmt.Sprintf("self repository action recursion exceeded max depth %d at %s", maxYAMLWalkDepth, current.ref))
+			scan.Errors = append(scan.Errors, fmt.Sprintf("self repository dependency recursion exceeded max depth %d at %s", maxYAMLWalkDepth, current.ref))
 			continue
 		}
 		if SelfRepositoryRefHasVersion(current.ref) {
@@ -193,13 +203,65 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 		}
 
 		relPath := strings.TrimPrefix(current.ref, selfRepositoryPrefix)
-		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
-		if !isWithinRoot(repoRoot, actionDir) {
-			scan.Errors = append(scan.Errors, fmt.Sprintf("refusing to read self repository action outside repo root: %s", current.ref))
+		repoPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))
+		if !isWithinRoot(repoRoot, repoPath) {
+			scan.Errors = append(scan.Errors, fmt.Sprintf("refusing to read self repository dependency outside repo root: %s", current.ref))
 			continue
 		}
 
-		uses, err := readActionUses(repoRoot, actionDir)
+		var uses []string
+		if current.workflow {
+			if err := ValidatePathWithinRoot(repoRoot, repoPath); err != nil {
+				scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository workflow %s: %v", current.ref, err))
+				continue
+			}
+			content, err := os.ReadFile(repoPath)
+			if err != nil {
+				scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository workflow %s: %v", current.ref, err))
+				continue
+			}
+			file, err := Parse(repoPath, content)
+			if err != nil {
+				scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository workflow %s: %v", current.ref, err))
+				continue
+			}
+			nested := file.ExtractActionRefs()
+			for _, ref := range nested.Refs {
+				key := ref.FullName() + "@" + ref.Ref
+				if !seenRefs[key] {
+					seenRefs[key] = true
+					scan.Refs = append(scan.Refs, ref)
+				}
+			}
+			for _, ref := range nested.SelfRepositoryRefs {
+				if !seenSelf[ref] {
+					seenSelf[ref] = true
+					scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, ref)
+				}
+			}
+			for _, ref := range nested.SelfRepositoryRefErrs {
+				if !seenInvalid[ref] {
+					seenInvalid[ref] = true
+					scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, ref)
+				}
+			}
+			for _, path := range nested.LocalPaths {
+				if !seenLocal[path] {
+					seenLocal[path] = true
+					scan.LocalPaths = append(scan.LocalPaths, path)
+				}
+			}
+			scan.Warnings = append(scan.Warnings, nested.Warnings...)
+			for _, ref := range nested.SelfRepositoryActionRefs {
+				pending = append(pending, pendingDependency{ref: ref, depth: current.depth + 1})
+			}
+			for _, ref := range nested.SelfRepositoryWorkflowRefs {
+				pending = append(pending, pendingDependency{ref: ref, workflow: true, depth: current.depth + 1})
+			}
+			continue
+		}
+
+		uses, err := readActionUses(repoRoot, repoPath)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
@@ -219,7 +281,7 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 					seenSelf[use] = true
 					scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, use)
 				}
-				pending = append(pending, pendingAction{ref: use, depth: current.depth + 1})
+				pending = append(pending, pendingDependency{ref: use, depth: current.depth + 1})
 			case strings.HasPrefix(use, "./"):
 				if !seenLocal[use] {
 					seenLocal[use] = true

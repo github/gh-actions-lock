@@ -141,12 +141,16 @@ func (f *File) validateSelfRepositoryMigration(scan RefScan) error {
 	if len(scan.SelfRepositoryRefErrs) > 0 {
 		return fmt.Errorf("invalid self repository reference %q", scan.SelfRepositoryRefErrs[0])
 	}
-	selfScan := ScanSelfRepositoryActions(f.Path, scan.SelfRepositoryActionRefs)
+	selfScan := ScanSelfRepositoryDependencies(
+		f.Path,
+		scan.SelfRepositoryActionRefs,
+		scan.SelfRepositoryWorkflowRefs,
+	)
 	if len(selfScan.SelfRepositoryRefErrs) > 0 {
 		return fmt.Errorf("invalid self repository reference %q", selfScan.SelfRepositoryRefErrs[0])
 	}
 	if len(selfScan.Errors) > 0 {
-		return fmt.Errorf("invalid self repository action: %s", selfScan.Errors[0])
+		return fmt.Errorf("invalid self repository dependency: %s", selfScan.Errors[0])
 	}
 	return nil
 }
