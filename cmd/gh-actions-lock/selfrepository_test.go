@@ -42,7 +42,10 @@ jobs:
 	t.Chdir(dir)
 
 	_, _, err := runCommandWithHTTP(t, transport, workflowPath)
-	require.ErrorIs(t, err, errSilent)
+	// Migration runs by default and validates self repository refs first, so an
+	// invalid `$/…` ref aborts the run before any dependency resolution.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid self repository reference")
 	assert.Zero(t, transport.calls.Load(), "invalid syntax should be rejected before dependency resolution")
 
 	gotWorkflow, err := os.ReadFile(workflowPath)
@@ -82,7 +85,7 @@ jobs:
 	require.NoError(t, os.WriteFile(workflowPath, workflow, 0o600))
 	t.Chdir(dir)
 
-	_, _, err := runCommandWithHTTP(t, transport, "--migrate-local-actions", workflowPath)
+	_, _, err := runCommandWithHTTP(t, transport, workflowPath)
 
 	require.Error(t, err)
 	assert.Zero(t, transport.calls.Load(), "invalid syntax should stop migration before dependency resolution")

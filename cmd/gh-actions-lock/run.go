@@ -68,10 +68,10 @@ type checkOptions struct {
 	// in scanned workflows must have a corresponding lockfile entry.
 	// No auth, no resolution, no reachability — ideal for pre-commit hooks.
 	verifyLocal bool
-	// migrateLocalActions rewrites same-repo `./…` composite action refs to
-	// the inherently-pinned `$/…` form before scanning. Opt-in: it changes
-	// `uses:` values on disk.
-	migrateLocalActions bool
+	// noMigrateLocalActions opts out of rewriting same-repo `./…` composite
+	// action refs to the inherently-pinned `$/…` form. Migration runs by
+	// default on fix runs; set this to leave `./…` refs on disk untouched.
+	noMigrateLocalActions bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -95,9 +95,9 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication required — ideal for pre-commit hooks.")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
-	cmd.Flags().BoolVar(&opts.migrateLocalActions, "migrate-local-actions", false,
-		"Rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form.\n"+
-			"Only local paths that resolve to an in-repo action file are rewritten.")
+	cmd.Flags().BoolVar(&opts.noMigrateLocalActions, "no-migrate-local-actions", false,
+		"Do not rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form.\n"+
+			"Migration runs by default on fix runs; this leaves `./…` refs on disk untouched.")
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
@@ -187,10 +187,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	opts.workflowPaths = paths
 
-	// --migrate-local-actions: rewrite same-repo `./…` action refs to the
-	// inherently-pinned `$/…` form before scanning, so the diagnosis sees
-	// compliant refs. Read-only runs (--no-fix) never touch disk.
-	if opts.migrateLocalActions && !opts.noFix {
+	// Rewrite same-repo `./…` action refs to the inherently-pinned `$/…` form
+	// before scanning, so the diagnosis sees compliant refs. Runs by default on
+	// fix runs; opt out with --no-migrate-local-actions. Read-only runs
+	// (--no-fix) never touch disk.
+	if !opts.noMigrateLocalActions && !opts.noFix {
 		migrated, err := migrateLocalActions(opts.workflowPaths)
 		if err != nil {
 			return err

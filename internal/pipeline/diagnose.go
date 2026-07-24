@@ -231,7 +231,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Severity:     checks.SeverityError,
 				Confidence:   checks.ConfidenceHigh,
 				Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
-				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions), or remove the `./…` steps",
+				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (automatic on fix runs; disable with --no-migrate-local-actions), or remove the `./…` steps",
 			})
 		} else {
 			wr.Findings = append(wr.Findings, checks.Finding{
@@ -240,7 +240,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 				Severity:     checks.SeverityWarning,
 				Confidence:   checks.ConfidenceHigh,
 				Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
-				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (run with --migrate-local-actions)",
+				Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (automatic on fix runs; disable with --no-migrate-local-actions)",
 			})
 		}
 		hasTerminalFinding = true

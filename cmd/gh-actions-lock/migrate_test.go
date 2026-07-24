@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigrateLocalActions_CompositeActionFiles verifies that --migrate-local-actions
+// TestMigrateLocalActions_CompositeActionFiles verifies that migration
 // rewrites `./…` not just in workflow files but also inside in-repo composite
 // action definitions (action.yml), including ones nested a few directories deep.
 // A `./…` whose target does not resolve to an in-repo action file is left
@@ -111,8 +111,8 @@ func TestMigrateLocalActions_RejectsActionFileSymlinkEscape(t *testing.T) {
 	assert.Equal(t, outside, gotOutside)
 }
 
-// TestMigrateLocalActions_EndToEnd runs the real command with
-// --migrate-local-actions against a scratch repo whose local composite chain
+// TestMigrateLocalActions_EndToEnd runs the real command (migration is on by
+// default) against a scratch repo whose local composite chain
 // reaches a pinnable remote action, then asserts on BOTH sides of
 // the mutation: the rewritten workflow/action files AND the generated
 // lockfile. It proves the two behaviours compose correctly in one pass:
@@ -189,7 +189,7 @@ jobs:
 	t.Chdir(dir)
 
 	_, _, err := runCommandWithHTTP(t, reg,
-		"--migrate-local-actions", ".github/workflows/workflow.yml",
+		".github/workflows/workflow.yml",
 	)
 	require.NoError(t, err)
 
@@ -218,4 +218,64 @@ jobs:
 	assert.NotContains(t, lock, "$/", "self refs are inherently pinned; no lockfile entry")
 	assert.NotContains(t, lock, "my-action", "in-repo composite must not be pinned")
 	assert.NotContains(t, lock, "helper")
+}
+
+// TestMigrateLocalActions_DefaultOnAndOptOut proves the default-on wiring:
+// a plain fix run rewrites an in-repo `./.github/actions/foo` composite ref to
+// `$/…` with no network, --no-fix leaves the file untouched, and the
+// --no-migrate-local-actions opt-out suppresses the rewrite on a fix run.
+func TestMigrateLocalActions_DefaultOnAndOptOut(t *testing.T) {
+	const workflow = `name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/foo
+`
+	setup := func(t *testing.T) string {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+		wf := filepath.Join(dir, ".github", "workflows", "ci.yml")
+		require.NoError(t, os.MkdirAll(filepath.Dir(wf), 0o755))
+		require.NoError(t, os.WriteFile(wf, []byte(workflow), 0o600))
+		act := filepath.Join(dir, ".github", "actions", "foo", "action.yml")
+		require.NoError(t, os.MkdirAll(filepath.Dir(act), 0o755))
+		require.NoError(t, os.WriteFile(act,
+			[]byte("name: Foo\nruns:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n"), 0o600))
+		t.Chdir(dir)
+		return wf
+	}
+	read := func(t *testing.T, path string) string {
+		b, err := os.ReadFile(path)
+		require.NoError(t, err)
+		return string(b)
+	}
+
+	t.Run("default fix run rewrites to $/", func(t *testing.T) {
+		transport := &requestCountingTransport{}
+		wf := setup(t)
+		_, _, err := runCommandWithHTTP(t, transport, wf)
+		require.NoError(t, err)
+		got := read(t, wf)
+		assert.Contains(t, got, "uses: $/.github/actions/foo")
+		assert.NotContains(t, got, "uses: ./.github/actions/foo")
+		assert.Zero(t, transport.calls.Load(), "self ref is inherently pinned; no network")
+	})
+
+	t.Run("--no-fix leaves file untouched", func(t *testing.T) {
+		transport := &requestCountingTransport{}
+		wf := setup(t)
+		_, _, _ = runCommandWithHTTP(t, transport, "--no-fix", wf)
+		assert.Equal(t, workflow, read(t, wf))
+	})
+
+	t.Run("--no-migrate-local-actions suppresses rewrite", func(t *testing.T) {
+		transport := &requestCountingTransport{}
+		wf := setup(t)
+		_, _, _ = runCommandWithHTTP(t, transport, "--no-migrate-local-actions", wf)
+		got := read(t, wf)
+		assert.Contains(t, got, "uses: ./.github/actions/foo", "opt-out leaves the ./… ref in place")
+		assert.NotContains(t, got, "$/", "opt-out means no migration to $/")
+	})
 }

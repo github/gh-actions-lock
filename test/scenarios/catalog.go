@@ -50,7 +50,7 @@ type Fixtures struct {
 	Lockfile         string                     `yaml:"lockfile"`
 	LockfileTemplate string                     `yaml:"lockfile_template"`
 	// Files lays down arbitrary repo-relative files before the run, e.g.
-	// in-repo composite action.yml definitions that `--migrate-local-actions`
+	// in-repo composite action.yml definitions that the default-on migration
 	// should also rewrite. Paths are relative to the repo root, not the
 	// workflows dir.
 	Files map[string]string `yaml:"files"`

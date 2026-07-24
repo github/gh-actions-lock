@@ -39,10 +39,10 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 		return err
 	}
 
-	// --migrate-local-actions rewrites same-repo `./…` refs to `$/…` on disk
-	// before the coverage check sees them. Opt-in write, so it runs even in
-	// this otherwise read-only mode (but never under --no-fix).
-	if opts.migrateLocalActions && !opts.noFix {
+	// Rewrite same-repo `./…` refs to `$/…` on disk before the coverage check
+	// sees them. Runs by default on fix runs even in this otherwise read-only
+	// mode; opt out with --no-migrate-local-actions, and never under --no-fix.
+	if !opts.noMigrateLocalActions && !opts.noFix {
 		migrated, mErr := migrateLocalActions(paths)
 		if mErr != nil {
 			return mErr

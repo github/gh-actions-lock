@@ -482,10 +482,9 @@ scenarios:
 
   - name: migrate_local_actions_rewrite
     category: workflow_parsing
-    description: "--migrate-local-actions rewrites a deep in-repo ./ chain to $/, then discovers and pins the remote dependency reached only through that $/ chain; no self repository ref enters the lockfile"
+    description: "migration runs by default on fix runs: rewrites a deep in-repo ./ chain to $/, then discovers and pins the remote dependency reached only through that $/ chain; no self repository ref enters the lockfile"
     needs_stub: true
     tags: [stub]
-    flags: ["--migrate-local-actions"]
     fixtures:
       workflows:
         ci.yml:
@@ -528,6 +527,39 @@ scenarios:
         "nested/deep/action.yml": ["uses: actions/checkout@v4"]
       files_exclude:
         ".github/workflows/ci.yml": ["uses: ./my-action", "actions/checkout"]
+
+  - name: migrate_local_actions_opt_out
+    category: workflow_parsing
+    description: "--no-migrate-local-actions opts out: the same-repo ./ composite ref is left on disk untouched and never rewritten to $/"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-migrate-local-actions"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./my-action
+      files:
+        my-action/action.yml: |
+          name: My Action
+          runs:
+            using: composite
+            steps:
+              - run: echo hi
+                shell: bash
+      delete_lockfile: true
+    expect:
+      output_contains: ["local path actions"]
+      files_contain:
+        ".github/workflows/ci.yml": ["uses: ./my-action"]
+      files_exclude:
+        ".github/workflows/ci.yml": ["$/"]
 
   - name: sub_path_action
     category: workflow_parsing
