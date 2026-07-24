@@ -250,9 +250,9 @@ type LookupIssue struct {
 	Message string // human-readable reason
 }
 
-// ReverseLookup classifies symbolic refs locally and reverse-lookups bare SHA
-// refs via DiscoverContaining. It populates dep.Tag and dep.Branch and computes
-// the canonical @ref. The ref priority is:
+// ReverseLookup leaves symbolic refs unchanged and reverse-lookups bare SHA
+// refs via DiscoverContaining. For bare SHAs it populates dep.Tag and dep.Branch
+// and computes the canonical @ref. The ref priority is:
 // tag (semver-ish release) > protected branch > default branch > any branch.
 // When the canonical ref differs from dep.Ref the change is recorded in
 // the returned rewrites map and dep.Ref is updated in place.
