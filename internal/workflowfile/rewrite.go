@@ -120,9 +120,6 @@ func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	}
 
 	repoRoot := findRepoRoot(f.Path)
-	if repoRoot == "" {
-		return append([]byte(nil), f.Content...), 0, nil
-	}
 	replacements := make(map[string]string, len(scan.LocalPaths))
 	for _, localPath := range scan.LocalPaths {
 		if !localActionExists(repoRoot, localPath) {
@@ -141,16 +138,12 @@ func (f *File) validateSelfRepositoryMigration(scan RefScan) error {
 	if len(scan.SelfRepositoryRefErrs) > 0 {
 		return fmt.Errorf("invalid self repository reference %q", scan.SelfRepositoryRefErrs[0])
 	}
-	selfScan := ScanSelfRepositoryDependencies(
-		f.Path,
-		scan.SelfRepositoryActionRefs,
-		scan.SelfRepositoryWorkflowRefs,
-	)
+	selfScan := ScanSelfRepositoryActions(f.Path, scan.SelfRepositoryActionRefs)
 	if len(selfScan.SelfRepositoryRefErrs) > 0 {
 		return fmt.Errorf("invalid self repository reference %q", selfScan.SelfRepositoryRefErrs[0])
 	}
 	if len(selfScan.Errors) > 0 {
-		return fmt.Errorf("invalid self repository dependency: %s", selfScan.Errors[0])
+		return fmt.Errorf("invalid self repository action: %s", selfScan.Errors[0])
 	}
 	return nil
 }

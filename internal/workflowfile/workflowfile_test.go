@@ -85,7 +85,6 @@ jobs:
 		scan.SelfRepositoryRefs,
 	)
 	assert.Equal(t, []string{"$/", "$/actions/foo"}, scan.SelfRepositoryActionRefs)
-	assert.Equal(t, []string{"$/.github/workflows/reusable.yml"}, scan.SelfRepositoryWorkflowRefs)
 
 	// `$/…@ref` is the invalid form.
 	assert.ElementsMatch(t,
@@ -138,7 +137,6 @@ jobs:
 
 	assert.Equal(t, []string{"$/shared"}, scan.SelfRepositoryRefs)
 	assert.Equal(t, []string{"$/shared"}, scan.SelfRepositoryActionRefs)
-	assert.Equal(t, []string{"$/shared"}, scan.SelfRepositoryWorkflowRefs)
 }
 
 func TestMigrateLocalActionsToSelfRepository(t *testing.T) {
@@ -181,17 +179,6 @@ func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
 	assert.Equal(t, content, out)
 }
 
-func TestMigrateLocalActionsToSelfRepository_NoRepoRoot(t *testing.T) {
-	content := []byte("jobs:\n  build:\n    steps:\n      - uses: ./local-action\n")
-	f, err := Parse(filepath.Join(t.TempDir(), "ci.yml"), content)
-	require.NoError(t, err)
-
-	out, changed, err := f.MigrateLocalActionsToSelfRepository()
-	require.NoError(t, err)
-	assert.Equal(t, 0, changed)
-	assert.Equal(t, content, out)
-}
-
 func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
@@ -224,24 +211,9 @@ func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.
 			assert.Equal(t, content, out)
 		})
 	}
-
-	t.Run("missing reusable workflow", func(t *testing.T) {
-		workflowPath := filepath.Join(repoRoot, ".github", "workflows", "missing-workflow.yml")
-		content := []byte("jobs:\n" +
-			"  call:\n    uses: $/.github/workflows/missing.yml\n" +
-			"  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./local-action\n")
-		f, err := Parse(workflowPath, content)
-		require.NoError(t, err)
-
-		out, changed, err := f.MigrateLocalActionsToSelfRepository()
-
-		require.Error(t, err)
-		assert.Zero(t, changed)
-		assert.Equal(t, content, out)
-	})
 }
 
-func TestScanSelfRepositoryDependencies_ActionClosure(t *testing.T) {
+func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
 	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
@@ -253,7 +225,6 @@ func TestScanSelfRepositoryDependencies_ActionClosure(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(actionPath), 0o755))
 		require.NoError(t, os.WriteFile(actionPath, []byte(content), 0o644))
 	}
-
 	writeAction("actions/root", `runs:
   using: composite
   steps:
@@ -270,7 +241,7 @@ func TestScanSelfRepositoryDependencies_ActionClosure(t *testing.T) {
     - uses: "$/actions/expression@${{ matrix.ref }}"
 `)
 
-	scan := ScanSelfRepositoryDependencies(workflowPath, []string{"$/actions/root"}, nil)
+	scan := ScanSelfRepositoryActions(workflowPath, []string{"$/actions/root"})
 
 	assert.ElementsMatch(t, []string{"vendor/tool@v1", "actions/checkout@v4"}, actionRefStrings(scan.Refs))
 	assert.ElementsMatch(t, []string{"$/actions/child", "$/actions/root"}, scan.SelfRepositoryRefs)
@@ -283,44 +254,15 @@ func TestScanSelfRepositoryDependencies_ActionClosure(t *testing.T) {
 	assert.Empty(t, scan.Warnings)
 }
 
-func TestScanSelfRepositoryDependencies_ReusableWorkflowClosure(t *testing.T) {
-	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
-	workflowDir := filepath.Join(repoRoot, ".github", "workflows")
-	require.NoError(t, os.MkdirAll(workflowDir, 0o755))
-	workflowPath := filepath.Join(workflowDir, "ci.yml")
-	require.NoError(t, os.WriteFile(workflowPath, []byte("name: ci\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "reusable.yml"), []byte(`jobs:
-  nested:
-    uses: $/.github/workflows/nested.yml
-`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "nested.yml"), []byte(`jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/setup-go@v5
-`), 0o644))
-
-	scan := ScanSelfRepositoryDependencies(
-		workflowPath,
-		nil,
-		[]string{"$/.github/workflows/reusable.yml"},
-	)
-
-	assert.Equal(t, []string{"actions/setup-go@v5"}, actionRefStrings(scan.Refs))
-	assert.Equal(t, []string{"$/.github/workflows/nested.yml"}, scan.SelfRepositoryRefs)
-	assert.Empty(t, scan.Errors)
-}
-
-func TestScanSelfRepositoryDependencies_NoRepoRoot(t *testing.T) {
-	scan := ScanSelfRepositoryDependencies(filepath.Join(t.TempDir(), "ci.yml"), []string{"$/actions/root"}, nil)
+func TestScanSelfRepositoryActions_NoRepoRoot(t *testing.T) {
+	scan := ScanSelfRepositoryActions(filepath.Join(t.TempDir(), "ci.yml"), []string{"$/actions/root"})
 
 	require.Len(t, scan.Errors, 1)
 	assert.Contains(t, scan.Errors[0], "not in a git repository")
 	assert.Empty(t, scan.Refs)
 }
 
-func TestScanSelfRepositoryDependencies_RejectsSymlinkEscape(t *testing.T) {
+func TestScanSelfRepositoryActions_RejectsSymlinkEscape(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
 	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
@@ -340,7 +282,7 @@ func TestScanSelfRepositoryDependencies_RejectsSymlinkEscape(t *testing.T) {
 		t.Skipf("creating symlink: %v", err)
 	}
 
-	scan := ScanSelfRepositoryDependencies(workflowPath, []string{"$/actions/escape"}, nil)
+	scan := ScanSelfRepositoryActions(workflowPath, []string{"$/actions/escape"})
 
 	require.Len(t, scan.Errors, 1)
 	assert.Contains(t, scan.Errors[0], "outside repository root")

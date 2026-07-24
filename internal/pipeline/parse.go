@@ -45,7 +45,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			continue
 		}
 		scan := wf.ExtractActionRefs()
-		selfScan := workflowfile.ScanSelfRepositoryDependencies(path, scan.SelfRepositoryActionRefs, scan.SelfRepositoryWorkflowRefs)
+		selfScan := workflowfile.ScanSelfRepositoryActions(path, scan.SelfRepositoryActionRefs)
 
 		pw.RewriteRefs = excludeActionRefs(scan.Refs, selfScan.Refs)
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
