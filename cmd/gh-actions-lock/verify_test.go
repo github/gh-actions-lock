@@ -63,6 +63,11 @@ func TestValidateOutputFlags_VerifyConflicts(t *testing.T) {
 			wantErr: "offline",
 		},
 		{
+			name:    "verify-local and relock conflict",
+			opts:    checkOptions{verifyLocal: true, relock: true},
+			wantErr: "offline",
+		},
+		{
 			name: "verify alone is valid",
 			opts: checkOptions{verify: true},
 		},

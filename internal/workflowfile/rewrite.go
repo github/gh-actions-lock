@@ -2,6 +2,9 @@ package workflowfile
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -98,6 +101,72 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 	})
 
 	return []byte(strings.Join(lines, "\n")), changed, nil
+}
+
+// MigrateLocalActionsToSelfRepository rewrites same-repo `./…` composite action
+// references to the inherently-pinned `$/…` form. Only local paths that
+// resolve to an in-repo action file are rewritten — that in-repo existence is
+// the same-repo equivalence guard that makes `$/` a safe replacement for
+// `./`. Local reusable workflows are never candidates (ExtractActionRefs
+// excludes them). Returns the new content and the number of `uses:` lines
+// changed.
+func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
+	scan := f.ExtractActionRefs()
+	if err := f.validateSelfRepositoryMigration(scan); err != nil {
+		return append([]byte(nil), f.Content...), 0, err
+	}
+	if len(scan.LocalPaths) == 0 {
+		return append([]byte(nil), f.Content...), 0, nil
+	}
+
+	repoRoot := findRepoRoot(f.Path)
+	replacements := make(map[string]string, len(scan.LocalPaths))
+	for _, localPath := range scan.LocalPaths {
+		if !localActionExists(repoRoot, localPath) {
+			continue
+		}
+		replacements[localPath] = selfRepositoryPrefix + strings.TrimPrefix(localPath, "./")
+	}
+	if len(replacements) == 0 {
+		return append([]byte(nil), f.Content...), 0, nil
+	}
+
+	return f.RewriteActionRefs(replacements)
+}
+
+func (f *File) validateSelfRepositoryMigration(scan RefScan) error {
+	if len(scan.SelfRepositoryRefErrs) > 0 {
+		return fmt.Errorf("invalid self repository reference %q", scan.SelfRepositoryRefErrs[0])
+	}
+	selfScan := ScanSelfRepositoryActions(f.Path, scan.SelfRepositoryActionRefs)
+	if len(selfScan.SelfRepositoryRefErrs) > 0 {
+		return fmt.Errorf("invalid self repository reference %q", selfScan.SelfRepositoryRefErrs[0])
+	}
+	if len(selfScan.Errors) > 0 {
+		return fmt.Errorf("invalid self repository action: %s", selfScan.Errors[0])
+	}
+	return nil
+}
+
+// localActionExists reports whether a `./…` path resolves to an action file
+// (action.yml or action.yaml) within the repo root.
+func localActionExists(repoRoot, localPath string) bool {
+	relPath := strings.TrimPrefix(localPath, "./")
+	actionDir := filepath.Join(repoRoot, relPath)
+	if !isWithinRoot(repoRoot, actionDir) {
+		return false
+	}
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		actionPath := filepath.Join(actionDir, name)
+		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
+			continue
+		}
+		info, err := os.Stat(actionPath)
+		if err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 // subpathRewriteLookup handles sub-path actions like actions/cache/restore@ref.

@@ -5,7 +5,9 @@
 package workflowfile
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +16,8 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"gopkg.in/yaml.v3"
 )
+
+var errPathOutsideRoot = errors.New("path resolves outside repository root")
 
 // File is the parsed workflow YAML the CLI rewrites in-place.
 // It carries the original byte content alongside the parsed node tree so
@@ -47,21 +51,60 @@ func Parse(path string, content []byte) (*File, error) {
 	return f, nil
 }
 
-// ExtractActionRefs finds all uses: references to repository actions in the workflow.
-func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) {
-	var refs []parserlock.ActionRef
-	var warnings []string
-	var localPaths []string
+// RefScan is the classified result of walking a workflow's `uses:` values.
+type RefScan struct {
+	// Refs are remote repository action references (owner/repo[/path]@ref).
+	Refs []parserlock.ActionRef
+	// LocalPaths are `./…` local composite action references (reusable
+	// workflows are excluded — they resolve differently).
+	LocalPaths []string
+	// SelfRepositoryRefs are valid `$/…` self repository actions. Inherently
+	// pinned: they resolve against the defining repo at the running ref.
+	SelfRepositoryRefs []string
+	// SelfRepositoryActionRefs are the step-level subset that must be scanned
+	// locally for remote dependencies. Job-level refs point at reusable
+	// workflows, which the workflow discovery pass scans independently.
+	SelfRepositoryActionRefs []string
+	// SelfRepositoryRefErrs are malformed `$/…@ref` values — the invalid form.
+	SelfRepositoryRefErrs []string
+	// Warnings are non-fatal parse notes (e.g. expression-based uses:).
+	Warnings []string
+}
+
+// ExtractActionRefs finds and classifies all uses: references in the workflow.
+func (f *File) ExtractActionRefs() RefScan {
+	var scan RefScan
 	seen := make(map[string]bool)
 	seenLocal := make(map[string]bool)
+	seenSelf := make(map[string]bool)
+	seenSelfAction := make(map[string]bool)
 
-	walkYAML(&f.root, func(key, value string) {
-		if key != "uses" {
+	walkUses(&f.root, func(value string, stepLevel bool) {
+		value = strings.TrimSpace(value)
+		if SelfRepositoryRefHasVersion(value) {
+			if !seenSelf[value] {
+				seenSelf[value] = true
+				scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, value)
+			}
 			return
 		}
-		value = strings.TrimSpace(value)
 		if strings.Contains(value, "${") {
-			warnings = append(warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
+			scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
+			return
+		}
+		if IsSelfRepositoryAction(value) {
+			// Bare `$/…` is a legal self repository reference at both step level
+			// (action dir) and job level (reusable-workflow file): "this repo
+			// at the running SHA", inherently pinned. Only the `@ref` form is
+			// invalid — a self repository reference has no external ref to pin.
+			if !seenSelf[value] {
+				seenSelf[value] = true
+				scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, value)
+			}
+			if stepLevel && !seenSelfAction[value] {
+				seenSelfAction[value] = true
+				scan.SelfRepositoryActionRefs = append(scan.SelfRepositoryActionRefs, value)
+			}
 			return
 		}
 		if strings.HasPrefix(value, "./") {
@@ -70,7 +113,7 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 			}
 			if !seenLocal[value] {
 				seenLocal[value] = true
-				localPaths = append(localPaths, value)
+				scan.LocalPaths = append(scan.LocalPaths, value)
 			}
 			return
 		}
@@ -79,12 +122,124 @@ func (f *File) ExtractActionRefs() ([]parserlock.ActionRef, []string, []string) 
 			dedupKey := actionRef.FullName() + "@" + actionRef.Ref
 			if !seen[dedupKey] {
 				seen[dedupKey] = true
-				refs = append(refs, *actionRef)
+				scan.Refs = append(scan.Refs, *actionRef)
 			}
 		}
 	})
 
-	return refs, localPaths, warnings
+	return scan
+}
+
+// SelfRepositoryActionScan is the transitive dependency scan of in-repo
+// actions reached from step-level `$/…` references.
+type SelfRepositoryActionScan struct {
+	Refs                  []parserlock.ActionRef
+	SelfRepositoryRefs    []string
+	SelfRepositoryRefErrs []string
+	LocalPaths            []string
+	Errors                []string
+	Warnings              []string
+}
+
+// ScanSelfRepositoryActions recursively reads in-repo actions reached through
+// step-level `$/…` references. The self repository actions themselves remain
+// inherently pinned; only remote dependencies found inside them are returned
+// in Refs.
+func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRepositoryActionScan {
+	var scan SelfRepositoryActionScan
+	if len(actionRefs) == 0 {
+		return scan
+	}
+
+	repoRoot := findRepoRoot(workflowPath)
+	if repoRoot == "" {
+		scan.Errors = append(scan.Errors, "can't inspect self repository actions: not in a git repository")
+		return scan
+	}
+
+	type pendingAction struct {
+		ref   string
+		depth int
+	}
+	pending := make([]pendingAction, 0, len(actionRefs))
+	for _, ref := range actionRefs {
+		pending = append(pending, pendingAction{ref: strings.TrimSpace(ref)})
+	}
+
+	seenActions := make(map[string]bool)
+	seenRefs := make(map[string]bool)
+	seenSelf := make(map[string]bool)
+	seenInvalid := make(map[string]bool)
+	seenLocal := make(map[string]bool)
+
+	for len(pending) > 0 {
+		current := pending[0]
+		pending = pending[1:]
+		if seenActions[current.ref] {
+			continue
+		}
+		seenActions[current.ref] = true
+
+		if current.depth > maxYAMLWalkDepth {
+			scan.Errors = append(scan.Errors, fmt.Sprintf("self repository action recursion exceeded max depth %d at %s", maxYAMLWalkDepth, current.ref))
+			continue
+		}
+		if SelfRepositoryRefHasVersion(current.ref) {
+			if !seenInvalid[current.ref] {
+				seenInvalid[current.ref] = true
+				scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, current.ref)
+			}
+			continue
+		}
+
+		relPath := strings.TrimPrefix(current.ref, selfRepositoryPrefix)
+		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
+		if !isWithinRoot(repoRoot, actionDir) {
+			scan.Errors = append(scan.Errors, fmt.Sprintf("refusing to read self repository action outside repo root: %s", current.ref))
+			continue
+		}
+
+		uses, err := readActionUses(repoRoot, actionDir)
+		if err != nil {
+			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
+			continue
+		}
+		for _, rawUse := range uses {
+			use := strings.TrimSpace(rawUse)
+			switch {
+			case SelfRepositoryRefHasVersion(use):
+				if !seenInvalid[use] {
+					seenInvalid[use] = true
+					scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, use)
+				}
+			case strings.Contains(use, "${"):
+				scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q in %s (expressions are not supported)", use, current.ref))
+			case IsSelfRepositoryAction(use):
+				if !seenSelf[use] {
+					seenSelf[use] = true
+					scan.SelfRepositoryRefs = append(scan.SelfRepositoryRefs, use)
+				}
+				pending = append(pending, pendingAction{ref: use, depth: current.depth + 1})
+			case strings.HasPrefix(use, "./"):
+				if !seenLocal[use] {
+					seenLocal[use] = true
+					scan.LocalPaths = append(scan.LocalPaths, use)
+				}
+			default:
+				actionRef := parserlock.ParseActionRef(use)
+				if actionRef == nil {
+					continue
+				}
+				key := actionRef.FullName() + "@" + actionRef.Ref
+				if !seenRefs[key] {
+					seenRefs[key] = true
+					scan.Refs = append(scan.Refs, *actionRef)
+				}
+			}
+		}
+	}
+
+	return scan
 }
 
 // DiscoverWorkflows finds all workflow files in .github/workflows/ relative to
@@ -113,6 +268,54 @@ func DiscoverWorkflowsIn(dir string) ([]string, error) {
 		if ext == ".yml" || ext == ".yaml" {
 			paths = append(paths, filepath.Join(dir, entry.Name()))
 		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// FindRepoRoot returns the git repository root containing startPath, or "" when
+// startPath is not inside a git repository.
+func FindRepoRoot(startPath string) string {
+	return findRepoRoot(startPath)
+}
+
+// DiscoverCompositeActionFiles walks the repository rooted at root and returns
+// the paths of all action definition files (action.yml / action.yaml). The
+// .git directory is skipped. Non-composite action files are included; callers
+// migrate them with MigrateLocalActionsToSelfRepository, which no-ops when a file has
+// no local `./…` steps.
+func DiscoverCompositeActionFiles(root string) ([]string, error) {
+	if root == "" {
+		return nil, nil
+	}
+	var paths []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == "action.yml" || d.Name() == "action.yaml" {
+			if err := ValidatePathWithinRoot(root, p); err != nil {
+				return err
+			}
+			info, err := os.Stat(p)
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("action definition %s is not a regular file", p)
+			}
+			paths = append(paths, p)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("discovering action files under %s: %w", root, err)
 	}
 	sort.Strings(paths)
 	return paths, nil
@@ -172,12 +375,37 @@ func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]pars
 	return refs, warnings
 }
 
-func walkYAML(node *yaml.Node, fn func(key, value string)) {
-	walkYAMLNodes(node, func(keyNode, valueNode *yaml.Node) {
-		if keyNode.Kind == yaml.ScalarNode && valueNode.Kind == yaml.ScalarNode {
-			fn(keyNode.Value, valueNode.Value)
+func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
+	walkUsesDepth(node, false, fn, 0)
+}
+
+func walkUsesDepth(node *yaml.Node, inStep bool, fn func(value string, stepLevel bool), depth int) {
+	if node == nil || depth > maxYAMLWalkDepth {
+		return
+	}
+	switch node.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, child := range node.Content {
+			walkUsesDepth(child, inStep, fn, depth+1)
 		}
-	})
+	case yaml.MappingNode:
+		for i := 0; i < len(node.Content)-1; i += 2 {
+			key := node.Content[i]
+			value := node.Content[i+1]
+			childInStep := inStep
+			if key.Kind == yaml.ScalarNode {
+				switch key.Value {
+				case "uses":
+					if value.Kind == yaml.ScalarNode {
+						fn(value.Value, inStep)
+					}
+				case "steps":
+					childInStep = true
+				}
+			}
+			walkUsesDepth(value, childInStep, fn, depth+1)
+		}
+	}
 }
 
 // maxYAMLWalkDepth bounds recursion in walkYAMLNodes so a hostile or
@@ -247,6 +475,31 @@ func isWithinRoot(root, candidate string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
 }
 
+// ValidatePathWithinRoot resolves symlinks in candidate and rejects paths that
+// leave root. Callers use it before reading or rewriting repository-owned YAML.
+func ValidatePathWithinRoot(root, candidate string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolving repository root %s: %w", root, err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return fmt.Errorf("resolving repository root %s: %w", root, err)
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
+	}
+	resolvedCandidate, err := filepath.EvalSymlinks(absCandidate)
+	if err != nil {
+		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
+	}
+	if !isWithinRoot(resolvedRoot, resolvedCandidate) {
+		return fmt.Errorf("%w: %s is outside %s", errPathOutsideRoot, candidate, root)
+	}
+	return nil
+}
+
 func parseActionYAMLForUses(content []byte) ([]string, error) {
 	var action struct {
 		Runs struct {
@@ -270,6 +523,31 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 		}
 	}
 	return uses, nil
+}
+
+func readActionUses(repoRoot, actionDir string) ([]string, error) {
+	var lastErr error
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		actionPath := filepath.Join(actionDir, name)
+		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
+			if errors.Is(err, errPathOutsideRoot) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+		content, err := os.ReadFile(actionPath)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		uses, err := parseActionYAMLForUses(content)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", name, err)
+		}
+		return uses, nil
+	}
+	return nil, fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
 }
 
 // KeyFromPath converts a workflow path discovered on disk (relative to the

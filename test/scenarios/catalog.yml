@@ -484,6 +484,68 @@ scenarios:
       exit: 1
       output_contains: ["local path actions", "composite"]
 
+  - name: composite_local_path_blocked_deep
+    category: workflow_parsing
+    description: "Remote composite whose $/ chain runs several levels deep before a leaf uses ./local-path — blocked transitively, not at the top level"
+    needs_token: true
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["nodeselector/actions-test-fixtures/deep-blocked@main"]
+    expect:
+      exit: 1
+      output_contains: ["local path actions", "composite", "deep-blocked-helper"]
+
+  - name: migrate_local_actions_rewrite
+    category: workflow_parsing
+    description: "--migrate-local-actions rewrites a deep in-repo ./ chain to $/, then discovers and pins the remote dependency reached only through that $/ chain; no self repository ref enters the lockfile"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--migrate-local-actions"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./my-action
+      files:
+        my-action/action.yml: |
+          name: My Action
+          runs:
+            using: composite
+            steps:
+              - uses: ./helper
+        helper/action.yml: |
+          name: Helper
+          runs:
+            using: composite
+            steps:
+              - uses: ./nested/deep
+        nested/deep/action.yml: |
+          name: Deep
+          runs:
+            using: composite
+            steps:
+              - uses: actions/checkout@v4
+      delete_lockfile: true
+    expect:
+      exit: 0
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_excludes: ["$/"]
+      files_contain:
+        ".github/workflows/ci.yml": ["uses: $/my-action"]
+        "my-action/action.yml": ["uses: $/helper"]
+        "helper/action.yml": ["uses: $/nested/deep"]
+        "nested/deep/action.yml": ["uses: actions/checkout@v4"]
+      files_exclude:
+        ".github/workflows/ci.yml": ["uses: ./my-action", "actions/checkout"]
+
   - name: sub_path_action
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"
@@ -816,6 +878,22 @@ scenarios:
       output_contains:
         - "transitive"
 
+  - name: self_repository_deep_transitive
+    category: multi_workflow
+    description: "Remote composite whose internals chain `$/` self repository references three levels deep — the tool fetches the tarball, walks the `$/` chain, and pins the cross-repo transitive closure (actions-test-fixtures-b) reached through it"
+    needs_token: true
+    tags: [real_repo]
+    live_repo: nodeselector/actions-test-fixtures
+    fixtures:
+      delete_lockfile: true
+    expect:
+      exit: 1
+      lockfile_deps_cover_direct: true
+      lockfile_deps_cover_indirect: true
+      lockfile_contains:
+        - "'.github/workflows/deep-self-ref.yml':"
+        - "nodeselector/actions-test-fixtures-b@main"
+
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║═══════════════════════════════ security ════════════════════════════════║
   # ╚═════════════════════════════════════════════════════════════════════════╝
@@ -1101,6 +1179,162 @@ scenarios:
     expect:
       exit: 0
       output_contains: [".github/workflows/deploy.yml"]
+
+  - name: self_repository_action_valid
+    category: workflow_parsing
+    description: "Bare $/ self repository reference at step level is inherently pinned — offline verify passes with no lockfile entry required"
+    needs_token: false
+    needs_stub: false
+    tags: [stub]
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/.github/actions/my-action
+      files:
+        .github/actions/my-action/action.yml: |
+          name: Local action
+          runs:
+            using: node20
+            main: index.js
+    expect:
+      exit: 0
+      output_contains: ["complete lockfile coverage"]
+
+  - name: self_repository_reusable_workflow_valid
+    category: workflow_parsing
+    description: "$/ self repository reference at reusable-workflow call level (jobs.<id>.uses) is inherently pinned — offline verify passes"
+    needs_token: false
+    needs_stub: false
+    tags: [stub]
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              call:
+                uses: $/.github/workflows/reusable.yml
+    expect:
+      exit: 0
+      output_contains: ["complete lockfile coverage"]
+
+  - name: self_repository_action_missing
+    category: workflow_parsing
+    description: "A missing in-repo $/ action is an unfixable invalid self repository ref, not a fixable not-pinned dependency"
+    needs_token: false
+    needs_stub: false
+    tags: [stub]
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/actions/missing
+    expect:
+      exit: 1
+      output_contains: ["can't inspect self repository action", "invalid-self-repository-ref"]
+
+  - name: self_repository_ref_rejected
+    category: workflow_parsing
+    description: "$/…@ref is rejected — a self repository reference always resolves to the running commit, so an explicit @ref is invalid"
+    needs_token: false
+    needs_stub: false
+    tags: [stub]
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/actions/foo@v1
+    expect:
+      exit: 1
+      output_contains: ["must not carry an @ref", "invalid-self-repository-ref"]
+
+  - name: self_repository_nested_ref_rejected
+    category: workflow_parsing
+    description: "A $/…@ref nested inside an in-repo composite is rejected during local closure discovery, before any network resolution"
+    needs_token: false
+    needs_stub: false
+    tags: [stub]
+    flags: ["--verify-local"]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/actions/root
+      files:
+        actions/root/action.yml: |
+          name: Root
+          runs:
+            using: composite
+            steps:
+              - uses: $/actions/child@v1
+    expect:
+      exit: 1
+      output_contains: ["must not carry an @ref", "invalid-self-repository-ref"]
+
+  - name: self_repository_shared_dependency
+    category: workflow_parsing
+    description: "The real binary keeps a remote ref shared by workflow YAML and a local $/ action at its authored ref, so source and lockfile coverage converge in one pass"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          raw: |
+            name: CI
+            on: push
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: $/actions/shared
+                  - uses: actions/checkout@v4
+      files:
+        actions/shared/action.yml: |
+          name: Shared
+          runs:
+            using: composite
+            steps:
+              - uses: actions/checkout@v4
+      delete_lockfile: true
+    expect:
+      exit: 0
+      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_excludes: ["actions/checkout@v4.2.2", "$/"]
+      files_contain:
+        ".github/workflows/ci.yml": ["uses: $/actions/shared", "uses: actions/checkout@v4"]
+        "actions/shared/action.yml": ["uses: actions/checkout@v4"]
+      files_exclude:
+        ".github/workflows/ci.yml": ["actions/checkout@v4.2.2"]
 
   - name: fresh_no_narrow_keeps_major
     category: narrowing
@@ -1785,6 +2019,26 @@ scenarios:
         - "'actions/checkout@v4':"
         - "ref: 'v4'"
         - "commit: 'sha1-"
+
+  - name: relock_bumps_stale_branch_ref
+    category: security
+    description: "--relock bumps a moved branch ref (main) from a stale ancestor SHA to the live head"
+    needs_stub: true
+    flags: ["--relock", "--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+      lockfile_template: pinned_checkout_main
+    expect:
+      exit: 0
+      lockfile_deps_cover_direct: true
+      lockfile_contains:
+        - "'actions/checkout@main':"
+        - "ref: 'main'"
+        - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+      lockfile_comment_excludes: "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 
   - name: onboard_roundtrip_v002
     category: onboarding

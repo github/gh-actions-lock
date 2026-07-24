@@ -39,6 +39,19 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 		return err
 	}
 
+	// --migrate-local-actions rewrites same-repo `./…` refs to `$/…` on disk
+	// before the coverage check sees them. Opt-in write, so it runs even in
+	// this otherwise read-only mode (but never under --no-fix).
+	if opts.migrateLocalActions && !opts.noFix {
+		migrated, mErr := migrateLocalActions(paths)
+		if mErr != nil {
+			return mErr
+		}
+		if migrated > 0 && opts.jsonFields == "" {
+			console.TermSuccess("Migrated %d local %s to `$/…`", migrated, ui.Pluralize(migrated, "action", "actions"))
+		}
+	}
+
 	// Load the lockfile without a resolver (no network).
 	var store *lockfile.State
 	if workflowsDir != "" {

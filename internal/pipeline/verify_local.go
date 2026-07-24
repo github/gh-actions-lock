@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 )
@@ -20,7 +22,13 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 		wr := checks.WorkflowReport{
 			Path:       pw.Path,
 			ActionRefs: pw.Refs,
-			Deps:       pw.ExistingDeps,
+			RewriteRefs: func() []parserlock.ActionRef {
+				if pw.RewriteRefs != nil {
+					return pw.RewriteRefs
+				}
+				return pw.Refs
+			}(),
+			Deps: pw.ExistingDeps,
 		}
 
 		if pw.LoadErr != nil {
@@ -48,6 +56,30 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 			continue
 		}
 
+		// `$/…@ref` is invalid regardless of lockfile coverage — a self
+		// reference always resolves to the running ref. Surface it in the
+		// offline check too; it needs no network to detect.
+		if len(pw.SelfRepositoryRefErrs) > 0 {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.InvalidSelfRepositoryRef,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       fmt.Sprintf("self repository actions must not carry an @ref: %s", strings.Join(pw.SelfRepositoryRefErrs, ", ")),
+				Remediation:  "drop the `@ref` suffix — `$/…` always resolves to the running ref",
+			})
+		}
+		for _, resolutionErr := range pw.SelfRepositoryResolutionErrs {
+			wr.Findings = append(wr.Findings, checks.Finding{
+				WorkflowPath: pw.Path,
+				Category:     checks.InvalidSelfRepositoryRef,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       resolutionErr,
+				Remediation:  "fix the `$/…` action path so its dependencies can be inspected",
+			})
+		}
+
 		if len(pw.Refs) == 0 && len(pw.LocalPaths) == 0 {
 			results = append(results, wr)
 			continue
@@ -56,7 +88,7 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 		// Use RunChecks with a nil resolver to get structural-only findings
 		// (NotPinned, ShaAsRef, RefChanged, Stale). No network calls.
 		findings := checks.RunChecks(context.Background(), pw, lf, nil)
-		wr.Findings = findings
+		wr.Findings = append(wr.Findings, findings...)
 		results = append(results, wr)
 	}
 

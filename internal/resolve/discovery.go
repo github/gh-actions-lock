@@ -34,6 +34,34 @@ func IsCompositeLocalPath(err error) bool {
 	return errors.As(err, &target)
 }
 
+// InvalidSelfRepositoryRefError is returned when a fetched composite carries
+// the invalid `$/…@ref` form.
+type InvalidSelfRepositoryRefError struct {
+	Parent string
+	Ref    string
+}
+
+func (e *InvalidSelfRepositoryRefError) Error() string {
+	return fmt.Sprintf("composite action %s uses self repository reference %q with a forbidden @ref", e.Parent, e.Ref)
+}
+
+// IsInvalidSelfRepositoryRef reports whether err contains an invalid nested
+// self repository reference.
+func IsInvalidSelfRepositoryRef(err error) bool {
+	var target *InvalidSelfRepositoryRefError
+	return errors.As(err, &target)
+}
+
+// selfRepositoryPrefix marks a `$/…` self repository action inside a composite's
+// nested uses. Kept local to avoid importing the workflowfile package into the
+// resolver; the sibling detection here is a plain prefix check.
+const selfRepositoryPrefix = "$/"
+
+type resolutionRequest struct {
+	ref      parserlock.ActionRef
+	fetchRef string
+}
+
 // LatestRef returns the highest stable tag for an action repository.
 func (r *Resolver) LatestRef(ctx context.Context, owner, repo string) (string, error) {
 	key := ghapi.ForRepo(owner, repo)
@@ -81,7 +109,10 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 	var allDeps []dep.Dependency
 	parentMap := make(dep.ParentMap)
 
-	pending := refs
+	pending := make([]resolutionRequest, len(refs))
+	for i, ref := range refs {
+		pending[i] = resolutionRequest{ref: ref}
+	}
 	depth := 0
 
 	// Rolling counters spanning every BFS depth. Total grows as transitive
@@ -122,12 +153,12 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			return allDeps, parentMap, fmt.Errorf("composite action recursion exceeded max depth %d", r.MaxRecursionDepth)
 		}
 
-		var toResolve []parserlock.ActionRef
-		for _, ref := range pending {
-			key := cacheKey(ref)
+		var toResolve []resolutionRequest
+		for _, request := range pending {
+			key := cacheKey(request.ref)
 			if !seen[key] {
 				seen[key] = true
-				toResolve = append(toResolve, ref)
+				toResolve = append(toResolve, request)
 			}
 		}
 
@@ -149,7 +180,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			resolveErr = errors.Join(resolveErr, err)
 		}
 
-		var nextPending []parserlock.ActionRef
+		var nextPending []resolutionRequest
 		for i := range deps {
 			yml := actionYMLs[i]
 			if yml == "" {
@@ -167,7 +198,8 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			// but the recorded edges flatten subpaths back into one node
 			// per tarball — same model the runner uses.
 			parentKey := deps[i].Key()
-			for _, use := range meta.NestedUses {
+			for _, rawUse := range meta.NestedUses {
+				use := strings.TrimSpace(rawUse)
 				if strings.HasPrefix(use, "./") {
 					resolveErr = errors.Join(resolveErr, &CompositeLocalPathError{
 						Parent:    parentKey,
@@ -175,8 +207,39 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 					})
 					continue
 				}
-				actionRef := parserlock.ParseActionRef(use)
-				if actionRef == nil {
+				var request resolutionRequest
+				if strings.HasPrefix(use, selfRepositoryPrefix) {
+					if strings.Contains(use, "@") {
+						resolveErr = errors.Join(resolveErr, &InvalidSelfRepositoryRefError{
+							Parent: parentKey,
+							Ref:    use,
+						})
+						continue
+					}
+					// `$/…` inside a composite is a same-tarball self repository reference:
+					// it resolves within THIS composite's own repo at its own
+					// resolved SHA (the parent repo, not the workflow-run repo).
+					// Retain the logical ref for lockfile identity while fetching
+					// the sibling action file from the immutable parent commit.
+					owner, repo := deps[i].OwnerRepo()
+					request = resolutionRequest{
+						ref: parserlock.ActionRef{
+							Owner: owner,
+							Repo:  repo,
+							Path:  strings.TrimPrefix(use, selfRepositoryPrefix),
+							Ref:   deps[i].Ref,
+						},
+						fetchRef: deps[i].SHA,
+					}
+				} else {
+					actionRef := parserlock.ParseActionRef(use)
+					if actionRef == nil {
+						continue
+					}
+					request = resolutionRequest{ref: *actionRef}
+				}
+				actionRef := request.ref
+				if actionRef.Owner == "" {
 					continue
 				}
 				childKey := actionRef.NWO() + "@" + actionRef.Ref
@@ -189,10 +252,10 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 				// can pull in cross-repo transitive deps the parent never
 				// references directly (e.g. nested-composite → simple-composite
 				// → other-repo). The path-aware seen{} set keys on FullName@Ref
-				// and so prevents re-resolving an exact self-reference, making
+				// and so prevents re-resolving an exact self repository reference, making
 				// this enqueue loop-safe.
 				if childKey == parentKey {
-					nextPending = append(nextPending, *actionRef)
+					nextPending = append(nextPending, request)
 					continue
 				}
 				// Track all parents, deduplicating.
@@ -207,7 +270,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 				if !found {
 					parentMap[childKey] = append(parents, parentKey)
 				}
-				nextPending = append(nextPending, *actionRef)
+				nextPending = append(nextPending, request)
 			}
 		}
 
@@ -225,7 +288,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 // resolveDone and resolveTotal are rolling counters owned by ResolveAllRecursive
 // that span every BFS depth, so a single non-jumping progress bar can cover
 // direct + transitive resolution as one phase.
-func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []parserlock.ActionRef, depth int, resolveDone, resolveTotal *atomic.Int64) ([]dep.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []resolutionRequest, depth int, resolveDone, resolveTotal *atomic.Int64) ([]dep.Dependency, []string, error) {
 	type resolveResult struct {
 		dep dep.Dependency
 		yml string
@@ -234,8 +297,8 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 	results := make([]resolveResult, len(refs))
 
 	var uncachedIdx []int
-	for i, ref := range refs {
-		if entry, ok := r.cache.Get(cacheKey(ref)); ok {
+	for i, request := range refs {
+		if entry, ok := r.cache.Get(cacheKey(request.ref)); ok {
 			results[i] = resolveResult{dep: entry.dep, yml: entry.actionYML, ok: true}
 		} else {
 			uncachedIdx = append(uncachedIdx, i)
@@ -290,11 +353,15 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 			reqs: make([]ghapi.ActionFileRequest, len(span)),
 		}
 		for j, idx := range span {
-			ref := refs[idx]
+			request := refs[idx]
+			fetchRef := request.fetchRef
+			if fetchRef == "" {
+				fetchRef = request.ref.Ref
+			}
 			b.idxs[j] = idx
 			b.reqs[j] = ghapi.ActionFileRequest{
-				Owner: ref.Owner, Repo: ref.Repo,
-				Path: ref.Path, Ref: ref.Ref,
+				Owner: request.ref.Owner, Repo: request.ref.Repo,
+				Path: request.ref.Path, Ref: fetchRef,
 			}
 		}
 		batches = append(batches, b)
@@ -303,7 +370,7 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 	poolErr := pinpool.RunTyped(r.Pool, ctx, "",
 		batches,
 		func(b actionBatch) string {
-			head := refs[b.idxs[0]]
+			head := refs[b.idxs[0]].ref
 			label := "resolving " + head.NWO() + "@" + head.Ref
 			if len(b.idxs) > 1 {
 				label = fmt.Sprintf("%s (+%d more)", label, len(b.idxs)-1)
@@ -314,12 +381,12 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []pars
 			res := r.gh.ResolveActionFiles(ctx, b.reqs)
 			var errs []error
 			for j, idx := range b.idxs {
-				ref := refs[idx]
+				ref := refs[idx].ref
 				if j < len(res) && res[j].Err == nil {
 					d := dep.Dependency{
 						NWO:  res[j].Owner + "/" + res[j].Repo,
 						Path: res[j].Path,
-						Ref:  res[j].Ref,
+						Ref:  ref.Ref,
 						SHA:  res[j].CommitOID,
 					}
 					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})

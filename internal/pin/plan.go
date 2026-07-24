@@ -35,6 +35,12 @@ type PlanOptions struct {
 	// re-resolved to their current live SHA.
 	AcceptMoved bool
 
+	// Relock treats ref-moved findings (a branch or partial-version ref
+	// that legitimately advanced) as resolvable, re-pinning them to the
+	// current live SHA. Unlike AcceptMoved it leaves unreachable-pin
+	// findings untouched so possible tampering stays a hard error.
+	Relock bool
+
 	// prevImpreciseNWO is computed once in Plan() from the global lockfile
 	// state. It holds lowercased NWOs that are already recorded with a
 	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
@@ -116,15 +122,40 @@ type planResult struct {
 func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, status func(string)) (planResult, error) {
 	var entries []Entry
 	var wplans []WorkflowPlan
+	for _, finding := range wr.Findings {
+		if finding.Category == checks.InvalidSelfRepositoryRef {
+			return planResult{}, nil
+		}
+	}
+	rewriteRefs := wr.RewriteRefs
+	if rewriteRefs == nil {
+		rewriteRefs = wr.ActionRefs
+	}
+	rewriteRefKeys := actionRefKeys(rewriteRefs)
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
-	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved)
+	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
+	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
 
-	if !wr.NeedsAttention() {
+	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
-		rw := narrowVerifiedEntries(ctx, entries, opts)
+		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
+		return planResult{entries: entries, wplans: wplans}, nil
+	}
+
+	// --relock must not rewrite a workflow that still carries an
+	// unreachable-pin finding: re-resolving a moved sibling pulls the whole
+	// tree (including the possibly-tampered unreachable dep, which may be
+	// transitive and absent from the direct-only inventory) through
+	// ResolveAllRecursive, and buildPinnedEntries would commit it at a live
+	// SHA before the hard-error gate runs. Leave the workflow untouched from
+	// its original inventory; the unreachable-pin error still fails the run.
+	// --accept-moved deliberately accepts these, so it is exempt.
+	if opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0 && repinMoved {
+		entries = verifiedEntries(wr.Inventory, wr.Path)
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -132,8 +163,18 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
 	entries = verifiedEntries(inventory, wr.Path)
 
+	// A moved *transitive* dep is pruned from inventory but is not a direct
+	// ActionRef, so partitionByInventory marks nothing unrecorded and the
+	// verified fast path would silently drop it instead of bumping it. Force
+	// the workflow's direct roots through recursive resolution so the moved
+	// transitive is re-pinned to its current SHA.
+	if len(unrecordedRefs) == 0 && repinMoved {
+		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
+		entries = verifiedEntries(nil, wr.Path)
+	}
+
 	if len(unrecordedRefs) == 0 {
-		rw := narrowVerifiedEntries(ctx, entries, opts)
+		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -150,11 +191,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		// Fall through with partial deps to pin what we can.
 	}
 
-	// Snapshot direct-dep matching before narrowing/ReverseLookup mutate
-	// dep.Ref — the tracker records index-aligned booleans at construction,
-	// then Keys() reads post-mutation refs. Must be built while deps and
-	// ActionRefs still share the same ref strings.
-	directTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
+	// Root refs are recorded directly under the workflow in the lockfile.
+	// Workflow refs are the narrower subset eligible for source rewrites.
+	// Keep separate trackers because a remote dependency found inside an
+	// in-repo `$/…` action is a lockfile root but does not appear in the
+	// workflow YAML.
+	rootTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
+	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
 
 	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
 	// to a symbolic tag when one exists.
@@ -162,11 +205,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	rewrites := make(map[string]string)
 	narrowedNWOs := make(map[string]bool) // NWOs where narrowing chose a tag
 
-	narrowDirectDeps(ctx, opts, deps, directTracker, rewrites, narrowedNWOs)
+	narrowDirectDeps(ctx, opts, deps, rewriteTracker, rewrites, narrowedNWOs)
 
 	// ReverseLookup canonicalizes each dep's ref while preserving the tags
 	// narrowing chose and transitive deps' declared refs.
-	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, directTracker, narrowedNWOs)
+	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, rewriteTracker, narrowedNWOs)
 	if err != nil {
 		return planResult{}, err
 	}
@@ -194,8 +237,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			}
 		}
 		deps = filtered
-		// Rebuild direct tracker against the filtered slice.
-		directTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
+		// Rebuild the root tracker against the filtered slice.
+		rootTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
 	}
 	for k, v := range rlRewrites {
 		rewrites[k] = v
@@ -221,7 +264,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Record workflow plan if there are rewrites.
 	// Also narrow any verified (already-recorded) entries that have imprecise refs.
-	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts); len(verifiedRW) > 0 {
+	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys); len(verifiedRW) > 0 {
 		for k, v := range verifiedRW {
 			rewrites[k] = v
 		}
@@ -238,10 +281,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
-	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, directTracker, inventorySHA)...)
+	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA)...)
 
 	// Record findings that are informational (ref-moved, misleading-sha).
-	entries = append(entries, informationalEntries(wr)...)
+	entries = append(entries, informationalEntries(wr, opts)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
 }
@@ -471,30 +514,41 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 }
 
 // informationalEntries records ref-moved and misleading-sha findings as
-// Investigate entries.
-func informationalEntries(wr checks.WorkflowReport) []Entry {
+// Investigate entries. When the run re-pins moved refs (--relock or
+// --accept-moved), ref-moved is resolved by the re-pin and is not recorded
+// for investigation.
+func informationalEntries(wr checks.WorkflowReport, opts PlanOptions) []Entry {
 	var out []Entry
 	for _, f := range wr.Findings {
 		switch f.Category {
-		case checks.MisleadingSHA, checks.RefMoved:
-			nwo := ""
-			ref := ""
-			if f.ActionRef != nil {
-				nwo = f.ActionRef.Owner + "/" + f.ActionRef.Repo
-				ref = f.ActionRef.Ref
+		case checks.RefMoved:
+			if repinsMoved(opts) {
+				continue
 			}
-			out = append(out, Entry{
-				NWO:         nwo,
-				Ref:         ref,
-				ObservedSHA: f.ObservedSHA,
-				Resolution:  Investigate,
-				Issue:       string(f.Category),
-				Reason:      f.Detail,
-				Workflows:   []string{wr.Path},
-			})
+			out = append(out, informationalEntry(f, wr.Path))
+		case checks.MisleadingSHA:
+			out = append(out, informationalEntry(f, wr.Path))
 		}
 	}
 	return out
+}
+
+func informationalEntry(f checks.Finding, path string) Entry {
+	nwo := ""
+	ref := ""
+	if f.ActionRef != nil {
+		nwo = f.ActionRef.Owner + "/" + f.ActionRef.Repo
+		ref = f.ActionRef.Ref
+	}
+	return Entry{
+		NWO:         nwo,
+		Ref:         ref,
+		ObservedSHA: f.ObservedSHA,
+		Resolution:  Investigate,
+		Issue:       string(f.Category),
+		Reason:      f.Detail,
+		Workflows:   []string{path},
+	}
 }
 
 // partitionByInventory splits refs into those with a matching inventory
@@ -519,17 +573,23 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 
 // pruneStaleInventory drops inventory entries matching a stale finding (a pin
 // the workflow no longer references), so a fix-mode re-pin converges.
-func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved bool) []checks.InventoryEntry {
+// acceptMoved additionally prunes ref-moved and unreachable-pin deps; relock
+// prunes ref-moved deps only, so a benign branch/version advance can be
+// re-pinned without accepting a possibly-tampered unreachable pin.
+func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved, relock bool) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {
 		switch {
-		case f.Category == checks.Stale && f.Dependency != nil:
-			d := f.Dependency
-			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
-		case acceptMoved && (f.Category == checks.UnreachablePin || f.Category == checks.RefMoved) && f.Dependency != nil:
-			d := f.Dependency
-			stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
+		case f.Dependency == nil:
+			continue
+		case f.Category == checks.Stale,
+			f.Category == checks.UnreachablePin && acceptMoved,
+			f.Category == checks.RefMoved && (acceptMoved || relock):
+		default:
+			continue
 		}
+		d := f.Dependency
+		stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
 	}
 	if len(stale) == 0 {
 		return inventory
@@ -543,6 +603,11 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 		out = append(out, inv)
 	}
 	return out
+}
+
+// repinsMoved reports whether this run re-resolves benign ref-moved deps.
+func repinsMoved(opts PlanOptions) bool {
+	return opts.Relock || opts.AcceptMoved
 }
 
 // verifiedEntries builds Verified plan entries for every inventory item.
@@ -565,7 +630,7 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 // narrowVerifiedEntries upgrades already-recorded direct deps to full semver
 // tags when possible, returning the workflow-YAML rewrites. Skipped for
 // --no-narrow, transitive deps, and refs the user kept imprecise (sticky v4).
-func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions) map[string]string {
+func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions, rewriteRefKeys map[string]bool) map[string]string {
 	if opts.NoNarrow || opts.Tagger == nil {
 		return nil
 	}
@@ -573,6 +638,9 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 	for i := range entries {
 		e := &entries[i]
 		if !e.Direct {
+			continue
+		}
+		if !rewriteRefKeys[strings.ToLower(e.NWO)+"@"+e.Ref] {
 			continue
 		}
 		owner, repo := splitNWO(e.NWO)
@@ -619,6 +687,14 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		return nil
 	}
 	return rewrites
+}
+
+func actionRefKeys(refs []parserlock.ActionRef) map[string]bool {
+	keys := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		keys[strings.ToLower(ref.Owner+"/"+ref.Repo)+"@"+ref.Ref] = true
+	}
+	return keys
 }
 
 // splitNWO splits "owner/repo" or "owner/repo/sub" into (owner, repo).

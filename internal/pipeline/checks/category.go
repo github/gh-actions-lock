@@ -72,6 +72,14 @@ const (
 	// default (full-directory) fix run these are pruned automatically; in
 	// read-only mode they are surfaced but not removed. Non-blocking.
 	StaleWorkflow Category = "stale-workflow"
+	// SelfRepositoryAction means the workflow references a same-repo action via
+	// the self repository `$/…` syntax. These resolve against the defining
+	// repo at the running ref, so they are inherently pinned and need no
+	// lockfile entry — always in compliance.
+	SelfRepositoryAction Category = "self-repository-action"
+	// InvalidSelfRepositoryRef means a `$/…` reference is malformed or its
+	// target cannot be inspected. This includes a forbidden `@ref` suffix.
+	InvalidSelfRepositoryRef Category = "invalid-self-repository-ref"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

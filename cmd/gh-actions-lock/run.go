@@ -57,6 +57,11 @@ type checkOptions struct {
 	// ref-moved: prunes the stale lockfile entry and re-pins to the
 	// current live SHA.
 	acceptMoved bool
+	// relock re-resolves deps whose branch or partial-version ref has
+	// legitimately advanced (ref-moved) to the current upstream SHA.
+	// Unlike acceptMoved it does NOT accept unreachable-pin findings
+	// (possible tampering), which stay hard errors.
+	relock bool
 	// verify is a convenience alias for --rescan --no-fix: full
 	// re-verification of every pin with a non-zero exit on any finding.
 	verify bool
@@ -64,6 +69,10 @@ type checkOptions struct {
 	// in scanned workflows must have a corresponding lockfile entry.
 	// No auth, no resolution, no reachability — ideal for pre-commit hooks.
 	verifyLocal bool
+	// migrateLocalActions rewrites same-repo `./…` composite action refs to
+	// the inherently-pinned `$/…` form before scanning. Opt-in: it changes
+	// `uses:` values on disk.
+	migrateLocalActions bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -81,11 +90,15 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
+	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Bump moved branch/version refs (e.g. main, v4) to their current upstream SHA; leaves unreachable pins as errors")
 	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Full re-verification of every pin (equivalent to --rescan --no-fix)")
 	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication required — ideal for pre-commit hooks.")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
+	cmd.Flags().BoolVar(&opts.migrateLocalActions, "migrate-local-actions", false,
+		"Rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form.\n"+
+			"Only local paths that resolve to an in-repo action file are rewritten.")
 }
 
 // validateOutputFlags rejects incoherent structured-output flag combinations.
@@ -97,11 +110,8 @@ func (opts *checkOptions) validateOutputFlags() error {
 	if opts.verify && opts.verifyLocal {
 		return fmt.Errorf("--verify and --verify-local are mutually exclusive")
 	}
-	if opts.verifyLocal && opts.rescan {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --rescan")
-	}
-	if opts.verifyLocal && opts.acceptMoved {
-		return fmt.Errorf("--verify-local is offline and cannot be combined with --accept-moved")
+	if opts.verifyLocal && (opts.rescan || opts.acceptMoved || opts.relock) {
+		return fmt.Errorf("--verify-local cannot be combined with --rescan, --accept-moved, or --relock because it runs offline")
 	}
 	return nil
 }
@@ -170,8 +180,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Pre-warm resolver caches from the lockfile so repeat runs skip
 	// redundant GraphQL and REST calls. Skipped when --rescan is set:
 	// a full re-verification must hit the network to detect ref movement.
-	// --accept-moved implies --rescan (must detect what moved).
-	if opts.acceptMoved {
+	// --accept-moved and --relock both imply --rescan (must detect what
+	// moved before re-pinning).
+	if opts.acceptMoved || opts.relock {
 		opts.rescan = true
 	}
 	trustLockfileCaches := !opts.rescan
@@ -181,6 +192,19 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endSetup()
 
 	opts.workflowPaths = paths
+
+	// --migrate-local-actions: rewrite same-repo `./…` action refs to the
+	// inherently-pinned `$/…` form before scanning, so the diagnosis sees
+	// compliant refs. Read-only runs (--no-fix) never touch disk.
+	if opts.migrateLocalActions && !opts.noFix {
+		migrated, err := migrateLocalActions(opts.workflowPaths)
+		if err != nil {
+			return err
+		}
+		if migrated > 0 && opts.jsonFields == "" {
+			console.TermSuccess("Migrated %d local %s to `$/…`", migrated, ui.Pluralize(migrated, "action", "actions"))
+		}
+	}
 
 	// Reconcile the lockfile's recorded workflow set against what's on disk.
 	// Only a full-directory scan can prove a workflow was deleted; a partial
@@ -349,6 +373,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Version:     cliVersion(),
 		NoNarrow:    opts.noNarrow,
 		AcceptMoved: opts.acceptMoved,
+		Relock:      opts.relock,
 	})
 	endPlan()
 	if planErr != nil {
@@ -522,4 +547,74 @@ func cliVersion() string {
 		return info.Main.Version
 	}
 	return "unknown"
+}
+
+// migrateLocalActions rewrites same-repo `./…` action refs to `$/…` and writes
+// changes to disk. It covers two kinds of files: the discovered workflow files,
+// and every in-repo composite action definition file (action.yml/action.yaml)
+// found under the repository root. The latter is why a composite action that
+// internally uses `uses: ./helper` gets fixed too, not just the workflow that
+// calls it. Returns the total number of `uses:` lines rewritten.
+func migrateLocalActions(paths []string) (int, error) {
+	files := append([]string(nil), paths...)
+
+	// Also sweep in-repo composite action files. The repo root is derived from
+	// a workflow path (they live under .github/workflows/); onboarding only
+	// runs when workflows exist, so an empty paths list means nothing to do.
+	if len(paths) > 0 {
+		if root := workflowfile.FindRepoRoot(paths[0]); root != "" {
+			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
+			if err != nil {
+				return 0, err
+			}
+			files = append(files, actionFiles...)
+		}
+	}
+
+	type plannedMigration struct {
+		path    string
+		content []byte
+		changed int
+	}
+	var migrations []plannedMigration
+	seen := make(map[string]bool)
+	for _, path := range files {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return 0, fmt.Errorf("resolving migration path %s: %w", path, err)
+		}
+		if seen[absPath] {
+			continue
+		}
+		seen[absPath] = true
+
+		if root := workflowfile.FindRepoRoot(path); root != "" {
+			if err := workflowfile.ValidatePathWithinRoot(root, path); err != nil {
+				return 0, fmt.Errorf("refusing to migrate %s: %w", path, err)
+			}
+		}
+		wf, err := workflowfile.Load(path)
+		if err != nil {
+			return 0, fmt.Errorf("loading %s: %w", path, err)
+		}
+		content, changed, err := wf.MigrateLocalActionsToSelfRepository()
+		if err != nil {
+			return 0, fmt.Errorf("refusing to migrate %s: %w", path, err)
+		}
+		if changed == 0 {
+			continue
+		}
+		migrations = append(migrations, plannedMigration{path: path, content: content, changed: changed})
+	}
+
+	// Do not write anything until every candidate has passed structural and
+	// repository-boundary validation.
+	written := 0
+	for _, plan := range migrations {
+		if err := os.WriteFile(plan.path, plan.content, 0o644); err != nil {
+			return written, fmt.Errorf("writing %s: %w", plan.path, err)
+		}
+		written += plan.changed
+	}
+	return written, nil
 }

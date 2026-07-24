@@ -74,8 +74,6 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: OIDC Setup for goproxy
-        uses: github/setup-goproxy@v1.1.0
       - uses: actions/checkout@v6.0.2
       - uses: cli/gh-extension-precompile@v2.1.0
         with:

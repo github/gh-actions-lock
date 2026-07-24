@@ -180,6 +180,18 @@ def hydrate_assertions(s, expect, needs_token: false)
     s.assert_lockfile_contains(*expect["lockfile_contains"])
   end
 
+  if expect["lockfile_excludes"]
+    s.assert_lockfile_excludes(*expect["lockfile_excludes"])
+  end
+
+  if expect["files_contain"]
+    s.assert_files_contain(expect["files_contain"])
+  end
+
+  if expect["files_exclude"]
+    s.assert_files_exclude(expect["files_exclude"])
+  end
+
   if expect["lockfile_deps_cover_direct"]
     s.assert_lockfile_deps_cover_direct
     # Also verify lockfile workflow refs match the actual YAML files.
@@ -534,24 +546,19 @@ def checkout_repo_rest(srv)
   end
 end
 
-# GraphQL handler that resolves actions/checkout@v4 to the given SHA
-# and returns DIVERGED for all reachability checks.
-# GraphQL handler that resolves actions/checkout@v4 to a DIFFERENT SHA
-# (simulating ref-moved), so the forgery ancestry check kicks in.
-def checkout_graphql_forgery(srv)
+# Resolve actions/checkout to a moved ref's live SHA.
+def checkout_graphql_ref_move(srv, live_sha)
   srv.on(:POST, %r{/graphql$}) do |req|
     body = JSON.parse(req.body) rescue {}
     query = body["query"] || ""
 
     if query.include?("expression")
-      # ResolveActionFiles — return a different SHA (ref moved)
       [200, { "Content-Type" => "application/json" },
        JSON.generate({ data: { a0: {
          nameWithOwner: "actions/checkout",
-         object: { oid: FORGERY_LIVE_SHA, file: { object: { text: "name: Checkout\ndescription: Checkout\n" } } }
+         object: { oid: live_sha, file: { object: { text: "name: Checkout\ndescription: Checkout\n" } } }
        } } })]
     elsif query.include?("compare")
-      # Reachability — irrelevant for forgery path but keep it working
       repo_data = {}
       query.scan(/b(\d+):/).flatten.each { |i| repo_data["b#{i}"] = { compare: { status: "BEHIND" } } }
       [200, { "Content-Type" => "application/json" },
@@ -559,7 +566,44 @@ def checkout_graphql_forgery(srv)
     else
       [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
     end
+
   end
+end
+
+def checkout_graphql_success(srv)
+  srv.on(:POST, %r{/graphql$}) do |req|
+    body = JSON.parse(req.body) rescue {}
+    query = body["query"] || ""
+
+    if query.include?("expression")
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate({ data: { a0: {
+         nameWithOwner: "actions/checkout",
+         object: {
+           oid: CHECKOUT_SHA,
+           file: {
+             object: {
+               text: "name: Checkout\ndescription: Checkout\nruns:\n  using: node20\n  main: dist/index.js\n"
+             }
+           }
+         }
+       } } })]
+    else
+      [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
+    end
+  end
+end
+
+def wire_checkout_success(s, token)
+  s.stub_server do |srv|
+    checkout_graphql_success(srv)
+    checkout_repo_rest(srv)
+    srv.on(:GET, %r{/repos/actions/checkout/releases}) do |_req|
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate([{ tag_name: "v4.2.2", published_at: "2024-01-01T00:00:00Z", immutable: false }])]
+    end
+  end
+  s.env("GH_TOKEN" => token)
 end
 
 # ── Stub server wiring per scenario ────────────────────────────────────
@@ -568,6 +612,13 @@ end
 # not listed here either use no stub or rely on catalog-level config.
 
 STUB_WIRING = {
+  migrate_local_actions_rewrite: ->(s) {
+    wire_checkout_success(s, "gho_fake_migrate_token")
+  },
+  self_repository_shared_dependency: ->(s) {
+    wire_checkout_success(s, "gho_fake_self_repository_token")
+  },
+
   # SSO scenarios: catch-all 403 with X-GitHub-SSO header
   sso_auth_failure: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
@@ -716,7 +767,7 @@ STUB_WIRING = {
   # Detection scenarios: lockfile forgery (pinned SHA not ancestor of live SHA)
   dbot_forgery_blocks: ->(s) {
     s.stub_server do |srv|
-      checkout_graphql_forgery(srv)
+      checkout_graphql_ref_move(srv, FORGERY_LIVE_SHA)
       checkout_repo_rest(srv)
       # Compare API: merge_base != pinned SHA → forgery
       srv.on(:GET, %r{/repos/actions/checkout/compare/}) do |_req|
@@ -729,11 +780,36 @@ STUB_WIRING = {
     end
     s.env("GH_TOKEN" => "gho_fake_forgery_token")
   },
+
+  # Relock scenario: branch ref recorded at a stale ancestor SHA; --relock
+  # bumps it to the live head (MAIN_BRANCH_SHA).
+  relock_bumps_stale_branch_ref: ->(s) {
+    s.stub_server do |srv|
+      checkout_graphql_ref_move(srv, MAIN_BRANCH_SHA)
+      checkout_repo_rest(srv)
+      # Compare API: recorded SHA is an ancestor (behind) of the live head, so
+      # the move is benign (ref-moved, not an unreachable pin).
+      srv.on(:GET, %r{/repos/actions/checkout/compare/}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({ status: "behind", merge_base_commit: { sha: CHECKOUT_SHA } })]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_relock_token")
+  },
 }
 
 # ── Custom assertion wiring ─────────────────────────────────────────────
 
 CUSTOM_ASSERTIONS = {
+  self_repository_shared_dependency: ->(s) {
+    s.assert_custom do |r|
+      binary = File.expand_path("../../gh-actions-lock", __dir__)
+      stdout, stderr, status = Open3.capture3(binary, "--verify-local", chdir: r.dir)
+      unless status.success?
+        s.failures << "second-pass --verify-local failed (lockfile did not converge):\n#{stdout}#{stderr}"
+      end
+    end
+  },
   sso_dedup: ->(s) {
     s.assert_custom do |r|
       count = r.output.scan("SAML enforcement").size
@@ -779,6 +855,11 @@ catalog["scenarios"].each do |spec|
     elsif fixtures["lockfile_template"]
       tmpl = LOCKFILE_TEMPLATES[fixtures["lockfile_template"]]
       s.lockfile(tmpl.call) if tmpl
+    end
+
+    # Hydrate arbitrary repo-relative files (e.g. in-repo composite action.yml)
+    if fixtures["files"]
+      s.files(fixtures["files"])
     end
 
     # CLI flags
