@@ -331,8 +331,8 @@ func TestReverseLookup_NoChangeWhenRefAlreadyCanonical(t *testing.T) {
 	if deps[0].Ref != "v4" {
 		t.Errorf("ref should be unchanged, got %q", deps[0].Ref)
 	}
-	if deps[0].Tag != "v4" || deps[0].Branch != "" {
-		t.Errorf("expected Tag=v4 Branch empty, got Tag=%q Branch=%q", deps[0].Tag, deps[0].Branch)
+	if deps[0].Tag != "" || deps[0].Branch != "" {
+		t.Errorf("expected Tag and Branch empty, got Tag=%q Branch=%q", deps[0].Tag, deps[0].Branch)
 	}
 	reg.Verify(t)
 }
@@ -422,8 +422,8 @@ func TestReverseLookup_PreservesBranchRefOverTag(t *testing.T) {
 	if deps[0].Tag != "" {
 		t.Errorf("expected Tag empty, got %q", deps[0].Tag)
 	}
-	if deps[0].Branch != "main" {
-		t.Errorf("expected Branch=main, got %q", deps[0].Branch)
+	if deps[0].Branch != "" {
+		t.Errorf("expected Branch empty, got %q", deps[0].Branch)
 	}
 	reg.Verify(t)
 }

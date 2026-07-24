@@ -270,7 +270,6 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 			continue
 		}
 		if !LooksLikeSHA(d.Ref) {
-			d.Tag, d.Branch = parserlock.SplitRef(d.Ref)
 			continue
 		}
 		tag, branch, err := r.DiscoverContaining(ctx, owner, repo, d.SHA, d.Ref)
