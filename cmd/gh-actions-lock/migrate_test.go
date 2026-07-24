@@ -266,14 +266,16 @@ jobs:
 	t.Run("--no-fix leaves file untouched", func(t *testing.T) {
 		transport := &requestCountingTransport{}
 		wf := setup(t)
-		_, _, _ = runCommandWithHTTP(t, transport, "--no-fix", wf)
+		_, _, err := runCommandWithHTTP(t, transport, "--no-fix", wf)
+		require.NoError(t, err, "command must succeed so the assertion proves the guard, not an early failure")
 		assert.Equal(t, workflow, read(t, wf))
 	})
 
 	t.Run("--no-migrate-local-actions suppresses rewrite", func(t *testing.T) {
 		transport := &requestCountingTransport{}
 		wf := setup(t)
-		_, _, _ = runCommandWithHTTP(t, transport, "--no-migrate-local-actions", wf)
+		_, _, err := runCommandWithHTTP(t, transport, "--no-migrate-local-actions", wf)
+		require.NoError(t, err, "command must succeed so the assertion proves the opt-out, not an early failure")
 		got := read(t, wf)
 		assert.Contains(t, got, "uses: ./.github/actions/foo", "opt-out leaves the ./… ref in place")
 		assert.NotContains(t, got, "$/", "opt-out means no migration to $/")

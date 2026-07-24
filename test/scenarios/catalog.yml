@@ -528,39 +528,6 @@ scenarios:
       files_exclude:
         ".github/workflows/ci.yml": ["uses: ./my-action", "actions/checkout"]
 
-  - name: migrate_local_actions_opt_out
-    category: workflow_parsing
-    description: "--no-migrate-local-actions opts out: the same-repo ./ composite ref is left on disk untouched and never rewritten to $/"
-    needs_stub: true
-    tags: [stub]
-    flags: ["--no-migrate-local-actions"]
-    fixtures:
-      workflows:
-        ci.yml:
-          raw: |
-            name: CI
-            on: push
-            jobs:
-              build:
-                runs-on: ubuntu-latest
-                steps:
-                  - uses: ./my-action
-      files:
-        my-action/action.yml: |
-          name: My Action
-          runs:
-            using: composite
-            steps:
-              - run: echo hi
-                shell: bash
-      delete_lockfile: true
-    expect:
-      output_contains: ["local path actions"]
-      files_contain:
-        ".github/workflows/ci.yml": ["uses: ./my-action"]
-      files_exclude:
-        ".github/workflows/ci.yml": ["$/"]
-
   - name: sub_path_action
     category: workflow_parsing
     description: "Sub-path action (actions/cache/restore@v4) handled"
@@ -1245,11 +1212,11 @@ scenarios:
 
   - name: self_repository_action_missing
     category: workflow_parsing
-    description: "A missing in-repo $/ action is an unfixable invalid self repository ref, not a fixable not-pinned dependency"
+    description: "A missing in-repo $/ action is an unfixable invalid self repository ref, not a fixable not-pinned dependency. --no-migrate-local-actions opts out of the default migration pass so the real binary's verify-local diagnosis is what reports it."
     needs_token: false
     needs_stub: false
     tags: [stub]
-    flags: ["--verify-local"]
+    flags: ["--verify-local", "--no-migrate-local-actions"]
     fixtures:
       workflows:
         ci.yml:
@@ -1267,11 +1234,11 @@ scenarios:
 
   - name: self_repository_ref_rejected
     category: workflow_parsing
-    description: "$/…@ref is rejected — a self repository reference always resolves to the running commit, so an explicit @ref is invalid"
+    description: "$/…@ref is rejected — a self repository reference always resolves to the running commit, so an explicit @ref is invalid. --no-migrate-local-actions opts out of the default migration pass so the real binary's verify-local diagnosis reports it."
     needs_token: false
     needs_stub: false
     tags: [stub]
-    flags: ["--verify-local"]
+    flags: ["--verify-local", "--no-migrate-local-actions"]
     fixtures:
       workflows:
         ci.yml:
@@ -1289,11 +1256,11 @@ scenarios:
 
   - name: self_repository_nested_ref_rejected
     category: workflow_parsing
-    description: "A $/…@ref nested inside an in-repo composite is rejected during local closure discovery, before any network resolution"
+    description: "A $/…@ref nested inside an in-repo composite is rejected during local closure discovery, before any network resolution. --no-migrate-local-actions opts out of the default migration pass so the real binary's verify-local diagnosis reports it."
     needs_token: false
     needs_stub: false
     tags: [stub]
-    flags: ["--verify-local"]
+    flags: ["--verify-local", "--no-migrate-local-actions"]
     fixtures:
       workflows:
         ci.yml:
