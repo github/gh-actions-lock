@@ -171,7 +171,7 @@ func (c *Client) anonListTags(ctx context.Context, owner, repo string) ([]TagEnt
 // anonPeelTagObject determines whether sha is an annotated tag and, if so,
 // peels it to the underlying commit using unauthenticated REST.
 func (c *Client) anonPeelTagObject(ctx context.Context, owner, repo, sha string) (PeelTagObjectResult, error) {
-	const maxDepth = 100
+	const maxDepth = 16 // ponytail: cap pathological REST walks; raise only for a real tag chain.
 	current := sha
 	seen := make(map[string]struct{})
 	result := PeelTagObjectResult{}
