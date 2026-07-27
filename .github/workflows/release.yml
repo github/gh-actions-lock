@@ -24,6 +24,10 @@ on:
         description: "Create the next -rc.N tag"
         type: boolean
         default: false
+      tag:
+        description: "Publish an existing tag instead of creating one"
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -50,6 +54,11 @@ jobs:
       - name: Compute next version
         id: version
         run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "### Publish existing release: \`${{ inputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           latest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
           if [ -z "$latest" ]; then
             latest="v0.0.0"
@@ -76,12 +85,25 @@ jobs:
           echo "### Next release: \`$next\` (bump: ${{ inputs.bump }}, previous stable: $latest)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and push tag
-        if: inputs.dry_run == false
+        if: inputs.dry_run == false && inputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git tag "${{ steps.version.outputs.tag }}"
           git push origin "${{ steps.version.outputs.tag }}"
+
+      - uses: actions/checkout@v6.0.2
+        if: inputs.dry_run == false
+        with:
+          ref: ${{ steps.version.outputs.tag }}
+
+      - uses: cli/gh-extension-precompile@v2.1.0
+        if: inputs.dry_run == false
+        with:
+          release_tag: ${{ steps.version.outputs.tag }}
+          generate_attestations: true
+          go_version_file: go.mod
+          go_build_options: ./cmd/gh-actions-lock
 
   release:
     if: github.event_name == 'push'
