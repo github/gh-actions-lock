@@ -47,13 +47,13 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	return eligible
 }
 
-func (c *Client) publicRepoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
+func (c *Client) repoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
 	code, _ := StatusCode(err)
 	if !IsSAMLEnforcement(err) && code != http.StatusUnauthorized {
 		return false
 	}
-	meta, metaErr := c.repoMetadata(ctx, owner, repo)
-	return metaErr == nil && meta.Visibility == "public"
+	_, metaErr := c.repoMetadata(ctx, owner, repo)
+	return metaErr == nil
 }
 
 // IsSAMLEnforcement reports whether err represents a SAML/SSO enforcement

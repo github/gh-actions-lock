@@ -112,7 +112,7 @@ func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
 
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodGet {
-			return jsonHTTP(map[string]any{"visibility": "private"})
+			return statusResponse(req, http.StatusUnauthorized)
 		}
 		return jsonHTTP(map[string]any{
 			"data": map[string]any{"a0": nil},
@@ -148,7 +148,7 @@ func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
 	}
 }
 
-func TestResolveActionFiles_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
+func TestResolveActionFiles_BadCredentialsUsesRESTFallbackForPrivateRepo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
@@ -167,7 +167,7 @@ func TestResolveActionFiles_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
 	var graphqlCalls int
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodGet {
-			return jsonHTTP(map[string]any{"visibility": "public"})
+			return jsonHTTP(map[string]any{"visibility": "private"})
 		}
 		graphqlCalls++
 		return badCredentialsResponse(req)
@@ -202,10 +202,10 @@ func TestResolveActionFiles_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
 func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 	tests := []struct {
 		name       string
-		visibility string
+		repoStatus int
 	}{
-		{name: "private repository", visibility: "private"},
-		{name: "unreachable ref", visibility: "public"},
+		{name: "inaccessible repository", repoStatus: http.StatusNotFound},
+		{name: "unreachable ref", repoStatus: http.StatusOK},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,7 +218,10 @@ func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 
 			tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.Method == http.MethodGet {
-					return jsonHTTP(map[string]any{"visibility": tt.visibility})
+					if tt.repoStatus != http.StatusOK {
+						return statusResponse(req, tt.repoStatus)
+					}
+					return jsonHTTP(map[string]any{"visibility": "private"})
 				}
 				return badCredentialsResponse(req)
 			})
@@ -234,11 +237,11 @@ func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 			if results[0].Err == nil {
 				t.Fatal("expected resolution error")
 			}
-			if tt.visibility == "private" && fallbackCalls != 0 {
-				t.Fatalf("private repository made %d fallback requests", fallbackCalls)
+			if tt.repoStatus != http.StatusOK && fallbackCalls != 0 {
+				t.Fatalf("inaccessible repository made %d fallback requests", fallbackCalls)
 			}
-			if tt.visibility == "public" && fallbackCalls == 0 {
-				t.Fatal("unreachable public ref was not attempted over REST")
+			if tt.repoStatus == http.StatusOK && fallbackCalls == 0 {
+				t.Fatal("unreachable ref was not attempted over REST")
 			}
 		})
 	}
@@ -311,9 +314,13 @@ func TestBatchBranchContains_BadCredentialsUsesPublicRESTFallback(t *testing.T) 
 }
 
 func badCredentialsResponse(req *http.Request) (*http.Response, error) {
-	resp, err := jsonHTTP(map[string]string{"message": "Bad credentials"})
-	resp.StatusCode = http.StatusUnauthorized
-	resp.Status = "401 Unauthorized"
+	return statusResponse(req, http.StatusUnauthorized)
+}
+
+func statusResponse(req *http.Request, status int) (*http.Response, error) {
+	resp, err := jsonHTTP(map[string]string{"message": http.StatusText(status)})
+	resp.StatusCode = status
+	resp.Status = fmt.Sprintf("%d %s", status, http.StatusText(status))
 	resp.Request = req
 	return resp, err
 }

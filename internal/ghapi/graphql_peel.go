@@ -50,7 +50,7 @@ func (c *Client) PeelTagObject(ctx context.Context, owner, repo, sha string) (Pe
 		"expr":  sha + "^{commit}",
 	}
 	if err := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "peel"), tagObjectPeelQuery, vars, &resp); err != nil {
-		if c.publicRepoFallbackEligible(ctx, owner, repo, err) {
+		if c.repoFallbackEligible(ctx, owner, repo, err) {
 			return c.anonPeelTagObject(ctx, owner, repo, sha)
 		}
 		return PeelTagObjectResult{}, err

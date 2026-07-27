@@ -92,14 +92,14 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 	return append(left, right...)
 }
 
-// retryWithAnonymous retries public refs that GraphQL could not authenticate
-// using REST GETs.
+// retryWithAnonymous retries refs that GraphQL could not authenticate using
+// REST GETs when the repository is accessible through REST.
 func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileRequest, results []ActionFileResult) []ActionFileResult {
 	for i, r := range results {
 		if r.Err == nil || ctx.Err() != nil {
 			continue
 		}
-		if !c.publicRepoFallbackEligible(ctx, refs[i].Owner, refs[i].Repo, r.Err) {
+		if !c.repoFallbackEligible(ctx, refs[i].Owner, refs[i].Repo, r.Err) {
 			continue
 		}
 		results[i] = c.resolveAnonymous(ctx, refs[i])
