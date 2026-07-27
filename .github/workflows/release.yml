@@ -5,25 +5,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump type"
-        type: choice
-        required: true
-        default: patch
-        options:
-          - patch
-          - minor
-          - major
-      dry_run:
-        description: "Show the tag that would be created without pushing it"
-        type: boolean
-        default: false
-      release_candidate:
-        description: "Create the next -rc.N tag"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -31,60 +12,7 @@ permissions:
   attestations: write
 
 jobs:
-  cut-tag:
-    if: github.event_name == 'workflow_dispatch'
-    name: Cut release tag
-    runs-on: ubuntu-latest
-    steps:
-      - name: Guard release branch
-        if: github.ref != 'refs/heads/main'
-        run: |
-          echo "::error::Releases must be cut from main (got $GITHUB_REF)."
-          exit 1
-
-      - uses: actions/checkout@v6.0.2
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Compute next version
-        id: version
-        run: |
-          latest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
-          if [ -z "$latest" ]; then
-            latest="v0.0.0"
-          fi
-          # Strip leading v
-          ver="${latest#v}"
-          IFS='.' read -r major minor patch <<< "$ver"
-          case "${{ inputs.bump }}" in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            patch) patch=$((patch + 1)) ;;
-          esac
-          base="v${major}.${minor}.${patch}"
-          next="$base"
-          if [[ "${{ inputs.release_candidate }}" == "true" ]]; then
-            latest_rc=$(git tag -l "${base}-rc.*" --sort=-v:refname | grep -E -- '-rc\.[0-9]+$' | head -1 || true)
-            rc=1
-            if [[ -n "$latest_rc" ]]; then
-              rc=$((${latest_rc##*.} + 1))
-            fi
-            next="${base}-rc.${rc}"
-          fi
-          echo "tag=$next" >> "$GITHUB_OUTPUT"
-          echo "### Next release: \`$next\` (bump: ${{ inputs.bump }}, previous stable: $latest)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Create and push tag
-        if: inputs.dry_run == false
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git tag "${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-
   release:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
