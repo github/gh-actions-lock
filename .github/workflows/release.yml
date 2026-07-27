@@ -20,6 +20,10 @@ on:
         description: "Show the tag that would be created without pushing it"
         type: boolean
         default: false
+      release_candidate:
+        description: "Create the next -rc.N tag"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -46,7 +50,7 @@ jobs:
       - name: Compute next version
         id: version
         run: |
-          latest=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          latest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
           if [ -z "$latest" ]; then
             latest="v0.0.0"
           fi
@@ -58,9 +62,18 @@ jobs:
             minor) minor=$((minor + 1)); patch=0 ;;
             patch) patch=$((patch + 1)) ;;
           esac
-          next="v${major}.${minor}.${patch}"
+          base="v${major}.${minor}.${patch}"
+          next="$base"
+          if [[ "${{ inputs.release_candidate }}" == "true" ]]; then
+            latest_rc=$(git tag -l "${base}-rc.*" --sort=-v:refname | grep -E -- '-rc\.[0-9]+$' | head -1 || true)
+            rc=1
+            if [[ -n "$latest_rc" ]]; then
+              rc=$((${latest_rc##*.} + 1))
+            fi
+            next="${base}-rc.${rc}"
+          fi
           echo "tag=$next" >> "$GITHUB_OUTPUT"
-          echo "### Next release: \`$next\` (bump: ${{ inputs.bump }}, previous: $latest)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Next release: \`$next\` (bump: ${{ inputs.bump }}, previous stable: $latest)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and push tag
         if: inputs.dry_run == false
