@@ -68,6 +68,13 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 	if len(refs) == 0 {
 		return nil
 	}
+	if c.restOnly {
+		results := make([]ActionFileResult, len(refs))
+		for i, ref := range refs {
+			results[i] = c.resolveAnonymous(ctx, ref)
+		}
+		return results
+	}
 	results, batchErr := c.resolveActionFilesOnce(ctx, refs)
 	code, _ := StatusCode(batchErr)
 	if batchErr == nil || len(refs) == 1 || ctx.Err() != nil || code == http.StatusUnauthorized {

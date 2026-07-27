@@ -28,6 +28,7 @@ type Client struct {
 	graphql  *api.GraphQLClient
 	rest     *api.RESTClient
 	Hostname string
+	restOnly bool
 
 	// anonBaseURL overrides the base URL for anonymous REST fallback calls.
 	// Empty uses the default "https://api.<Hostname>". Set in tests.
@@ -91,7 +92,10 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		o(&cfg)
 	}
 
-	c := &Client{Hostname: hostname}
+	c := &Client{
+		Hostname: hostname,
+		restOnly: os.Getenv("GH_TOKEN") == "x-access-token",
+	}
 
 	apiOpts := api.ClientOptions{Host: hostname}
 

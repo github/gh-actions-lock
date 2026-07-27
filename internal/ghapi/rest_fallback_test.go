@@ -37,6 +37,28 @@ func TestSSOFallbackEligible(t *testing.T) {
 	}
 }
 
+func TestNew_RESTOnlyForDependabotToken(t *testing.T) {
+	tests := []struct {
+		token string
+		want  bool
+	}{
+		{token: "x-access-token", want: true},
+		{token: "real-token", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.token, func(t *testing.T) {
+			t.Setenv("GH_TOKEN", tt.token)
+			c, err := New("github.com", WithClientTransport(roundTripFunc(nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.restOnly != tt.want {
+				t.Fatalf("restOnly = %v, want %v", c.restOnly, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
 	anonProbeCache = sync.Map{} // reset cache
 
@@ -148,7 +170,8 @@ func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
 	}
 }
 
-func TestResolveActionFiles_BadCredentialsUsesRESTFallbackForPrivateRepo(t *testing.T) {
+func TestResolveActionFiles_RESTOnlyUsesPrivateRepo(t *testing.T) {
+	t.Setenv("GH_TOKEN", "x-access-token")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
@@ -164,13 +187,9 @@ func TestResolveActionFiles_BadCredentialsUsesRESTFallbackForPrivateRepo(t *test
 	}))
 	defer srv.Close()
 
-	var graphqlCalls int
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method == http.MethodGet {
-			return jsonHTTP(map[string]any{"visibility": "private"})
-		}
-		graphqlCalls++
-		return badCredentialsResponse(req)
+		t.Fatalf("REST-only mode used authenticated transport: %s %s", req.Method, req.URL)
+		return nil, nil
 	})
 	c, err := New("github.com", WithClientTransport(tr))
 	if err != nil {
@@ -193,9 +212,6 @@ func TestResolveActionFiles_BadCredentialsUsesRESTFallbackForPrivateRepo(t *test
 		if result.ActionYML != "name: public action" {
 			t.Fatalf("%s: action.yml = %q", nwo, result.ActionYML)
 		}
-	}
-	if graphqlCalls != 1 {
-		t.Fatalf("GraphQL calls = %d, want 1", graphqlCalls)
 	}
 }
 
@@ -247,7 +263,8 @@ func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPeelTagObject_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
+func TestPeelTagObject_RESTOnlyUsesRESTFallback(t *testing.T) {
+	t.Setenv("GH_TOKEN", "x-access-token")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
@@ -259,10 +276,8 @@ func TestPeelTagObject_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
 	defer srv.Close()
 
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method == http.MethodGet {
-			return jsonHTTP(map[string]any{"visibility": "public"})
-		}
-		return badCredentialsResponse(req)
+		t.Fatalf("REST-only mode used authenticated transport: %s %s", req.Method, req.URL)
+		return nil, nil
 	})
 	c, err := New("github.com", WithClientTransport(tr))
 	if err != nil {
@@ -279,7 +294,8 @@ func TestPeelTagObject_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
 	}
 }
 
-func TestBatchBranchContains_BadCredentialsUsesPublicRESTFallback(t *testing.T) {
+func TestBatchBranchContains_RESTOnlyUsesRESTFallback(t *testing.T) {
+	t.Setenv("GH_TOKEN", "x-access-token")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
@@ -291,10 +307,8 @@ func TestBatchBranchContains_BadCredentialsUsesPublicRESTFallback(t *testing.T) 
 	defer srv.Close()
 
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method == http.MethodGet {
-			return jsonHTTP(map[string]any{"visibility": "public"})
-		}
-		return badCredentialsResponse(req)
+		t.Fatalf("REST-only mode used authenticated transport: %s %s", req.Method, req.URL)
+		return nil, nil
 	})
 	c, err := New("github.com", WithClientTransport(tr))
 	if err != nil {

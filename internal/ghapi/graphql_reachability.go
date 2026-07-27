@@ -27,6 +27,9 @@ func (c *Client) BatchBranchContains(ctx context.Context, owner, repo, sha strin
 	if len(branches) == 0 {
 		return "", false, nil
 	}
+	if c.restOnly {
+		return c.anonBatchBranchContains(ctx, owner, repo, sha, branches)
+	}
 
 	for start := 0; start < len(branches); start += batchReachabilitySize {
 		end := start + batchReachabilitySize

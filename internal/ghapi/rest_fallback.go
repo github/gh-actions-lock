@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// anonProbeCache caches per-owner results of anonymous access probes.
+// anonProbeCache caches per-owner results of unauthenticated access probes.
 // true = anonymous access confirmed working, false = not accessible.
 var anonProbeCache sync.Map // map[string]bool
 
