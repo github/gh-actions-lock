@@ -623,27 +623,12 @@ STUB_WIRING = {
   sso_auth_failure: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
   },
-  sso_anon_fallback: ->(s) {
-    # Authenticated requests (with Authorization header) get SAML 403.
-    # Anonymous requests (no Authorization) succeed — simulating public repo.
+  dependabot_proxy_rest_only: ->(s) {
     fake_sha = "a" * 40
     s.stub_server do |srv|
-      # GraphQL always uses auth → return SAML error.
-      srv.on(:POST, /.*/) do |req|
-        [403, { "Content-Type" => "application/json", "X-GitHub-SSO" => SSO_HEADER_VALUE },
-         JSON.generate(SSO_ERROR_BODY)]
-      end
-
-      # GET: if Authorization present → SAML 403; otherwise → anon success.
+      # No POST handler: any GraphQL request fails the scenario.
       srv.on(:GET, /.*/) do |req|
-        if req["Authorization"] && !req["Authorization"].empty?
-          [403, { "Content-Type" => "application/json", "X-GitHub-SSO" => SSO_HEADER_VALUE },
-           JSON.generate(SSO_ERROR_BODY)]
-        elsif req.path.include?("/orgs/")
-          # Probe: org is publicly visible.
-          [200, { "Content-Type" => "application/json" },
-           JSON.generate({ login: "actions", id: 44036562 })]
-        elsif req.path.include?("/commits/")
+        if req.path.include?("/commits/")
           [200, { "Content-Type" => "application/json" },
            JSON.generate({ sha: fake_sha })]
         elsif req.path.include?("/contents/")
@@ -657,7 +642,7 @@ STUB_WIRING = {
            JSON.generate([{ name: "v4", commit: { sha: fake_sha } }])]
         elsif req.path.match?(%r{/repos/actions/checkout$})
           [200, { "Content-Type" => "application/json" },
-           JSON.generate({ default_branch: "main", visibility: "public", pushed_at: "2024-01-01T00:00:00Z", id: 1, owner: { id: 44036562 } })]
+           JSON.generate({ default_branch: "main", visibility: "private", pushed_at: "2024-01-01T00:00:00Z", id: 1, owner: { id: 44036562 } })]
         elsif req.path.include?("/compare/")
           [200, { "Content-Type" => "application/json" },
            JSON.generate({ status: "behind", merge_base_commit: { sha: fake_sha } })]
@@ -668,17 +653,8 @@ STUB_WIRING = {
           [404, { "Content-Type" => "application/json" }, JSON.generate({ message: "Not Found" })]
         end
       end
-
-      # HEAD for the probe.
-      srv.on(:HEAD, /.*/) do |req|
-        if req["Authorization"] && !req["Authorization"].empty?
-          [403, { "Content-Type" => "application/json" }, ""]
-        else
-          [200, { "Content-Type" => "application/json" }, ""]
-        end
-      end
     end
-    s.env("GH_TOKEN" => "gho_fake_sso_fallback_token")
+    s.env("GH_TOKEN" => "gho_fake_dependabot_proxy_token")
   },
   sso_dedup: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }

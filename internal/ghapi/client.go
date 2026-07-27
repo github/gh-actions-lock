@@ -94,7 +94,7 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 
 	c := &Client{
 		Hostname: hostname,
-		restOnly: os.Getenv("GH_TOKEN") == "x-access-token",
+		restOnly: os.Getenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY") == "1",
 	}
 
 	apiOpts := api.ClientOptions{Host: hostname}

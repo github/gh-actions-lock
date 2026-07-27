@@ -148,11 +148,13 @@ scenarios:
       output_excludes:
         - "resolution failed:"
 
-  - name: sso_anon_fallback
+  - name: dependabot_proxy_rest_only
     category: sso_auth
-    description: "SSO-blocked public org falls back to anonymous access and resolves"
+    description: "Dependabot proxy context resolves private actions with REST GETs and no GraphQL POST"
     needs_stub: true
     tags: [stub]
+    env:
+      GH_ACTIONS_LOCK_DEPENDABOT_PROXY: "1"
     fixtures:
       workflows:
         ci.yml:
@@ -164,8 +166,7 @@ scenarios:
       output_contains:
         - "actions/checkout"
       output_excludes:
-        - "SAML enforcement"
-        - "SSO authorization required"
+        - "Bad credentials"
 
   - name: sso_dedup
     category: sso_auth

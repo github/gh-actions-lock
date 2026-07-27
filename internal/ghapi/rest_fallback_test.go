@@ -37,17 +37,17 @@ func TestSSOFallbackEligible(t *testing.T) {
 	}
 }
 
-func TestNew_RESTOnlyForDependabotToken(t *testing.T) {
+func TestNew_RESTOnlyForDependabotProxy(t *testing.T) {
 	tests := []struct {
-		token string
+		value string
 		want  bool
 	}{
-		{token: "x-access-token", want: true},
-		{token: "real-token", want: false},
+		{value: "1", want: true},
+		{value: "", want: false},
 	}
 	for _, tt := range tests {
-		t.Run(tt.token, func(t *testing.T) {
-			t.Setenv("GH_TOKEN", tt.token)
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY", tt.value)
 			c, err := New("github.com", WithClientTransport(roundTripFunc(nil)))
 			if err != nil {
 				t.Fatal(err)
@@ -171,7 +171,7 @@ func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
 }
 
 func TestResolveActionFiles_RESTOnlyUsesPrivateRepo(t *testing.T) {
-	t.Setenv("GH_TOKEN", "x-access-token")
+	t.Setenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY", "1")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
@@ -264,7 +264,7 @@ func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 }
 
 func TestPeelTagObject_RESTOnlyUsesRESTFallback(t *testing.T) {
-	t.Setenv("GH_TOKEN", "x-access-token")
+	t.Setenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY", "1")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
@@ -295,7 +295,7 @@ func TestPeelTagObject_RESTOnlyUsesRESTFallback(t *testing.T) {
 }
 
 func TestBatchBranchContains_RESTOnlyUsesRESTFallback(t *testing.T) {
-	t.Setenv("GH_TOKEN", "x-access-token")
+	t.Setenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY", "1")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
