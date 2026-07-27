@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -68,8 +69,9 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 		return nil
 	}
 	results, batchErr := c.resolveActionFilesOnce(ctx, refs)
-	if batchErr == nil || len(refs) == 1 || ctx.Err() != nil {
-		return c.retrySSOWithAnonymous(ctx, refs, results)
+	code, _ := StatusCode(batchErr)
+	if batchErr == nil || len(refs) == 1 || ctx.Err() != nil || code == http.StatusUnauthorized {
+		return c.retryWithAnonymous(ctx, refs, results)
 	}
 	mid := len(refs) / 2
 	left := c.ResolveActionFiles(ctx, refs[:mid])
@@ -90,17 +92,14 @@ func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileReques
 	return append(left, right...)
 }
 
-// retrySSOWithAnonymous retries refs that failed with SSO errors for
-// fallback-eligible orgs (e.g. actions/*) using unauthenticated REST.
-func (c *Client) retrySSOWithAnonymous(ctx context.Context, refs []ActionFileRequest, results []ActionFileResult) []ActionFileResult {
+// retryWithAnonymous retries public refs that GraphQL could not authenticate
+// using REST GETs.
+func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileRequest, results []ActionFileResult) []ActionFileResult {
 	for i, r := range results {
 		if r.Err == nil || ctx.Err() != nil {
 			continue
 		}
-		if !c.SSOFallbackEligible(ctx, refs[i].Owner) {
-			continue
-		}
-		if !IsSAMLEnforcement(r.Err) {
+		if !c.publicRepoFallbackEligible(ctx, refs[i].Owner, refs[i].Repo, r.Err) {
 			continue
 		}
 		results[i] = c.resolveAnonymous(ctx, refs[i])

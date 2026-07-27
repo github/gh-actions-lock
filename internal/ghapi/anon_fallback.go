@@ -47,6 +47,15 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	return eligible
 }
 
+func (c *Client) publicRepoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
+	code, _ := StatusCode(err)
+	if !IsSAMLEnforcement(err) && code != http.StatusUnauthorized {
+		return false
+	}
+	meta, metaErr := c.repoMetadata(ctx, owner, repo)
+	return metaErr == nil && meta.Visibility == "public"
+}
+
 // IsSAMLEnforcement reports whether err represents a SAML/SSO enforcement
 // block. It matches both REST 403s (api.HTTPError) and plain errors whose
 // message indicates SAML enforcement (e.g. from the GraphQL resolution path).
