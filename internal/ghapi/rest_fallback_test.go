@@ -269,9 +269,18 @@ func TestPeelTagObject_RESTOnlyUsesRESTFallback(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
 		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"object": map[string]string{"type": "commit", "sha": "commitabc"},
-		})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/tagsha"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"type": "tag", "sha": "innertag"},
+			})
+		case strings.HasSuffix(r.URL.Path, "/innertag"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"type": "commit", "sha": "commitabc"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
 
