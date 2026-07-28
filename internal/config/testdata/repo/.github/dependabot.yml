@@ -1,0 +1,25 @@
+# Real-world shape: multiple ecosystems, github-actions NOT first, and a full
+# cooldown block using every documented key. Mirrors the schema at
+# https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 5
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+      include:
+        - "actions/*"
+      exclude:
+        - "actions/checkout"
