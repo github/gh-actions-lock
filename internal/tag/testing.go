@@ -14,5 +14,5 @@ func NewListerForTest(t *testing.T, reg *httpmock.Registry) *Lister {
 	if err != nil {
 		t.Fatalf("ghapi.New: %v", err)
 	}
-	return NewLister(client, CooldownConfig{DefaultDays: 3, RepoOverrides: map[string]int{}})
+	return NewLister(client, CooldownConfig{DefaultDays: 3})
 }

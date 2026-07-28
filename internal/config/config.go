@@ -1,105 +1,89 @@
-// Package config loads CLI configuration from file and environment.
+// Package config loads the release-cooldown policy from a repository's
+// Dependabot configuration. There is no built-in default: an absent,
+// github-actions-less, cooldown-less, or malformed config resolves to an empty
+// policy (no cooldown), matching Dependabot's own ReleaseCooldownOptions, which
+// initializes every day value to zero. Locking is never blocked by a config
+// problem.
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/github/gh-actions-lock/internal/tag"
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds process-wide settings loaded from the config file and
-// environment variables. Create one via LoadConfig at startup and pass
-// it through the pipeline.
-type Config struct {
-	// Path is the resolved config file path (empty if none found).
-	Path string
-	// Cooldown controls how recently a tag must have been released to
-	// be excluded from upgrade suggestions.
-	Cooldown tag.CooldownConfig
-	// Workers is the concurrency limit for pool-parallelized phases.
-	// Defaults to 8; overridden by GH_ACTIONS_LOCK_WORKERS.
-	Workers int
-	// StallHintMS is the stall-detection threshold in milliseconds.
-	// 0 disables the watcher. Overridden by GH_ACTIONS_LOCK_STALL_HINT_MS.
-	StallHintMS int
-	// DebugProgress enables per-phase progress tracing.
-	DebugProgress bool
-}
-
-// Load reads the config file and environment, returning a Config
-// with sensible defaults for any unset values.
-func Load() Config {
-	p := configPath()
-	c := Config{
-		Path:          p,
-		Workers:       8,
-		StallHintMS:   -1, // sentinel: use pinpool default
-		DebugProgress: envBool("GH_ACTIONS_LOCK_DEBUG_PROGRESS"),
+// LoadCooldown reads the github-actions cooldown policy from repoRoot's
+// Dependabot config (.github/dependabot.yml, falling back to .yaml). It returns
+// the parsed policy plus human-readable warnings for any configured keys it
+// does not yet honor, so the CLI never silently ignores configuration.
+func LoadCooldown(repoRoot string) (tag.CooldownConfig, []string) {
+	data, ok := readDependabotFile(repoRoot)
+	if !ok {
+		return tag.CooldownConfig{}, nil
 	}
-
-	if v, err := strconv.Atoi(os.Getenv("GH_ACTIONS_LOCK_WORKERS")); err == nil && v > 0 {
-		c.Workers = v
-	}
-	if v := os.Getenv("GH_ACTIONS_LOCK_STALL_HINT_MS"); v != "" {
-		if ms, err := strconv.Atoi(v); err == nil {
-			c.StallHintMS = ms
-		}
-	}
-
-	c.Cooldown = loadCooldownFromFile(p)
-	return c
-}
-
-func envBool(key string) bool {
-	v := os.Getenv(key)
-	return v == "1" || v == "true" || v == "yes"
-}
-
-// loadCooldownFromFile reads cooldown settings from the config file.
-func loadCooldownFromFile(path string) tag.CooldownConfig {
-	cfg := tag.CooldownConfig{
-		DefaultDays:   3,
-		RepoOverrides: make(map[string]int),
-	}
-	if path == "" {
-		return cfg
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return cfg
-	}
-	var file struct {
-		CooldownDays int `yaml:"cooldown_days"`
-		Repos        map[string]struct {
-			CooldownDays int `yaml:"cooldown_days"`
-		} `yaml:"repos"`
-	}
+	var file dependabotConfig
 	if err := yaml.Unmarshal(data, &file); err != nil {
-		return cfg
-	}
-	if file.CooldownDays > 0 {
-		cfg.DefaultDays = file.CooldownDays
-	}
-	for nwo, repoCfg := range file.Repos {
-		if repoCfg.CooldownDays >= 0 {
-			cfg.RepoOverrides[nwo] = repoCfg.CooldownDays
+		return tag.CooldownConfig{}, []string{
+			fmt.Sprintf("ignoring malformed Dependabot config: %v", err),
 		}
 	}
-	return cfg
+	cd, ok := file.actionsCooldown()
+	if !ok {
+		return tag.CooldownConfig{}, nil
+	}
+	return tag.CooldownConfig{DefaultDays: cd.DefaultDays}, cd.unsupportedWarnings()
 }
 
-// configPath returns the path to the config file, respecting
-// GH_ACTIONS_LOCK_CONFIG for testing/demos.
-func configPath() string {
-	if p := os.Getenv("GH_ACTIONS_LOCK_CONFIG"); p != "" {
-		return p
+func readDependabotFile(repoRoot string) ([]byte, bool) {
+	for _, name := range []string{"dependabot.yml", "dependabot.yaml"} {
+		if data, err := os.ReadFile(filepath.Join(repoRoot, ".github", name)); err == nil {
+			return data, true
+		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	return nil, false
+}
+
+// dependabotConfig is the subset of Dependabot's schema this tool reads.
+type dependabotConfig struct {
+	Updates []struct {
+		PackageEcosystem string    `yaml:"package-ecosystem"`
+		Cooldown         *cooldown `yaml:"cooldown"`
+	} `yaml:"updates"`
+}
+
+// cooldown mirrors Dependabot's cooldown block. See
+// dependabot-core common/lib/dependabot/package/release_cooldown_options.rb.
+type cooldown struct {
+	DefaultDays     int      `yaml:"default-days"`
+	SemverMajorDays int      `yaml:"semver-major-days"`
+	SemverMinorDays int      `yaml:"semver-minor-days"`
+	SemverPatchDays int      `yaml:"semver-patch-days"`
+	Include         []string `yaml:"include"`
+	Exclude         []string `yaml:"exclude"`
+}
+
+// actionsCooldown returns the cooldown block from the first github-actions
+// update entry that has one.
+func (c dependabotConfig) actionsCooldown() (cooldown, bool) {
+	for _, u := range c.Updates {
+		if u.PackageEcosystem == "github-actions" && u.Cooldown != nil {
+			return *u.Cooldown, true
+		}
 	}
-	return filepath.Join(home, ".config", "gh-actions-lock", "config.yml")
+	return cooldown{}, false
+}
+
+// unsupportedWarnings names cooldown keys that are set but not yet honored.
+func (c cooldown) unsupportedWarnings() []string {
+	var w []string
+	if c.SemverMajorDays > 0 || c.SemverMinorDays > 0 || c.SemverPatchDays > 0 {
+		w = append(w, "Dependabot cooldown semver-major/minor/patch-days are not supported; applying default-days to all upgrades")
+	}
+	if len(c.Include) > 0 || len(c.Exclude) > 0 {
+		w = append(w, "Dependabot cooldown include/exclude filters are not supported; applying default-days to all actions")
+	}
+	return w
 }

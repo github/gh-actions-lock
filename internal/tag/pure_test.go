@@ -8,14 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCooldownDuration(t *testing.T) {
-	cfg := CooldownConfig{DefaultDays: 7}
-	assert.Equal(t, 7*24*time.Hour, cfg.CooldownDuration("owner", "repo"))
-
-	cfg = CooldownConfig{DefaultDays: 7, RepoOverrides: map[string]int{"a/b": 2}}
-	assert.Equal(t, 2*24*time.Hour, cfg.CooldownDuration("a", "b"))
-}
-
 func TestRepoInfoIsInternal(t *testing.T) {
 	assert.True(t, RepoInfo{Visibility: "private"}.IsInternal())
 	assert.True(t, RepoInfo{Visibility: "internal"}.IsInternal())

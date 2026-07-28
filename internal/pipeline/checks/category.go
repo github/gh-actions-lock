@@ -80,6 +80,17 @@ const (
 	// InvalidSelfRepositoryRef means a `$/…` reference is malformed or its
 	// target cannot be inspected. This includes a forbidden `@ref` suffix.
 	InvalidSelfRepositoryRef Category = "invalid-self-repository-ref"
+	// FreshTag is an informational, non-blocking security nudge: an action was
+	// pinned to a tag released less than the freshness window (3 days) ago and
+	// no Dependabot cooldown is configured. Surfaced so operators know they
+	// locked a very recent release and can configure a cooldown if they'd
+	// rather let fresh releases settle.
+	FreshTag Category = "fresh-tag"
+	// CooldownConfigIgnored is an informational, non-blocking notice that the
+	// repository's Dependabot cooldown block sets keys this tool does not yet
+	// honor (e.g. semver-*-days or include/exclude). Surfaced so the ignored
+	// configuration is never silent.
+	CooldownConfigIgnored Category = "cooldown-config-ignored"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that
