@@ -48,7 +48,32 @@ func Parse(path string, content []byte) (*File, error) {
 		return nil, fmt.Errorf("parsing workflow YAML: %w", err)
 	}
 
+	var invalid []string
+	walkUses(&f.root, func(value string, _ bool) {
+		if isUsesExpression(value) {
+			invalid = append(invalid, strings.TrimSpace(value))
+		}
+	})
+	if len(invalid) > 0 {
+		return nil, usesExpressionErr(invalid)
+	}
+
 	return f, nil
+}
+
+// isUsesExpression reports whether a `uses:` value contains an expression.
+// Malformed `$/…@ref` values are excluded so the more specific self
+// repository diagnostic still wins.
+func isUsesExpression(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.Contains(value, "${") && !SelfRepositoryRefHasVersion(value)
+}
+
+// usesExpressionErr reports an expression in `uses:`. GitHub Actions rejects
+// the workflow outright at both step and job level (no context is in scope
+// there), so parsing fails rather than skipping the line.
+func usesExpressionErr(values []string) error {
+	return fmt.Errorf("`uses:` can't contain an expression: %s", strings.Join(values, ", "))
 }
 
 // RefScan is the classified result of walking a workflow's `uses:` values.
@@ -86,10 +111,6 @@ func (f *File) ExtractActionRefs() RefScan {
 				seenSelf[value] = true
 				scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, value)
 			}
-			return
-		}
-		if strings.Contains(value, "${") {
-			scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q (expressions are not supported)", value))
 			return
 		}
 		if IsSelfRepositoryAction(value) {
@@ -212,8 +233,6 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 					seenInvalid[use] = true
 					scan.SelfRepositoryRefErrs = append(scan.SelfRepositoryRefErrs, use)
 				}
-			case strings.Contains(use, "${"):
-				scan.Warnings = append(scan.Warnings, fmt.Sprintf("skipping unparseable uses: value %q in %s (expressions are not supported)", use, current.ref))
 			case IsSelfRepositoryAction(use):
 				if !seenSelf[use] {
 					seenSelf[use] = true
@@ -517,10 +536,18 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 	}
 
 	var uses []string
+	var invalid []string
 	for _, step := range action.Runs.Steps {
-		if step.Uses != "" {
+		switch {
+		case step.Uses == "":
+		case isUsesExpression(step.Uses):
+			invalid = append(invalid, strings.TrimSpace(step.Uses))
+		default:
 			uses = append(uses, step.Uses)
 		}
+	}
+	if len(invalid) > 0 {
+		return nil, usesExpressionErr(invalid)
 	}
 	return uses, nil
 }

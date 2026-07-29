@@ -41,9 +41,32 @@ func TestExtractActionRefsMixed(t *testing.T) {
 
 	assert.Len(t, localPaths, 1)
 	assert.Equal(t, "./local-action", localPaths[0])
+	assert.Empty(t, warnings)
+}
 
-	assert.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "unparseable uses:")
+func TestParseRejectsUsesExpression(t *testing.T) {
+	for name, content := range map[string]string{
+		"step level": `
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ${{ format('actions/checkout@v4') }}
+`,
+		"job level": `
+on: push
+jobs:
+  call:
+    uses: owner/repo/.github/workflows/x.yml@${{ github.ref_name }}
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse("wf.yml", []byte(content))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "`uses:` can't contain an expression")
+		})
+	}
 }
 
 func TestExtractActionRefs_SelfRepositoryClassification(t *testing.T) {
