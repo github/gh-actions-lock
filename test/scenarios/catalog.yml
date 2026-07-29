@@ -45,6 +45,8 @@ categories:
     description: "--no-onboard gating, onboarding-required findings, and CI flag composition"
   - name: dependabot
     description: "Dependabot consumer contract — JSON findings shape, exit codes, and category/severity for --no-onboard --no-narrow --no-interactive"
+  - name: cooldown
+    description: "Release-cooldown sourcing from Dependabot config and the fresh-tag freshness nudge"
 
 scenarios:
   # ╔═════════════════════════════════════════════════════════════════════════╗
@@ -2097,3 +2099,73 @@ scenarios:
         - "repo_id:"
       lockfile_comment_excludes: '^\s+tag:'
       lockfile_comment_matches: "ref: '"
+
+  - name: fresh_tag_warns_without_cooldown
+    category: cooldown
+    description: "No Dependabot cooldown configured: pinning a tag released <3 days ago emits a fresh-tag finding"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-narrow", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      stdout_is_json: true
+      stdout_contains:
+        - "fresh-tag"
+        - "pinned to a very recent tag with no Dependabot cooldown configured"
+
+  - name: fresh_tag_suppressed_by_cooldown
+    category: cooldown
+    description: "Dependabot cooldown default-days>0 suppresses the fresh-tag finding"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-narrow", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      files:
+        .github/dependabot.yml: |
+          version: 2
+          updates:
+            - package-ecosystem: "github-actions"
+              directory: "/"
+              schedule:
+                interval: "weekly"
+              cooldown:
+                default-days: 30
+    expect:
+      stdout_is_json: true
+      stdout_excludes:
+        - "fresh-tag"
+
+  - name: fresh_tag_zero_days_still_warns
+    category: cooldown
+    description: "Dependabot cooldown default-days:0 cannot suppress the fresh-tag finding (no silent downgrade)"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-narrow", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      files:
+        .github/dependabot.yml: |
+          version: 2
+          updates:
+            - package-ecosystem: "github-actions"
+              directory: "/"
+              schedule:
+                interval: "weekly"
+              cooldown:
+                default-days: 0
+    expect:
+      stdout_is_json: true
+      stdout_contains:
+        - "fresh-tag"
+        - "pinned to a very recent tag with no Dependabot cooldown configured"

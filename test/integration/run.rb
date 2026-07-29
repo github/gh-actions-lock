@@ -606,12 +606,39 @@ def wire_checkout_success(s, token)
   s.env("GH_TOKEN" => token)
 end
 
+# wire_checkout_fresh stubs a checkout pin whose v4 release published_at is
+# computed relative to now, so the tag is genuinely within the 3-day freshness
+# window every time the suite runs (a hardcoded date would rot). The scenario's
+# .github/dependabot.yml (laid via catalog fixtures.files) selects whether the
+# fresh-tag warning fires or is suppressed.
+def wire_checkout_fresh(s, token)
+  s.stub_server do |srv|
+    checkout_graphql_success(srv)
+    checkout_repo_rest(srv)
+    one_day_ago = (Time.now - 86_400).utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    srv.on(:GET, %r{/repos/actions/checkout/releases}) do |_req|
+      [200, { "Content-Type" => "application/json" },
+       JSON.generate([{ tag_name: "v4", published_at: one_day_ago, immutable: false }])]
+    end
+  end
+  s.env("GH_TOKEN" => token)
+end
+
 # ── Stub server wiring per scenario ────────────────────────────────────
 #
 # Maps scenario names to blocks that wire up the stub server. Scenarios
 # not listed here either use no stub or rely on catalog-level config.
 
 STUB_WIRING = {
+  fresh_tag_warns_without_cooldown: ->(s) {
+    wire_checkout_fresh(s, "gho_fake_fresh_warn_token")
+  },
+  fresh_tag_suppressed_by_cooldown: ->(s) {
+    wire_checkout_fresh(s, "gho_fake_fresh_suppressed_token")
+  },
+  fresh_tag_zero_days_still_warns: ->(s) {
+    wire_checkout_fresh(s, "gho_fake_fresh_zero_token")
+  },
   migrate_local_actions_rewrite: ->(s) {
     wire_checkout_success(s, "gho_fake_migrate_token")
   },

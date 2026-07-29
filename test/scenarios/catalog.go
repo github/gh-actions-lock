@@ -80,6 +80,7 @@ type Expect struct {
 	OutputContains []string `yaml:"output_contains"`
 	OutputExcludes []string `yaml:"output_excludes"`
 	StdoutContains []string `yaml:"stdout_contains"`
+	StdoutExcludes []string `yaml:"stdout_excludes,omitempty"`
 	StdoutIsJSON   bool     `yaml:"stdout_is_json"`
 	LockfileExists bool     `yaml:"lockfile_exists"`
 	// LockfileExcludes asserts the generated lockfile does NOT contain each
