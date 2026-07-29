@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/tag"
 )
 
 func TestFreshTagFinding(t *testing.T) {
@@ -50,5 +54,47 @@ func TestAppendCooldownConfigFindings(t *testing.T) {
 	appendCooldownConfigFindings(report, nil)
 	if len(report.RepoFindings) != 2 {
 		t.Errorf("nil warnings must add nothing; got %d", len(report.RepoFindings))
+	}
+}
+
+// TestInjectFreshTagFindings covers the resolution gate: a Pinned entry (an
+// initial pin or an update that changed the SHA) fires the fresh-tag nudge,
+// while a Verified entry (unchanged re-run) stays quiet.
+func TestInjectFreshTagFindings(t *testing.T) {
+	fresh := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `(?i)repos/actions/checkout/tags`),
+		httpmock.JSONResponse([]map[string]any{
+			{"name": "v4", "commit": map[string]any{"sha": "abc123"}},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `(?i)repos/actions/checkout/releases`),
+		httpmock.JSONResponse([]map[string]any{
+			{"tag_name": "v4", "published_at": fresh, "immutable": false},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `(?i)repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{
+			"default_branch": "main", "visibility": "public",
+			"pushed_at": "2024-01-01T00:00:00Z",
+		}),
+	)
+	tagger := tag.NewListerForTest(t, reg)
+
+	record := &pin.Record{Entries: []pin.Entry{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "s1", Resolution: pin.Pinned},
+		{NWO: "actions/setup-go", Ref: "v5", SHA: "s2", Resolution: pin.Verified},
+	}}
+	report := &checks.Report{}
+	injectFreshTagFindings(context.Background(), report, record, tagger)
+
+	if len(report.RepoFindings) != 1 {
+		t.Fatalf("RepoFindings = %d, want 1 (Pinned fires, Verified quiet)", len(report.RepoFindings))
+	}
+	if got := report.RepoFindings[0]; got.Category != checks.FreshTag {
+		t.Errorf("category = %s, want fresh-tag", got.Category)
 	}
 }

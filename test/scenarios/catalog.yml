@@ -2102,19 +2102,18 @@ scenarios:
 
   - name: fresh_tag_warns_without_cooldown
     category: cooldown
-    description: "No Dependabot cooldown configured: pinning a tag released <3 days ago emits a fresh-tag finding"
+    description: "No Dependabot cooldown configured: pinning a tag released <3 days ago warns on the terminal"
     needs_stub: true
     tags: [stub]
-    flags: ["--no-narrow", "--json=findings"]
+    flags: ["--no-narrow"]
     fixtures:
       workflows:
         ci.yml:
           name: CI
           actions: ["actions/checkout@v4"]
     expect:
-      stdout_is_json: true
-      stdout_contains:
-        - "fresh-tag"
+      exit: 0
+      output_contains:
         - "pinned to a very recent tag with no Dependabot cooldown configured"
 
   - name: fresh_tag_suppressed_by_cooldown

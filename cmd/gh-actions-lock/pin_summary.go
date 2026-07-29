@@ -83,6 +83,7 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	}
 
 	renderFullScanWarnings(console, pinned)
+	renderCooldownFindings(console, report)
 	if !noNarrow {
 		renderVersionRefNudge(ctx, console, record, r)
 	}
@@ -161,6 +162,18 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 		return errSilent
 	}
 	return nil
+}
+
+// renderCooldownFindings surfaces the fresh-tag and cooldown-ignored nudges on
+// the terminal. PresentResults skips these categories so this is their single
+// surface, shown even on a clean pin where PresentResults never runs.
+func renderCooldownFindings(console *ui.UI, report *checks.Report) {
+	for _, f := range report.RepoFindings {
+		if f.Category != checks.FreshTag && f.Category != checks.CooldownConfigIgnored {
+			continue
+		}
+		console.TermWarn("%s", f.Detail)
+	}
 }
 
 // renderNarrowedEntries shows refs that were upgraded from mutable (main, v4)
