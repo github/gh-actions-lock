@@ -15,10 +15,12 @@ type ParsedWorkflow struct {
 	// Refs are all remote dependency roots attributed to the workflow. This
 	// includes refs found inside in-repo `$/…` actions.
 	Refs []parserlock.ActionRef
-	// RewriteRefs are workflow-YAML refs that pinning may rewrite. A ref also
-	// used inside a `$/…` action is excluded because rewriting only the workflow
-	// occurrence would leave the action file and lockfile out of sync.
-	RewriteRefs        []parserlock.ActionRef
+	// RewriteRefs are the refs that pinning may rewrite in source: the
+	// workflow YAML plus the in-repo `$/…` action files it reaches.
+	RewriteRefs []parserlock.ActionRef
+	// SelfActionFiles are the in-repo action definition files reached through
+	// step-level `$/…` refs. They are rewritten alongside the workflow.
+	SelfActionFiles    []string
 	LocalPaths         []string
 	SelfRepositoryRefs []string
 	// SelfRepositoryRefErrs holds malformed `$/…@ref` values (the invalid form).

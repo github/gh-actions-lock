@@ -193,12 +193,13 @@ jobs:
 	// In-repo composite action files migrated, including the nested one.
 	assert.Contains(t, read("my-action/action.yml"), "uses: $/helper")
 	assert.Contains(t, read("helper/action.yml"), "uses: $/nested/deep")
-	assert.Contains(t, read("nested/deep/action.yml"), "uses: actions/setup-go@v6")
+	assert.Contains(t, read("nested/deep/action.yml"), "uses: actions/setup-go@v6.0.0",
+		"remote refs inside $/ actions are narrowed in their action file")
 
 	// Lockfile: pins the remote dep, records nothing for the self refs.
 	lock := readTempLockfilePins(t)
 	assert.Contains(t, lock, "actions/setup-go", "remote dep should be pinned")
-	assert.Contains(t, lock, "'actions/setup-go@v6':", "nested refs keep the author's ref instead of being narrowed as workflow source")
+	assert.Contains(t, lock, "'actions/setup-go@v6.0.0':", "narrowed ref matches the rewritten action file")
 	assert.Contains(t, lock, setupGoSHA)
 	assert.NotContains(t, lock, "$/", "self refs are inherently pinned; no lockfile entry")
 	assert.NotContains(t, lock, "my-action", "in-repo composite must not be pinned")

@@ -41,8 +41,8 @@ jobs:
 	require.Len(t, pw.Refs, 1)
 	assert.Equal(t, "actions/checkout", pw.Refs[0].NWO())
 	assert.Equal(t, "v4", pw.Refs[0].Ref)
-	assert.NotNil(t, pw.RewriteRefs)
-	assert.Empty(t, pw.RewriteRefs, "a ref shared with a self repository action must not be rewritten in only the workflow")
+	assert.NotEmpty(t, pw.RewriteRefs, "refs inside a self repository action are rewritable in their action file")
+	assert.Equal(t, []string{actionPath}, pw.SelfActionFiles)
 	assert.ElementsMatch(t, []string{"$/actions/root", "$/.github/workflows/reusable.yml"}, pw.SelfRepositoryRefs)
 	assert.Empty(t, pw.SelfRepositoryResolutionErrs)
 }

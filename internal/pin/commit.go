@@ -52,6 +52,12 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		return err
 	}
 
+	// Action files can be shared by several workflows, so merge their
+	// rewrites and write each file once, serially.
+	if err := rewriteSelfActionFiles(rec.Workflows); err != nil {
+		return err
+	}
+
 	// Phase 2: Update lockfile entries for each pinned workflow.
 	// Only write workflows that have at least one genuinely new pin.
 	pinnedByWorkflow := groupPinnedByWorkflow(rec)
@@ -99,6 +105,43 @@ func rewriteWorkflow(wp WorkflowPlan) error {
 		return nil
 	}
 	return os.WriteFile(wp.Path, content, 0o644)
+}
+
+// rewriteSelfActionFiles applies each workflow's rewrites to the in-repo
+// action files it reaches via `$/…`. No sentinel comment: these are action
+// definitions, not managed workflows.
+func rewriteSelfActionFiles(plans []WorkflowPlan) error {
+	merged := make(map[string]map[string]string)
+	for _, wp := range plans {
+		if len(wp.Rewrites) == 0 {
+			continue
+		}
+		for _, path := range wp.SelfActionFiles {
+			if merged[path] == nil {
+				merged[path] = make(map[string]string)
+			}
+			for oldUses, newUses := range wp.Rewrites {
+				merged[path][oldUses] = newUses
+			}
+		}
+	}
+	for path, rewrites := range merged {
+		wf, err := workflowfile.Load(path)
+		if err != nil {
+			return fmt.Errorf("loading %s: %w", path, err)
+		}
+		content, changed, err := wf.RewriteActionRefs(rewrites)
+		if err != nil {
+			return fmt.Errorf("rewriting %s: %w", path, err)
+		}
+		if changed == 0 || bytes.Equal(content, wf.Content) {
+			continue
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func isPinOrVerified(r Resolution) bool {

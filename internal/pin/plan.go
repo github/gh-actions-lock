@@ -141,7 +141,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -155,7 +155,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// --accept-moved deliberately accepts these, so it is exempt.
 	if opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0 && repinMoved {
 		entries = verifiedEntries(wr.Inventory, wr.Path)
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -175,7 +175,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -185,7 +185,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if resolveErr != nil {
 		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
 		if len(deps) == 0 {
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path})
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 			return planResult{entries: entries, wplans: wplans}, nil
 		}
 		// Fall through with partial deps to pin what we can.
@@ -271,13 +271,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
-			Path:     wr.Path,
-			Rewrites: rewrites,
+			Path:            wr.Path,
+			Rewrites:        rewrites,
+			SelfActionFiles: wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// No rewrites and no plan entry yet — still include the workflow
 		// so EnsureSentinel can be applied during commit.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).

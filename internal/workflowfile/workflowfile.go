@@ -158,8 +158,11 @@ type SelfRepositoryActionScan struct {
 	SelfRepositoryRefs    []string
 	SelfRepositoryRefErrs []string
 	LocalPaths            []string
-	Errors                []string
-	Warnings              []string
+	// ActionFiles are the in-repo action definition files visited, in visit
+	// order. Refs in these files are rewritable source, unlike `$/…` itself.
+	ActionFiles []string
+	Errors      []string
+	Warnings    []string
 }
 
 // ScanSelfRepositoryActions recursively reads in-repo actions reached through
@@ -220,11 +223,12 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 			continue
 		}
 
-		uses, err := readActionUses(repoRoot, actionDir)
+		uses, actionPath, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
 		}
+		scan.ActionFiles = append(scan.ActionFiles, actionPath)
 		for _, rawUse := range uses {
 			use := strings.TrimSpace(rawUse)
 			switch {
@@ -596,13 +600,15 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 	return uses, nil
 }
 
-func readActionUses(repoRoot, actionDir string) ([]string, error) {
+// readActionUses returns the `uses:` values of an in-repo action definition
+// along with the file they were read from, so callers can rewrite that file.
+func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := filepath.Join(actionDir, name)
 		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
 			if errors.Is(err, errPathOutsideRoot) {
-				return nil, err
+				return nil, "", err
 			}
 			lastErr = err
 			continue
@@ -614,11 +620,11 @@ func readActionUses(repoRoot, actionDir string) ([]string, error) {
 		}
 		uses, err := parseActionYAMLForUses(content)
 		if err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", name, err)
+			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
 		}
-		return uses, nil
+		return uses, actionPath, nil
 	}
-	return nil, fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
+	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
 }
 
 // KeyFromPath converts a workflow path discovered on disk (relative to the

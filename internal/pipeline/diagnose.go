@@ -195,6 +195,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	if wr.RewriteRefs == nil {
 		wr.RewriteRefs = pw.Refs
 	}
+	wr.SelfActionFiles = pw.SelfActionFiles
 	wr.ParseWarnings = pw.ParseWarnings
 
 	hasTerminalFinding := false

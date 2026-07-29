@@ -47,8 +47,11 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		scan := wf.ExtractActionRefs()
 		selfScan := workflowfile.ScanSelfRepositoryActions(path, scan.SelfRepositoryActionRefs)
 
-		pw.RewriteRefs = excludeActionRefs(scan.Refs, selfScan.Refs)
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
+		// Refs inside `$/…` actions are rewritable too: their action file is
+		// rewritten alongside the workflow, so narrowing stays in sync.
+		pw.RewriteRefs = pw.Refs
+		pw.SelfActionFiles = selfScan.ActionFiles
 		pw.LocalPaths = mergeStrings(scan.LocalPaths, selfScan.LocalPaths)
 		pw.SelfRepositoryRefs = mergeStrings(scan.SelfRepositoryRefs, selfScan.SelfRepositoryRefs)
 		pw.SelfRepositoryRefErrs = mergeStrings(scan.SelfRepositoryRefErrs, selfScan.SelfRepositoryRefErrs)
@@ -82,24 +85,6 @@ func mergeActionRefs(groups ...[]parserlock.ActionRef) []parserlock.ActionRef {
 		}
 	}
 	return refs
-}
-
-func excludeActionRefs(refs, excluded []parserlock.ActionRef) []parserlock.ActionRef {
-	excludedKeys := make(map[string]bool, len(excluded))
-	for _, ref := range excluded {
-		excludedKeys[actionRefLockKey(ref)] = true
-	}
-	out := make([]parserlock.ActionRef, 0, len(refs))
-	for _, ref := range refs {
-		if !excludedKeys[actionRefLockKey(ref)] {
-			out = append(out, ref)
-		}
-	}
-	return out
-}
-
-func actionRefLockKey(ref parserlock.ActionRef) string {
-	return strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
 }
 
 func mergeStrings(groups ...[]string) []string {

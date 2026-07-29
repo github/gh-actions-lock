@@ -28,7 +28,8 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 				}
 				return pw.Refs
 			}(),
-			Deps: pw.ExistingDeps,
+			SelfActionFiles: pw.SelfActionFiles,
+			Deps:            pw.ExistingDeps,
 		}
 
 		if pw.LoadErr != nil {

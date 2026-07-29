@@ -50,6 +50,9 @@ type Entry struct {
 type WorkflowPlan struct {
 	Path     string
 	Rewrites map[string]string
+	// SelfActionFiles are in-repo action definition files reached from this
+	// workflow through `$/…`. The same rewrites apply to their `uses:` lines.
+	SelfActionFiles []string
 }
 
 // Record is the complete output of Plan — everything Commit needs to
