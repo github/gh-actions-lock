@@ -551,6 +551,7 @@ func appendStaleWorkflowFindings(report *checks.Report, workflows []string, prun
 
 // cliVersion returns the gh-actions-lock extension version embedded by the Go
 // build system. Returns "(devel)" for local `go build` and a real version
+// like "v0.1.2" when installed via `gh extension install`.
 func cliVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		return info.Main.Version

@@ -33,163 +33,82 @@ func TestDependabotCooldown_RealWorldFixture(t *testing.T) {
 	}
 }
 
-func TestDependabotCooldown_PresentWithCooldown(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 5
-`)
-	cfg, _, warnings := DependabotCooldown(dir)
-	if cfg.DefaultDays != 5 {
-		t.Errorf("DefaultDays = %d, want 5", cfg.DefaultDays)
+func TestDependabotCooldown_Table(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string // default dependabot.yml; empty means write no file
+		yaml     string
+		wantDays int
+		wantOK   bool
+		wantWarn int
+	}{
+		{
+			name:     "present with cooldown",
+			yaml:     "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    directory: \"/\"\n    schedule:\n      interval: \"weekly\"\n    cooldown:\n      default-days: 5\n",
+			wantDays: 5, wantOK: true,
+		},
+		{
+			name:     "yaml extension is read",
+			filename: "dependabot.yaml",
+			yaml:     "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    cooldown:\n      default-days: 2\n",
+			wantDays: 2, wantOK: true,
+		},
+		{
+			name: "present without cooldown block",
+			yaml: "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    directory: \"/\"\n    schedule:\n      interval: \"weekly\"\n",
+		},
+		{
+			name: "other ecosystem ignored",
+			yaml: "version: 2\nupdates:\n  - package-ecosystem: \"npm\"\n    cooldown:\n      default-days: 9\n",
+		},
+		{
+			name: "absent config file",
+		},
+		{
+			name:     "malformed does not block",
+			yaml:     "updates: [this: is: not: valid",
+			wantWarn: 1,
+		},
+		{
+			name:     "unsupported keys warn",
+			yaml:     "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    cooldown:\n      default-days: 3\n      semver-major-days: 30\n      include:\n        - \"actions/*\"\n",
+			wantDays: 3, wantOK: true, wantWarn: 2,
+		},
+		{
+			name: "explicit zero is not configured",
+			yaml: "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    cooldown:\n      default-days: 0\n",
+		},
+		{
+			name: "empty cooldown block",
+			yaml: "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    cooldown:\n",
+		},
+		{
+			name:     "first actions entry with a cooldown wins",
+			yaml:     "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    directory: \"/\"\n  - package-ecosystem: \"github-actions\"\n    directory: \"/nested\"\n    cooldown:\n      default-days: 4\n",
+			wantDays: 4, wantOK: true,
+		},
 	}
-	if len(warnings) != 0 {
-		t.Errorf("warnings = %v, want none", warnings)
-	}
-}
-
-func TestDependabotCooldown_YAMLExtension(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yaml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    cooldown:
-      default-days: 2
-`)
-	cfg, _, _ := DependabotCooldown(dir)
-	if cfg.DefaultDays != 2 {
-		t.Errorf("DefaultDays = %d, want 2 (.yaml must be read)", cfg.DefaultDays)
-	}
-}
-
-func TestDependabotCooldown_PresentWithoutCooldownBlock(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-`)
-	cfg, _, warnings := DependabotCooldown(dir)
-	if cfg.DefaultDays != 0 {
-		t.Errorf("DefaultDays = %d, want 0 (no cooldown block)", cfg.DefaultDays)
-	}
-	if len(warnings) != 0 {
-		t.Errorf("warnings = %v, want none", warnings)
-	}
-}
-
-func TestDependabotCooldown_OtherEcosystemIgnored(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "npm"
-    cooldown:
-      default-days: 9
-`)
-	cfg, _, _ := DependabotCooldown(dir)
-	if cfg.DefaultDays != 0 {
-		t.Errorf("DefaultDays = %d, want 0 (only github-actions counts)", cfg.DefaultDays)
-	}
-}
-
-func TestDependabotCooldown_Absent(t *testing.T) {
-	cfg, _, warnings := DependabotCooldown(t.TempDir())
-	if cfg.DefaultDays != 0 {
-		t.Errorf("DefaultDays = %d, want 0 (no config file)", cfg.DefaultDays)
-	}
-	if len(warnings) != 0 {
-		t.Errorf("warnings = %v, want none", warnings)
-	}
-}
-
-func TestDependabotCooldown_Malformed(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yml", "updates: [this: is: not: valid")
-	cfg, _, warnings := DependabotCooldown(dir)
-	if cfg.DefaultDays != 0 {
-		t.Errorf("DefaultDays = %d, want 0 (malformed must not block)", cfg.DefaultDays)
-	}
-	if len(warnings) != 1 {
-		t.Fatalf("warnings = %v, want one malformed-config warning", warnings)
-	}
-}
-
-func TestDependabotCooldown_UnsupportedKeysWarn(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    cooldown:
-      default-days: 3
-      semver-major-days: 30
-      include:
-        - "actions/*"
-`)
-	cfg, _, warnings := DependabotCooldown(dir)
-	if cfg.DefaultDays != 3 {
-		t.Errorf("DefaultDays = %d, want 3", cfg.DefaultDays)
-	}
-	if len(warnings) != 2 {
-		t.Fatalf("warnings = %v, want 2 (semver-* and include/exclude)", warnings)
-	}
-}
-
-func TestDependabotCooldown_ExplicitZeroDays(t *testing.T) {
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    cooldown:
-      default-days: 0
-`)
-	cfg, ok, warnings := DependabotCooldown(dir)
-	if cfg.DefaultDays != 0 {
-		t.Errorf("DefaultDays = %d, want 0", cfg.DefaultDays)
-	}
-	if ok {
-		t.Error("ok = true, want false (default-days 0 must not count as configured)")
-	}
-	if len(warnings) != 0 {
-		t.Errorf("explicit 0 is not an unsupported key; warnings = %v", warnings)
-	}
-}
-
-func TestDependabotCooldown_EmptyCooldownBlock(t *testing.T) {
-	// `cooldown:` with no mapping parses to a nil pointer, i.e. no block.
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    cooldown:
-`)
-	cfg, _, warnings := DependabotCooldown(dir)
-	if cfg.DefaultDays != 0 || len(warnings) != 0 {
-		t.Errorf("empty cooldown: got DefaultDays=%d warnings=%v, want 0 / none", cfg.DefaultDays, warnings)
-	}
-}
-
-func TestDependabotCooldown_FirstActionsEntryWithCooldownWins(t *testing.T) {
-	// Multi-directory setups can list github-actions twice; take the first
-	// entry that actually carries a cooldown block.
-	dir := writeDependabot(t, "dependabot.yml", `
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-  - package-ecosystem: "github-actions"
-    directory: "/nested"
-    cooldown:
-      default-days: 4
-`)
-	cfg, _, _ := DependabotCooldown(dir)
-	if cfg.DefaultDays != 4 {
-		t.Errorf("DefaultDays = %d, want 4 (first entry with a cooldown block)", cfg.DefaultDays)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.yaml != "" {
+				name := tt.filename
+				if name == "" {
+					name = "dependabot.yml"
+				}
+				dir = writeDependabot(t, name, tt.yaml)
+			}
+			cfg, ok, warnings := DependabotCooldown(dir)
+			if cfg.DefaultDays != tt.wantDays {
+				t.Errorf("DefaultDays = %d, want %d", cfg.DefaultDays, tt.wantDays)
+			}
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if len(warnings) != tt.wantWarn {
+				t.Errorf("warnings = %v, want %d", warnings, tt.wantWarn)
+			}
+		})
 	}
 }
 
