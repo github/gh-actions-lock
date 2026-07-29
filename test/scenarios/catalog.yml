@@ -414,8 +414,9 @@ scenarios:
 
   - name: expression_in_uses
     category: workflow_parsing
-    description: "Expression-based uses: (${{ }}) — unparseable, skipped with warning"
-    needs_token: true
+    description: "Expression-based uses: (${{ }}) — illegal in Actions, fails to parse"
+    needs_stub: true
+    tags: [stub]
     fixtures:
       workflows:
         ci.yml:
@@ -429,8 +430,8 @@ scenarios:
                   - uses: ${{ matrix.action }}
                   - uses: actions/checkout@v4
     expect:
-      exit: 0
-      lockfile_deps_cover_direct: true
+      exit: 2
+      output_contains: ["can't contain an expression"]
 
   - name: local_action_skipped
     category: workflow_parsing

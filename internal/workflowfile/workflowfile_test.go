@@ -405,3 +405,52 @@ func TestExtractLocalCompositeRefs_RejectsPathTraversal(t *testing.T) {
 	}
 	assert.True(t, sawRefusal, "expected refusal warning, got: %#v", warnings)
 }
+
+func TestParseIgnoresNonUsesKeys(t *testing.T) {
+	f, err := Parse("wf.yml", []byte(`
+on: push
+env:
+  uses: ${{ github.repository }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          uses: ${{ github.ref }}
+`))
+	require.NoError(t, err)
+	assert.Len(t, f.ExtractActionRefs().Refs, 1)
+}
+
+func TestParseRejectsAliasedUsesExpression(t *testing.T) {
+	_, err := Parse("wf.yml", []byte(`
+on: push
+x: &step
+  uses: ${{ matrix.action }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - *step
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "`uses:` can't contain an expression")
+}
+
+func TestScanSelfRepositoryActionsRejectsUsesExpression(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "actions", "compo"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "actions", "compo", "action.yml"), []byte(`
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@${{ inputs.ref }}
+`), 0o644))
+
+	scan := ScanSelfRepositoryActions(filepath.Join(root, ".github", "workflows", "ci.yml"), []string{"$/actions/compo"})
+	require.Len(t, scan.Errors, 1)
+	assert.Contains(t, scan.Errors[0], "`uses:` can't contain an expression")
+	assert.Empty(t, scan.Refs)
+}
