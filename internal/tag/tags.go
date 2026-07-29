@@ -236,7 +236,7 @@ func (tl *Lister) ReleaseDate(owner, repo, tag string) string {
 // isTagTooNew returns true if the tag's release date is younger than the cooldown period.
 // Tags without a known release date are never filtered (we can't determine their age).
 func (tl *Lister) isTagTooNew(owner, repo, tag string) bool {
-	days := tl.cooldown.DefaultDays
+	days := tl.cooldown.CooldownDays(owner, repo)
 	if days <= 0 {
 		return false
 	}
