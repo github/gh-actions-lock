@@ -148,9 +148,12 @@ updates:
     cooldown:
       default-days: 0
 `)
-	cfg, _, warnings := DependabotCooldown(dir)
+	cfg, ok, warnings := DependabotCooldown(dir)
 	if cfg.DefaultDays != 0 {
 		t.Errorf("DefaultDays = %d, want 0", cfg.DefaultDays)
+	}
+	if ok {
+		t.Error("ok = true, want false (default-days 0 must not count as configured)")
 	}
 	if len(warnings) != 0 {
 		t.Errorf("explicit 0 is not an unsupported key; warnings = %v", warnings)

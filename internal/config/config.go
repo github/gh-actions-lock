@@ -15,9 +15,12 @@ import (
 
 // DependabotCooldown reads the github-actions cooldown policy from repoRoot's
 // Dependabot config (.github/dependabot.yml, falling back to .yaml). ok is true
-// only when a github-actions entry carries a cooldown block. warnings names
-// configured keys the tool does not yet honor, so config is never silently
-// ignored. An absent or malformed config yields ok=false and never blocks.
+// only when a github-actions entry configures a positive default-days; a block
+// with default-days <= 0 (or only unsupported keys) is treated as not
+// configured so it can't silently override a stricter policy from another
+// source. warnings names configured keys the tool does not yet honor, so config
+// is never silently ignored. An absent or malformed config yields ok=false and
+// never blocks.
 func DependabotCooldown(repoRoot string) (cfg tag.CooldownConfig, ok bool, warnings []string) {
 	data, found := readDependabotFile(repoRoot)
 	if !found {
@@ -33,7 +36,7 @@ func DependabotCooldown(repoRoot string) (cfg tag.CooldownConfig, ok bool, warni
 	if !has {
 		return tag.CooldownConfig{}, false, nil
 	}
-	return tag.CooldownConfig{DefaultDays: cd.DefaultDays}, true, cd.unsupportedWarnings()
+	return tag.CooldownConfig{DefaultDays: cd.DefaultDays}, cd.DefaultDays > 0, cd.unsupportedWarnings()
 }
 
 func readDependabotFile(repoRoot string) ([]byte, bool) {

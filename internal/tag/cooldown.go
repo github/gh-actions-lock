@@ -2,10 +2,7 @@
 // cooldown.
 package tag
 
-import (
-	"strings"
-	"time"
-)
+import "strings"
 
 // CooldownConfig controls the minimum age a tag must have before it's
 // suggested or pinned. DefaultDays applies to every action; RepoOverrides sets
@@ -30,9 +27,4 @@ func (c CooldownConfig) CooldownDays(owner, repo string) int {
 		}
 	}
 	return c.DefaultDays
-}
-
-// CooldownDuration returns the cooldown as a time.Duration.
-func (c CooldownConfig) CooldownDuration(owner, repo string) time.Duration {
-	return time.Duration(c.CooldownDays(owner, repo)) * 24 * time.Hour
 }

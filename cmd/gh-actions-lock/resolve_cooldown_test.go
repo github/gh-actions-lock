@@ -70,6 +70,59 @@ func TestResolveCooldown_MalformedDependabotFallsBackAndWarns(t *testing.T) {
 	}
 }
 
+func TestResolveCooldown_DependabotZeroCannotDowngradeFile(t *testing.T) {
+	// A repo's default-days: 0 must NOT override the operator's stricter file
+	// policy — it falls through instead of silently disabling cooldown.
+	writeUserFileConfig(t, "cooldown_days: 14\n")
+	dir := writeRepoDependabot(t, `
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    cooldown:
+      default-days: 0
+`)
+	cfg, configured, _ := ResolveCooldown(dir)
+	if !configured || cfg.DefaultDays != 14 {
+		t.Fatalf("got cfg=%+v configured=%v, want DefaultDays 14 (file, not the repo's 0)", cfg, configured)
+	}
+}
+
+func TestResolveCooldown_DependabotZeroAloneIsUnconfigured(t *testing.T) {
+	// default-days: 0 with no file policy resolves to unconfigured, so the
+	// fresh-tag warn fires rather than a silent no-filter.
+	t.Setenv("GH_ACTIONS_LOCK_CONFIG", filepath.Join(t.TempDir(), "none.yml"))
+	dir := writeRepoDependabot(t, `
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    cooldown:
+      default-days: 0
+`)
+	if _, configured, _ := ResolveCooldown(dir); configured {
+		t.Error("configured = true, want false (default-days 0 is not a policy)")
+	}
+}
+
+func TestResolveCooldown_UnsupportedKeysOnlyFallsThroughButWarns(t *testing.T) {
+	// A cooldown block with only unsupported keys (no default-days) applies no
+	// filter, falls through to the file policy, and still surfaces the warning.
+	writeUserFileConfig(t, "cooldown_days: 8\n")
+	dir := writeRepoDependabot(t, `
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    cooldown:
+      semver-major-days: 30
+`)
+	cfg, configured, warnings := ResolveCooldown(dir)
+	if !configured || cfg.DefaultDays != 8 {
+		t.Errorf("got cfg=%+v configured=%v, want DefaultDays 8 (file)", cfg, configured)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %v, want 1 (unsupported semver key)", warnings)
+	}
+}
+
 // writeUserFileConfig points GH_ACTIONS_LOCK_CONFIG at a temp config.yml.
 func writeUserFileConfig(t *testing.T, body string) {
 	t.Helper()

@@ -14,10 +14,13 @@ import (
 )
 
 // ResolveCooldown picks the release-cooldown policy by precedence: the repo's
-// Dependabot config is gospel; else the user's ~/.config/gh-actions-lock
-// config file; else no policy. configured is false only in that last case, so
-// the caller applies the global fresh-tag warn instead of a silent filter.
-// warnings carries any Dependabot keys we don't honor (surfaced non-blocking).
+// Dependabot config is gospel when it sets a positive default-days; else the
+// user's ~/.config/gh-actions-lock config file; else no policy. A Dependabot
+// cooldown of default-days <= 0 does not count as configured, so a repo can't
+// use it to silently override a stricter policy from the user's file. configured
+// is false only when no source sets a policy, so the caller applies the global
+// fresh-tag warn instead of a silent filter. warnings carries any Dependabot
+// keys we don't honor (surfaced non-blocking).
 func ResolveCooldown(repoRoot string) (cfg tag.CooldownConfig, configured bool, warnings []string) {
 	cfg, ok, warnings := config.DependabotCooldown(repoRoot)
 	if ok {
