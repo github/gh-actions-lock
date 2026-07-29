@@ -501,7 +501,7 @@ scenarios:
 
   - name: migrate_local_actions_rewrite
     category: workflow_parsing
-    description: "migration runs by default on fix runs: rewrites a deep in-repo ./ chain to $/, then discovers and pins the remote dependency reached only through that $/ chain; no self repository ref enters the lockfile"
+    description: "migration runs by default on fix runs: rewrites a deep in-repo ./ chain to $/, then discovers, narrows and pins the remote dependency reached only through that $/ chain; no self repository ref enters the lockfile"
     needs_stub: true
     tags: [stub]
     fixtures:
@@ -537,13 +537,13 @@ scenarios:
       delete_lockfile: true
     expect:
       exit: 0
-      lockfile_contains: ["'actions/checkout@v4':"]
+      lockfile_contains: ["'actions/checkout@v4.2.2':"]
       lockfile_excludes: ["$/"]
       files_contain:
         ".github/workflows/ci.yml": ["uses: $/my-action"]
         "my-action/action.yml": ["uses: $/helper"]
         "helper/action.yml": ["uses: $/nested/deep"]
-        "nested/deep/action.yml": ["uses: actions/checkout@v4"]
+        "nested/deep/action.yml": ["uses: actions/checkout@v4.2.2"]
       files_exclude:
         ".github/workflows/ci.yml": ["uses: ./my-action", "actions/checkout"]
 
@@ -1304,7 +1304,7 @@ scenarios:
 
   - name: self_repository_shared_dependency
     category: workflow_parsing
-    description: "The real binary keeps a remote ref shared by workflow YAML and a local $/ action at its authored ref, so source and lockfile coverage converge in one pass"
+    description: "The real binary narrows a remote ref shared by workflow YAML and a local $/ action in both files, so source and lockfile stay in sync"
     needs_stub: true
     tags: [stub]
     fixtures:
@@ -1329,13 +1329,11 @@ scenarios:
       delete_lockfile: true
     expect:
       exit: 0
-      lockfile_contains: ["'actions/checkout@v4':"]
-      lockfile_excludes: ["actions/checkout@v4.2.2", "$/"]
+      lockfile_contains: ["'actions/checkout@v4.2.2':"]
+      lockfile_excludes: ["'actions/checkout@v4':", "$/"]
       files_contain:
-        ".github/workflows/ci.yml": ["uses: $/actions/shared", "uses: actions/checkout@v4"]
-        "actions/shared/action.yml": ["uses: actions/checkout@v4"]
-      files_exclude:
-        ".github/workflows/ci.yml": ["actions/checkout@v4.2.2"]
+        ".github/workflows/ci.yml": ["uses: $/actions/shared", "uses: actions/checkout@v4.2.2"]
+        "actions/shared/action.yml": ["uses: actions/checkout@v4.2.2"]
 
   - name: fresh_no_narrow_keeps_major
     category: narrowing
