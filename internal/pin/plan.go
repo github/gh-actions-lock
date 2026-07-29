@@ -71,18 +71,14 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		items[i] = indexedWR{idx: i, wr: wr}
 	}
 
-	// Build set of NWOs globally recorded with a non-semver ref. Checked
-	// across all workflows (not per-WF) so two workflows referencing the
-	// same action settle on the same ref precision — avoiding duplicate
-	// dep entries in the lockfile.
+	// Build set of NWOs recorded with a non-semver ref as a *direct* pin.
+	// Checked across all workflows (not per-WF) so two workflows referencing
+	// the same action settle on the same ref precision — avoiding duplicate
+	// dep entries in the lockfile. Transitive pins are excluded: their ref is
+	// the composite author's choice, is never narrowed, and would otherwise
+	// permanently veto narrowing every direct use of the same NWO.
 	if opts.prevImpreciseNWO == nil && opts.Store != nil {
-		opts.prevImpreciseNWO = make(map[string]bool)
-		for _, d := range opts.Store.AllDeps() {
-			sv, ok := parserlock.ParseSemVer(d.Ref)
-			if ok && !sv.IsFull() {
-				opts.prevImpreciseNWO[strings.ToLower(d.NWO)] = true
-			}
-		}
+		opts.prevImpreciseNWO = impreciseDirectNWOs(opts.Store)
 	}
 
 	results := make([]planResult, len(report.Workflows))
@@ -705,4 +701,22 @@ func splitNWO(nwo string) (string, string) {
 		return "", ""
 	}
 	return parts[0], parts[1]
+}
+
+// impreciseDirectNWOs returns lowercased NWOs recorded with a non-full-semver
+// ref as a direct pin of some workflow.
+func impreciseDirectNWOs(store *lockfile.State) map[string]bool {
+	out := make(map[string]bool)
+	for _, wfKey := range store.WorkflowKeys() {
+		deps, err := store.Get(wfKey)
+		if err != nil {
+			continue
+		}
+		for _, d := range deps {
+			if sv, ok := parserlock.ParseSemVer(d.Ref); ok && !sv.IsFull() {
+				out[strings.ToLower(d.NWO)] = true
+			}
+		}
+	}
+	return out
 }
