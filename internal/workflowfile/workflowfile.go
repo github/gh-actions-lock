@@ -76,6 +76,22 @@ func usesExpressionErr(values []string) error {
 	return fmt.Errorf("`uses:` can't contain an expression: %s", strings.Join(values, ", "))
 }
 
+func appendDockerWarning(warnings *[]string, seen map[string]bool, value string) bool {
+	if !strings.HasPrefix(value, "docker://") {
+		return false
+	}
+	if seen[value] {
+		return true
+	}
+	seen[value] = true
+	detail := "container image tags are mutable"
+	if strings.Contains(strings.TrimPrefix(value, "docker://"), "@") {
+		detail = "container image digests must be maintained separately"
+	}
+	*warnings = append(*warnings, fmt.Sprintf("%s is not covered by the actions lockfile; %s", value, detail))
+	return true
+}
+
 // RefScan is the classified result of walking a workflow's `uses:` values.
 type RefScan struct {
 	// Refs are remote repository action references (owner/repo[/path]@ref).
@@ -103,6 +119,7 @@ func (f *File) ExtractActionRefs() RefScan {
 	seenLocal := make(map[string]bool)
 	seenSelf := make(map[string]bool)
 	seenSelfAction := make(map[string]bool)
+	seenDocker := make(map[string]bool)
 
 	walkUses(&f.root, func(value string, stepLevel bool) {
 		value = strings.TrimSpace(value)
@@ -138,11 +155,7 @@ func (f *File) ExtractActionRefs() RefScan {
 			}
 			return
 		}
-		if strings.HasPrefix(value, "docker://") {
-			if !seen[value] {
-				seen[value] = true
-				scan.Warnings = append(scan.Warnings, fmt.Sprintf("%s is not covered by the actions lockfile; container image tags are mutable", value))
-			}
+		if appendDockerWarning(&scan.Warnings, seenDocker, value) {
 			return
 		}
 		actionRef := parserlock.ParseActionRef(value)
@@ -202,6 +215,7 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 	seenSelf := make(map[string]bool)
 	seenInvalid := make(map[string]bool)
 	seenLocal := make(map[string]bool)
+	seenDocker := make(map[string]bool)
 
 	for len(pending) > 0 {
 		current := pending[0]
@@ -255,6 +269,7 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 					seenLocal[use] = true
 					scan.LocalPaths = append(scan.LocalPaths, use)
 				}
+			case appendDockerWarning(&scan.Warnings, seenDocker, use):
 			default:
 				actionRef := parserlock.ParseActionRef(use)
 				if actionRef == nil {

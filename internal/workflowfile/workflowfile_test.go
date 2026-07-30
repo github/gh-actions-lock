@@ -46,6 +46,25 @@ func TestExtractActionRefsMixed(t *testing.T) {
 	}, warnings)
 }
 
+func TestExtractActionRefs_DockerWarnings(t *testing.T) {
+	f, err := Parse("ci.yml", []byte(`
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker://alpine:3.18
+      - uses: docker://alpine:3.18
+      - uses: docker://alpine@sha256:0123456789abcdef
+`))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable",
+		"docker://alpine@sha256:0123456789abcdef is not covered by the actions lockfile; container image digests must be maintained separately",
+	}, f.ExtractActionRefs().Warnings)
+}
+
 func TestParseRejectsUsesExpression(t *testing.T) {
 	for name, content := range map[string]string{
 		"step level": `
@@ -262,6 +281,9 @@ func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
     - uses: $/actions/root
     - uses: actions/checkout@v4
     - uses: ./workspace-relative
+    - uses: docker://alpine:3.18
+    - uses: docker://alpine:3.18
+    - uses: docker://alpine@sha256:0123456789abcdef
     - uses: $/actions/bad@v2
     - uses: "$/actions/expression@${{ matrix.ref }}"
 `)
@@ -276,7 +298,10 @@ func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 	)
 	assert.Equal(t, []string{"./workspace-relative"}, scan.LocalPaths)
 	assert.Empty(t, scan.Errors)
-	assert.Empty(t, scan.Warnings)
+	assert.Equal(t, []string{
+		"docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable",
+		"docker://alpine@sha256:0123456789abcdef is not covered by the actions lockfile; container image digests must be maintained separately",
+	}, scan.Warnings)
 }
 
 func TestScanSelfRepositoryActions_NoRepoRoot(t *testing.T) {
