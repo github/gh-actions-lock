@@ -1,8 +1,14 @@
 package pin
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -103,27 +109,44 @@ func TestBuildDirectKeys(t *testing.T) {
 	assert.NotContains(t, keys, "g/h@v4", "investigate should be excluded")
 }
 
-func TestWorkflowsWithNewPins(t *testing.T) {
-	rec := &Record{
-		Entries: []Entry{
-			{NWO: "a/b", Ref: "v1", Resolution: Pinned, Workflows: []string{"ci.yml", "release.yml"}},
-			{NWO: "c/d", Ref: "v2", Resolution: Verified, Workflows: []string{"ci.yml"}},
-			{NWO: "e/f", Ref: "v3", Resolution: Investigate, Workflows: []string{"test.yml"}},
-		},
-	}
+func TestCommitRemovesDependenciesDroppedFromWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(workflowPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), []byte(`on: push
+jobs:
+  lint:
+    uses: owner/reusable/.github/workflows/lint.yml@main
+`), 0o644))
+	t.Chdir(dir)
 
-	got := workflowsWithNewPins(rec)
-	assert.True(t, got["ci.yml"])
-	assert.True(t, got["release.yml"])
-	assert.NotContains(t, got, "test.yml", "non-pinned entries should not contribute")
-}
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+	oldParent := dep.Dependency{NWO: "owner/action", Ref: "main", SHA: strings.Repeat("1", 40), HashAlgo: "sha1"}
+	oldChild := dep.Dependency{NWO: "actions/setup-go", Ref: "v5", SHA: strings.Repeat("2", 40), HashAlgo: "sha1"}
+	keep := dep.Dependency{NWO: "actions/checkout", Ref: "v7", SHA: strings.Repeat("3", 40), HashAlgo: "sha1"}
+	require.NoError(t, store.Set(context.Background(), workflowPath,
+		[]dep.Dependency{oldParent, oldChild, keep},
+		map[string][]string{oldChild.Key(): {oldParent.Key()}},
+		map[string]bool{oldParent.Key(): true, keep.Key(): true}))
+	require.NoError(t, store.Save())
 
-func TestWorkflowsWithNewPins_empty(t *testing.T) {
 	rec := &Record{
-		Entries: []Entry{
-			{Resolution: Verified, Workflows: []string{"ci.yml"}},
-		},
+		Entries: []Entry{{
+			NWO:        keep.NWO,
+			Ref:        keep.Ref,
+			SHA:        keep.SHA,
+			Resolution: Verified,
+			Direct:     true,
+			Workflows:  []string{workflowPath},
+		}},
+		Workflows: []WorkflowPlan{{Path: workflowPath}},
 	}
-	got := workflowsWithNewPins(rec)
-	assert.Empty(t, got)
+	require.NoError(t, Commit(context.Background(), rec, store, nil))
+
+	got, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "actions.lock"))
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "actions/checkout@v7")
+	assert.NotContains(t, string(got), "owner/action@main")
+	assert.NotContains(t, string(got), "actions/setup-go@v5")
 }

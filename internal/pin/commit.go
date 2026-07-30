@@ -58,18 +58,18 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		return err
 	}
 
-	// Phase 2: Update lockfile entries for each pinned workflow.
-	// Only write workflows that have at least one genuinely new pin.
+	// Phase 2: Update lockfile entries for each scanned workflow.
 	pinnedByWorkflow := groupPinnedByWorkflow(rec)
-	hasNewPin := workflowsWithNewPins(rec)
-	if len(pinnedByWorkflow) > 0 {
+	if len(rec.Workflows) > 0 {
 		progress("Updating lockfile")
 	}
-	for wfPath, deps := range pinnedByWorkflow {
-		if !hasNewPin[wfPath] {
-			continue // all entries verified — no write needed
-		}
+	for _, wp := range rec.Workflows {
+		wfPath := wp.Path
 		wfKey := workflowfile.KeyFromPath(wfPath)
+		deps := pinnedByWorkflow[wfPath]
+		if len(deps) == 0 && !store.HasWorkflow(wfKey) {
+			continue
+		}
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
 		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
@@ -237,20 +237,4 @@ func buildDirectKeys(rec *Record, wfPath string) map[string]bool {
 		}
 	}
 	return keys
-}
-
-// workflowsWithNewPins returns the set of workflow paths that contain at
-// least one entry with Resolution == Pinned (i.e. genuinely new or changed)
-// or a narrowed ref (Verified with AutoFixedRef set, meaning the dep key changed).
-func workflowsWithNewPins(rec *Record) map[string]bool {
-	m := make(map[string]bool)
-	for _, e := range rec.Entries {
-		if e.Resolution != Pinned && !(e.Resolution == Verified && e.AutoFixedRef != "") {
-			continue
-		}
-		for _, wf := range e.Workflows {
-			m[wf] = true
-		}
-	}
-	return m
 }
