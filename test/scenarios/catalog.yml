@@ -2168,3 +2168,29 @@ scenarios:
       stdout_contains:
         - "fresh-tag"
         - "pinned to a very recent tag with no Dependabot cooldown configured"
+
+  - name: cooldown_ignored_keys_surface_in_readonly
+    category: cooldown
+    description: "Read-only (--no-fix): unsupported Dependabot cooldown keys surface in JSON even when the run fails on an unpinned action"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-fix", "--no-narrow", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+      files:
+        .github/dependabot.yml: |
+          version: 2
+          updates:
+            - package-ecosystem: "github-actions"
+              directory: "/"
+              cooldown:
+                semver-major-days: 30
+    expect:
+      exit: 1
+      stdout_is_json: true
+      stdout_contains:
+        - "cooldown-config-ignored"
+        - "not supported and were ignored"

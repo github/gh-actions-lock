@@ -622,6 +622,9 @@ def wire_checkout_fresh(s, token)
     end
   end
   s.env("GH_TOKEN" => token)
+  # Pin the user config path at an empty file so the subprocess can't read a
+  # developer's real ~/.config/gh-actions-lock/config.yml and suppress the nudge.
+  s.env("GH_ACTIONS_LOCK_CONFIG" => "/dev/null")
 end
 
 # ── Stub server wiring per scenario ────────────────────────────────────
@@ -638,6 +641,9 @@ STUB_WIRING = {
   },
   fresh_tag_zero_days_still_warns: ->(s) {
     wire_checkout_fresh(s, "gho_fake_fresh_zero_token")
+  },
+  cooldown_ignored_keys_surface_in_readonly: ->(s) {
+    wire_checkout_success(s, "gho_fake_cooldown_ignored_token")
   },
   migrate_local_actions_rewrite: ->(s) {
     wire_checkout_success(s, "gho_fake_migrate_token")

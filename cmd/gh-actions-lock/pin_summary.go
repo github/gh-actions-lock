@@ -164,12 +164,12 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	return nil
 }
 
-// renderCooldownFindings surfaces the fresh-tag and cooldown-ignored nudges on
-// the terminal. PresentResults skips these categories so this is their single
-// surface, shown even on a clean pin where PresentResults never runs.
+// renderCooldownFindings surfaces the fresh-tag nudge on the terminal in fix
+// mode, so it shows even on a clean pin where PresentResults renders nothing.
+// Cooldown-ignored notices are surfaced earlier by PresentResults (both modes).
 func renderCooldownFindings(console *ui.UI, report *checks.Report) {
 	for _, f := range report.RepoFindings {
-		if f.Category != checks.FreshTag && f.Category != checks.CooldownConfigIgnored {
+		if f.Category != checks.FreshTag {
 			continue
 		}
 		console.TermWarn("%s", f.Detail)

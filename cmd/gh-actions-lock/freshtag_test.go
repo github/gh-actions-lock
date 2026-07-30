@@ -11,6 +11,32 @@ import (
 	"github.com/github/gh-actions-lock/internal/tag"
 )
 
+// TestInjectFreshTagFindings_PositiveCooldownSkips proves the per-entry gate:
+// an action with a positive effective cooldown is not nudged, because the
+// resolver's cooldown filter already gated fresh tags for it.
+func TestInjectFreshTagFindings_PositiveCooldownSkips(t *testing.T) {
+	fresh := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `(?i)repos/actions/checkout/releases`),
+		httpmock.JSONResponse([]map[string]any{
+			{"tag_name": "v4", "published_at": fresh, "immutable": false},
+		}),
+	)
+	tagger := tag.NewListerForTest(t, reg)
+
+	record := &pin.Record{Entries: []pin.Entry{
+		{NWO: "actions/checkout", Ref: "v4", SHA: "s1", Resolution: pin.Pinned},
+	}}
+	report := &checks.Report{}
+	cfg := tag.CooldownConfig{RepoOverrides: map[string]int{"actions/checkout": 7}}
+	injectFreshTagFindings(context.Background(), report, record, tagger, cfg)
+
+	if len(report.RepoFindings) != 0 {
+		t.Fatalf("RepoFindings = %d, want 0 (positive cooldown skips the nudge)", len(report.RepoFindings))
+	}
+}
+
 func TestFreshTagFinding(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	iso := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339) }
@@ -89,7 +115,7 @@ func TestInjectFreshTagFindings(t *testing.T) {
 		{NWO: "actions/setup-go", Ref: "v5", SHA: "s2", Resolution: pin.Verified},
 	}}
 	report := &checks.Report{}
-	injectFreshTagFindings(context.Background(), report, record, tagger)
+	injectFreshTagFindings(context.Background(), report, record, tagger, tag.CooldownConfig{})
 
 	if len(report.RepoFindings) != 1 {
 		t.Fatalf("RepoFindings = %d, want 1 (Pinned fires, Verified quiet)", len(report.RepoFindings))

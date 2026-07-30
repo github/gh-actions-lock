@@ -24,9 +24,9 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 		exclude[c] = true
 	}
 	for _, f := range report.RepoFindings {
-		// Fresh-tag and cooldown-ignored nudges are rendered by the fix-mode
-		// pin summary, which owns them so they show on a clean pin too.
-		if f.Category == checks.FreshTag || f.Category == checks.CooldownConfigIgnored {
+		// Fresh-tag nudges are appended after this render and shown by the
+		// fix-mode pin summary, so they surface on a clean pin too.
+		if f.Category == checks.FreshTag {
 			continue
 		}
 		out.TermWarn("%s", f.Detail)
