@@ -6,6 +6,9 @@ workflows:
     '.github/workflows/dependency-review.yml':
         - 'actions/checkout@v5.0.1'
         - 'actions/dependency-review-action@v5.0.0'
+    '.github/workflows/lint.yml':
+        - 'actions/checkout@v5.0.1'
+        - 'actions/setup-go@v5'
     '.github/workflows/release.yml':
         - 'actions/checkout@v6.0.2'
         - 'cli/gh-extension-precompile@v2.1.0'

@@ -1,0 +1,30 @@
+# This workflow is managed by gh actions-lock.
+
+name: Lint actions.lock
+
+on:
+  workflow_call:
+    inputs:
+      extra-flags:
+        description: Extra flags passed to gh actions-lock
+        required: false
+        type: string
+        default: ""
+      ignore-categories:
+        description: Comma-separated finding categories to treat as warnings instead of errors
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5.0.1
+      - uses: $/actions/lint
+        with:
+          extra-flags: ${{ inputs.extra-flags }}
+          ignore-categories: ${{ inputs.ignore-categories }}
