@@ -246,10 +246,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Build a Lister for pin narrowing, reusing the resolver's API client; cooldown is resolved dependabot > config file > none.
 	var tagger *tag.Lister
 	var cooldownCfg tag.CooldownConfig
-	var cooldownConfigured bool
 	var cooldownWarnings []string
 	if gc := r.GHClient(); gc != nil {
-		cooldownCfg, cooldownConfigured, cooldownWarnings = ResolveCooldown(".")
+		cooldownCfg, _, cooldownWarnings = ResolveCooldown(".")
 		tagger = tag.NewLister(gc, cooldownCfg)
 	}
 
@@ -288,6 +287,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	report := result.Report
 	valid := result.Valid
 	skippedRescan := result.SkippedRescan
+	appendCooldownConfigFindings(report, cooldownWarnings)
 
 	// Read-only modes never touch the lockfile, so surface stale entries as
 	// non-blocking info findings instead of pruning them. Fix mode prunes
@@ -319,7 +319,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if showSpinner {
 			console.PauseProgress()
 		}
-		format.PresentResults(console, report, valid, true)
+		format.PresentResults(console, report, valid, !opts.noFix)
 		if showSpinner {
 			console.ResumeProgress()
 		}
@@ -416,11 +416,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		injectVersionRefFindings(report, record)
 	}
 
-	// Surface Dependabot cooldown keys we don't honor, and nudge on freshly
-	// pinned tags when no cooldown policy is configured. Both are non-blocking.
-	appendCooldownConfigFindings(report, cooldownWarnings)
-	if tagger != nil && !cooldownConfigured {
-		injectFreshTagFindings(ctx, report, record, tagger)
+	// Nudge on freshly pinned tags that have no effective cooldown.
+	if tagger != nil {
+		injectFreshTagFindings(ctx, report, record, tagger, cooldownCfg)
 	}
 
 	// Write the run log.

@@ -517,6 +517,7 @@ func TestPresentResults_RepoFindingsSurface(t *testing.T) {
 			DocURL:     "https://example.com/docs",
 		}},
 	}
+
 	PresentResults(u, report, true, false)
 
 	got := buf.String()
@@ -525,6 +526,28 @@ func TestPresentResults_RepoFindingsSurface(t *testing.T) {
 	}
 	if !strings.Contains(got, "example.com/docs") {
 		t.Errorf("RepoFindings DocURL missing from terminal output:\n%s", got)
+	}
+}
+
+func TestPresentResults_CooldownWarningSurfacesReadOnly(t *testing.T) {
+	report := &checks.Report{
+		RepoFindings: []checks.Finding{{
+			Category: checks.CooldownConfigIgnored,
+			Severity: checks.SeverityWarning,
+			Detail:   "unsupported cooldown key ignored",
+		}},
+	}
+
+	u, buf := newTestUI()
+	PresentResults(u, report, true, false)
+	if !strings.Contains(buf.String(), "unsupported cooldown key ignored") {
+		t.Errorf("read-only output missing cooldown warning:\n%s", buf.String())
+	}
+
+	u, buf = newTestUI()
+	PresentResults(u, report, true, true)
+	if strings.Contains(buf.String(), "unsupported cooldown key ignored") {
+		t.Errorf("fix-mode output duplicated pin-summary warning:\n%s", buf.String())
 	}
 }
 

@@ -45,13 +45,13 @@ func appendCooldownConfigFindings(report *checks.Report, warnings []string) {
 }
 
 // injectFreshTagFindings flags tags pinned this run that were released within
-// freshTagWindow, when no cooldown is configured. Tags without a GitHub Release
+// freshTagWindow and have no effective cooldown. Tags without a GitHub Release
 // have no date and aren't flagged — same blind spot the cooldown filter has.
-func injectFreshTagFindings(ctx context.Context, report *checks.Report, record *pin.Record, tagger *tag.Lister) {
+func injectFreshTagFindings(ctx context.Context, report *checks.Report, record *pin.Record, tagger *tag.Lister, cooldown tag.CooldownConfig) {
 	seen := map[string]bool{} // NWO@tag → already flagged
 	for _, e := range record.Pinned() {
 		owner, repo, ok := strings.Cut(e.NWO, "/")
-		if !ok {
+		if !ok || cooldown.CooldownDays(owner, repo) > 0 {
 			continue
 		}
 		tagName := e.Tag

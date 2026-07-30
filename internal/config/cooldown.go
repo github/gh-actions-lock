@@ -34,10 +34,10 @@ func (c dependabotConfig) actionsCooldown() (cooldown, bool) {
 func (c cooldown) unsupportedWarnings() []string {
 	var w []string
 	if c.SemverMajorDays > 0 || c.SemverMinorDays > 0 || c.SemverPatchDays > 0 {
-		w = append(w, "Dependabot cooldown semver-major/minor/patch-days are not supported; applying default-days to all upgrades")
+		w = append(w, "gh-actions-lock ignores Dependabot cooldown semver-major/minor/patch-days because they are not supported")
 	}
 	if len(c.Include) > 0 || len(c.Exclude) > 0 {
-		w = append(w, "Dependabot cooldown include/exclude filters are not supported; applying default-days to all actions")
+		w = append(w, "gh-actions-lock ignores Dependabot cooldown include/exclude filters because they are not supported")
 	}
 	return w
 }

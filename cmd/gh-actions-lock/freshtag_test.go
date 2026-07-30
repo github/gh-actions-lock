@@ -89,12 +89,27 @@ func TestInjectFreshTagFindings(t *testing.T) {
 		{NWO: "actions/setup-go", Ref: "v5", SHA: "s2", Resolution: pin.Verified},
 	}}
 	report := &checks.Report{}
-	injectFreshTagFindings(context.Background(), report, record, tagger)
+	injectFreshTagFindings(context.Background(), report, record, tagger, tag.CooldownConfig{})
 
 	if len(report.RepoFindings) != 1 {
 		t.Fatalf("RepoFindings = %d, want 1 (Pinned fires, Verified quiet)", len(report.RepoFindings))
 	}
 	if got := report.RepoFindings[0]; got.Category != checks.FreshTag {
 		t.Errorf("category = %s, want fresh-tag", got.Category)
+	}
+
+	report = &checks.Report{}
+	injectFreshTagFindings(context.Background(), report, record, tagger, tag.CooldownConfig{DefaultDays: 3})
+	if len(report.RepoFindings) != 0 {
+		t.Fatalf("RepoFindings = %d, want 0 with an effective cooldown", len(report.RepoFindings))
+	}
+
+	report = &checks.Report{}
+	injectFreshTagFindings(context.Background(), report, record, tagger, tag.CooldownConfig{
+		DefaultDays:   3,
+		RepoOverrides: map[string]int{"actions/checkout": 0},
+	})
+	if len(report.RepoFindings) != 1 {
+		t.Fatalf("RepoFindings = %d, want 1 with a zero repo override", len(report.RepoFindings))
 	}
 }

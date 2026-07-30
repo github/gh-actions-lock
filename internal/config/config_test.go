@@ -126,6 +126,8 @@ updates:
 `)
 	if _, _, w := DependabotCooldown(semverOnly); len(w) != 1 {
 		t.Errorf("semver-minor-days alone: warnings = %v, want 1", w)
+	} else if w[0] != "gh-actions-lock ignores Dependabot cooldown semver-major/minor/patch-days because they are not supported" {
+		t.Errorf("semver-minor-days warning = %q", w[0])
 	}
 
 	excludeOnly := writeDependabot(t, "dependabot.yml", `
@@ -138,5 +140,7 @@ updates:
 `)
 	if _, _, w := DependabotCooldown(excludeOnly); len(w) != 1 {
 		t.Errorf("exclude alone: warnings = %v, want 1", w)
+	} else if w[0] != "gh-actions-lock ignores Dependabot cooldown include/exclude filters because they are not supported" {
+		t.Errorf("exclude warning = %q", w[0])
 	}
 }

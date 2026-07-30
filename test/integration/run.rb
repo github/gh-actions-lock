@@ -621,7 +621,7 @@ def wire_checkout_fresh(s, token)
        JSON.generate([{ tag_name: "v4", published_at: one_day_ago, immutable: false }])]
     end
   end
-  s.env("GH_TOKEN" => token)
+  s.env("GH_TOKEN" => token, "GH_ACTIONS_LOCK_CONFIG" => "/dev/null")
 end
 
 # ── Stub server wiring per scenario ────────────────────────────────────
