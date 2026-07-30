@@ -84,11 +84,10 @@ func appendDockerWarning(warnings *[]string, seen map[string]bool, value string)
 		return true
 	}
 	seen[value] = true
-	detail := "container image tags are mutable"
 	if strings.Contains(strings.TrimPrefix(value, "docker://"), "@") {
-		detail = "container image digests must be maintained separately"
+		return true
 	}
-	*warnings = append(*warnings, fmt.Sprintf("%s is not covered by the actions lockfile; %s", value, detail))
+	*warnings = append(*warnings, fmt.Sprintf("%s is not covered by the actions lockfile; container image tags are mutable", value))
 	return true
 }
 

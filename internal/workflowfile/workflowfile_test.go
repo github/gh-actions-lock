@@ -61,7 +61,6 @@ jobs:
 
 	assert.Equal(t, []string{
 		"docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable",
-		"docker://alpine@sha256:0123456789abcdef is not covered by the actions lockfile; container image digests must be maintained separately",
 	}, f.ExtractActionRefs().Warnings)
 }
 
@@ -300,7 +299,6 @@ func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 	assert.Empty(t, scan.Errors)
 	assert.Equal(t, []string{
 		"docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable",
-		"docker://alpine@sha256:0123456789abcdef is not covered by the actions lockfile; container image digests must be maintained separately",
 	}, scan.Warnings)
 }
 
