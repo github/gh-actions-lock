@@ -138,6 +138,13 @@ func (f *File) ExtractActionRefs() RefScan {
 			}
 			return
 		}
+		if strings.HasPrefix(value, "docker://") {
+			if !seen[value] {
+				seen[value] = true
+				scan.Warnings = append(scan.Warnings, fmt.Sprintf("%s is not covered by the actions lockfile; container image tags are mutable", value))
+			}
+			return
+		}
 		actionRef := parserlock.ParseActionRef(value)
 		if actionRef != nil {
 			dedupKey := actionRef.FullName() + "@" + actionRef.Ref

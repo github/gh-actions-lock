@@ -41,7 +41,9 @@ func TestExtractActionRefsMixed(t *testing.T) {
 
 	assert.Len(t, localPaths, 1)
 	assert.Equal(t, "./local-action", localPaths[0])
-	assert.Empty(t, warnings)
+	assert.Equal(t, []string{
+		"docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable",
+	}, warnings)
 }
 
 func TestParseRejectsUsesExpression(t *testing.T) {

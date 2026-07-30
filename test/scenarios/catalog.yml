@@ -433,6 +433,21 @@ scenarios:
       exit: 2
       output_contains: ["can't contain an expression"]
 
+  - name: docker_uses_warns
+    category: workflow_parsing
+    description: "Real binary warns that docker:// image tags are mutable and outside lockfile coverage"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["docker://alpine:3.18"]
+    expect:
+      exit: 0
+      output_contains:
+        - "docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable"
+
   - name: local_action_skipped
     category: workflow_parsing
     description: "Local action (./path) — entire workflow skipped"
