@@ -100,7 +100,6 @@ func rewriteWorkflow(wp WorkflowPlan) error {
 		}
 	}
 
-	content = workflowfile.EnsureSentinel(content)
 	if bytes.Equal(content, wf.Content) {
 		return nil
 	}
@@ -108,8 +107,7 @@ func rewriteWorkflow(wp WorkflowPlan) error {
 }
 
 // rewriteSelfActionFiles applies each workflow's rewrites to the in-repo
-// action files it reaches via `$/…`. No sentinel comment: these are action
-// definitions, not managed workflows.
+// action files it reaches via `$/…`.
 func rewriteSelfActionFiles(plans []WorkflowPlan) error {
 	merged := make(map[string]map[string]string)
 	for _, wp := range plans {

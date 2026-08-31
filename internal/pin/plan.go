@@ -272,8 +272,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			SelfActionFiles: wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
-		// No rewrites and no plan entry yet — still include the workflow
-		// so EnsureSentinel can be applied during commit.
+		// Keep the workflow in the plan so its lockfile entry is updated.
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 	}
 
