@@ -132,7 +132,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
-	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
+	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0 ||
+		opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0
 
 	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
@@ -179,7 +180,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
-		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
+		unresolved := unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)
+		if repinMoved {
+			entries = append(verifiedEntries(wr.Inventory, wr.Path), unresolved...)
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+			return planResult{entries: entries, wplans: wplans}, nil
+		}
+		entries = append(entries, unresolved...)
 		if len(deps) == 0 {
 			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 			return planResult{entries: entries, wplans: wplans}, nil
@@ -602,7 +609,6 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 	return out
 }
 
-// repinsMoved reports whether this run re-resolves benign ref-moved deps.
 func repinsMoved(opts PlanOptions) bool {
 	return opts.Relock || opts.AcceptMoved
 }

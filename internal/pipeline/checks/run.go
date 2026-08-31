@@ -31,6 +31,16 @@ func RunChecks(ctx context.Context, pw ParsedWorkflow, lf parserlock.File, r Che
 
 	if r != nil {
 		out = append(out, checkMisleadingSha(ctx, pw, r)...)
+		for _, d := range pw.RecordedDeps {
+			pin, ok := parserlock.ParsePin(d.Key())
+			if !ok {
+				continue
+			}
+			depIndex[pin.IndexKey()] = lockedPin{
+				Pin:    pin,
+				Commit: d.HashAlgoOrDetect() + "-" + d.SHA,
+			}
+		}
 		refMoved := checkRefMovedAndForgery(ctx, pw, depIndex, r)
 		out = append(out, refMoved...)
 	}

@@ -1275,3 +1275,113 @@ jobs:
 	assert.Contains(t, lock, "sha1-"+parentSHA)
 	assert.Contains(t, lock, "'old/child@v1'")
 }
+
+func TestCheck_Relock_BumpsMovedTransitive(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	parentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	oldChildSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	liveChildSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	composite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: old/child@v1\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", parentSHA, composite),
+				"a1": testRepoResponse("old/child", liveChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/old/child/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": oldChildSHA},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`)
+	writeTempCompositeLockfile(t, parentSHA, "old/child", "v1", oldChildSHA)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--relock", "--no-narrow", workflowPath)
+	require.NoError(t, err)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+parentSHA)
+	assert.Contains(t, lock, "sha1-"+liveChildSHA)
+	assert.NotContains(t, lock, "sha1-"+oldChildSHA)
+}
+
+func TestCheck_Relock_PreservesClosureOnPartialResolution(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	oldParentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveParentSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	oldChildSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	liveComposite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: new/child@v2\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveParentSHA, liveComposite),
+				"a1": testRepoResponse("old/child", oldChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("new", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": nil},
+			"errors": []any{
+				map[string]any{
+					"type":    "FORBIDDEN",
+					"message": "Resource protected by organization SAML enforcement.",
+					"path":    []any{"a0"},
+					"extensions": map[string]any{
+						"saml_failure": true,
+					},
+				},
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": oldParentSHA},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`)
+	writeTempCompositeLockfile(t, oldParentSHA, "old/child", "v1", oldChildSHA)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--relock", "--no-narrow", "--json=findings", workflowPath,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `"category": "reachability-unknown"`)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+oldParentSHA)
+	assert.NotContains(t, lock, "sha1-"+liveParentSHA)
+	assert.Contains(t, lock, "'old/child@v1'")
+	assert.NotContains(t, lock, "'new/child@v2'")
+}
