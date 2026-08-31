@@ -616,6 +616,8 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 			Ref:        inv.Dep.Ref,
 			SHA:        inv.Dep.SHA,
 			Resolution: Verified,
+			OnBranch:   inv.Dep.Branch,
+			Tag:        inv.Dep.Tag,
 			Workflows:  []string{path},
 			Direct:     inv.Direct,
 			RequiredBy: inv.Parents,
@@ -648,6 +650,20 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		// slow-path guard in narrowDirectDeps: a verified v4 entry the
 		// user kept as v4 must not be narrowed on a no-op re-pin.
 		if opts.prevImpreciseNWO[strings.ToLower(e.NWO)] {
+			continue
+		}
+		if parserlock.IsFullSha(e.Ref) {
+			newRef := e.Tag
+			if newRef == "" {
+				newRef = e.OnBranch
+			}
+			if newRef == "" {
+				continue
+			}
+			oldRef := e.Ref
+			rewrites[e.NWO+"@"+oldRef] = e.NWO + "@" + newRef
+			e.Ref = newRef
+			e.AutoFixedRef = oldRef
 			continue
 		}
 		// Only narrow refs that are already version-shaped but imprecise

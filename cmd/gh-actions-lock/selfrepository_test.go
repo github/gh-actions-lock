@@ -97,3 +97,56 @@ jobs:
 	_, readErr = os.Stat(lockPath)
 	assert.ErrorIs(t, readErr, os.ErrNotExist)
 }
+
+func TestExistingSHARefRewritesSelfRepositoryAction(t *testing.T) {
+	const sha = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
+	transport := &requestCountingTransport{}
+
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	actionPath := filepath.Join(dir, ".github", "actions", "local", "action.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actionPath), 0o755))
+	require.NoError(t, os.WriteFile(actionPath, []byte(`name: Local
+runs:
+  using: composite
+  steps:
+    - uses: actions/create-github-app-token@`+sha+`
+`), 0o600))
+
+	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+	require.NoError(t, os.WriteFile(workflowPath, []byte(`name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: $/.github/actions/local
+`), 0o600))
+	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(`version: 'v0.0.2'
+workflows:
+    '.github/workflows/ci.yml':
+        - 'actions/create-github-app-token@`+sha+`'
+dependencies:
+    'actions/create-github-app-token@`+sha+`':
+        ref: 'v3.2.0'
+        commit: 'sha1-`+sha+`'
+        owner_id: 44036562
+        repo_id: 642580244
+`), 0o600))
+	t.Chdir(dir)
+
+	_, _, err := runCommandWithHTTP(t, transport, filepath.Join(".github", "workflows", "ci.yml"))
+	require.NoError(t, err)
+	assert.Zero(t, transport.calls.Load())
+
+	action, err := os.ReadFile(actionPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(action), "uses: actions/create-github-app-token@v3.2.0")
+
+	lock, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(lock), "'actions/create-github-app-token@v3.2.0'")
+	assert.NotContains(t, string(lock), "'actions/create-github-app-token@"+sha+"'")
+}
