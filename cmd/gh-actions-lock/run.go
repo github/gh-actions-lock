@@ -380,6 +380,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		NoNarrow:    opts.noNarrow,
 		AcceptMoved: opts.acceptMoved,
 		Relock:      opts.relock,
+		PartialScan: !fullScan,
 	})
 	endPlan()
 	if planErr != nil {

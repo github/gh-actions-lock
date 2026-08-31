@@ -41,13 +41,16 @@ type PlanOptions struct {
 	// findings untouched so possible tampering stays a hard error.
 	Relock bool
 
+	// PartialScan reports that explicit workflow paths, rather than the full
+	// workflow directory, define this run's mutation authority.
+	PartialScan bool
+
 	// prevImpreciseNWO is computed once in Plan() from the global lockfile
 	// state. It holds lowercased NWOs that are already recorded with a
 	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
 	// for these to respect the user's prior precision choice and avoid
 	// creating duplicate dep entries at different ref granularities.
 	prevImpreciseNWO map[string]bool
-	partialScan      bool
 
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
@@ -81,19 +84,6 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	if opts.prevImpreciseNWO == nil && opts.Store != nil {
 		opts.prevImpreciseNWO = impreciseDirectNWOs(opts.Store)
 	}
-	if opts.Store != nil {
-		scanned := make(map[string]bool, len(report.Workflows))
-		for _, wr := range report.Workflows {
-			scanned[workflowfile.KeyFromPath(wr.Path)] = true
-		}
-		for _, key := range opts.Store.WorkflowKeys() {
-			if !scanned[key] {
-				opts.partialScan = true
-				break
-			}
-		}
-	}
-
 	results := make([]planResult, len(report.Workflows))
 	var planErr error
 	poolErr := pinpool.RunTyped(opts.Pool, ctx, "Planning pins",
@@ -142,7 +132,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 	rewriteRefKeys := actionRefKeys(rewriteRefs)
 	selfActionRefKeys := actionRefKeys(wr.SelfActionRefs)
-	if opts.partialScan {
+	if opts.PartialScan && !opts.NoNarrow && opts.Tagger != nil {
 		// ponytail: refuse any local-action repair in a partial scan; track
 		// action-to-workflow ownership if this conservative boundary hurts.
 		for _, inv := range wr.Inventory {
