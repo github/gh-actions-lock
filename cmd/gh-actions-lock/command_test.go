@@ -1385,3 +1385,42 @@ jobs:
 	assert.Contains(t, lock, "'old/child@v1'")
 	assert.NotContains(t, lock, "'new/child@v2'")
 }
+
+func TestCheck_VerifySurfacesResolverFailure(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": nil},
+			"errors": []any{
+				map[string]any{
+					"type":    "FORBIDDEN",
+					"message": "Resource protected by organization SAML enforcement.",
+					"path":    []any{"a0"},
+					"extensions": map[string]any{
+						"saml_failure": true,
+					},
+				},
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`,
+		"example/action@main=sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--verify", workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "Dependency verification was inconclusive")
+	assert.Contains(t, stderr, "could not re-resolve actions")
+	assert.Equal(t, 1, strings.Count(stderr, "Dependency verification was inconclusive"))
+}

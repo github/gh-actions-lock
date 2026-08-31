@@ -323,6 +323,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 				console.TermDetail("%s", hint)
 			}
 		}
+		if opts.jsonFields == "" {
+			renderResolverWarning(console, report)
+		}
 		if !valid {
 			if opts.jsonFields == "" {
 				hasFixable := format.PresentReadOnlyFailures(console, report)
