@@ -251,13 +251,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			}
 		}
 		deps = filtered
-		// Rebuild the root tracker against the filtered slice.
+		// Filtering changes indices, so both index-aligned trackers must follow.
 		rootTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
+		rewriteTracker = lockfile.NewDirectTracker(rewriteRefs, deps)
 	}
 	for k, v := range rlRewrites {
 		rewrites[k] = v
 	}
-	addTransferredRepositoryRewrites(deps, rewriteTracker, rewrites)
+	requiredRewrites := addTransferredRepositoryRewrites(deps, rewriteTracker, rewrites)
 
 	// Update parent map keys to reflect narrowed/normalized refs.
 	parentRewrites := make(map[string]string)
@@ -286,9 +287,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
-			Path:            wr.Path,
-			Rewrites:        rewrites,
-			SelfActionFiles: wr.SelfActionFiles,
+			Path:             wr.Path,
+			Rewrites:         rewrites,
+			RequiredRewrites: requiredRewrites,
+			SelfActionFiles:  wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// No rewrites and no plan entry yet — still include the workflow
@@ -330,7 +332,8 @@ func validateTransferredRepositories(deps []dep.Dependency, directTracker lockfi
 	return rekeys, nil
 }
 
-func addTransferredRepositoryRewrites(deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string) {
+func addTransferredRepositoryRewrites(deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string) map[string]string {
+	required := make(map[string]string)
 	for i, d := range deps {
 		if !directTracker.IsDirect(i) {
 			continue
@@ -340,9 +343,13 @@ func addTransferredRepositoryRewrites(deps []dep.Dependency, directTracker lockf
 			if ref.Path != "" {
 				newUse += "/" + ref.Path
 			}
-			rewrites[ref.FullName()+"@"+ref.Ref] = newUse + "@" + d.Ref
+			oldUse := ref.FullName() + "@" + ref.Ref
+			newUse += "@" + d.Ref
+			rewrites[oldUse] = newUse
+			required[oldUse] = newUse
 		}
 	}
+	return required
 }
 
 // unresolvedEntries flags findings whose refs were attempted but failed to

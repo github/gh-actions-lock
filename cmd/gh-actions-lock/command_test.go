@@ -133,6 +133,47 @@ jobs:
 	}
 }
 
+func TestCheckCommand_RejectsAnchoredMovedRepositoryRewrite(t *testing.T) {
+	const (
+		oldNWO = "krzema12/github-actions-typing"
+		newNWO = "typesafegithub/github-actions-typing"
+		ref    = "v2.2.2"
+		sha    = "9ddf35b71a482be7d8922b28e8d00df16b77e315"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("krzema12", "github-actions-typing"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(newNWO, sha, nodeActionYAML),
+			},
+		}),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - &typing
+        uses: `+oldNWO+`@`+ref+`
+      - *typing
+`)
+	before, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+	require.ErrorContains(t, err, "cannot update an anchored or aliased `uses:` value")
+	after, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, string(before), string(after))
+	_, statErr := os.Stat(filepath.Join(".github", "workflows", "actions.lock"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func TestCheckCommand_RejectsMovedRepositoryInRemoteComposite(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)

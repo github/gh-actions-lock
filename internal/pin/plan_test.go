@@ -58,6 +58,22 @@ func TestTransferredRepositoryRejectsRemoteParentEvenWhenAlsoDirect(t *testing.T
 	assert.Equal(t, "root/composite@v2", transferred.Parent)
 }
 
+func TestTransferredRepositoryRewriteAfterEarlierLookupIssue(t *testing.T) {
+	original := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"}
+	deps := []dep.Dependency{
+		{NWO: "remote/orphan", Ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{NWO: "new/action", OriginalRefs: []parserlock.ActionRef{original}, Ref: "v1"},
+	}
+	rewriteRefs := []parserlock.ActionRef{original}
+
+	deps = deps[1:]
+	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
+	rewrites := map[string]string{}
+	required := addTransferredRepositoryRewrites(deps, rewriteTracker, rewrites)
+
+	assert.Equal(t, "new/action@v1", required["old/action@v1"])
+}
+
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
 // workflow fails resolution (e.g. repo not found), only the failed ref is
 // marked Unresolved. The successful ref proceeds through reachability and
