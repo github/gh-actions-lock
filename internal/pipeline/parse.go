@@ -52,6 +52,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		// rewritten alongside the workflow, so narrowing stays in sync.
 		pw.RewriteRefs = pw.Refs
 		pw.SelfActionFiles = selfScan.ActionFiles
+		pw.SelfActionRefs = selfScan.Refs
 		pw.LocalPaths = mergeStrings(scan.LocalPaths, selfScan.LocalPaths)
 		pw.SelfRepositoryRefs = mergeStrings(scan.SelfRepositoryRefs, selfScan.SelfRepositoryRefs)
 		pw.SelfRepositoryRefErrs = mergeStrings(scan.SelfRepositoryRefErrs, selfScan.SelfRepositoryRefErrs)

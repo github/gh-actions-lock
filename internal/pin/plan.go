@@ -47,6 +47,7 @@ type PlanOptions struct {
 	// for these to respect the user's prior precision choice and avoid
 	// creating duplicate dep entries at different ref granularities.
 	prevImpreciseNWO map[string]bool
+	partialScan      bool
 
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
@@ -79,6 +80,18 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	// permanently veto narrowing every direct use of the same NWO.
 	if opts.prevImpreciseNWO == nil && opts.Store != nil {
 		opts.prevImpreciseNWO = impreciseDirectNWOs(opts.Store)
+	}
+	if opts.Store != nil {
+		scanned := make(map[string]bool, len(report.Workflows))
+		for _, wr := range report.Workflows {
+			scanned[workflowfile.KeyFromPath(wr.Path)] = true
+		}
+		for _, key := range opts.Store.WorkflowKeys() {
+			if !scanned[key] {
+				opts.partialScan = true
+				break
+			}
+		}
 	}
 
 	results := make([]planResult, len(report.Workflows))
@@ -128,6 +141,17 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		rewriteRefs = wr.ActionRefs
 	}
 	rewriteRefKeys := actionRefKeys(rewriteRefs)
+	selfActionRefKeys := actionRefKeys(wr.SelfActionRefs)
+	if opts.partialScan {
+		// ponytail: refuse any local-action repair in a partial scan; track
+		// action-to-workflow ownership if this conservative boundary hurts.
+		for _, inv := range wr.Inventory {
+			key := strings.ToLower(inv.Dep.NWO) + "@" + inv.Dep.Ref
+			if parserlock.IsFullSha(inv.Dep.Ref) && (inv.Dep.Tag != "" || inv.Dep.Branch != "") && selfActionRefKeys[key] {
+				return planResult{}, fmt.Errorf("cannot rewrite %s in a shared local action during a partial workflow scan; scan all workflows", key)
+			}
+		}
+	}
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.

@@ -21,6 +21,7 @@ type ParsedWorkflow struct {
 	// SelfActionFiles are the in-repo action definition files reached through
 	// step-level `$/…` refs. They are rewritten alongside the workflow.
 	SelfActionFiles    []string
+	SelfActionRefs     []parserlock.ActionRef
 	LocalPaths         []string
 	SelfRepositoryRefs []string
 	// SelfRepositoryRefErrs holds malformed `$/…@ref` values (the invalid form).

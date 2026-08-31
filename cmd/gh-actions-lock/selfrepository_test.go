@@ -115,23 +115,27 @@ runs:
 
 	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
-	require.NoError(t, os.WriteFile(workflowPath, []byte(`name: CI
+	workflow := []byte(`name: CI
 on: push
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: $/.github/actions/local
-`), 0o600))
+`)
+	require.NoError(t, os.WriteFile(workflowPath, workflow, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(workflowPath), "other.yml"), workflow, 0o600))
 	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
-	require.NoError(t, os.WriteFile(lockPath, []byte(`version: 'v0.0.2'
+	originalLock := []byte(`version: 'v0.0.2'
 workflows:
     '.github/workflows/ci.yml':
-        - 'actions/create-github-app-token@`+sha+`'
+        - 'actions/create-github-app-token@` + sha + `'
+    '.github/workflows/other.yml':
+        - 'actions/create-github-app-token@` + sha + `'
 dependencies:
-    'actions/create-github-app-token@`+sha+`':
+    'actions/create-github-app-token@` + sha + `':
         ref: 'v3.2.0'
-        commit: 'sha1-`+sha+`'
+        commit: 'sha1-` + sha + `'
         owner_id: 44036562
         repo_id: 642580244
         uses:
@@ -141,18 +145,28 @@ dependencies:
         commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         owner_id: 44036562
         repo_id: 197814629
-`), 0o600))
+`)
+	require.NoError(t, os.WriteFile(lockPath, originalLock, 0o600))
 	t.Chdir(dir)
 
 	_, _, err := runCommandWithHTTP(t, transport, filepath.Join(".github", "workflows", "ci.yml"))
+	require.ErrorContains(t, err, "partial workflow scan")
+	action, readErr := os.ReadFile(actionPath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(action), "uses: actions/create-github-app-token@"+sha)
+	lock, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, originalLock, lock)
+
+	_, _, err = runCommandWithHTTP(t, transport)
 	require.NoError(t, err)
 	assert.Zero(t, transport.calls.Load())
 
-	action, err := os.ReadFile(actionPath)
+	action, err = os.ReadFile(actionPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(action), "uses: actions/create-github-app-token@v3.2.0")
 
-	lock, err := os.ReadFile(lockPath)
+	lock, err = os.ReadFile(lockPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(lock), "'actions/create-github-app-token@v3.2.0'")
 	assert.Contains(t, string(lock), "'actions/checkout@v4'")
