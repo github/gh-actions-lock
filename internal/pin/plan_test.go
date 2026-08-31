@@ -2,6 +2,9 @@ package pin
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -59,19 +62,82 @@ func TestTransferredRepositoryRejectsRemoteParentEvenWhenAlsoDirect(t *testing.T
 }
 
 func TestTransferredRepositoryRewriteAfterEarlierLookupIssue(t *testing.T) {
+	const (
+		orphanSHA      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		transferredSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.GraphQLForRepo("orphan", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "orphan/action",
+					"object": map[string]any{
+						"oid":  orphanSHA,
+						"file": map[string]any{"object": map[string]any{"text": "runs:\n  using: node20\n"}},
+					},
+				},
+				"a1": map[string]any{
+					"nameWithOwner": "new/action",
+					"object": map[string]any{
+						"oid":  transferredSHA,
+						"file": map[string]any{"object": map[string]any{"text": "runs:\n  using: node20\n"}},
+					},
+				},
+			},
+		}),
+	)
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodPost {
+			return reg.RoundTrip(req)
+		}
+		status, body := http.StatusOK, "[]"
+		if strings.HasSuffix(req.URL.Path, "/repos/orphan/action") {
+			body = `{"default_branch":"main"}`
+		} else if strings.Contains(req.URL.Path, "/git/ref/") {
+			status, body = http.StatusNotFound, `{"message":"Not Found"}`
+		}
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    req,
+		}, nil
+	})
+	pool := pinpool.New(2, nil)
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(transport))
+	require.NoError(t, err)
 	original := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"}
-	deps := []dep.Dependency{
-		{NWO: "remote/orphan", Ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-		{NWO: "new/action", OriginalRefs: []parserlock.ActionRef{original}, Ref: "v1"},
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/test.yml",
+		Findings: []checks.Finding{{
+			ActionRef:  &original,
+			Category:   "unpinned",
+			Severity:   checks.SeverityWarning,
+			Confidence: checks.ConfidenceHigh,
+		}},
+		ActionRefs: []parserlock.ActionRef{
+			{Owner: "orphan", Repo: "action", Ref: orphanSHA},
+			original,
+		},
+		RewriteRefs: []parserlock.ActionRef{original},
 	}
-	rewriteRefs := []parserlock.ActionRef{original}
 
-	deps = deps[1:]
-	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
-	rewrites := map[string]string{}
-	required := addTransferredRepositoryRewrites(deps, rewriteTracker, rewrites)
+	result, err := planWorkflow(context.Background(), wr, PlanOptions{
+		Resolver: resolver,
+		Pool:     pool,
+	}, func(string) {})
+	require.NoError(t, err)
+	reg.Verify(t)
+	require.Len(t, result.wplans, 1)
+	assert.Equal(t, "new/action@v1", result.wplans[0].RequiredRewrites["old/action@v1"])
+}
 
-	assert.Equal(t, "new/action@v1", required["old/action@v1"])
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
