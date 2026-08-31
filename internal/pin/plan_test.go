@@ -414,12 +414,13 @@ func TestPlanWorkflow_InvalidSelfRepositoryRefDoesNotMutateWorkflow(t *testing.T
 // (Resolver + ReverseLookup + Tagger), confirming that --no-narrow protects the
 // SHA from rewriting and that the default path still narrows it to a tag.
 func TestNoNarrow_BareSHA(t *testing.T) {
-	const sha = "abc1230000000000000000000000000000000000"
+	const (
+		sha         = "b6e2e70617bc3265edd6dab6c906732b2f1ae151"
+		ancestorSHA = "09f2f74827fd0000000000000000000000000000"
+	)
 
-	// newSlowPathFixtures wires up a Resolver and a Tagger that would narrow
-	// the SHA to v4.2.1.
 	// The report has a Finding so NeedsAttention() is true and the slow path runs.
-	newSlowPathFixtures := func(t *testing.T, reverseLookup bool) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
+	newSlowPathFixtures := func(t *testing.T) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
 		t.Helper()
 		reg := &httpmock.Registry{}
 
@@ -439,20 +440,16 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			}),
 		)
 
-		if reverseLookup {
-			reg.Register(
-				httpmock.REST("GET", `repos/actions/checkout/branches`),
-				httpmock.JSONResponse([]any{
-					map[string]any{"name": "main", "commit": map[string]any{"sha": sha}},
-				}),
-			)
-		}
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/branches`),
+			httpmock.JSONResponse(httpmock.BranchListResponse("main", sha)),
+		)
 		reg.Register(
 			httpmock.REST("GET", `repos/actions/checkout/tags`),
-			httpmock.JSONResponse([]any{
-				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
-				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
-			}),
+			httpmock.JSONResponse(httpmock.TagListResponse(
+				"v21", sha,
+				"v3.1.4", ancestorSHA,
+			)),
 		)
 
 		pool := pinpool.New(2, nil)
@@ -478,7 +475,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	}
 
 	t.Run("no-narrow preserves bare SHA through ReverseLookup", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, true)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 
 		opts := PlanOptions{
 			Resolver: resolver,
@@ -503,8 +500,8 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite when --no-narrow")
 	})
 
-	t.Run("default narrows bare SHA to tag", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
+	t.Run("default narrows bare SHA to exact major tag", func(t *testing.T) {
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 
 		opts := PlanOptions{
 			Resolver: resolver,
@@ -523,7 +520,9 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			}
 		}
 		require.Len(t, pinned, 1, "expected exactly one pinned entry")
-		assert.Equal(t, "v4.2.1", pinned[0].Ref, "bare SHA should be narrowed to full semver tag")
+		assert.Equal(t, "v21", pinned[0].Ref)
+		assert.Equal(t, sha, pinned[0].SHA)
+		assert.Equal(t, "v21", pinned[0].Tag)
 		require.Len(t, result.wplans, 1)
 		assert.Contains(t, result.wplans[0].Rewrites,
 			"actions/checkout@"+sha,

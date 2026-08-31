@@ -346,23 +346,7 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		if parserlock.IsFullSha(dep.Ref) {
 			if opts.NoNarrow {
 				narrowedNWOs[strings.ToLower(dep.NWO)] = true
-				continue
 			}
-			patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA, "")
-			if err != nil {
-				continue
-			}
-			if patchTag == "" {
-				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA, "")
-				if err != nil || patchTag == "" {
-					continue
-				}
-			}
-			oldUses := dep.NWO + "@" + dep.Ref
-			newUses := dep.NWO + "@" + patchTag
-			rewrites[oldUses] = newUses
-			dep.Ref = patchTag
-			narrowedNWOs[strings.ToLower(dep.NWO)] = true
 			continue
 		}
 
@@ -385,16 +369,8 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		}
 
 		patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, dep.SHA, dep.Ref)
-		if err != nil {
+		if err != nil || patchTag == "" {
 			continue
-		}
-		// No exact tag match - if the repo publishes semver releases,
-		// walk back to the latest tag that's an ancestor of this SHA.
-		if patchTag == "" {
-			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA, dep.Ref)
-			if err != nil || patchTag == "" {
-				continue
-			}
 		}
 		oldUses := dep.NWO + "@" + dep.Ref
 		newUses := dep.NWO + "@" + patchTag
@@ -662,16 +638,9 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		if sv.IsFull() {
 			continue
 		}
-		// Try exact tag match, then ancestor fallback.
 		patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, e.SHA, e.Ref)
-		if err != nil {
+		if err != nil || patchTag == "" {
 			continue
-		}
-		if patchTag == "" {
-			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, e.SHA, e.Ref)
-			if err != nil || patchTag == "" {
-				continue
-			}
 		}
 		oldRef := e.Ref
 		oldUses := e.NWO + "@" + oldRef

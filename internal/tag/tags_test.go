@@ -2,7 +2,6 @@ package tag
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
@@ -67,88 +66,6 @@ func TestListTags_SemverOrdering(t *testing.T) {
 	}
 }
 
-func TestBestAncestorTag_RefFamily(t *testing.T) {
-	const headSHA = "ffffffffffffffffffffffffffffffffffffffff"
-
-	tests := []struct {
-		name         string
-		ref          string
-		tags         any
-		ancestorSHAs []string
-		want         string
-	}{
-		{
-			name: "major ref excludes another major",
-			ref:  "v18",
-			tags: httpmock.TagListResponse(
-				"v3.12.0", "3333333333333333333333333333333333333333",
-			),
-			ancestorSHAs: []string{"3333333333333333333333333333333333333333"},
-		},
-		{
-			name: "major ref accepts its major",
-			ref:  "v4",
-			tags: httpmock.TagListResponse(
-				"v5.0.0", "5555555555555555555555555555555555555555",
-				"v4.2.1", "4444444444444444444444444444444444444444",
-			),
-			ancestorSHAs: []string{
-				"5555555555555555555555555555555555555555",
-				"4444444444444444444444444444444444444444",
-			},
-			want: "v4.2.1",
-		},
-		{
-			name: "minor ref accepts its minor",
-			ref:  "v4.2",
-			tags: httpmock.TagListResponse(
-				"v4.3.0", "4343434343434343434343434343434343434343",
-				"v4.2.1", "4242424242424242424242424242424242424242",
-			),
-			ancestorSHAs: []string{
-				"4343434343434343434343434343434343434343",
-				"4242424242424242424242424242424242424242",
-			},
-			want: "v4.2.1",
-		},
-		{
-			name:         "bare SHA accepts any family",
-			tags:         httpmock.TagListResponse("v3.12.0", "3333333333333333333333333333333333333333"),
-			ancestorSHAs: []string{"3333333333333333333333333333333333333333"},
-			want:         "v3.12.0",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := &httpmock.Registry{}
-			reg.Register(
-				httpmock.REST("GET", `repos/actions/checkout/tags`),
-				httpmock.JSONResponse(tt.tags),
-			)
-			reg.Register(
-				httpmock.REST("GET", `repos/actions/checkout/releases`),
-				httpmock.JSONResponse([]map[string]any{}),
-			)
-			for _, ancestorSHA := range tt.ancestorSHAs {
-				reg.Register(
-					httpmock.REST("GET", fmt.Sprintf(`repos/actions/checkout/compare/%s\.\.\.%s`, ancestorSHA, headSHA)),
-					httpmock.JSONResponse(httpmock.CompareAncestorResponse(ancestorSHA)),
-				)
-			}
-
-			tl := NewListerForTest(t, reg)
-			got, err := tl.BestAncestorTag(context.Background(), "actions", "checkout", headSHA, tt.ref)
-			if err != nil {
-				t.Fatalf("BestAncestorTag: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("BestAncestorTag() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestBestPatchTagForSHA_RefFamily(t *testing.T) {
 	const sha = "ffffffffffffffffffffffffffffffffffffffff"
 
@@ -174,11 +91,6 @@ func TestBestPatchTagForSHA_RefFamily(t *testing.T) {
 			ref:  "v4.2",
 			tags: httpmock.TagListResponse("v4.3.0", sha, "v4.2.1", sha),
 			want: "v4.2.1",
-		},
-		{
-			name: "bare SHA accepts any family",
-			tags: httpmock.TagListResponse("v3.12.0", sha),
-			want: "v3.12.0",
 		},
 	}
 

@@ -67,6 +67,75 @@ jobs:
 	assert.Empty(t, payload.Findings)
 }
 
+func TestCheck_BareSHAUsesExactMajorTagAndVerifiesLocally(t *testing.T) {
+	const (
+		sha         = "b6e2e70617bc3265edd6dab6c906732b2f1ae151"
+		ancestorSHA = "09f2f74827fd0000000000000000000000000000"
+	)
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.GraphQLForRepo("dawidd6", "action-download-artifact"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("dawidd6/action-download-artifact", sha, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact$`),
+		httpmock.JSONResponse(map[string]any{
+			"default_branch": "main",
+			"id":             2,
+			"owner":          map[string]any{"id": 1},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{
+			"ref": "refs/heads/main", "object": map[string]any{"sha": sha, "type": "commit"},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse(
+			"v21", sha,
+			"v3.1.4", ancestorSHA,
+		)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dawidd6/action-download-artifact@b6e2e70617bc3265edd6dab6c906732b2f1ae151
+`)
+
+	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+
+	workflow, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(workflow), "dawidd6/action-download-artifact@v21")
+	assert.NotContains(t, string(workflow), "@v3.1.4")
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "'dawidd6/action-download-artifact@v21':")
+	assert.Contains(t, lock, "ref: 'v21'")
+	assert.Contains(t, lock, "commit: 'sha1-"+sha+"'")
+	assert.NotContains(t, lock, "v3.1.4")
+
+	_, _, err = runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", workflowPath)
+	require.NoError(t, err)
+}
+
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
 
 func testRepoResponse(nameWithOwner, oid, actionYAML string) map[string]any {
