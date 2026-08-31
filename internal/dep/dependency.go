@@ -15,7 +15,8 @@ import (
 // resolver traversal, and lockfile serialization — never persisted on disk
 // and not part of any public API.
 type Dependency struct {
-	NWO string // owner/repo (no path)
+	NWO          string // owner/repo (no path)
+	OriginalRefs []parserlock.ActionRef
 	// Path is the optional sub-action subpath as written in `uses:`
 	// (e.g. "save" for actions/cache/save). It is preserved on the
 	// in-memory dep so resolver-time graph traversal can fetch the
@@ -78,11 +79,24 @@ func detectHashAlgo(hash string) string {
 // Dedup returns a copy of deps with duplicates (by Key) removed,
 // preserving first-seen order.
 func Dedup(deps []Dependency) []Dependency {
-	seen := make(map[string]bool, len(deps))
+	seen := make(map[string]int, len(deps))
 	out := make([]Dependency, 0, len(deps))
 	for _, d := range deps {
-		if k := d.Key(); !seen[k] {
-			seen[k] = true
+		k := d.Key()
+		if idx, ok := seen[k]; ok {
+			have := make(map[string]bool, len(out[idx].OriginalRefs))
+			for _, ref := range out[idx].OriginalRefs {
+				have[ref.FullName()+"@"+ref.Ref] = true
+			}
+			for _, ref := range d.OriginalRefs {
+				refKey := ref.FullName() + "@" + ref.Ref
+				if !have[refKey] {
+					out[idx].OriginalRefs = append(out[idx].OriginalRefs, ref)
+					have[refKey] = true
+				}
+			}
+		} else {
+			seen[k] = len(out)
 			out = append(out, d)
 		}
 	}

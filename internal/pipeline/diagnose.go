@@ -127,6 +127,8 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	parentMap := map[string][]string{}
 	if r != nil {
 		parentMap = resolvedParents
+		wr.ResolvedDeps = liveDeps
+		wr.ResolvedParents = resolvedParents
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 

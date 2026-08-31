@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -15,6 +16,47 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTransferredRepositoryRewritePreservesSubpath(t *testing.T) {
+	deps := []dep.Dependency{{
+		NWO: "new/action",
+		OriginalRefs: []parserlock.ActionRef{{
+			Owner: "old", Repo: "action", Path: "sub", Ref: "v1.2.3",
+		}},
+		Path: "sub",
+		Ref:  "v1.2.3",
+	}}
+	refs := []parserlock.ActionRef{{
+		Owner: "old", Repo: "action", Path: "sub", Ref: "v1.2.3",
+	}}
+	tracker := lockfile.NewDirectTracker(refs, deps)
+
+	rekeys, err := validateTransferredRepositories(deps, tracker, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "new/action@v1.2.3", rekeys["old/action@v1.2.3"])
+
+	rewrites := map[string]string{}
+	addTransferredRepositoryRewrites(deps, tracker, rewrites)
+	assert.Equal(t, "new/action/sub@v1.2.3", rewrites["old/action/sub@v1.2.3"])
+}
+
+func TestTransferredRepositoryRejectsRemoteParentEvenWhenAlsoDirect(t *testing.T) {
+	original := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"}
+	deps := []dep.Dependency{{
+		NWO:          "new/action",
+		OriginalRefs: []parserlock.ActionRef{original},
+		Ref:          "v1",
+	}}
+	tracker := lockfile.NewDirectTracker([]parserlock.ActionRef{original}, deps)
+
+	_, err := validateTransferredRepositories(deps, tracker, dep.ParentMap{
+		"old/action@v1": {"root/composite@v2"},
+	})
+
+	var transferred *resolve.TransferredRepositoryError
+	require.ErrorAs(t, err, &transferred)
+	assert.Equal(t, "root/composite@v2", transferred.Parent)
+}
 
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
 // workflow fails resolution (e.g. repo not found), only the failed ref is

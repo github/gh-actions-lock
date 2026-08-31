@@ -101,6 +101,30 @@ func TestParseActionFileResponse_AnnotatedTagPeeled(t *testing.T) {
 	}
 }
 
+func TestParseActionFileResponse_CanonicalizesMovedRepository(t *testing.T) {
+	refs := []ActionFileRequest{{
+		Owner: "krzema12", Repo: "github-actions-typing", Ref: "v2.2.2",
+	}}
+	data := map[string]json.RawMessage{
+		"a0": json.RawMessage(`{"nameWithOwner":"typesafegithub/github-actions-typing","object":{"oid":"9ddf35b71a482be7d8922b28e8d00df16b77e315"}}`),
+	}
+
+	results := parseActionFileResponse(data, refs, map[string]int{"a0": 0}, nil, "")
+
+	if results[0].Err != nil {
+		t.Fatalf("unexpected error: %v", results[0].Err)
+	}
+	if results[0].OriginalNWO != "krzema12/github-actions-typing" {
+		t.Fatalf("original repository = %q", results[0].OriginalNWO)
+	}
+	if got := results[0].Owner + "/" + results[0].Repo; got != "typesafegithub/github-actions-typing" {
+		t.Fatalf("canonical repository = %q", got)
+	}
+	if results[0].CommitOID != "9ddf35b71a482be7d8922b28e8d00df16b77e315" {
+		t.Fatalf("commit = %q", results[0].CommitOID)
+	}
+}
+
 func TestParseActionFileResponse_Errors(t *testing.T) {
 	refs := []ActionFileRequest{
 		{Owner: "actions", Repo: "checkout", Ref: "v6"},

@@ -2008,6 +2008,31 @@ scenarios:
         - expr: '.findings[0].category'
           equals: 'reachability-unknown'
 
+  - name: transferred_repository_rewritten
+    category: security
+    description: "Real compiled binary and GitHub API redirect an old repository NWO, rewrite writable workflow source, and emit canonical lock metadata"
+    needs_token: true
+    tags: [smoke]
+    flags: ["--no-narrow", "--no-interactive"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["krzema12/github-actions-typing@v2.2.2"]
+    expect:
+      exit: 0
+      lockfile_exists: true
+      lockfile_contains:
+        - "'typesafegithub/github-actions-typing@v2.2.2':"
+      lockfile_excludes:
+        - "krzema12/github-actions-typing"
+      files_contain:
+        .github/workflows/ci.yml:
+          - "uses: typesafegithub/github-actions-typing@v2.2.2"
+      files_exclude:
+        .github/workflows/ci.yml:
+          - "uses: krzema12/github-actions-typing@v2.2.2"
+
   - name: dbot_forgery_blocks
     category: dependabot
     description: "Stale pin (lockfile SHA not reachable from the ref head) produces unreachable-pin/error finding"

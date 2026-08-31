@@ -3,7 +3,9 @@ package dep
 import (
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDependencyStringRoundTrip(t *testing.T) {
@@ -53,4 +55,23 @@ func TestDependencyStringRoundTrip(t *testing.T) {
 func TestDependencyKey(t *testing.T) {
 	d := Dependency{NWO: "actions/checkout", Ref: "v4", SHA: "abc"}
 	assert.Equal(t, "actions/checkout@v4", d.Key())
+}
+
+func TestDedupMergesTransferredSources(t *testing.T) {
+	deps := []Dependency{
+		{NWO: "new/action", Ref: "v1"},
+		{
+			NWO: "new/action",
+			Ref: "v1",
+			OriginalRefs: []parserlock.ActionRef{
+				{Owner: "old", Repo: "action", Ref: "v1"},
+			},
+		},
+	}
+
+	got := Dedup(deps)
+
+	require.Len(t, got, 1)
+	require.Len(t, got[0].OriginalRefs, 1)
+	assert.Equal(t, "old/action", got[0].OriginalRefs[0].NWO())
 }

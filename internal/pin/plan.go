@@ -128,13 +128,22 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		rewriteRefs = wr.ActionRefs
 	}
 	rewriteRefKeys := actionRefKeys(rewriteRefs)
+	resolvedTracker := lockfile.NewDirectTracker(rewriteRefs, wr.ResolvedDeps)
+	_, transferErr := validateTransferredRepositories(wr.ResolvedDeps, resolvedTracker, wr.ResolvedParents)
+	if transferErr != nil {
+		return planResult{}, transferErr
+	}
+	hasTransfer := false
+	for _, d := range wr.ResolvedDeps {
+		hasTransfer = hasTransfer || len(d.OriginalRefs) > 0
+	}
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
 	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
 
-	if !wr.NeedsAttention() && !repinMoved {
+	if !wr.NeedsAttention() && !repinMoved && !hasTransfer {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
@@ -168,6 +177,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
+	if hasTransfer {
+		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
+		entries = verifiedEntries(nil, wr.Path)
+	}
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
@@ -194,6 +207,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// workflow YAML.
 	rootTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
 	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
+	canonicalRekeys, err := validateTransferredRepositories(deps, rewriteTracker, parentMap)
+	if err != nil {
+		return planResult{}, err
+	}
+	parentMap = dep.RekeyParentMap(parentMap, canonicalRekeys)
 
 	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
 	// to a symbolic tag when one exists.
@@ -239,6 +257,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	for k, v := range rlRewrites {
 		rewrites[k] = v
 	}
+	addTransferredRepositoryRewrites(deps, rewriteTracker, rewrites)
 
 	// Update parent map keys to reflect narrowed/normalized refs.
 	parentRewrites := make(map[string]string)
@@ -284,6 +303,46 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = append(entries, informationalEntries(wr, opts)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
+}
+
+func validateTransferredRepositories(deps []dep.Dependency, directTracker lockfile.DirectTracker, parentMap dep.ParentMap) (map[string]string, error) {
+	rekeys := make(map[string]string)
+	for i, d := range deps {
+		for _, ref := range d.OriginalRefs {
+			oldKey := ref.NWO() + "@" + ref.Ref
+			if parents := parentMap[oldKey]; len(parents) > 0 {
+				return nil, &resolve.TransferredRepositoryError{
+					Original:  ref.NWO(),
+					Canonical: d.NWO,
+					Parent:    parents[0],
+				}
+			}
+			if !directTracker.IsDirect(i) {
+				return nil, &resolve.TransferredRepositoryError{
+					Original:  ref.NWO(),
+					Canonical: d.NWO,
+					Parent:    "unknown",
+				}
+			}
+			rekeys[oldKey] = d.Key()
+		}
+	}
+	return rekeys, nil
+}
+
+func addTransferredRepositoryRewrites(deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string) {
+	for i, d := range deps {
+		if !directTracker.IsDirect(i) {
+			continue
+		}
+		for _, ref := range d.OriginalRefs {
+			newUse := d.NWO
+			if ref.Path != "" {
+				newUse += "/" + ref.Path
+			}
+			rewrites[ref.FullName()+"@"+ref.Ref] = newUse + "@" + d.Ref
+		}
+	}
 }
 
 // unresolvedEntries flags findings whose refs were attempted but failed to

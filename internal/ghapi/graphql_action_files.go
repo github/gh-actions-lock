@@ -27,13 +27,14 @@ func (r ActionFileRequest) NWO() string { return r.Owner + "/" + r.Repo }
 // for one ActionFileRequest. Err is non-nil when this specific ref could
 // not be resolved (e.g. not found, SSO required).
 type ActionFileResult struct {
-	Owner     string
-	Repo      string
-	Path      string
-	Ref       string
-	CommitOID string
-	ActionYML string
-	Err       error
+	Owner       string
+	Repo        string
+	OriginalNWO string
+	Path        string
+	Ref         string
+	CommitOID   string
+	ActionYML   string
+	Err         error
 }
 
 // repoResponse is the raw GraphQL response shape for a single repository alias.
@@ -259,6 +260,16 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		if err := json.Unmarshal(raw, &repo); err != nil {
 			results[idx].Err = fmt.Errorf("failed to parse: %w", err)
 			continue
+		}
+		if repo.NameWithOwner != "" && !strings.EqualFold(repo.NameWithOwner, ref.NWO()) {
+			owner, name, ok := strings.Cut(repo.NameWithOwner, "/")
+			if !ok || owner == "" || name == "" {
+				results[idx].Err = fmt.Errorf("invalid canonical repository name %q", repo.NameWithOwner)
+				continue
+			}
+			results[idx].OriginalNWO = ref.NWO()
+			results[idx].Owner = owner
+			results[idx].Repo = name
 		}
 
 		if repo.Object == nil || repo.Object.OID == "" {
