@@ -12,6 +12,7 @@ import "github.com/github/gh-actions-lock/internal/dep"
 type resolvedEntry struct {
 	dep       dep.Dependency
 	actionYML string
+	err       error
 }
 
 // tagPeel records the outcome of a PeelTagObject lookup so repeated checks

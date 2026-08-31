@@ -950,6 +950,28 @@ func TestResolveAllRecursivePartialFailureCachedGood(t *testing.T) {
 	}
 }
 
+func TestResolveAllRecursiveCachesFailures(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("bad", "private"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": nil},
+		}),
+	)
+
+	r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
+	require.NoError(t, err)
+	refs := []parserlock.ActionRef{{Owner: "bad", Repo: "private", Ref: "main"}}
+
+	_, _, firstErr := r.ResolveAllRecursive(context.Background(), refs)
+	require.Error(t, firstErr)
+	_, _, secondErr := r.ResolveAllRecursive(context.Background(), refs)
+	require.Error(t, secondErr)
+	assert.Equal(t, firstErr.Error(), secondErr.Error())
+	assert.Len(t, reg.Requests, 1, "a failed ref should be requested once per resolver run")
+}
+
 // gitRefHeadResponse returns a git/ref response for an exact branch match.
 func gitRefHeadResponse(name, sha string) any {
 	return map[string]any{

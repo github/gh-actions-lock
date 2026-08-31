@@ -25,6 +25,8 @@ type ParsedWorkflow struct {
 	SelfRepositoryRefErrs        []string
 	SelfRepositoryResolutionErrs []string
 	ExistingDeps                 []dep.Dependency
+	RecordedDeps                 []dep.Dependency
+	RecordedParents              dep.ParentMap
 	ParseWarnings                []string
 	LoadErr                      error
 	DepsErr                      error

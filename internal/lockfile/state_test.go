@@ -497,6 +497,85 @@ func setupClosure(t *testing.T, dir string) {
 	}
 }
 
+func TestState_GetClosureTraversesRecordedGraph(t *testing.T) {
+	dir := t.TempDir()
+	setupClosure(t, dir)
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deps, parents, err := store.GetClosure(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("expected direct and transitive dependencies, got %+v", deps)
+	}
+	gotParents := parents["actions/cache@v4"]
+	if len(gotParents) != 1 || gotParents[0] != "actions/setup-go@v6" {
+		t.Fatalf("expected recorded parent edge, got %v", gotParents)
+	}
+}
+
+func TestState_SetPreservesOrReplacesRecordedClosureByParentCommit(t *testing.T) {
+	t.Run("unchanged parent keeps recorded children", func(t *testing.T) {
+		dir := t.TempDir()
+		setupClosure(t, dir)
+		parent := dep.Dependency{
+			NWO:      "actions/setup-go",
+			Ref:      "v6",
+			Branch:   "main",
+			SHA:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			HashAlgo: "sha1",
+		}
+		after := resaveBumped(
+			t,
+			dir,
+			".github/workflows/ci.yml",
+			[]dep.Dependency{parent},
+			nil,
+			map[string]bool{parent.Key(): true},
+		)
+		if !strings.Contains(string(after), "actions/cache@v4") {
+			t.Fatalf("recorded child must survive an incomplete resolution:\n%s", after)
+		}
+	})
+
+	t.Run("advanced parent replaces recorded children", func(t *testing.T) {
+		dir := t.TempDir()
+		setupClosure(t, dir)
+		parent := dep.Dependency{
+			NWO:      "actions/setup-go",
+			Ref:      "v6",
+			Branch:   "main",
+			SHA:      "9999999999999999999999999999999999999999",
+			HashAlgo: "sha1",
+		}
+		child := dep.Dependency{
+			NWO:      "new/child",
+			Ref:      "v2",
+			Branch:   "main",
+			SHA:      "2222222222222222222222222222222222222222",
+			HashAlgo: "sha1",
+		}
+		after := resaveBumped(
+			t,
+			dir,
+			".github/workflows/ci.yml",
+			[]dep.Dependency{parent, child},
+			map[string][]string{child.Key(): {parent.Key()}},
+			map[string]bool{parent.Key(): true},
+		)
+		if strings.Contains(string(after), "actions/cache@v4") {
+			t.Fatalf("advanced parent must drop its obsolete child:\n%s", after)
+		}
+		if !strings.Contains(string(after), "new/child@v2") {
+			t.Fatalf("advanced parent must record its live child:\n%s", after)
+		}
+	})
+}
+
 // resaveBumped reloads the store from disk (as `update` does), replaces the
 // given workflow's closure, and saves — returning the new on-disk bytes.
 func resaveBumped(t *testing.T, dir, wfKey string, deps []dep.Dependency, pm map[string][]string, direct map[string]bool) []byte {

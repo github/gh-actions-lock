@@ -228,12 +228,64 @@ func (s *State) PruneWorkflows(keep map[string]bool) []string {
 func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	deps, ok := s.file.Workflows[workflowKey]
+	pins, ok := s.file.Workflows[workflowKey]
 	if !ok {
 		return nil, nil
 	}
-	out := make([]dep.Dependency, 0, len(deps))
-	for _, raw := range deps {
+	return s.dependenciesForPins(pins, workflowKey)
+}
+
+// GetClosure returns the recorded transitive closure and child-to-parent graph
+// for workflowKey.
+func (s *State) GetClosure(workflowKey string) ([]dep.Dependency, dep.ParentMap, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	roots, ok := s.file.LookupWorkflow(workflowKey)
+	if !ok {
+		return nil, nil, nil
+	}
+	pins := make([]string, 0, len(roots))
+	queued := make(map[string]bool)
+	for _, root := range roots {
+		if !queued[root] {
+			pins = append(pins, root)
+			queued[root] = true
+		}
+	}
+	parents := make(dep.ParentMap)
+	for i := 0; i < len(pins); i++ {
+		parentPin := pins[i]
+		parent, ok := parserlock.ParsePin(parentPin)
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid pin %q in %s for workflow %q", parentPin, parserlock.Path, workflowKey)
+		}
+		action, ok := s.file.Dependencies[parentPin]
+		if !ok {
+			continue
+		}
+		for _, childPin := range action.Uses {
+			child, ok := parserlock.ParsePin(childPin)
+			if !ok {
+				return nil, nil, fmt.Errorf("invalid pin %q in %s for workflow %q", childPin, parserlock.Path, workflowKey)
+			}
+			childKey := pinToDep(child).Key()
+			parents[childKey] = append(parents[childKey], pinToDep(parent).Key())
+			if !queued[childPin] {
+				pins = append(pins, childPin)
+				queued[childPin] = true
+			}
+		}
+	}
+	deps, err := s.dependenciesForPins(pins, workflowKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return deps, parents, nil
+}
+
+func (s *State) dependenciesForPins(pins []string, workflowKey string) ([]dep.Dependency, error) {
+	out := make([]dep.Dependency, 0, len(pins))
+	for _, raw := range pins {
 		pin, ok := parserlock.ParsePin(raw)
 		if !ok {
 			return nil, fmt.Errorf("invalid pin %q in %s for workflow %q", raw, parserlock.Path, workflowKey)
@@ -406,12 +458,15 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				ref = d.Branch
 			}
 		}
+		commit := d.HashAlgoOrDetect() + "-" + d.SHA
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
 			if ref == "" {
 				ref = existing.Ref
 			}
-			for _, u := range existing.Uses {
-				usesSet[u] = true
+			if existing.Commit == commit {
+				for _, u := range existing.Uses {
+					usesSet[u] = true
+				}
 			}
 		}
 		var uses []string
@@ -424,7 +479,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
 			Ref:     ref,
-			Commit:  d.HashAlgoOrDetect() + "-" + d.SHA,
+			Commit:  commit,
 			OwnerID: ids[0],
 			RepoID:  ids[1],
 			Uses:    uses,

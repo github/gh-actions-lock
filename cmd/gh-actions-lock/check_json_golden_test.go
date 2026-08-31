@@ -40,6 +40,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 		checkoutSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		setupGoSHA  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 		cacheSHA    = "cccccccccccccccccccccccccccccccccccccccc"
+		staleSHA    = "dddddddddddddddddddddddddddddddddddddddd"
 		helperSHA   = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	)
 
@@ -55,9 +56,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 		"    - uses: actions/cache@v4\n" +
 		"    - uses: helper/only-transitive@v1\n"
 
-	// Direct refs from the workflow: checkout@v6, setup-go@v6, cache@v3.
-	// The resolver batches them into a single GraphQL request keyed by
-	// owner/name pairs (a0/a1/a2).
+	// Direct refs and the recorded closure are resolved in one GraphQL batch.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
@@ -65,19 +64,9 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
 				"a1": testRepoResponse("actions/setup-go", setupGoSHA, compositeYAML),
 				"a2": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
-			},
-		}),
-	)
-
-	// Transitive batch discovered from the setup-go composite: cache@v4
-	// (same NWO as a direct workflow ref) and helper/only-transitive@v1
-	// (transitive-only, gives us a populated required_by[] in the JSON).
-	reg.Register(
-		httpmock.GraphQLForRepo("actions", "cache"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
-				"a1": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
+				"a3": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
+				"a4": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
+				"a5": testRepoResponse("old/dead", staleSHA, nodeActionYAML),
 			},
 		}),
 	)

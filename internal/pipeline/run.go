@@ -60,7 +60,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			unresolved = append(unresolved, pw)
 		}
 	}
-	refs, _ := CollectResolvable(unresolved)
+	refs := CollectResolvable(unresolved)
 
 	// Phase 2: Resolve.
 	if r == nil {

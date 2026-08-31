@@ -4,7 +4,6 @@ import (
 	"context"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -21,7 +20,7 @@ import (
 func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
 	parsed := ParseAll(paths, store)
 	if r != nil {
-		refs, _ := CollectResolvable(parsed)
+		refs := CollectResolvable(parsed)
 		if len(refs) > 0 {
 			_, _, _ = r.ResolveAllRecursive(ctx, refs)
 		}
@@ -64,6 +63,13 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			} else {
 				pw.ExistingDeps = deps
 			}
+			closure, parents, closureErr := store.GetClosure(wfKey)
+			if closureErr != nil {
+				pw.DepsErr = closureErr
+			} else {
+				pw.RecordedDeps = closure
+				pw.RecordedParents = parents
+			}
 		}
 		out = append(out, pw)
 	}
@@ -101,14 +107,13 @@ func mergeStrings(groups ...[]string) []string {
 	return values
 }
 
-// CollectResolvable returns the deduplicated union of refs and existing deps
-// across all parsed workflows. Use the returned slices to pre-warm the
-// resolver caches once before per-workflow diagnostics.
-func CollectResolvable(parsed []checks.ParsedWorkflow) ([]parserlock.ActionRef, []dep.Dependency) {
+// CollectResolvable returns the deduplicated union of current workflow refs
+// and recorded closure refs across all parsed workflows.
+func CollectResolvable(parsed []checks.ParsedWorkflow) []parserlock.ActionRef {
 	seenRef := make(map[ghapi.ActionRef]bool)
 	var refs []parserlock.ActionRef
 	for _, pw := range parsed {
-		for _, ref := range pw.Refs {
+		for _, ref := range resolvableRefs(pw) {
 			key := ghapi.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 			if seenRef[key] {
 				continue
@@ -117,19 +122,28 @@ func CollectResolvable(parsed []checks.ParsedWorkflow) ([]parserlock.ActionRef, 
 			refs = append(refs, ref)
 		}
 	}
-	seenDep := make(map[string]bool)
-	var deps []dep.Dependency
-	for _, pw := range parsed {
-		for _, dep := range pw.ExistingDeps {
-			key := dep.Key()
-			if seenDep[key] {
-				continue
-			}
-			seenDep[key] = true
-			deps = append(deps, dep)
-		}
+	return refs
+}
+
+func resolvableRefs(pw checks.ParsedWorkflow) []parserlock.ActionRef {
+	refs := append([]parserlock.ActionRef(nil), pw.Refs...)
+	current := make(map[ghapi.NWORef]bool, len(pw.Refs))
+	for _, ref := range pw.Refs {
+		current[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
 	}
-	return refs, deps
+	for _, d := range pw.RecordedDeps {
+		owner, repo := d.OwnerRepo()
+		if current[ghapi.ForNWORef(owner, repo, d.Ref)] {
+			continue
+		}
+		refs = append(refs, parserlock.ActionRef{
+			Owner: owner,
+			Repo:  repo,
+			Path:  d.Path,
+			Ref:   d.Ref,
+		})
+	}
+	return refs
 }
 
 // DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.

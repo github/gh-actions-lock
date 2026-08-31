@@ -70,7 +70,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	var resolvedParents dep.ParentMap
 	if r != nil {
 		var resolveErr error
-		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, resolvableRefs(pw))
 		if resolveErr != nil {
 			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {
@@ -126,7 +126,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 	parentMap := map[string][]string{}
 	if r != nil {
-		parentMap = resolvedParents
+		parentMap = mergeParentMaps(pw.RecordedParents, resolvedParents)
 		populateInventoryParents(wr.Inventory, parentMap)
 	}
 
@@ -136,7 +136,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 	rawFindings := checks.RunChecks(ctx, pw, store.File(), checkR)
 
-	depByKey := indexDeps(pw.ExistingDeps)
+	depByKey := indexDeps(pw.RecordedDeps)
 	for _, f := range rawFindings {
 		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap) {
 			continue

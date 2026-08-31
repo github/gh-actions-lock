@@ -60,3 +60,22 @@ func populateInventoryParents(inventory []checks.InventoryEntry, parentMap map[s
 		}
 	}
 }
+
+func mergeParentMaps(maps ...dep.ParentMap) dep.ParentMap {
+	merged := make(dep.ParentMap)
+	for _, parentMap := range maps {
+		for child, parents := range parentMap {
+			seen := make(map[string]bool, len(merged[child]))
+			for _, parent := range merged[child] {
+				seen[parent] = true
+			}
+			for _, parent := range parents {
+				if !seen[parent] {
+					merged[child] = append(merged[child], parent)
+					seen[parent] = true
+				}
+			}
+		}
+	}
+	return merged
+}
