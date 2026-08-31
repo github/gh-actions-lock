@@ -195,17 +195,16 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	rootTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
 	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
 
-	// Narrow mutable version tags to patch tags, and resolve bare-SHA refs
-	// to a symbolic tag when one exists.
+	// Narrow mutable version tags to exact patch tags.
 	status("pinning " + wr.Path)
 	rewrites := make(map[string]string)
-	narrowedNWOs := make(map[string]bool) // NWOs where narrowing chose a tag
+	preservedDeps := make(map[int]bool)
 
-	narrowDirectDeps(ctx, opts, deps, rewriteTracker, rewrites, narrowedNWOs)
+	narrowDirectDeps(ctx, opts, deps, rewriteTracker, rewrites, preservedDeps)
 
 	// ReverseLookup canonicalizes each dep's ref while preserving the tags
 	// narrowing chose and transitive deps' declared refs.
-	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, rewriteTracker, narrowedNWOs)
+	rlRewrites, lookupIssues, err := reverseLookupRewrites(ctx, opts, wr, deps, rewriteTracker, preservedDeps)
 	if err != nil {
 		return planResult{}, err
 	}
@@ -319,10 +318,9 @@ func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.Act
 	return out
 }
 
-// narrowDirectDeps rewrites direct deps' mutable refs to precise tags (bare SHA
-// or partial/non-semver ref -> full patch tag), leaving transitive deps verbatim.
-// Each rewrite mutates deps[i].Ref and records the old->new uses and narrowed NWO.
-func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string, narrowedNWOs map[string]bool) {
+// narrowDirectDeps rewrites direct partial semver refs to exact patch tags,
+// leaving bare SHA and transitive refs for reverse lookup.
+func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string, preservedDeps map[int]bool) {
 	if opts.Tagger == nil {
 		return
 	}
@@ -340,12 +338,10 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 			continue
 		}
 
-		// Bare-SHA refs: find a tag pointing at the same commit.
-		// Skip if --no-narrow — the user wants to keep their commit SHA as-is.
-		// Mark narrowedNWOs so ReverseLookup also preserves the SHA ref.
+		// ReverseLookup owns bare-SHA normalization unless --no-narrow protects it.
 		if parserlock.IsFullSha(dep.Ref) {
 			if opts.NoNarrow {
-				narrowedNWOs[strings.ToLower(dep.NWO)] = true
+				preservedDeps[i] = true
 			}
 			continue
 		}
@@ -376,21 +372,22 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		newUses := dep.NWO + "@" + patchTag
 		rewrites[oldUses] = newUses
 		dep.Ref = patchTag
-		narrowedNWOs[nwoLower] = true
+		preservedDeps[i] = true
 	}
 }
 
 // reverseLookupRewrites canonicalizes dep refs via ReverseLookup (SHA -> tag/
 // branch), restoring refs that narrowing or a transitive dep already fixed.
 // Returns the rewrites map, indices of unresolvable deps, and any hard error.
-func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, narrowedNWOs map[string]bool) (map[string]string, []resolve.LookupIssue, error) {
+func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, preservedDeps map[int]bool) (map[string]string, []resolve.LookupIssue, error) {
 	// Save narrowed refs before ReverseLookup - it may overwrite dep.Ref
 	// with a branch name, but we want to keep the semver tag narrowing chose.
-	narrowedRefs := make(map[int]string)
+	preservedRefs := make(map[int]string)
+	preservedKeys := make(map[string]bool)
 	for i := range deps {
-		nwo := strings.ToLower(deps[i].NWO)
-		if narrowedNWOs[nwo] {
-			narrowedRefs[i] = deps[i].Ref
+		if preservedDeps[i] {
+			preservedRefs[i] = deps[i].Ref
+			preservedKeys[deps[i].Key()] = true
 		}
 	}
 
@@ -410,7 +407,7 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 		return nil, nil, fmt.Errorf("reverse lookup: %w", err)
 	}
 	// Restore narrowed refs that ReverseLookup may have overwritten.
-	for i, ref := range narrowedRefs {
+	for i, ref := range preservedRefs {
 		deps[i].Ref = ref
 	}
 	// Restore transitive deps' declared refs — we don't own the composite's
@@ -431,11 +428,8 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 		if transitiveRewriteKeys[k] {
 			continue
 		}
-		if at := strings.Index(k, "@"); at > 0 {
-			nwo := strings.ToLower(k[:at])
-			if narrowedNWOs[nwo] {
-				continue
-			}
+		if preservedKeys[k] {
+			continue
 		}
 		rewrites[k] = v
 	}

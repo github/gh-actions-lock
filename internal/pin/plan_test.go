@@ -43,11 +43,73 @@ func TestNarrowDirectDeps_PreservesRefWhenExactTagIsFromAnotherFamily(t *testing
 		deps,
 		direct,
 		rewrites,
-		make(map[string]bool),
+		make(map[int]bool),
 	)
 
 	assert.Equal(t, "v18", deps[0].Ref)
 	assert.Empty(t, rewrites)
+}
+
+func TestNarrowDirectDeps_SameNWOSiblingRefsNormalizeIndependently(t *testing.T) {
+	const (
+		patchSHA = "4444444444444444444444444444444444444444"
+		bareSHA  = "2121212121212121212121212121212121212121"
+	)
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{
+			"ref": "refs/heads/main", "object": map[string]any{"sha": bareSHA, "type": "commit"},
+		}),
+	)
+
+	deps := []dep.Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: patchSHA},
+		{NWO: "actions/checkout", Ref: bareSHA, SHA: bareSHA},
+	}
+	refs := []parserlock.ActionRef{
+		{Owner: "actions", Repo: "checkout", Ref: "v4"},
+		{Owner: "actions", Repo: "checkout", Ref: bareSHA},
+	}
+	direct := lockfile.NewDirectTracker(refs, deps)
+	rewrites := make(map[string]string)
+	preserved := make(map[int]bool)
+	tagger := tag.NewListerForTest(t, reg)
+
+	narrowDirectDeps(context.Background(), PlanOptions{Tagger: tagger}, deps, direct, rewrites, preserved)
+
+	resolver, err := resolve.New("github.com", pinpool.New(2, nil), resolve.WithTransport(reg))
+	require.NoError(t, err)
+	reverseRewrites, issues, err := reverseLookupRewrites(
+		context.Background(),
+		PlanOptions{Resolver: resolver},
+		checks.WorkflowReport{},
+		deps,
+		direct,
+		preserved,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+	assert.Equal(t, "v4.2.1", deps[0].Ref)
+	assert.Equal(t, "v21", deps[1].Ref)
+	assert.Equal(t, "actions/checkout@v21", reverseRewrites["actions/checkout@"+bareSHA])
 }
 
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
