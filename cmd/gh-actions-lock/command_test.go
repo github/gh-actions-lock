@@ -107,6 +107,10 @@ func TestCheck_BareSHAUsesExactMajorTagAndVerifiesLocally(t *testing.T) {
 		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/releases`),
 		httpmock.JSONResponse([]map[string]any{}),
 	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/compare/09f2f74827fd0000000000000000000000000000\.\.\.b6e2e70617bc3265edd6dab6c906732b2f1ae151`),
+		httpmock.JSONResponse(httpmock.CompareAncestorResponse(ancestorSHA)),
+	)
 
 	workflowPath := writeTempWorkflow(t, `
 name: ci
@@ -131,6 +135,50 @@ jobs:
 	assert.Contains(t, lock, "ref: 'v21'")
 	assert.Contains(t, lock, "commit: 'sha1-"+sha+"'")
 	assert.NotContains(t, lock, "v3.1.4")
+
+	_, _, err = runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", workflowPath)
+	require.NoError(t, err)
+}
+
+func TestCheck_ChangedTagAtSameCommitRekeysAndVerifiesLocally(t *testing.T) {
+	const sha = "94de994a9f6fffee200243214e17002e2920bb59"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.GraphQLForRepo("dawidd6", "action-send-mail"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("dawidd6/action-send-mail", sha, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-send-mail/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v18", sha, "v3.12.0", sha)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-send-mail/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dawidd6/action-send-mail@v18
+`, "dawidd6/action-send-mail@v3.12.0=sha1-"+sha)
+
+	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "'dawidd6/action-send-mail@v18':")
+	assert.Contains(t, lock, "ref: 'v18'")
+	assert.Contains(t, lock, "commit: 'sha1-"+sha+"'")
+	assert.NotContains(t, lock, "v3.12.0")
 
 	_, _, err = runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", workflowPath)
 	require.NoError(t, err)
