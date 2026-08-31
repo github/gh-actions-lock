@@ -9,12 +9,46 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNarrowDirectDeps_PreservesRefWhenExactTagIsFromAnotherFamily(t *testing.T) {
+	const sha = "94de994a9f6fffee200243214e17002e2920bb59"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-send-mail/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v18", sha, "v3.12.0", sha)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-send-mail/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	deps := []dep.Dependency{{NWO: "dawidd6/action-send-mail", Ref: "v18", SHA: sha}}
+	direct := lockfile.NewDirectTracker(
+		[]parserlock.ActionRef{{Owner: "dawidd6", Repo: "action-send-mail", Ref: "v18"}},
+		deps,
+	)
+	rewrites := make(map[string]string)
+
+	narrowDirectDeps(
+		context.Background(),
+		PlanOptions{Tagger: tag.NewListerForTest(t, reg)},
+		deps,
+		direct,
+		rewrites,
+		make(map[string]bool),
+	)
+
+	assert.Equal(t, "v18", deps[0].Ref)
+	assert.Empty(t, rewrites)
+}
 
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
 // workflow fails resolution (e.g. repo not found), only the failed ref is
