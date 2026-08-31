@@ -35,7 +35,7 @@ func TestPresentResults_WarningsReachTerminal(t *testing.T) {
 		notWanted  []string
 	}{
 		{
-			name: "ref-moved warning is swallowed until update path exists",
+			name: "ref-moved warning surfaces with relock guidance",
 			findings: []checks.Finding{{
 				WorkflowPath: ".github/workflows/a.yml",
 				Category:     checks.RefMoved,
@@ -48,11 +48,11 @@ func TestPresentResults_WarningsReachTerminal(t *testing.T) {
 				},
 				ObservedSHA: "2222222222222222222222222222222222222222",
 				Detail:      "ref v1 now resolves to 222222222222, lockfile pins 111111111111",
+				Remediation: "re-run `gh actions-lock --relock` to advance the lock entry",
 			}},
-			notWanted: []string{
-				"moved upstream",
-				"compare/111111111111...222222222222",
-				"run `gh actions-lock` to update",
+			wantOutput: []string{
+				"ref v1 now resolves to 222222222222",
+				"gh actions-lock --relock",
 			},
 		},
 		{
@@ -208,7 +208,7 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 			notWanted: []string{"bare SHA", "resolving below"},
 		},
 		{
-			name:          "ref-moved is swallowed (deferred to update path)",
+			name:          "ref-moved shows relock hint",
 			willRemediate: true,
 			findings: []checks.Finding{{
 				WorkflowPath: ".github/workflows/a.yml",
@@ -222,10 +222,11 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 				},
 				ObservedSHA: "2222222222222222222222222222222222222222",
 				Detail:      "ref v1 now resolves to 222222222222",
+				Remediation: "re-run `gh actions-lock --relock` to advance the lock entry",
 			}},
-			notWanted: []string{
-				"moved upstream",
-				"run `gh actions-lock` to update",
+			wantOutput: []string{
+				"ref v1 now resolves to 222222222222",
+				"gh actions-lock --relock",
 			},
 		},
 		{

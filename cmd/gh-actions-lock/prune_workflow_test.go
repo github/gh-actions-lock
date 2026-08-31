@@ -16,13 +16,20 @@ import (
 
 // writeStaleLockfileRepo builds a scratch repo whose lockfile records two
 // workflows — workflow.yml (present on disk, uses checkout@v6) and deleted.yml
-// (no file on disk, uses setup-go@v6) — and chdirs into it. Both pins are
-// mutable v6 refs so they're trusted from the lockfile without any network
-// call. Returns the lockfile path.
-func writeStaleLockfileRepo(t *testing.T) string {
+// (no file on disk, uses setup-go@v6) — and chdirs into it. Returns the
+// lockfile path.
+func writeStaleLockfileRepo(t *testing.T, reg *httpmock.Registry) string {
 	t.Helper()
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+			},
+		}),
+	)
 
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
@@ -58,7 +65,7 @@ func TestCheck_FullScan_PrunesDeletedWorkflow(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	lockPath := writeStaleLockfileRepo(t)
+	lockPath := writeStaleLockfileRepo(t, reg)
 
 	// No explicit workflow-path arg → full scan → prune authority.
 	_, _, err := runCommandWithHTTP(t, reg, "--json=valid,workflows")
@@ -80,7 +87,7 @@ func TestCheck_PartialInvocation_DoesNotPrune(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	lockPath := writeStaleLockfileRepo(t)
+	lockPath := writeStaleLockfileRepo(t, reg)
 
 	_, _, err := runCommandWithHTTP(t, reg, "--json=valid,workflows", ".github/workflows/workflow.yml")
 	require.NoError(t, err)
@@ -98,7 +105,7 @@ func TestCheck_NoFix_ReportsStaleWorkflow(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	lockPath := writeStaleLockfileRepo(t)
+	lockPath := writeStaleLockfileRepo(t, reg)
 	lockBefore, err := os.ReadFile(lockPath)
 	require.NoError(t, err)
 

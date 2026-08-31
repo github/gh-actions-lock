@@ -132,7 +132,7 @@ func checkOneRefMoved(ctx context.Context, pw ParsedWorkflow, ref parserlock.Act
 		f.Severity = SeverityWarning
 		f.Confidence = ConfidenceHigh
 		f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()))
-		f.Remediation = "re-run `gh actions-lock` to refresh the lock entry"
+		f.Remediation = "re-run `gh actions-lock --relock` to advance the lock entry"
 	}
 	return f, true
 }

@@ -709,11 +709,6 @@ STUB_WIRING = {
     end
     s.env("GH_TOKEN" => "gho_fake_mixed_test_token")
   },
-  rescan_inconclusive_fails: ->(s) {
-    s.stub_server { |srv| sso_403_all(srv) }
-    s.env("GH_TOKEN" => "gho_fake_rescan_token")
-  },
-
   # Error icon / record / prefix scenarios: SSO 403 as a reliable failure trigger
   unresolved_uses_error_icon: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }

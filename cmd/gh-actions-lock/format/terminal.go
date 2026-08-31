@@ -360,16 +360,6 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			if !isTransitive {
 				bareSHADeps = append(bareSHADeps, key)
 			}
-		case f.Category == checks.RefMoved:
-			// TODO: surface ref-moved warnings once the `gh actions-lock
-			// update` path exists. Today the guidance ("run gh actions-lock
-			// to update") is wrong — a plain re-run trusts the lockfile and
-			// repins nothing; only --rescan even detects the movement. Until
-			// there's a command that actually advances a moved ref, swallow
-			// these rather than print misleading instructions.
-		case f.Category.IsInconclusive() &&
-			strings.Contains(f.Remediation, "transitive dependency"):
-			// transitive reachability unknown: silently swallowed
 		default:
 			otherDetailWarnings = append(otherDetailWarnings, key)
 		}
@@ -406,7 +396,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		wg := warnMap[key]
 		f := wg.finding
 		depKey := f.DepKey()
-		if f.Category.IsInconclusive() && f.Severity == checks.SeverityWarning {
+		if (f.Category == checks.RefMoved || f.Category.IsInconclusive()) && f.Severity == checks.SeverityWarning {
 			label := depKey
 			if label == "" {
 				label = f.WorkflowPath

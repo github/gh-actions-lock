@@ -1193,17 +1193,14 @@ module ActionsPin
             system(sub_env, ENV.fetch("SHELL", "/bin/bash"), chdir: ctx.dir)
             puts "\nBack in integration shell. Scenario dir still live at #{ctx.dir}"
 
-          when "rerun", "rescan"
+          when "rerun"
             if active_ctx
               w = 62
-              rescan = (verb == "rescan" || arg == "--rescan")
-              mode_label = rescan ? "re-scanning" : "re-running"
-              puts "\e[1;36m── #{mode_label} #{active_ctx.scenario.name} ──\e[0m"
-              extra = rescan ? ["--rescan"] : []
-              puts "\e[2m$\e[0m #{active_ctx.cmd_string(extra_args: extra)}"
+              puts "\e[1;36m── re-running #{active_ctx.scenario.name} ──\e[0m"
+              puts "\e[2m$\e[0m #{active_ctx.cmd_string}"
               puts
               t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              result = active_ctx.run_pty(input_prompts: active_ctx.scenario.input_spec, extra_args: extra)
+              result = active_ctx.run_pty(input_prompts: active_ctx.scenario.input_spec)
               elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
               puts
 
@@ -1560,8 +1557,6 @@ module ActionsPin
         puts "  \e[36mdiff <name>\e[0m           Show cached diff for a specific scenario"
         puts "  \e[36mcd <name>\e[0m             Prepare scenario and drop into its dir"
         puts "  \e[36mrerun\e[0m                 Re-run active scenario (keeps lockfile state)"
-        puts "  \e[36mrerun --rescan\e[0m        Re-run with --rescan flag"
-        puts "  \e[36mrescan\e[0m                Shorthand for rerun --rescan"
         puts "  \e[36medit\e[0m                  Open active scenario dir in $EDITOR"
         puts "  \e[36mdone\e[0m                  Teardown active scenario context"
         puts "  \e[36mbuild\e[0m                 Rebuild the binary (go build)"

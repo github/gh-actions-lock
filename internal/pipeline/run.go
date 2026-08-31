@@ -2,10 +2,7 @@ package pipeline
 
 import (
 	"context"
-	"strings"
 
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -19,7 +16,6 @@ type RunOptions struct {
 	Resolver      *resolve.Resolver
 	Store         *lockfile.State
 	Pool          *pinpool.Pool
-	Rescan        bool // re-verify all pins end-to-end
 
 	// Resolver UX hooks — set these for interactive spinner mode.
 	OnResolveProgress func(done, total int)
@@ -29,13 +25,11 @@ type RunOptions struct {
 
 // RunResult bundles the pipeline output.
 type RunResult struct {
-	Report        *checks.Report
-	Valid         bool
-	SkippedRescan int // mutable recorded refs (v4, branches) trusted without a live re-check
+	Report *checks.Report
+	Valid  bool
 }
 
-// Run executes the full diagnostic pipeline: parse → trust-check →
-// resolve → diagnose.
+// Run executes the full diagnostic pipeline: parse → resolve → diagnose.
 func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	r := opts.Resolver
 	prof := opts.Profile
@@ -49,60 +43,14 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		return nil, ctx.Err()
 	}
 
-	// Fast path: trust fully-recorded workflows. For partially-recorded
-	// workflows, seed the resolver cache with recorded deps so only
-	// unrecorded refs hit the network.
-	//
-	// Immutable full-semver pins (e.g. v4.2.1) are NOT trusted blindly:
-	// they're routed through live resolution + ancestry so a stale or
-	// unreachable pin is caught on the default path, not just under
-	// --rescan. Mutable recorded refs (v4, v4.2, branches) legitimately
-	// move, so they stay trusted (seeded from the lockfile) until --rescan.
-	skippedRescan := 0
-	var seedDeps []dep.Dependency
-	recordedKeys := make(map[string]bool)
+	// Structural blockers are terminal at diagnose time. Do not perform
+	// unrelated network work for a workflow the planner must reject.
 	for i := range parsed {
-		// Structural blockers are terminal at diagnose time. Do not perform
-		// unrelated network work for a workflow the planner must reject.
 		if len(parsed[i].LocalPaths) > 0 ||
 			len(parsed[i].SelfRepositoryRefErrs) > 0 ||
 			len(parsed[i].SelfRepositoryResolutionErrs) > 0 {
 			parsed[i].Resolved = true
-			continue
 		}
-		if opts.Rescan {
-			continue
-		}
-		plan := planFastPath(parsed[i])
-		// Mutable recorded refs are trusted without a live re-check
-		// (surfaced in the summary so the operator can --rescan them).
-		skippedRescan += len(plan.mutableRefs)
-		if plan.resolved {
-			parsed[i].Resolved = true
-			continue
-		}
-		// Seed only the mutable recorded deps so they resolve from
-		// the lockfile (trusted); immutable and unrecorded refs are
-		// left to resolve live from the network.
-		rd := parsed[i].RecordedDeps(plan.mutableRefs)
-		seedDeps = append(seedDeps, rd...)
-		for _, rr := range plan.mutableRefs {
-			recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
-		}
-	}
-
-	// Seed the resolver cache with lockfile entries for recorded deps
-	// in partially-recorded workflows. This makes the pipeline
-	// self-sufficient: diagnoseOneParsed re-resolves ALL refs per
-	// workflow, and seeded entries become free cache hits.
-	//
-	// Trust boundary: seeded entries have no actionYML, so the BFS in
-	// ResolveAllRecursive won't discover new transitive deps through
-	// them. This is intentional — the same trust model as
-	// IsFullyRecorded, which skips resolution entirely. If the
-	// lockfile's transitive closure is incomplete, --rescan detects it.
-	if r != nil && len(seedDeps) > 0 {
-		r.SeedFromLockfile(dep.Dedup(seedDeps))
 	}
 
 	// Collect unresolved workflows for network work.
@@ -112,7 +60,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			unresolved = append(unresolved, pw)
 		}
 	}
-	refs, _ := CollectUnrecordedResolvable(unresolved, recordedKeys)
+	refs, _ := CollectResolvable(unresolved)
 
 	// Phase 2: Resolve.
 	if r == nil {
@@ -149,47 +97,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	valid := report.IsValid()
 
 	return &RunResult{
-		Report:        report,
-		Valid:         valid,
-		SkippedRescan: skippedRescan,
+		Report: report,
+		Valid:  valid,
 	}, nil
-}
-
-// fastPathPlan describes how the pre-resolution fast path treats one
-// recorded workflow.
-type fastPathPlan struct {
-	// resolved is true when the workflow needs no live resolution: it has
-	// no refs, is a local-path action, or every recorded ref is a trusted
-	// mutable pin.
-	resolved bool
-	// mutableRefs are recorded refs (v4, v4.2, branches) trusted from the
-	// lockfile without a live re-check.
-	mutableRefs []parserlock.ActionRef
-}
-
-// planFastPath decides, without touching the network, whether a parsed
-// workflow can skip live resolution and which of its recorded refs are
-// trusted mutable pins. Immutable full-semver pins (v4.2.1) are never
-// trusted blindly: their presence forces live resolution so a stale or
-// unreachable pin is caught on the default path, not just under --rescan.
-func planFastPath(pw checks.ParsedWorkflow) fastPathPlan {
-	// Local-path workflows are handled at diagnose time; don't waste
-	// network calls resolving their refs.
-	if len(pw.LocalPaths) > 0 {
-		return fastPathPlan{resolved: true}
-	}
-	recorded, unrecorded := pw.PartitionRefs()
-
-	var mutable []parserlock.ActionRef
-	immutableCount := 0
-	for _, rr := range recorded {
-		if checks.IsImmutableRef(rr.Ref) {
-			immutableCount++
-		} else {
-			mutable = append(mutable, rr)
-		}
-	}
-
-	resolved := len(pw.Refs) == 0 || (len(unrecorded) == 0 && immutableCount == 0)
-	return fastPathPlan{resolved: resolved, mutableRefs: mutable}
 }

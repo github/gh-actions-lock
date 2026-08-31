@@ -54,7 +54,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -244,7 +244,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -310,7 +310,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
@@ -372,7 +372,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -430,7 +430,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -509,7 +509,7 @@ jobs:
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -584,7 +584,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -635,7 +635,7 @@ jobs:
 
 	// --json with no value should use the default fields (valid,findings,workflows)
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json", workflowPath,
+		"--no-fix", "--json", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -650,25 +650,22 @@ jobs:
 	assert.NotContains(t, raw, "dependencies", "default --json should not include top-level dependencies to avoid duplication with workflows")
 }
 
-// TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps verifies that
-// SeedFromLockfile pre-warms the resolution cache so known deps skip
-// network calls, while new deps still resolve from the network.
-// The workflow has two deps: checkout (in lockfile) and setup-go (not in
-// lockfile). Only setup-go should hit the HTTP mock.
-func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
+// TestCheck_DefaultRun_ResolvesRecordedAndNewDeps proves existing lockfile
+// entries do not suppress live resolution.
+func TestCheck_DefaultRun_ResolvesRecordedAndNewDeps(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 
-	// Only register an HTTP stub for setup-go (the NEW dep).
-	// No stub for checkout — the seed must serve it from cache.
+	// Both the recorded and new dependency must resolve live.
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -699,14 +696,11 @@ jobs:
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 	t.Chdir(dir)
 
-	// Run WITHOUT --rescan so SeedFromLockfile is active.
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		"--no-fix", "--json=valid,findings",
 		".github/workflows/workflow.yml",
 	)
 	// setup-go is resolved but not yet pinned → "not-pinned" finding → errSilent.
-	// That's expected: we're testing that checkout was served from cache, not
-	// that the overall check passes.
 	require.ErrorIs(t, err, errSilent)
 
 	var payload struct {
@@ -715,8 +709,7 @@ jobs:
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 
-	// The finding should be about setup-go being unpinned, NOT about checkout.
-	// If checkout required an HTTP call, reg.Verify would fail (no stub registered).
+	// The finding should be about setup-go being unpinned, not checkout.
 	require.Len(t, payload.Findings, 1)
 	assert.Equal(t, "not-pinned", payload.Findings[0].Category)
 	assert.Contains(t, payload.Findings[0].Dependency, "setup-go")
@@ -733,13 +726,13 @@ func TestCheck_NoFix_WritesNothing(t *testing.T) {
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 
-	// setup-go is the unpinned (new) dep — it resolves from the mock. checkout
-	// is seeded from the lockfile and must not hit the network.
+	// Both the recorded and new dependency resolve from the mock.
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -852,11 +845,9 @@ jobs:
 	assert.Contains(t, pins, "actions/setup-go", "autofix should have pinned setup-go")
 }
 
-// TestCheck_Rescan_DetectsRefMovementDespiteLockfile is a regression test
-// ensuring --rescan does NOT seed the resolution cache. If seeding occurred,
-// the resolver would return the stale lockfile SHA and the ref-moved finding
-// would be suppressed — exactly the bug we fixed.
-func TestCheck_Rescan_DetectsRefMovementDespiteLockfile(t *testing.T) {
+// TestCheck_DefaultRun_DetectsRefMovementDespiteLockfile proves recorded
+// mutable refs resolve live on every networked run.
+func TestCheck_DefaultRun_DetectsRefMovementDespiteLockfile(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -897,7 +888,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	// ref-moved is a warning (valid=true), not an error.
 	require.NoError(t, err, "ref-moved is a warning, should not error")
@@ -915,10 +906,7 @@ jobs:
 			hasRefMoved = true
 		}
 	}
-	assert.True(t, hasRefMoved,
-		"--rescan must detect ref movement (stale lockfile SHA vs live SHA); "+
-			"if this fails, SeedFromLockfile is poisoning the resolution cache during rescan: %+v",
-		payload.Findings)
+	assert.True(t, hasRefMoved, "default runs must detect ref movement: %+v", payload.Findings)
 }
 
 func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
@@ -927,9 +915,15 @@ func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	// No HTTP stub: both workflows are fully recorded in the lockfile, so
-	// the fast path skips every network round-trip. The dedup logic under
-	// test operates purely on the inventory built from disk.
+	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+			},
+		}),
+	)
 
 	wf1 := writeTempWorkflow(t, `
 name: ci
@@ -1063,9 +1057,8 @@ func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
 }
 
 // TestCheck_Relock_BumpsMovedBranchRef covers github/actions-dispatch#751:
-// a branch ref (main) whose upstream head advanced is trusted as-is on a
-// normal run and merely flagged ref-moved under --rescan. --relock must
-// re-resolve it and rewrite the lockfile to the new live SHA.
+// a branch ref (main) whose upstream head advanced is detected on a normal
+// run. --relock permits rewriting the lockfile to the new live SHA.
 func TestCheck_Relock_BumpsMovedBranchRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 
@@ -1125,13 +1118,31 @@ jobs:
 }
 
 // TestCheck_DefaultRun_DoesNotBumpBranchRef is the counterpart to the relock
-// test: without --relock a mutable branch ref is trusted from the lockfile
-// (fast path, no network) and its recorded SHA is left as-is.
+// test: without --relock a moved branch ref is detected but its recorded SHA
+// is left as-is.
 func TestCheck_DefaultRun_DoesNotBumpBranchRef(t *testing.T) {
 	reg := &httpmock.Registry{}
-	defer reg.Verify(t) // no stubs should be hit on the fast path
+	defer reg.Verify(t)
 
 	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": staleSHA,
+			},
+		}),
+	)
 
 	workflowPath := writeTempWorkflow(t, `
 name: ci
@@ -1145,9 +1156,11 @@ jobs:
 		"example/action@main=sha1-"+staleSHA,
 	)
 
-	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	_, stderr, err := runCommandWithHTTP(t, reg, workflowPath)
 	require.NoError(t, err)
+	assert.Contains(t, stderr, "gh actions-lock --relock")
+	assert.NotContains(t, stderr, "All 1 workflow valid")
 
 	assert.Contains(t, readTempLockfilePins(t), staleSHA,
-		"a default run must not bump a trusted branch ref")
+		"a default run must not bump a moved branch ref without --relock")
 }

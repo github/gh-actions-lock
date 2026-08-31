@@ -69,6 +69,28 @@ func TestReportHasUnfixableErrors_ClassifiesWorkflowNotPinned(t *testing.T) {
 	}
 }
 
+func TestReportHasLiveWarnings(t *testing.T) {
+	tests := []struct {
+		name     string
+		category checks.Category
+		want     bool
+	}{
+		{name: "ref moved", category: checks.RefMoved, want: true},
+		{name: "inconclusive", category: checks.ReachabilityUnknown, want: true},
+		{name: "valid", category: checks.Valid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &checks.Report{Workflows: []checks.WorkflowReport{{
+				Findings: []checks.Finding{{Category: tt.category}},
+			}}}
+			if got := reportHasLiveWarnings(report); got != tt.want {
+				t.Errorf("reportHasLiveWarnings() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderInvestigationAlerts_DeduplicatesByNWORef(t *testing.T) {
 	entries := []pin.Entry{
 		{

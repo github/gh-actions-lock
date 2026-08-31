@@ -94,7 +94,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		// The fixture's lockfile addresses the workflow as
 		// .github/workflows/ci.yml, so we run check on that exact path.
-		"--rescan", "--no-fix", "--json=valid,findings,workflows,dependencies",
+		"--no-fix", "--json=valid,findings,workflows,dependencies",
 		".github/workflows/ci.yml",
 	)
 	// We expect findings (ref-changed + stale), so the command exits

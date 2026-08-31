@@ -128,25 +128,6 @@ func (r *Resolver) SeedBranchHints(deps []dep.Dependency) {
 	}
 }
 
-// SeedFromLockfile pre-warms the resolution cache so repeat runs skip
-// redundant API calls. Do NOT call with --rescan: seeding would hide
-// ref movement.
-func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
-	for _, d := range deps {
-		if d.SHA == "" || d.Ref == "" {
-			continue
-		}
-		owner, repo := d.OwnerRepo()
-		if owner == "" || repo == "" {
-			continue
-		}
-		r.cache.Put(
-			ghapi.ForActionRef(owner, repo, d.Path, d.Ref),
-			resolvedEntry{dep: d},
-		)
-	}
-}
-
 // --- Accessors ---
 
 // Hostname returns the GitHub host the resolver is targeting.

@@ -34,7 +34,7 @@ categories:
   - name: workflow_parsing
     description: "Workflow file parsing edge cases"
   - name: output_modes
-    description: "CLI flag combinations (--json, --no-fix, --rescan)"
+    description: "CLI flag combinations (--json, --no-fix, --verify)"
   - name: multi_workflow
     description: "Cross-workflow scenarios and dependency tracking"
   - name: security
@@ -84,10 +84,7 @@ scenarios:
       lockfile_contains: ["'actions/checkout@v4':"]
       lockfile_comment_excludes: 'actions/checkout@v4\.\d'
       # v4 is a partial-semver pin: with narrowing on (default), the
-      # version-ref nudge is the single actionable message (pin precisely,
-      # which also earns live re-verification). The summary must NOT add a
-      # competing --rescan line, and must not resurrect the old "re-verify
-      # reachability" contradiction.
+      # version-ref nudge is the actionable message to pin precisely.
       output_contains: ["pinned without a full semver tag", "lock precisely"]
       output_excludes: ["trusted without a live check", "re-verify reachability"]
 
@@ -647,36 +644,6 @@ scenarios:
       stdout_is_json: true
       stdout_contains: ["findings"]
 
-  - name: rescan_mode
-    category: output_modes
-    description: "--rescan forces full re-verification"
-    needs_token: true
-    flags: ["--rescan"]
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["actions/checkout@v4"]
-    expect:
-      exit: 0
-      lockfile_deps_cover_direct: true
-
-  - name: rescan_inconclusive_fails
-    category: output_modes
-    description: "--rescan with SSO-blocked verification — fails, no 'All valid'"
-    needs_stub: true
-    tags: [stub]
-    flags: ["--rescan"]
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["actions/checkout@v4"]
-      lockfile_template: pinned_checkout
-    expect:
-      exit: 1
-      output_excludes: ["All", "valid"]
-
   - name: no_fix_json_combined
     category: output_modes
     description: "--no-fix --json combined produces JSON without modifying disk"
@@ -694,7 +661,7 @@ scenarios:
 
   - name: verify_fresh_unpinned
     category: output_modes
-    description: "--verify with unpinned deps — exits 1, read-only (equivalent to --rescan --no-fix)"
+    description: "--verify with unpinned deps — exits 1 and leaves files unchanged"
     needs_token: true
     flags: ["--verify"]
     fixtures:
@@ -818,20 +785,6 @@ scenarios:
     expect:
       exit: 1
       output_contains: ["mutually exclusive"]
-
-  - name: verify_local_conflict_rescan
-    category: output_modes
-    description: "--verify-local --rescan is rejected — verify-local is offline"
-    needs_stub: false
-    flags: ["--verify-local", "--rescan"]
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["actions/checkout@v4"]
-    expect:
-      exit: 1
-      output_contains: ["offline"]
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║════════════════════════════ multi_workflow ═════════════════════════════║
@@ -1956,7 +1909,7 @@ scenarios:
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
-    description: "SSO 403 on a previously-pinned action — pin retained, clean exit"
+    description: "SSO 403 on a previously-pinned action — pin retained with an inconclusive warning and clean exit"
     needs_stub: true
     tags: [stub]
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
@@ -1974,7 +1927,11 @@ scenarios:
         - expr: '.valid'
           equals: "true"
         - expr: '.findings | length'
-          equals: "0"
+          equals: "1"
+        - expr: '.findings[0].category'
+          equals: "reachability-unknown"
+        - expr: '.findings[0].severity'
+          equals: "warning"
 
       lockfile_contains:
         - "version: 'v0.0.2'"
@@ -1982,11 +1939,6 @@ scenarios:
         - "ref: 'v4'"
         - "commit: 'sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd'"
 
-      golden_json:
-        cli_version: (devel)
-        findings: []
-        lockfile_version: v0.0.2
-        valid: true
   - name: dbot_impostor_blocks
     category: dependabot
     description: "Orphaned commit (no tag or branch) produces reachability-unknown warning in JSON findings"
@@ -2013,7 +1965,7 @@ scenarios:
     description: "Stale pin (lockfile SHA not reachable from the ref head) produces unreachable-pin/error finding"
     needs_stub: true
     tags: [stub]
-    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--rescan", "--json=valid,findings"]
+    flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
     fixtures:
       workflows:
         ci.yml:

@@ -35,9 +35,10 @@ After the initial run to onboard workflows, you will need to run `gh actions-loc
 
 A full-directory run (`gh actions-lock` with no path arguments) also prunes lockfile entries for workflows that have been deleted from `.github/workflows/`, dropping any dependencies left orphaned by the removal. Scoped runs that name specific workflows never prune out-of-scope entries.
 
-Pins to branches or partial versions (e.g. `main`, `v4`) are trusted from the
-lockfile and not re-resolved on a normal run. To bump them to the current
-upstream commit, run:
+Normal networked runs live-resolve the dependency closure for the workflows in
+scope. If a branch or partial version (e.g. `main`, `v4`) has moved, the command
+reports the movement but retains the recorded commit. To permit advancing those
+pins to the current upstream commit, run:
 
 ```bash
 gh actions-lock --relock
