@@ -134,6 +134,13 @@ dependencies:
         commit: 'sha1-`+sha+`'
         owner_id: 44036562
         repo_id: 642580244
+        uses:
+            - 'actions/checkout@v4'
+    'actions/checkout@v4':
+        ref: 'v4'
+        commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        owner_id: 44036562
+        repo_id: 197814629
 `), 0o600))
 	t.Chdir(dir)
 
@@ -148,5 +155,7 @@ dependencies:
 	lock, err := os.ReadFile(lockPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(lock), "'actions/create-github-app-token@v3.2.0'")
+	assert.Contains(t, string(lock), "'actions/checkout@v4'")
+	assert.Contains(t, string(lock), "uses:\n            - 'actions/checkout@v4'")
 	assert.NotContains(t, string(lock), "'actions/create-github-app-token@"+sha+"'")
 }

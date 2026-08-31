@@ -406,7 +406,13 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				ref = d.Branch
 			}
 		}
-		if existing, ok := s.file.Dependencies[pinKey]; ok {
+		existing, ok := s.file.Dependencies[pinKey]
+		if !ok && !isSHARef(d.Ref) && isSHARef(d.SHA) {
+			shaPin := pin
+			shaPin.Ref = d.SHA
+			existing, ok = s.file.Dependencies[shaPin.String()]
+		}
+		if ok {
 			if ref == "" {
 				ref = existing.Ref
 			}
