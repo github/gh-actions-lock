@@ -353,7 +353,7 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 				continue
 			}
 			if patchTag == "" {
-				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+				patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA, "")
 				if err != nil || patchTag == "" {
 					continue
 				}
@@ -391,7 +391,7 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		// No exact tag match - if the repo publishes semver releases,
 		// walk back to the latest tag that's an ancestor of this SHA.
 		if patchTag == "" {
-			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA)
+			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, dep.SHA, dep.Ref)
 			if err != nil || patchTag == "" {
 				continue
 			}
@@ -668,7 +668,7 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 			continue
 		}
 		if patchTag == "" {
-			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, e.SHA)
+			patchTag, err = opts.Tagger.BestAncestorTag(ctx, owner, repo, e.SHA, e.Ref)
 			if err != nil || patchTag == "" {
 				continue
 			}
