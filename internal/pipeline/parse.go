@@ -58,7 +58,10 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		pw.SelfRepositoryRefErrs = mergeStrings(scan.SelfRepositoryRefErrs, selfScan.SelfRepositoryRefErrs)
 		pw.SelfRepositoryResolutionErrs = selfScan.Errors
 		pw.ParseWarnings = append(scan.Warnings, selfScan.Warnings...)
-		if len(pw.Refs) > 0 && store != nil {
+		hasTerminalRefs := len(pw.LocalPaths) > 0 ||
+			len(pw.SelfRepositoryRefErrs) > 0 ||
+			len(pw.SelfRepositoryResolutionErrs) > 0
+		if store != nil && (len(pw.Refs) > 0 || hasTerminalRefs) {
 			wfKey := workflowfile.KeyFromPath(path)
 			deps, depsErr := store.Get(wfKey)
 			if depsErr != nil {

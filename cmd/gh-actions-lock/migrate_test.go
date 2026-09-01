@@ -267,7 +267,7 @@ jobs:
 }
 
 func TestNoMigrateLocalActions_PreservesExistingPins(t *testing.T) {
-	const workflow = `name: CI
+	const workflowWithRemoteAction = `name: CI
 on: push
 jobs:
   build:
@@ -275,6 +275,14 @@ jobs:
     steps:
       - uses: ./.github/actions/foo
       - uses: actions/checkout@v4
+`
+	const workflowWithOnlyLocalAction = `name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/foo
 `
 	const lock = `version: 'v0.0.2'
 dependencies:
@@ -288,19 +296,26 @@ workflows:
     - 'actions/checkout@v4'
 `
 
-	dir := t.TempDir()
-	t.Chdir(dir)
-	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
-	require.NoError(t, os.WriteFile(workflowPath, []byte(workflow), 0o600))
-	lockPath := filepath.Join(".github", "workflows", "actions.lock")
-	require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+	for name, workflow := range map[string]string{
+		"remote and local actions": workflowWithRemoteAction,
+		"only local action":        workflowWithOnlyLocalAction,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+			require.NoError(t, os.WriteFile(workflowPath, []byte(workflow), 0o600))
+			lockPath := filepath.Join(".github", "workflows", "actions.lock")
+			require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
 
-	transport := &requestCountingTransport{}
-	_, _, err := runCommandWithHTTP(t, transport, "--rescan", "--no-migrate-local-actions")
-	require.Error(t, err)
-	got, readErr := os.ReadFile(lockPath)
-	require.NoError(t, readErr)
-	assert.Equal(t, 2, strings.Count(string(got), "'actions/checkout@v4'"))
-	assert.NotContains(t, string(got), "'.github/workflows/ci.yml': []")
+			transport := &requestCountingTransport{}
+			_, _, err := runCommandWithHTTP(t, transport, "--rescan", "--no-migrate-local-actions")
+			require.Error(t, err)
+			got, readErr := os.ReadFile(lockPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, 2, strings.Count(string(got), "'actions/checkout@v4'"))
+			assert.NotContains(t, string(got), "'.github/workflows/ci.yml': []")
+		})
+	}
 }
