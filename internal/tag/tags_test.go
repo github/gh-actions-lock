@@ -65,3 +65,55 @@ func TestListTags_SemverOrdering(t *testing.T) {
 		}
 	}
 }
+
+func TestBestPatchTagForSHA_RefFamily(t *testing.T) {
+	const sha = "ffffffffffffffffffffffffffffffffffffffff"
+
+	tests := []struct {
+		name string
+		ref  string
+		tags any
+		want string
+	}{
+		{
+			name: "major ref excludes another major at the same commit",
+			ref:  "v18",
+			tags: httpmock.TagListResponse("v3.12.0", sha),
+		},
+		{
+			name: "major ref accepts its major",
+			ref:  "v4",
+			tags: httpmock.TagListResponse("v5.0.0", sha, "v4.2.1", sha),
+			want: "v4.2.1",
+		},
+		{
+			name: "minor ref accepts its minor",
+			ref:  "v4.2",
+			tags: httpmock.TagListResponse("v4.3.0", sha, "v4.2.1", sha),
+			want: "v4.2.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/tags`),
+				httpmock.JSONResponse(tt.tags),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/releases`),
+				httpmock.JSONResponse([]map[string]any{}),
+			)
+
+			tl := NewListerForTest(t, reg)
+			got, err := tl.BestPatchTagForSHA(context.Background(), "actions", "checkout", sha, tt.ref)
+			if err != nil {
+				t.Fatalf("BestPatchTagForSHA: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("BestPatchTagForSHA() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
