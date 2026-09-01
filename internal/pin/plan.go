@@ -134,6 +134,9 @@ type planResult struct {
 func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, status func(string)) (planResult, error) {
 	var entries []Entry
 	var wplans []WorkflowPlan
+	if wr.SkipCommit {
+		return planResult{entries: verifiedEntries(wr.Inventory, wr.Path)}, nil
+	}
 	for _, finding := range wr.Findings {
 		if finding.Category == checks.InvalidSelfRepositoryRef {
 			return planResult{}, nil

@@ -344,6 +344,28 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites)
 	})
 
+	t.Run("SHA metadata repairs to branch", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Branch = "main"
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "main", result.entries[0].Ref)
+		assert.Equal(t, sha, result.entries[0].AutoFixedRef)
+		assert.Equal(t,
+			map[string]string{"actions/checkout@" + sha: "actions/checkout@main"},
+			result.wplans[0].Rewrites,
+		)
+	})
+
 	t.Run("repair preserves source NWO spelling", func(t *testing.T) {
 		tagger, _ := newTagger(t)
 		report := fastPathReport(sha)
@@ -472,6 +494,29 @@ func TestPlanRejectsRepairConflictingWithSymbolicEntry(t *testing.T) {
 	})
 
 	require.ErrorContains(t, err, "conflicting planned target actions/checkout@v4.2.1")
+}
+
+func TestPlanExcludesLoadFailuresFromCommit(t *testing.T) {
+	const sha = "abc1230000000000000000000000000000000000"
+	blocked := checks.WorkflowReport{
+		Path:       ".github/workflows/broken.yml",
+		SkipCommit: true,
+		Inventory: []checks.InventoryEntry{{
+			Dep:  dep.Dependency{NWO: "actions/checkout", Ref: "v4", SHA: sha},
+			File: ".github/workflows/broken.yml",
+		}},
+	}
+	valid := checks.WorkflowReport{Path: ".github/workflows/valid.yml"}
+
+	record, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{blocked, valid},
+	}, PlanOptions{Pool: pinpool.New(2, nil)})
+	require.NoError(t, err)
+
+	require.Len(t, record.Workflows, 1)
+	assert.Equal(t, valid.Path, record.Workflows[0].Path)
+	require.Len(t, record.Entries, 1)
+	assert.Equal(t, blocked.Path, record.Entries[0].Workflows[0])
 }
 
 func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {

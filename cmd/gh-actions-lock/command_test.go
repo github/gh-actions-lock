@@ -1056,7 +1056,11 @@ func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
 			args := append(tt.args, workflowPath)
 			_, stderr, err := runCommandWithHTTP(t, reg, args...)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "parsing workflow YAML")
+			if tt.name == "migration enabled" {
+				assert.Contains(t, err.Error(), "parsing workflow YAML")
+			} else {
+				require.ErrorIs(t, err, errSilent)
+			}
 			assert.NotContains(t, stderr, "All 1 workflow valid")
 		})
 	}

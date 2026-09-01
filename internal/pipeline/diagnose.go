@@ -178,6 +178,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	wr := checks.WorkflowReport{Path: pw.Path}
 
 	if pw.LoadErr != nil {
+		wr.SkipCommit = true
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,
 			Category:     checks.NotPinned,
