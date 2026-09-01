@@ -610,6 +610,64 @@ jobs:
 	assert.Equal(t, []string{"example/action@main"}, transitiveDep.RequiredBy)
 }
 
+func TestCheckCommand_BareSHAKeepsSymbolicLockRootDirect(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
+				"a1": testRepoResponse("example/action", sha, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/branches"),
+		httpmock.JSONResponse([]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/branches"),
+		httpmock.JSONResponse([]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/tags"),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "v1", "commit": map[string]any{"sha": sha}},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@`+sha+`
+`,
+		"example/action@v1=sha1-"+sha,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--no-narrow", "--json=workflows", workflowPath,
+	)
+	require.NoError(t, err)
+
+	var payload struct {
+		Workflows []struct {
+			Dependencies []format.Dependency `json:"dependencies"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	require.Len(t, payload.Workflows, 1)
+	require.Len(t, payload.Workflows[0].Dependencies, 1)
+	assert.True(t, payload.Workflows[0].Dependencies[0].Direct)
+	assert.Contains(t, readTempLockfilePins(t), "    - 'example/action@v1'")
+}
+
 func TestCheckCommand_JSONDefaultFieldsExcludesDependencies(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)

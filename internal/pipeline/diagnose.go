@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
@@ -61,6 +62,9 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	directRefs := make(map[ghapi.NWORef]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {
 		directRefs[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+		if parserlock.IsFullSha(ref.Ref) {
+			directRefs[ghapi.ForNWORef(ref.Owner, ref.Repo, strings.ToLower(ref.Ref))] = true
+		}
 	}
 
 	// Resolve live state: hits cache when ParseAll's caller pre-warmed the
@@ -117,11 +121,10 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 
 	for _, dep := range pw.RecordedDeps {
-		owner, repo := dep.OwnerRepo()
 		wr.Inventory = append(wr.Inventory, checks.InventoryEntry{
 			Dep:    dep,
 			File:   pw.Path,
-			Direct: directRefs[ghapi.ForNWORef(owner, repo, dep.Ref)],
+			Direct: isDirectDependency(dep, directRefs),
 		})
 	}
 	parentMap := mergeParentMaps(pw.RecordedParents, resolvedParents)

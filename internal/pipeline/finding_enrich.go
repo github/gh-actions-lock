@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"strings"
+
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -18,8 +20,7 @@ func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directR
 	if f.Dependency == nil {
 		return
 	}
-	owner, repo := f.Dependency.OwnerRepo()
-	if directRefs[ghapi.ForNWORef(owner, repo, f.Dependency.Ref)] {
+	if isDirectDependency(*f.Dependency, directRefs) {
 		return
 	}
 	// Prefer the dep snapshot from the workflow's RecordedDeps (it has the
@@ -32,6 +33,12 @@ func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directR
 	if parents := parentMap[key]; len(parents) > 0 {
 		f.ParentNWO = parents[0]
 	}
+}
+
+func isDirectDependency(d dep.Dependency, directRefs map[ghapi.NWORef]bool) bool {
+	owner, repo := d.OwnerRepo()
+	return directRefs[ghapi.ForNWORef(owner, repo, d.Ref)] ||
+		d.SHA != "" && directRefs[ghapi.ForNWORef(owner, repo, strings.ToLower(d.SHA))]
 }
 
 // isTransitivePin reports whether the finding refers to a dep reached via
