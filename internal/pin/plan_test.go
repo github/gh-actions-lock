@@ -150,14 +150,14 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 
 	goodSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	// Both refs fold into one batched query: a0=good/action resolves,
+	// Both refs fold into one batched query: a0=old/action redirects and resolves,
 	// a1=bad/private is null (repo not found).
 	reg.Register(
-		httpmock.GraphQLForRepo("good", "action"),
+		httpmock.GraphQLForRepo("old", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": map[string]any{
-					"nameWithOwner": "good/action",
+					"nameWithOwner": "new/action",
 					"object": map[string]any{
 						"oid":  goodSHA,
 						"file": map[string]any{"object": map[string]any{"text": "name: Good\nruns:\n  using: node20\n"}},
@@ -176,7 +176,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 		Path: ".github/workflows/test.yml",
 		Findings: []checks.Finding{
 			{
-				ActionRef:  &parserlock.ActionRef{Owner: "good", Repo: "action", Ref: "v1"},
+				ActionRef:  &parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"},
 				Category:   "unpinned",
 				Severity:   checks.SeverityWarning,
 				Confidence: checks.ConfidenceHigh,
@@ -189,7 +189,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 			},
 		},
 		ActionRefs: []parserlock.ActionRef{
-			{Owner: "good", Repo: "action", Ref: "v1"},
+			{Owner: "old", Repo: "action", Ref: "v1"},
 			{Owner: "bad", Repo: "private", Ref: "main"},
 		},
 	}
@@ -219,10 +219,29 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	assert.Equal(t, "main", unresolved[0].Ref)
 	assert.Contains(t, unresolved[0].Reason, "not found")
 
-	// good/action must be pinned (not poisoned by the bad ref).
+	// The redirected action must be pinned under its canonical NWO, not
+	// misclassified as unresolved because the sibling failed.
 	require.Len(t, pinned, 1, "expected exactly one pinned entry")
-	assert.Equal(t, "good/action", pinned[0].NWO)
+	assert.Equal(t, "new/action", pinned[0].NWO)
 	assert.Equal(t, goodSHA, pinned[0].SHA)
+}
+
+func TestUnresolvedEntriesPreservesRefCase(t *testing.T) {
+	resolvedRef := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "Release"}
+	failedRef := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "release"}
+	wr := checks.WorkflowReport{Findings: []checks.Finding{
+		{ActionRef: &resolvedRef, Category: checks.NotPinned},
+		{ActionRef: &failedRef, Category: checks.NotPinned},
+	}}
+
+	got := unresolvedEntries(wr, []parserlock.ActionRef{resolvedRef, failedRef}, []dep.Dependency{{
+		NWO:          "new/action",
+		Ref:          resolvedRef.Ref,
+		OriginalRefs: []parserlock.ActionRef{resolvedRef},
+	}}, assert.AnError)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, failedRef.Ref, got[0].Ref)
 }
 
 // TestPlanWorkflow_AllResolutionsFail verifies that when ALL refs in a

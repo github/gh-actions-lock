@@ -8,6 +8,7 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -356,20 +357,24 @@ func addTransferredRepositoryRewrites(deps []dep.Dependency, directTracker lockf
 // resolve. On a partial failure deps holds the refs that did resolve, so only
 // the genuine misses (attempted and not in deps) are marked Unresolved.
 func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.ActionRef, deps []dep.Dependency, resolveErr error) []Entry {
-	resolved := make(map[string]bool, len(deps))
+	resolved := make(map[ghapi.NWORef]bool, len(deps))
 	for _, d := range deps {
-		resolved[strings.ToLower(d.NWO+"@"+d.Ref)] = true
+		owner, repo := d.OwnerRepo()
+		resolved[ghapi.ForNWORef(owner, repo, d.Ref)] = true
+		for _, ref := range d.OriginalRefs {
+			resolved[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+		}
 	}
-	attempted := make(map[string]bool, len(unrecordedRefs))
+	attempted := make(map[ghapi.NWORef]bool, len(unrecordedRefs))
 	for _, ref := range unrecordedRefs {
-		attempted[strings.ToLower(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
+		attempted[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
 	}
 	var out []Entry
 	for _, f := range wr.Findings {
 		if f.ActionRef == nil {
 			continue
 		}
-		key := strings.ToLower(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
+		key := ghapi.ForNWORef(f.ActionRef.Owner, f.ActionRef.Repo, f.ActionRef.Ref)
 		if !attempted[key] || resolved[key] {
 			continue
 		}
