@@ -55,6 +55,17 @@ func (d Dependency) OwnerRepo() (string, string) {
 	return owner, repo
 }
 
+// MatchesActionRef reports whether ref names this dependency directly,
+// including a bare SHA that matches symbolic lock metadata.
+func (d Dependency) MatchesActionRef(ref parserlock.ActionRef) bool {
+	owner, repo := d.OwnerRepo()
+	if !strings.EqualFold(owner, ref.Owner) || !strings.EqualFold(repo, ref.Repo) {
+		return false
+	}
+	return d.Ref == ref.Ref ||
+		parserlock.IsFullSha(ref.Ref) && strings.EqualFold(d.SHA, ref.Ref)
+}
+
 // HashAlgoOrDetect returns the hash algorithm, falling back to detection from SHA length.
 func (d Dependency) HashAlgoOrDetect() string {
 	if d.HashAlgo != "" {

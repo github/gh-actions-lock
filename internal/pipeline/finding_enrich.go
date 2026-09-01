@@ -1,10 +1,10 @@
 package pipeline
 
 import (
-	"strings"
+	"slices"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
-	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 )
 
@@ -16,7 +16,7 @@ import (
 // and a Dependency synthesized from the workflow ref / lockfile pin. This
 // is purely about pointing the user at the composite that pulled in a
 // transitively-pinned dep.
-func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directRefs map[ghapi.NWORef]bool, parentMap map[string][]string) {
+func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directRefs []parserlock.ActionRef, parentMap map[string][]string) {
 	if f.Dependency == nil {
 		return
 	}
@@ -35,10 +35,8 @@ func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directR
 	}
 }
 
-func isDirectDependency(d dep.Dependency, directRefs map[ghapi.NWORef]bool) bool {
-	owner, repo := d.OwnerRepo()
-	return directRefs[ghapi.ForNWORef(owner, repo, d.Ref)] ||
-		d.SHA != "" && directRefs[ghapi.ForNWORef(owner, repo, strings.ToLower(d.SHA))]
+func isDirectDependency(d dep.Dependency, directRefs []parserlock.ActionRef) bool {
+	return slices.ContainsFunc(directRefs, d.MatchesActionRef)
 }
 
 // isTransitivePin reports whether the finding refers to a dep reached via

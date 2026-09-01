@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
-	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -59,22 +57,13 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
 	}
 
-	directRefs := make(map[ghapi.NWORef]bool, len(pw.Refs))
-	for _, ref := range pw.Refs {
-		directRefs[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
-		if parserlock.IsFullSha(ref.Ref) {
-			directRefs[ghapi.ForNWORef(ref.Owner, ref.Repo, strings.ToLower(ref.Ref))] = true
-		}
-	}
-
 	// Resolve live state: hits cache when ParseAll's caller pre-warmed the
 	// resolver. Failure degrades to structural-only checks for any refs that
 	// couldn't be resolved — partial results are kept.
 	var liveDeps []dep.Dependency
-	var resolvedParents dep.ParentMap
 	if r != nil {
 		var resolveErr error
-		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, resolvableRefs(pw))
+		liveDeps, _, resolveErr = r.ResolveAllRecursive(ctx, resolvableRefs(pw))
 		if resolveErr != nil {
 			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {
@@ -124,10 +113,10 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		wr.Inventory = append(wr.Inventory, checks.InventoryEntry{
 			Dep:    dep,
 			File:   pw.Path,
-			Direct: isDirectDependency(dep, directRefs),
+			Direct: isDirectDependency(dep, pw.Refs),
 		})
 	}
-	parentMap := mergeParentMaps(pw.RecordedParents, resolvedParents)
+	parentMap := pw.RecordedParents
 	populateInventoryParents(wr.Inventory, parentMap)
 
 	var checkR checks.CheckResolver
@@ -141,7 +130,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap) {
 			continue
 		}
-		attachParent(&f, depByKey, directRefs, parentMap)
+		attachParent(&f, depByKey, pw.Refs, parentMap)
 		f.DocURL = DocURLFor(f.Category)
 		wr.Findings = append(wr.Findings, f)
 	}

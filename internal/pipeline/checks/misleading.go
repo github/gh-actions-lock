@@ -3,10 +3,12 @@ package checks
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
@@ -98,6 +100,12 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			Owner: parsed.Owner,
 			Repo:  parsed.Repo,
 			Ref:   parsed.Ref,
+		}
+		recorded := dep.Dependency{NWO: parsed.NWO, Ref: parsed.Ref, SHA: pin.SHA()}
+		if slices.ContainsFunc(pw.Refs, func(ref parserlock.ActionRef) bool {
+			return parserlock.IsFullSha(ref.Ref) && recorded.MatchesActionRef(ref)
+		}) {
+			continue
 		}
 		if f, ok := checkOneRefMoved(ctx, pw, ref, pin, r); ok {
 			out = append(out, f)

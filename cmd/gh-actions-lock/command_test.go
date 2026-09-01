@@ -477,6 +477,9 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
+	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+	setupGoSHA := "d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+	cacheSHA := "5a3ec84eff668545956fd18022155c47e93e2684"
 	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
 
 	// Direct refs are resolved in one batch.
@@ -484,8 +487,8 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-				"a1": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", setupGoSHA, compositeYAML),
 			},
 		}),
 	)
@@ -494,7 +497,7 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 		httpmock.GraphQLForRepo("actions", "cache"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
+				"a0": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -508,12 +511,31 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-`,
-		"actions/checkout@v6",
-		"actions/setup-go@v6",
-		// Transitive dependency (via actions/setup-go@v6).
-		"actions/cache@v4",
-	)
+`)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'actions/checkout@v6':\n" +
+		"    ref: 'v6'\n" +
+		"    commit: 'sha1-" + checkoutSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"  'actions/setup-go@v6':\n" +
+		"    ref: 'v6'\n" +
+		"    commit: 'sha1-" + setupGoSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"    uses:\n" +
+		"      - 'actions/cache@v4'\n" +
+		"  'actions/cache@v4':\n" +
+		"    ref: 'v4'\n" +
+		"    commit: 'sha1-" + cacheSHA + "'\n" +
+		"    owner_id: 3\n" +
+		"    repo_id: 3\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'actions/checkout@v6'\n" +
+		"    - 'actions/setup-go@v6'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTP(t, reg,
@@ -666,6 +688,44 @@ jobs:
 	require.Len(t, payload.Workflows[0].Dependencies, 1)
 	assert.True(t, payload.Workflows[0].Dependencies[0].Direct)
 	assert.Contains(t, readTempLockfilePins(t), "    - 'example/action@v1'")
+}
+
+func TestCheckCommand_BareSHASkipsSymbolicRefMovement(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	movedSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
+				"a1": testRepoResponse("example/action", movedSHA, nodeActionYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@`+sha+`
+`,
+		"example/action@v1=sha1-"+sha,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--no-fix", "--json=findings", workflowPath,
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, stdout, `"category": "ref-moved"`)
+	assert.NotContains(t, stdout, `"category": "ancestry-unknown"`)
+	assert.NotContains(t, stdout, `"category": "unreachable-pin"`)
+	assert.NotContains(t, stdout, "gh actions-lock --relock")
 }
 
 func TestCheckCommand_JSONDefaultFieldsExcludesDependencies(t *testing.T) {
@@ -1245,14 +1305,6 @@ func TestCheck_DefaultRun_RetainsMovedCompositeRecordedClosure(t *testing.T) {
 		}),
 	)
 	reg.Register(
-		httpmock.GraphQLForRepo("new", "child"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("new/child", newChildSHA, nodeActionYAML),
-			},
-		}),
-	)
-	reg.Register(
 		httpmock.REST("GET", "repos/example/action/compare/"),
 		httpmock.JSONResponse(map[string]any{
 			"status":            "ahead",
@@ -1269,16 +1321,39 @@ jobs:
     steps:
       - uses: example/action@main
 `)
-	writeTempCompositeLockfile(t, oldParentSHA, "old/child", "v1", oldChildSHA)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'example/action@main':\n" +
+		"    ref: 'main'\n" +
+		"    commit: 'sha1-" + oldParentSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"    uses:\n" +
+		"      - 'old/child@v1'\n" +
+		"  'old/child@v1':\n" +
+		"    ref: 'v1'\n" +
+		"    commit: 'sha1-" + oldChildSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"  'new/child@v2':\n" +
+		"    ref: 'v2'\n" +
+		"    commit: 'sha1-" + newChildSHA + "'\n" +
+		"    owner_id: 3\n" +
+		"    repo_id: 3\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'example/action@main'\n" +
+		"    - 'new/child@v2'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
 
 	stdout, _, err := runCommandWithHTTP(t, reg, "--json=findings", workflowPath)
 	require.NoError(t, err)
-	assert.NotContains(t, stdout, `"category": "stale"`)
+	assert.Contains(t, stdout, `"category": "stale"`)
 
-	lock := readTempLockfilePins(t)
-	assert.Contains(t, lock, "sha1-"+oldParentSHA)
-	assert.Contains(t, lock, "'old/child@v1'")
-	assert.NotContains(t, lock, "'new/child@v2'")
+	updatedLock := readTempLockfilePins(t)
+	assert.Contains(t, updatedLock, "sha1-"+oldParentSHA)
+	assert.Contains(t, updatedLock, "'old/child@v1'")
+	assert.NotContains(t, updatedLock, "'new/child@v2'")
 }
 
 func TestCheck_DefaultRun_RetainsRecordedClosureAfterPartialResolution(t *testing.T) {
