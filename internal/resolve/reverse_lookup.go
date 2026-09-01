@@ -279,7 +279,7 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 		if tag == "" && branch == "" {
 			var msg string
 			if LooksLikeSHA(d.Ref) {
-				msg = "this commit has no exact tag and is not on any branch — update the workflow to use a current upstream tag or branch, then rerun"
+				msg = "this commit has no exact tag and is not on any branch. Update the workflow to use a current upstream tag or branch, then rerun"
 			} else {
 				msg = fmt.Sprintf("commit %s is not reachable from any ref (tag or branch) — orphaned commit",
 					parserlock.ShortSHA(d.SHA))
