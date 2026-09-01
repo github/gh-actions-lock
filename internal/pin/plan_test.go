@@ -297,6 +297,33 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite for a sticky entry")
 	})
 
+	t.Run("sticky sibling does not suppress SHA metadata repair", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Tag = "v4.2.1"
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+		opts := PlanOptions{
+			Tagger:           tagger,
+			prevImpreciseNWO: map[string]bool{"actions/checkout": true},
+		}
+
+		result, err := planWorkflow(context.Background(), report, opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4.2.1", result.entries[0].Ref)
+		assert.Equal(t, sha, result.entries[0].AutoFixedRef)
+		require.Len(t, result.wplans, 1)
+		assert.Equal(t,
+			map[string]string{"actions/checkout@" + sha: "actions/checkout@v4.2.1"},
+			result.wplans[0].Rewrites,
+		)
+	})
+
 	t.Run("branch ref main is NOT narrowed", func(t *testing.T) {
 		// main is not version-shaped, so narrowing must not touch it.
 		// Non-version refs are intentional choices (e.g. vercel/next.js@canary).

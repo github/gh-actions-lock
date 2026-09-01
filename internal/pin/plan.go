@@ -656,16 +656,6 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		if !rewriteRefKeys[strings.ToLower(e.NWO)+"@"+e.Ref] {
 			continue
 		}
-		owner, repo := splitNWO(e.NWO)
-		if owner == "" {
-			continue
-		}
-		// Respect a prior imprecise precision choice, mirroring the
-		// slow-path guard in narrowDirectDeps: a verified v4 entry the
-		// user kept as v4 must not be narrowed on a no-op re-pin.
-		if opts.prevImpreciseNWO[strings.ToLower(e.NWO)] {
-			continue
-		}
 		if parserlock.IsFullSha(e.Ref) {
 			newRef := e.Tag
 			if newRef == "" {
@@ -678,6 +668,16 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 			rewrites[e.NWO+"@"+oldRef] = e.NWO + "@" + newRef
 			e.Ref = newRef
 			e.AutoFixedRef = oldRef
+			continue
+		}
+		owner, repo := splitNWO(e.NWO)
+		if owner == "" {
+			continue
+		}
+		// Respect a prior imprecise precision choice, mirroring the
+		// slow-path guard in narrowDirectDeps: a verified v4 entry the
+		// user kept as v4 must not be narrowed on a no-op re-pin.
+		if opts.prevImpreciseNWO[strings.ToLower(e.NWO)] {
 			continue
 		}
 		// Only narrow refs that are already version-shaped but imprecise
