@@ -63,14 +63,13 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	skippedRescan := 0
 	fastPlans := make([]fastPathPlan, len(parsed))
 	for i := range parsed {
-		if !opts.Rescan &&
-			len(parsed[i].LocalPaths) == 0 &&
+		if len(parsed[i].LocalPaths) == 0 &&
 			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
 			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
 			fastPlans[i] = planFastPath(parsed[i])
 		}
 	}
-	canonicalRepos := validateMutableRepositoryIdentities(ctx, r, opts.Pool, fastPlans)
+	canonicalRepos := lookupMutableRepositoryIdentities(ctx, r, opts.Pool, fastPlans)
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	for i := range parsed {
@@ -88,7 +87,8 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		plan := fastPlans[i]
 		trustedMutable := plan.mutableRefs[:0]
 		for _, ref := range plan.mutableRefs {
-			if canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)] {
+			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
+			if canonical == "" || strings.EqualFold(canonical, ref.NWO()) {
 				trustedMutable = append(trustedMutable, ref)
 			}
 		}
@@ -165,6 +165,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Phase 3: Diagnose.
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
+	appendKnownTransferFindings(report, parsed, canonicalRepos)
 	endDiag()
 	valid := report.IsValid()
 
@@ -175,7 +176,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}, nil
 }
 
-func validateMutableRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, plans []fastPathPlan) map[ghapi.Repo]bool {
+func lookupMutableRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, plans []fastPathPlan) map[ghapi.Repo]string {
 	type indexedRef struct {
 		idx int
 		ref parserlock.ActionRef
@@ -191,22 +192,52 @@ func validateMutableRepositoryIdentities(ctx context.Context, r *resolve.Resolve
 			}
 		}
 	}
-	results := make([]bool, len(repos))
+	results := make([]string, len(repos))
 	if r != nil {
 		_ = pinpool.RunTyped(pool, ctx, "", repos,
 			func(indexedRef) string { return "" },
 			func(ctx context.Context, _ int, item indexedRef) error {
 				canonical, err := r.CanonicalNWO(ctx, item.ref.Owner, item.ref.Repo)
-				results[item.idx] = err == nil && strings.EqualFold(canonical, item.ref.NWO())
+				if err == nil {
+					results[item.idx] = canonical
+				}
 				return nil
 			},
 		)
 	}
-	valid := make(map[ghapi.Repo]bool, len(repos))
+	canonical := make(map[ghapi.Repo]string, len(repos))
 	for _, item := range repos {
-		valid[ghapi.ForRepo(item.ref.Owner, item.ref.Repo)] = results[item.idx]
+		canonical[ghapi.ForRepo(item.ref.Owner, item.ref.Repo)] = results[item.idx]
 	}
-	return valid
+	return canonical
+}
+
+func appendKnownTransferFindings(report *checks.Report, parsed []checks.ParsedWorkflow, canonicalRepos map[ghapi.Repo]string) {
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		for _, ref := range parsed[i].Refs {
+			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
+			if canonical == "" || strings.EqualFold(canonical, ref.NWO()) || resolvedTransfer(wr.ResolvedDeps, ref) {
+				continue
+			}
+			appendTransferredRepositoryFindings(wr, []dep.Dependency{{
+				NWO:          canonical,
+				Ref:          ref.Ref,
+				OriginalRefs: []parserlock.ActionRef{ref},
+			}}, nil)
+		}
+	}
+}
+
+func resolvedTransfer(deps []dep.Dependency, original parserlock.ActionRef) bool {
+	for _, d := range deps {
+		for _, ref := range d.OriginalRefs {
+			if strings.EqualFold(ref.NWO(), original.NWO()) && ref.Ref == original.Ref {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // fastPathPlan describes how the pre-resolution fast path treats one

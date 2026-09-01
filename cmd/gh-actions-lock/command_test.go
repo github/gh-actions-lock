@@ -279,6 +279,48 @@ jobs:
 	assert.Equal(t, lockBefore, lockAfter)
 }
 
+func TestCheckCommand_VerifyRejectsKnownMoveWhenResolutionFails(t *testing.T) {
+	const (
+		oldNWO = "old/action"
+		newNWO = "new/action"
+		ref    = "v1"
+		sha    = "1111111111111111111111111111111111111111"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", `repos/old/action$`),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "action"),
+		httpmock.StatusResponse(http.StatusInternalServerError),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+ref+`
+`, oldNWO+"@"+ref+"=sha1-"+sha)
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--verify", "--json=valid,findings", workflowPath)
+
+	require.ErrorIs(t, err, errSilent)
+	var payload struct {
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.False(t, payload.Valid)
+	require.Len(t, payload.Findings, 2)
+	assert.Equal(t, "reachability-unknown", payload.Findings[0].Category)
+	assert.Equal(t, "ref-changed", payload.Findings[1].Category)
+	assert.Contains(t, payload.Findings[1].Detail, oldNWO+" has been renamed or transferred to "+newNWO)
+}
+
 func TestCheckCommand_RejectsAnchoredMovedRepositoryRewrite(t *testing.T) {
 	const (
 		oldNWO = "krzema12/github-actions-typing"
