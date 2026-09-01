@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
@@ -110,4 +112,25 @@ func TestDiagnoseOneParsed_SelfRepositoryResolutionError(t *testing.T) {
 	assert.Equal(t, checks.InvalidSelfRepositoryRef, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
 	assert.False(t, wr.IsValid())
+}
+
+func TestTransferredRepositoryFindingNamesRemoteComposite(t *testing.T) {
+	original := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"}
+	wr := checks.WorkflowReport{Path: ".github/workflows/ci.yml"}
+
+	appendTransferredRepositoryFindings(&wr, []dep.Dependency{{
+		NWO:          "new/action",
+		Ref:          "v1",
+		OriginalRefs: []parserlock.ActionRef{original},
+	}}, dep.ParentMap{
+		"old/action@v1": {"root/composite@v2"},
+	})
+
+	require.Len(t, wr.Findings, 1)
+	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
+	assert.Contains(t, wr.Findings[0].Detail, "old/action")
+	assert.Contains(t, wr.Findings[0].Detail, "new/action")
+	assert.Contains(t, wr.Findings[0].Detail, "root/composite@v2")
+	assert.Equal(t, "root/composite@v2", wr.Findings[0].ParentNWO)
+	assert.Contains(t, wr.Findings[0].Remediation, "upstream composite")
 }

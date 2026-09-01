@@ -133,6 +133,50 @@ jobs:
 	}
 }
 
+func TestCheckCommand_VerifyRejectsMovedRepositoryInExistingLockfile(t *testing.T) {
+	const (
+		oldNWO = "krzema12/github-actions-typing"
+		newNWO = "typesafegithub/github-actions-typing"
+		ref    = "v2.2.2"
+		sha    = "9ddf35b71a482be7d8922b28e8d00df16b77e315"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("krzema12", "github-actions-typing"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(newNWO, sha, nodeActionYAML),
+			},
+		}),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+ref+`
+`, oldNWO+"@"+ref+"=sha1-"+sha)
+	workflowBefore, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	lockBefore, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg, "--verify", "--no-narrow", workflowPath)
+
+	require.Error(t, err)
+	assert.Contains(t, stdout+stderr, "repository "+oldNWO+" has been renamed or transferred to "+newNWO)
+	workflowAfter, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflowBefore, workflowAfter)
+	lockAfter, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, lockBefore, lockAfter)
+}
+
 func TestCheckCommand_RejectsAnchoredMovedRepositoryRewrite(t *testing.T) {
 	const (
 		oldNWO = "krzema12/github-actions-typing"

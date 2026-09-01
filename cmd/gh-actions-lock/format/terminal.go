@@ -121,7 +121,7 @@ func PresentReadOnlyFailures(out *ui.UI, report *checks.Report) (hasFixable bool
 		g := groups[key]
 		out.TermBlank()
 		for _, f := range g.findings {
-			if IsAutoFixable(f.Category) {
+			if IsAutoFixable(f) {
 				hasFixable = true
 			}
 			renderTermFindingDetail(out, f, key)
@@ -436,8 +436,11 @@ func IsAlertedCategory(c checks.Category) bool {
 // (unreachable-pin, misleading-sha) need investigation or --accept-moved, and
 // local-path actions aren't supported at all — so none of those should
 // trigger the "Re-run without --no-fix to apply fixes" hint.
-func IsAutoFixable(c checks.Category) bool {
-	switch c {
+func IsAutoFixable(f checks.Finding) bool {
+	if f.Category == checks.RefChanged && f.ParentNWO != "" {
+		return false
+	}
+	switch f.Category {
 	case checks.NotPinned, checks.RefChanged, checks.Stale:
 		return true
 	}
