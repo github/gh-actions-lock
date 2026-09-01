@@ -261,15 +261,11 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 			results[idx].Err = fmt.Errorf("failed to parse: %w", err)
 			continue
 		}
-		if repo.NameWithOwner != "" && !strings.EqualFold(repo.NameWithOwner, ref.NWO()) {
-			owner, name, ok := strings.Cut(repo.NameWithOwner, "/")
-			if !ok || owner == "" || name == "" {
-				results[idx].Err = fmt.Errorf("invalid canonical repository name %q", repo.NameWithOwner)
+		if repo.NameWithOwner != "" {
+			if err := canonicalizeActionFileResult(&results[idx], ref, repo.NameWithOwner); err != nil {
+				results[idx].Err = err
 				continue
 			}
-			results[idx].OriginalNWO = ref.NWO()
-			results[idx].Owner = owner
-			results[idx].Repo = name
 		}
 
 		if repo.Object == nil || repo.Object.OID == "" {
@@ -298,6 +294,20 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 	}
 
 	return results
+}
+
+func canonicalizeActionFileResult(result *ActionFileResult, ref ActionFileRequest, canonical string) error {
+	owner, name, ok := strings.Cut(canonical, "/")
+	if !ok || owner == "" || name == "" {
+		return fmt.Errorf("invalid canonical repository name %q", canonical)
+	}
+	if strings.EqualFold(canonical, ref.NWO()) {
+		return nil
+	}
+	result.OriginalNWO = ref.NWO()
+	result.Owner = owner
+	result.Repo = name
+	return nil
 }
 
 // samlBlockedOwners returns the set of repository owners whose resolution

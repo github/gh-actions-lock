@@ -81,7 +81,10 @@ func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
 	// GraphQL transport returns SAML error for actions/checkout.
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodGet {
-			return jsonHTTP(map[string]any{"visibility": "public"})
+			return jsonHTTP(map[string]any{
+				"full_name":  "actions/checkout",
+				"visibility": "public",
+			})
 		}
 		return jsonHTTP(map[string]any{
 			"data": map[string]any{"a0": nil},
@@ -177,6 +180,10 @@ func TestResolveActionFiles_RESTOnlyUsesPrivateRepo(t *testing.T) {
 			t.Errorf("fallback request method = %s, want GET", r.Method)
 		}
 		switch {
+		case r.URL.Path == "/repos/actions/checkout":
+			json.NewEncoder(w).Encode(map[string]string{"full_name": "actions/checkout"})
+		case r.URL.Path == "/repos/actions/setup-go":
+			json.NewEncoder(w).Encode(map[string]string{"full_name": "actions/setup-go"})
 		case strings.Contains(r.URL.Path, "/commits/"):
 			json.NewEncoder(w).Encode(map[string]string{"sha": "abc123def456abc123def456abc123def456abc1"})
 		case strings.Contains(r.URL.Path, "/contents/"):
@@ -215,6 +222,101 @@ func TestResolveActionFiles_RESTOnlyUsesPrivateRepo(t *testing.T) {
 	}
 }
 
+func TestResolveActionFiles_RESTFallbackCanonicalizesMovedRepository(t *testing.T) {
+	const (
+		oldNWO = "old/action"
+		newNWO = "new/action"
+		sha    = "abc123def456abc123def456abc123def456abc1"
+	)
+	assertCanonical := func(t *testing.T, result ActionFileResult) {
+		t.Helper()
+		if result.Err != nil {
+			t.Fatalf("resolution failed: %v", result.Err)
+		}
+		if result.OriginalNWO != oldNWO {
+			t.Fatalf("original repository = %q, want %q", result.OriginalNWO, oldNWO)
+		}
+		if got := result.Owner + "/" + result.Repo; got != newNWO {
+			t.Fatalf("canonical repository = %q, want %q", got, newNWO)
+		}
+		if result.CommitOID != sha {
+			t.Fatalf("commit = %q, want %q", result.CommitOID, sha)
+		}
+	}
+
+	t.Run("REST only", func(t *testing.T) {
+		t.Setenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY", "1")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/repos/old/action":
+				json.NewEncoder(w).Encode(map[string]string{"full_name": newNWO})
+			case strings.HasPrefix(r.URL.Path, "/repos/new/action/commits/"):
+				json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+			case strings.HasPrefix(r.URL.Path, "/repos/new/action/contents/"):
+				fmt.Fprint(w, "name: moved action")
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		c, err := New("github.com", WithClientTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("REST-only mode used authenticated transport: %s %s", req.Method, req.URL)
+			return nil, nil
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.anonBaseURL = srv.URL
+
+		results := c.ResolveActionFiles(context.Background(), []ActionFileRequest{{
+			Owner: "old", Repo: "action", Ref: "v1",
+		}})
+		assertCanonical(t, results[0])
+	})
+
+	t.Run("SSO fallback", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/repos/new/action/commits/"):
+				json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+			case strings.HasPrefix(r.URL.Path, "/repos/new/action/contents/"):
+				fmt.Fprint(w, "name: moved action")
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet {
+				return jsonHTTP(map[string]any{
+					"full_name":  newNWO,
+					"visibility": "public",
+				})
+			}
+			return jsonHTTP(map[string]any{
+				"data": map[string]any{"a0": nil},
+				"errors": []map[string]any{{
+					"message":    "Resource protected by organization SAML enforcement.",
+					"path":       []any{"a0"},
+					"extensions": map[string]any{"saml_failure": true},
+				}},
+			})
+		})
+		c, err := New("github.com", WithClientTransport(tr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.anonBaseURL = srv.URL
+
+		results := c.ResolveActionFiles(context.Background(), []ActionFileRequest{{
+			Owner: "old", Repo: "action", Ref: "v1",
+		}})
+		assertCanonical(t, results[0])
+	})
+}
+
 func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -237,7 +339,10 @@ func TestResolveActionFiles_BadCredentialsFallbackFailsClosed(t *testing.T) {
 					if tt.repoStatus != http.StatusOK {
 						return statusResponse(req, tt.repoStatus)
 					}
-					return jsonHTTP(map[string]any{"visibility": "private"})
+					return jsonHTTP(map[string]any{
+						"full_name":  "example/action",
+						"visibility": "private",
+					})
 				}
 				return badCredentialsResponse(req)
 			})

@@ -676,7 +676,7 @@ STUB_WIRING = {
            JSON.generate([{ name: "v4", commit: { sha: fake_sha } }])]
         elsif req.path.match?(%r{/repos/actions/checkout$})
           [200, { "Content-Type" => "application/json" },
-           JSON.generate({ default_branch: "main", visibility: "private", pushed_at: "2024-01-01T00:00:00Z", id: 1, owner: { id: 44036562 } })]
+           JSON.generate({ full_name: "actions/checkout", default_branch: "main", visibility: "private", pushed_at: "2024-01-01T00:00:00Z", id: 1, owner: { id: 44036562 } })]
         elsif req.path.include?("/compare/")
           [200, { "Content-Type" => "application/json" },
            JSON.generate({ status: "behind", merge_base_commit: { sha: fake_sha } })]

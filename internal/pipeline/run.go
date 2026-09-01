@@ -12,6 +12,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // RunOptions configures the Run pipeline.
@@ -62,14 +63,20 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// the NWO.
 	skippedRescan := 0
 	fastPlans := make([]fastPathPlan, len(parsed))
+	identityRefs := make([][]repositoryIdentityRef, len(parsed))
+	var lockSnapshot parserlock.File
+	if opts.Store != nil {
+		lockSnapshot = opts.Store.File()
+	}
 	for i := range parsed {
 		if len(parsed[i].LocalPaths) == 0 &&
 			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
 			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
 			fastPlans[i] = planFastPath(parsed[i])
+			identityRefs[i] = repositoryIdentityRefs(parsed[i].Path, fastPlans[i], lockSnapshot)
 		}
 	}
-	canonicalRepos := lookupMutableRepositoryIdentities(ctx, r, opts.Pool, fastPlans)
+	canonicalRepos := lookupRepositoryIdentities(ctx, r, opts.Pool, identityRefs)
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	for i := range parsed {
@@ -90,6 +97,16 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
 			if canonical != "" && strings.EqualFold(canonical, ref.NWO()) {
 				trustedMutable = append(trustedMutable, ref)
+			}
+		}
+		for _, item := range identityRefs[i] {
+			if item.Parent == "" {
+				continue
+			}
+			canonical := canonicalRepos[ghapi.ForRepo(item.Ref.Owner, item.Ref.Repo)]
+			if canonical == "" || !strings.EqualFold(canonical, item.Ref.NWO()) {
+				trustedMutable = nil
+				break
 			}
 		}
 		plan.resolved = plan.resolved && len(trustedMutable) == len(plan.mutableRefs)
@@ -165,7 +182,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Phase 3: Diagnose.
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
-	appendKnownTransferFindings(report, parsed, canonicalRepos)
+	appendKnownTransferFindings(report, identityRefs, canonicalRepos)
 	endDiag()
 	valid := report.IsValid()
 
@@ -176,15 +193,71 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}, nil
 }
 
-func lookupMutableRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, plans []fastPathPlan) map[ghapi.Repo]string {
+type repositoryIdentityRef struct {
+	Ref    parserlock.ActionRef
+	Parent string
+}
+
+func repositoryIdentityRefs(path string, plan fastPathPlan, file parserlock.File) []repositoryIdentityRef {
+	refs := make([]repositoryIdentityRef, 0, len(plan.mutableRefs))
+	index := make(map[ghapi.NWORef]int)
+	mutable := make(map[ghapi.NWORef]bool, len(plan.mutableRefs))
+	add := func(ref parserlock.ActionRef, parent string) {
+		key := ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)
+		if i, ok := index[key]; ok {
+			if parent != "" {
+				refs[i].Parent = parent
+			}
+			return
+		}
+		index[key] = len(refs)
+		refs = append(refs, repositoryIdentityRef{Ref: ref, Parent: parent})
+	}
+
+	for _, ref := range plan.mutableRefs {
+		mutable[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+	}
+	seen := make(map[string]bool)
+	var walk func(string, string)
+	walk = func(pinKey, parent string) {
+		if seen[pinKey] {
+			return
+		}
+		seen[pinKey] = true
+		pin, ok := parserlock.ParsePin(pinKey)
+		if !ok {
+			return
+		}
+		add(parserlock.ActionRef{Owner: pin.Owner, Repo: pin.Repo, Ref: pin.Ref}, parent)
+		for _, child := range file.Dependencies[pinKey].Uses {
+			walk(child, pinKey)
+		}
+	}
+	for _, root := range file.Workflows[workflowfile.KeyFromPath(path)] {
+		pin, ok := parserlock.ParsePin(root)
+		if !ok || !mutable[ghapi.ForNWORef(pin.Owner, pin.Repo, pin.Ref)] {
+			continue
+		}
+		for _, child := range file.Dependencies[root].Uses {
+			walk(child, root)
+		}
+	}
+	for _, ref := range plan.mutableRefs {
+		add(ref, "")
+	}
+	return refs
+}
+
+func lookupRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, workflows [][]repositoryIdentityRef) map[ghapi.Repo]string {
 	type indexedRef struct {
 		idx int
 		ref parserlock.ActionRef
 	}
 	var repos []indexedRef
 	seen := make(map[ghapi.Repo]bool)
-	for _, plan := range plans {
-		for _, ref := range plan.mutableRefs {
+	for _, identities := range workflows {
+		for _, item := range identities {
+			ref := item.Ref
 			key := ghapi.ForRepo(ref.Owner, ref.Repo)
 			if !seen[key] {
 				seen[key] = true
@@ -212,10 +285,11 @@ func lookupMutableRepositoryIdentities(ctx context.Context, r *resolve.Resolver,
 	return canonical
 }
 
-func appendKnownTransferFindings(report *checks.Report, parsed []checks.ParsedWorkflow, canonicalRepos map[ghapi.Repo]string) {
+func appendKnownTransferFindings(report *checks.Report, workflows [][]repositoryIdentityRef, canonicalRepos map[ghapi.Repo]string) {
 	for i := range report.Workflows {
 		wr := &report.Workflows[i]
-		for _, ref := range parsed[i].Refs {
+		for _, item := range workflows[i] {
+			ref := item.Ref
 			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
 			if canonical == "" || strings.EqualFold(canonical, ref.NWO()) || resolvedTransfer(wr.ResolvedDeps, ref) {
 				continue
@@ -226,7 +300,13 @@ func appendKnownTransferFindings(report *checks.Report, parsed []checks.ParsedWo
 				OriginalRefs: []parserlock.ActionRef{ref},
 			}
 			wr.ResolvedDeps = append(wr.ResolvedDeps, known)
-			appendTransferredRepositoryFindings(wr, []dep.Dependency{known}, nil)
+			if item.Parent != "" {
+				if wr.ResolvedParents == nil {
+					wr.ResolvedParents = make(dep.ParentMap)
+				}
+				wr.ResolvedParents[ref.NWO()+"@"+ref.Ref] = []string{item.Parent}
+			}
+			appendTransferredRepositoryFindings(wr, []dep.Dependency{known}, wr.ResolvedParents)
 		}
 	}
 }

@@ -449,6 +449,77 @@ jobs:
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+func TestCheckCommand_RejectsTransferredRecordedRemoteCompositeRef(t *testing.T) {
+	const (
+		parentNWO = "root/composite"
+		oldNWO    = "old/action"
+		newNWO    = "new/action"
+		parentSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		childSHA  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", `repos/root/composite$`),
+		httpmock.JSONResponse(map[string]any{"full_name": parentNWO}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/old/action$`),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("root", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(parentNWO, parentSHA, "runs:\n  using: composite\n  steps:\n    - uses: "+oldNWO+"@v1\n"),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(newNWO, childSHA, nodeActionYAML),
+			},
+		}),
+	)
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
+	workflow := "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: " + parentNWO + "@v1\n"
+	require.NoError(t, os.WriteFile(workflowPath, []byte(workflow), 0o600))
+	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
+	lockYAML := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  '" + parentNWO + "@v1':\n" +
+		"    ref: 'v1'\n    commit: 'sha1-" + parentSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"    uses:\n      - '" + oldNWO + "@v1'\n" +
+		"  '" + oldNWO + "@v1':\n" +
+		"    ref: 'v1'\n    commit: 'sha1-" + childSHA + "'\n    owner_id: 2\n    repo_id: 2\n" +
+		"workflows:\n  '.github/workflows/ci.yml':\n    - '" + parentNWO + "@v1'\n"
+	require.NoError(t, os.WriteFile(lockPath, []byte(lockYAML), 0o600))
+	t.Chdir(dir)
+	workflowArg := ".github/workflows/ci.yml"
+
+	workflowBefore, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	lockBefore, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowArg)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, oldNWO+" has been renamed or transferred to "+newNWO)
+	require.ErrorContains(t, err, "upstream composite "+parentNWO+"@v1")
+	assert.NotContains(t, stdout+stderr, "All workflows valid")
+	workflowAfter, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflowBefore, workflowAfter)
+	lockAfter, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, lockBefore, lockAfter)
+}
+
 const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
 
 func testRepoResponse(nameWithOwner, oid, actionYAML string) map[string]any {
