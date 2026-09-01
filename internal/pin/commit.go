@@ -60,6 +60,10 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 
 	// Phase 2: Update lockfile entries for each scanned workflow.
 	pinnedByWorkflow := groupPinnedByWorkflow(rec)
+	scopedWorkflows := make(map[string]bool, len(rec.Workflows))
+	for _, wp := range rec.Workflows {
+		scopedWorkflows[workflowfile.KeyFromPath(wp.Path)] = true
+	}
 	if len(rec.Workflows) > 0 {
 		progress("Updating lockfile")
 	}
@@ -73,7 +77,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
 		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
-		if err := store.Set(ctx, wfKey, deps, parentMap, directKeys); err != nil {
+		if err := store.SetScoped(ctx, wfKey, deps, parentMap, directKeys, scopedWorkflows); err != nil {
 			return fmt.Errorf("updating lockfile for %s: %w", wfPath, err)
 		}
 	}

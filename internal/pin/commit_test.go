@@ -150,3 +150,43 @@ jobs:
 	assert.NotContains(t, string(got), "owner/action@main")
 	assert.NotContains(t, string(got), "actions/setup-go@v5")
 }
+
+func TestCommitScopedParentAdvanceKeepsUntouchedWorkflowEdges(t *testing.T) {
+	dir := t.TempDir()
+	ciPath := filepath.Join(".github", "workflows", "ci.yml")
+	releasePath := filepath.Join(".github", "workflows", "release.yml")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ciPath), []byte("on: push\njobs: {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, releasePath), []byte("on: push\njobs: {}\n"), 0o644))
+	t.Chdir(dir)
+
+	ctx := context.Background()
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+	parent := dep.Dependency{NWO: "owner/composite", Ref: "main", SHA: strings.Repeat("1", 40), HashAlgo: "sha1"}
+	releaseChild := dep.Dependency{NWO: "owner/release-child", Ref: "v1", SHA: strings.Repeat("2", 40), HashAlgo: "sha1"}
+	require.NoError(t, store.Set(ctx, ciPath,
+		[]dep.Dependency{parent}, nil, map[string]bool{parent.Key(): true}))
+	require.NoError(t, store.Set(ctx, releasePath,
+		[]dep.Dependency{parent, releaseChild},
+		map[string][]string{releaseChild.Key(): {parent.Key()}},
+		map[string]bool{parent.Key(): true}))
+	require.NoError(t, store.Save())
+
+	newParentSHA := strings.Repeat("3", 40)
+	ciChildSHA := strings.Repeat("4", 40)
+	rec := &Record{
+		Entries: []Entry{
+			{NWO: parent.NWO, Ref: parent.Ref, SHA: newParentSHA, Resolution: Pinned, Direct: true, Workflows: []string{ciPath}},
+			{NWO: "owner/ci-child", Ref: "v2", SHA: ciChildSHA, Resolution: Pinned, RequiredBy: []string{parent.Key()}, Workflows: []string{ciPath}},
+		},
+		Workflows: []WorkflowPlan{{Path: ciPath}},
+	}
+	require.NoError(t, Commit(ctx, rec, store, nil))
+
+	file := store.File()
+	action := file.Dependencies["owner/composite@main"]
+	assert.Equal(t, "sha1-"+newParentSHA, action.Commit)
+	assert.Equal(t, []string{"owner/ci-child@v2", "owner/release-child@v1"}, action.Uses)
+	assert.Contains(t, file.Dependencies, "owner/release-child@v1")
+}

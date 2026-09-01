@@ -351,6 +351,16 @@ func (s *State) AllDeps() []dep.Dependency {
 // Resolution of owner/repo numeric IDs happens lazily per NWO and is cached
 // for the lifetime of the store.
 func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys map[string]bool) error {
+	return s.set(ctx, workflowKey, deps, parentMap, directKeys, nil)
+}
+
+// SetScoped updates a workflow while preserving existing graph edges on
+// dependencies also reached by workflows outside the current command scope.
+func (s *State) SetScoped(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys, scopedWorkflows map[string]bool) error {
+	return s.set(ctx, workflowKey, deps, parentMap, directKeys, scopedWorkflows)
+}
+
+func (s *State) set(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys, scopedWorkflows map[string]bool) error {
 	// Resolve repo IDs for every unique owner/repo BEFORE taking s.mu so
 	// concurrent pin workers don't serialize on the network round-trip.
 	// lookupIDs is safe to call without s.mu and dedups in-flight fetches
@@ -463,7 +473,10 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			if ref == "" {
 				ref = existing.Ref
 			}
-			if existing.Commit == commit {
+			if existing.Commit == commit || s.reachableFromUnscopedWorkflow(pinKey, workflowKey, scopedWorkflows) {
+				// ponytail: actions.lock stores a global edge union, so keep the
+				// old union when an untouched workflow reaches this parent.
+				// A full-scope refresh can replace it exactly.
 				for _, u := range existing.Uses {
 					usesSet[u] = true
 				}
@@ -488,6 +501,36 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 	sort.Strings(directPins)
 	s.file.Workflows[workflowKey] = directPins
 	return nil
+}
+
+func (s *State) reachableFromUnscopedWorkflow(target, workflowKey string, scopedWorkflows map[string]bool) bool {
+	var reaches func(string, map[string]bool) bool
+	reaches = func(key string, seen map[string]bool) bool {
+		if key == target {
+			return true
+		}
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+		for _, child := range s.file.Dependencies[key].Uses {
+			if reaches(child, seen) {
+				return true
+			}
+		}
+		return false
+	}
+	for workflow, roots := range s.file.Workflows {
+		if workflow == workflowKey || scopedWorkflows[workflow] {
+			continue
+		}
+		for _, root := range roots {
+			if reaches(root, make(map[string]bool)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Save persists the lockfile to disk, garbage-collecting orphan action
