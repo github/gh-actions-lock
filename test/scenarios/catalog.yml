@@ -2042,7 +2042,7 @@ scenarios:
         - "'actions/checkout@main':"
         - "ref: 'main'"
         - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
-      lockfile_comment_excludes: "11d5960a326750d5838078e36cf38b85af677262"
+      lockfile_comment_excludes: "f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a"
 
   - name: onboard_roundtrip_v002
     category: onboarding
