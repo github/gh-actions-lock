@@ -130,18 +130,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if rewriteRefs == nil {
 		rewriteRefs = wr.ActionRefs
 	}
-	selfActionRefKeys := actionRefKeys(wr.SelfActionRefs)
-	if opts.PartialScan && !opts.NoNarrow && opts.Tagger != nil {
-		// ponytail: refuse any local-action repair in a partial scan; track
-		// action-to-workflow ownership if this conservative boundary hurts.
-		for _, inv := range wr.Inventory {
-			key := strings.ToLower(inv.Dep.NWO) + "@" + inv.Dep.Ref
-			if parserlock.IsFullSha(inv.Dep.Ref) && (inv.Dep.Tag != "" || inv.Dep.Branch != "") && selfActionRefKeys[key] {
-				return planResult{}, fmt.Errorf("cannot rewrite %s in a shared local action during a partial workflow scan; scan all workflows", key)
-			}
-		}
-	}
-
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
@@ -150,6 +138,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
+		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
+			return planResult{}, err
+		}
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -184,6 +175,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
+		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
+			return planResult{}, err
+		}
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -278,6 +272,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
+	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
+		return planResult{}, err
+	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
 			Path:            wr.Path,
@@ -297,6 +294,24 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = append(entries, informationalEntries(wr, opts)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
+}
+
+func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlock.ActionRef, rewrites map[string]string) error {
+	if !opts.PartialScan || len(rewrites) == 0 {
+		return nil
+	}
+	selfKeys := actionRefKeys(selfActionRefs)
+	for oldUses := range rewrites {
+		ref := parserlock.ParseActionRef(oldUses)
+		if ref == nil {
+			continue
+		}
+		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
+		if selfKeys[key] {
+			return fmt.Errorf("cannot rewrite %s in a shared local action during a partial workflow scan; scan all workflows", key)
+		}
+	}
+	return nil
 }
 
 // unresolvedEntries flags findings whose refs were attempted but failed to

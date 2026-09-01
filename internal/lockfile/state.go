@@ -416,9 +416,6 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			}
 		}
 		oldRef := d.OriginalRef
-		if oldRef == "" {
-			oldRef = d.SHA
-		}
 		if !isSHARef(d.Ref) && isSHARef(oldRef) {
 			shaPin := pin
 			shaPin.Ref = oldRef

@@ -173,9 +173,7 @@ jobs:
 
 	t.Chdir(dir)
 
-	_, _, err := runCommandWithHTTP(t, reg,
-		".github/workflows/workflow.yml",
-	)
+	_, _, err := runCommandWithHTTP(t, reg)
 	require.NoError(t, err)
 
 	read := func(rel string) string {
