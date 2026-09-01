@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -322,6 +323,76 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 			map[string]string{"actions/checkout@" + sha: "actions/checkout@v4.2.1"},
 			result.wplans[0].Rewrites,
 		)
+	})
+
+	t.Run("SHA metadata does not rewrite to itself", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Branch = sha
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, sha, result.entries[0].Ref)
+		assert.Empty(t, result.entries[0].AutoFixedRef)
+		assert.Empty(t, result.wplans[0].Rewrites)
+	})
+
+	t.Run("repair preserves source NWO spelling", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Tag = "v4.2.1"
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "Actions",
+			Repo:  "Checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4.2.1", result.entries[0].Ref)
+		assert.Equal(t,
+			map[string]string{"Actions/Checkout@" + sha: "Actions/Checkout@v4.2.1"},
+			result.wplans[0].Rewrites,
+		)
+	})
+
+	t.Run("repair declines conflicting symbolic target", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		store, err := lockfile.LoadState(t.TempDir(), fakeMeta{})
+		require.NoError(t, err)
+		target := dep.Dependency{
+			NWO:      "actions/checkout",
+			Ref:      "v4.2.1",
+			SHA:      "def4560000000000000000000000000000000000",
+			HashAlgo: "sha1",
+		}
+		require.NoError(t, store.Set(context.Background(), "other.yml",
+			[]dep.Dependency{target}, nil, map[string]bool{target.Key(): true}))
+
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Tag = target.Ref
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger, Store: store}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, sha, result.entries[0].Ref)
+		assert.Empty(t, result.entries[0].AutoFixedRef)
+		assert.Empty(t, result.wplans[0].Rewrites)
 	})
 
 	t.Run("branch ref main is NOT narrowed", func(t *testing.T) {
