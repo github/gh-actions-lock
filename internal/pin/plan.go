@@ -132,7 +132,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
-	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
+	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0 ||
+		opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0
 
 	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
@@ -159,12 +160,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
 	entries = verifiedEntries(inventory, wr.Path)
 
-	// A moved *transitive* dep is pruned from inventory but is not a direct
-	// ActionRef, so partitionByInventory marks nothing unrecorded and the
-	// verified fast path would silently drop it instead of bumping it. Force
-	// the workflow's direct roots through recursive resolution so the moved
-	// transitive is re-pinned to its current SHA.
-	if len(unrecordedRefs) == 0 && repinMoved {
+	// A moved transitive is absent from the direct ActionRefs, so refresh the
+	// complete scoped closure whenever movement is accepted.
+	if repinMoved {
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
@@ -179,7 +177,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
-		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
+		unresolved := unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)
+		if repinMoved {
+			entries = append(verifiedEntries(wr.Inventory, wr.Path), unresolved...)
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+			return planResult{entries: entries, wplans: wplans}, nil
+		}
+		entries = append(entries, unresolved...)
 		if len(deps) == 0 {
 			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 			return planResult{entries: entries, wplans: wplans}, nil
@@ -279,8 +283,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Build entries for all pinned deps (skip any already emitted from inventory).
 	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA)...)
 
-	// Record findings that are informational (ref-moved, misleading-sha).
-	entries = append(entries, informationalEntries(wr, opts)...)
+	entries = append(entries, misleadingSHAEntries(wr)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
 }
@@ -509,20 +512,10 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 	return out
 }
 
-// informationalEntries records ref-moved and misleading-sha findings as
-// Investigate entries. When the run re-pins moved refs (--relock or
-// --accept-moved), ref-moved is resolved by the re-pin and is not recorded
-// for investigation.
-func informationalEntries(wr checks.WorkflowReport, opts PlanOptions) []Entry {
+func misleadingSHAEntries(wr checks.WorkflowReport) []Entry {
 	var out []Entry
 	for _, f := range wr.Findings {
-		switch f.Category {
-		case checks.RefMoved:
-			if repinsMoved(opts) {
-				continue
-			}
-			out = append(out, informationalEntry(f, wr.Path))
-		case checks.MisleadingSHA:
+		if f.Category == checks.MisleadingSHA {
 			out = append(out, informationalEntry(f, wr.Path))
 		}
 	}
@@ -601,7 +594,6 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 	return out
 }
 
-// repinsMoved reports whether this run re-resolves benign ref-moved deps.
 func repinsMoved(opts PlanOptions) bool {
 	return opts.Relock || opts.AcceptMoved
 }

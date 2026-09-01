@@ -27,14 +27,7 @@ func TestCheckCommand_JSONWithHTTPMocks(t *testing.T) {
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-			},
-		}),
-	)
-	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", "4a3601121dd01d1626a1e23e37211e3254c1c06c", nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", "4a3601121dd01d1626a1e23e37211e3254c1c06c", nodeActionYAML),
 			},
 		}),
 	)
@@ -54,7 +47,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -155,6 +148,28 @@ func writeTempLockfile(t *testing.T, repoDir, wfName string, pinStrings []string
 	require.NoError(t, os.WriteFile(p, []byte(sb.String()), 0o600))
 }
 
+func writeTempCompositeLockfile(t *testing.T, parentSHA, childNWO, childRef, childSHA string) {
+	t.Helper()
+	content := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'example/action@main':\n" +
+		"    ref: 'main'\n" +
+		"    commit: 'sha1-" + parentSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"    uses:\n" +
+		"      - '" + childNWO + "@" + childRef + "'\n" +
+		"  '" + childNWO + "@" + childRef + "':\n" +
+		"    ref: '" + childRef + "'\n" +
+		"    commit: 'sha1-" + childSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'example/action@main'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(content), 0o600))
+}
+
 // readTempLockfilePins returns the raw pin strings from the actions.lock file
 // in the current working directory. Useful for assertions in write/upgrade
 // tests that previously inspected the workflow YAML directly.
@@ -231,6 +246,7 @@ func TestCheck_Reachable(t *testing.T) {
 			},
 		}),
 	)
+
 	workflowPath := writeTempWorkflow(t, `
 name: ci
 on: push
@@ -244,7 +260,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -296,7 +312,6 @@ func TestCheck_UnreachablePin_NotAncestor(t *testing.T) {
 			},
 		}),
 	)
-
 	workflowPath := writeTempWorkflow(t, `
 name: ci
 on: push
@@ -310,7 +325,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
@@ -372,7 +387,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -430,7 +445,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -462,22 +477,18 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
+	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+	setupGoSHA := "d35c59abb061a4a6fb18e82ac0862c26744d6ab5"
+	cacheSHA := "5a3ec84eff668545956fd18022155c47e93e2684"
 	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
 
-	// Per-ref resolution queries (parallel resolver resolves one ref per worker).
+	// Direct refs are resolved in one batch.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/checkout", "de0fac2e4500dabe0009e67214ff5f5447ce83dd", nodeActionYAML),
-			},
-		}),
-	)
-	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", setupGoSHA, compositeYAML),
 			},
 		}),
 	)
@@ -486,7 +497,7 @@ func TestCheckCommand_JSONDependenciesWithRequiredBy(t *testing.T) {
 		httpmock.GraphQLForRepo("actions", "cache"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
+				"a0": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -500,16 +511,35 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-`,
-		"actions/checkout@v6",
-		"actions/setup-go@v6",
-		// Transitive dependency (via actions/setup-go@v6).
-		"actions/cache@v4",
-	)
+`)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'actions/checkout@v6':\n" +
+		"    ref: 'v6'\n" +
+		"    commit: 'sha1-" + checkoutSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"  'actions/setup-go@v6':\n" +
+		"    ref: 'v6'\n" +
+		"    commit: 'sha1-" + setupGoSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"    uses:\n" +
+		"      - 'actions/cache@v4'\n" +
+		"  'actions/cache@v4':\n" +
+		"    ref: 'v4'\n" +
+		"    commit: 'sha1-" + cacheSHA + "'\n" +
+		"    owner_id: 3\n" +
+		"    repo_id: 3\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'actions/checkout@v6'\n" +
+		"    - 'actions/setup-go@v6'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -547,25 +577,36 @@ jobs:
 	}
 }
 
-func TestCheckCommand_JSONDependenciesInfersRequiredByWithoutComments(t *testing.T) {
+func TestCheckCommand_RecordedSubActionClosureDoesNotResolveRepositoryRoot(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
-
+	parentSHA := strings.Repeat("1", 40)
+	childSHA := strings.Repeat("2", 40)
+	compositeYAML := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: owner/child/save@v2\n"
+	rootChildYAML := "name: Wrong root\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n"
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
+		httpmock.GraphQLForRepo("owner", "composite"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
+				"a0": testRepoResponse("owner/composite", parentSHA, compositeYAML),
+				"a1": testRepoResponse("owner/child", childSHA, rootChildYAML),
 			},
 		}),
 	)
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "cache"),
+		httpmock.GraphQLForRepo("owner", "child"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
+				"a0": testRepoResponse("owner/child", childSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("owner/child", childSHA, rootChildYAML),
 			},
 		}),
 	)
@@ -577,14 +618,69 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v6
-`,
-		"actions/setup-go@v6",
-		"actions/cache@v4",
+      - uses: owner/composite@v1
+`)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'owner/composite@v1':\n" +
+		"    ref: 'v1'\n" +
+		"    commit: 'sha1-" + parentSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"    uses:\n" +
+		"      - 'owner/child@v2'\n" +
+		"  'owner/child@v2':\n" +
+		"    ref: 'v2'\n" +
+		"    commit: 'sha1-" + childSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'owner/composite@v1'\n"
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "uses local path")
+
+	got, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(got), "'owner/child@v2'")
+	assert.Contains(t, string(got), "      - 'owner/child@v2'")
+}
+
+func TestCheckCommand_JSONDependenciesIncludesRecordedClosure(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	parentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	childSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	compositeYAML := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: example/action@v1\n"
+
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", parentSHA, compositeYAML),
+				"a1": testRepoResponse("example/action", childSHA, nodeActionYAML),
+			},
+		}),
 	)
 
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`)
+	writeTempCompositeLockfile(t, parentSHA, "example/action", "v1", childSHA)
+
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -595,17 +691,114 @@ jobs:
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	require.Len(t, payload.Workflows, 1)
+	require.Len(t, payload.Workflows[0].Dependencies, 2)
 
 	var transitiveDep *format.Dependency
 	for i := range payload.Workflows[0].Dependencies {
-		if payload.Workflows[0].Dependencies[i].NWO == "actions/cache" {
+		if payload.Workflows[0].Dependencies[i].Ref == "v1" {
 			transitiveDep = &payload.Workflows[0].Dependencies[i]
 			break
 		}
 	}
-	require.NotNil(t, transitiveDep, "transitive dep actions/cache should be present")
+	require.NotNil(t, transitiveDep, "recorded transitive dependency should be present")
 	assert.False(t, transitiveDep.Direct)
-	assert.Equal(t, []string{"actions/setup-go@v6"}, transitiveDep.RequiredBy)
+	assert.Equal(t, []string{"example/action@main"}, transitiveDep.RequiredBy)
+}
+
+func TestCheckCommand_BareSHAKeepsSymbolicLockRootDirect(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
+				"a1": testRepoResponse("example/action", sha, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/branches"),
+		httpmock.JSONResponse([]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/branches"),
+		httpmock.JSONResponse([]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/tags"),
+		httpmock.JSONResponse([]any{
+			map[string]any{"name": "v1", "commit": map[string]any{"sha": sha}},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@`+sha+`
+`,
+		"example/action@v1=sha1-"+sha,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--no-narrow", "--json=workflows", workflowPath,
+	)
+	require.NoError(t, err)
+
+	var payload struct {
+		Workflows []struct {
+			Dependencies []format.Dependency `json:"dependencies"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	require.Len(t, payload.Workflows, 1)
+	require.Len(t, payload.Workflows[0].Dependencies, 1)
+	assert.True(t, payload.Workflows[0].Dependencies[0].Direct)
+	assert.Contains(t, readTempLockfilePins(t), "    - 'example/action@v1'")
+}
+
+func TestCheckCommand_BareSHASkipsSymbolicRefMovement(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	sha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	movedSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", sha, nodeActionYAML),
+				"a1": testRepoResponse("example/action", movedSHA, nodeActionYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@`+sha+`
+`,
+		"example/action@v1=sha1-"+sha,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--no-fix", "--json=findings", workflowPath,
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, stdout, `"category": "ref-moved"`)
+	assert.NotContains(t, stdout, `"category": "ancestry-unknown"`)
+	assert.NotContains(t, stdout, `"category": "unreachable-pin"`)
+	assert.NotContains(t, stdout, "gh actions-lock --relock")
 }
 
 func TestCheckCommand_JSONDefaultFieldsExcludesDependencies(t *testing.T) {
@@ -635,7 +828,7 @@ jobs:
 
 	// --json with no value should use the default fields (valid,findings,workflows)
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json", workflowPath,
+		"--no-fix", "--json", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -650,25 +843,22 @@ jobs:
 	assert.NotContains(t, raw, "dependencies", "default --json should not include top-level dependencies to avoid duplication with workflows")
 }
 
-// TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps verifies that
-// SeedFromLockfile pre-warms the resolution cache so known deps skip
-// network calls, while new deps still resolve from the network.
-// The workflow has two deps: checkout (in lockfile) and setup-go (not in
-// lockfile). Only setup-go should hit the HTTP mock.
-func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
+// TestCheck_DefaultRun_ResolvesRecordedAndNewDeps proves existing lockfile
+// entries do not suppress live resolution.
+func TestCheck_DefaultRun_ResolvesRecordedAndNewDeps(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 
-	// Only register an HTTP stub for setup-go (the NEW dep).
-	// No stub for checkout — the seed must serve it from cache.
+	// Both the recorded and new dependency must resolve live.
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -699,14 +889,11 @@ jobs:
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 	t.Chdir(dir)
 
-	// Run WITHOUT --rescan so SeedFromLockfile is active.
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		"--no-fix", "--json=valid,findings",
 		".github/workflows/workflow.yml",
 	)
 	// setup-go is resolved but not yet pinned → "not-pinned" finding → errSilent.
-	// That's expected: we're testing that checkout was served from cache, not
-	// that the overall check passes.
 	require.ErrorIs(t, err, errSilent)
 
 	var payload struct {
@@ -715,8 +902,7 @@ jobs:
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 
-	// The finding should be about setup-go being unpinned, NOT about checkout.
-	// If checkout required an HTTP call, reg.Verify would fail (no stub registered).
+	// The finding should be about setup-go being unpinned, not checkout.
 	require.Len(t, payload.Findings, 1)
 	assert.Equal(t, "not-pinned", payload.Findings[0].Category)
 	assert.Contains(t, payload.Findings[0].Dependency, "setup-go")
@@ -733,13 +919,13 @@ func TestCheck_NoFix_WritesNothing(t *testing.T) {
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 
-	// setup-go is the unpinned (new) dep — it resolves from the mock. checkout
-	// is seeded from the lockfile and must not hit the network.
+	// Both the recorded and new dependency resolve from the mock.
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
+		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+				"a1": testRepoResponse("actions/setup-go", setupGoSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -852,11 +1038,9 @@ jobs:
 	assert.Contains(t, pins, "actions/setup-go", "autofix should have pinned setup-go")
 }
 
-// TestCheck_Rescan_DetectsRefMovementDespiteLockfile is a regression test
-// ensuring --rescan does NOT seed the resolution cache. If seeding occurred,
-// the resolver would return the stale lockfile SHA and the ref-moved finding
-// would be suppressed — exactly the bug we fixed.
-func TestCheck_Rescan_DetectsRefMovementDespiteLockfile(t *testing.T) {
+// TestCheck_DefaultRun_DetectsRefMovementDespiteLockfile proves recorded
+// mutable refs resolve live on every networked run.
+func TestCheck_DefaultRun_DetectsRefMovementDespiteLockfile(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -897,7 +1081,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--no-fix", "--json=valid,findings", workflowPath,
 	)
 	// ref-moved is a warning (valid=true), not an error.
 	require.NoError(t, err, "ref-moved is a warning, should not error")
@@ -915,10 +1099,60 @@ jobs:
 			hasRefMoved = true
 		}
 	}
-	assert.True(t, hasRefMoved,
-		"--rescan must detect ref movement (stale lockfile SHA vs live SHA); "+
-			"if this fails, SeedFromLockfile is poisoning the resolution cache during rescan: %+v",
-		payload.Findings)
+	assert.True(t, hasRefMoved, "default runs must detect ref movement: %+v", payload.Findings)
+}
+
+func TestCheck_DefaultRun_MovedRefRemainsNonBlockingAlongsideNewDependency(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	newSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+				"a1": testRepoResponse("example/new", newSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": staleSHA},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/example/new$`),
+		httpmock.JSONResponse(map[string]any{
+			"id":    3,
+			"owner": map[string]any{"id": 2},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@v1
+      - uses: example/new@v2.0.0
+`,
+		"example/action@v1=sha1-"+staleSHA,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--json=findings", workflowPath)
+	require.NoError(t, err, "ref-moved must remain non-blocking while fixing another dependency")
+	assert.Contains(t, stdout, `"category": "ref-moved"`)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+staleSHA)
+	assert.Contains(t, lock, "'example/new@v2.0.0'")
 }
 
 func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
@@ -927,9 +1161,15 @@ func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	// No HTTP stub: both workflows are fully recorded in the lockfile, so
-	// the fast path skips every network round-trip. The dedup logic under
-	// test operates purely on the inventory built from disk.
+	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+			},
+		}),
+	)
 
 	wf1 := writeTempWorkflow(t, `
 name: ci
@@ -1063,9 +1303,8 @@ func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
 }
 
 // TestCheck_Relock_BumpsMovedBranchRef covers github/actions-dispatch#751:
-// a branch ref (main) whose upstream head advanced is trusted as-is on a
-// normal run and merely flagged ref-moved under --rescan. --relock must
-// re-resolve it and rewrite the lockfile to the new live SHA.
+// a branch ref (main) whose upstream head advanced is detected on a normal
+// run. --relock permits rewriting the lockfile to the new live SHA.
 func TestCheck_Relock_BumpsMovedBranchRef(t *testing.T) {
 	reg := &httpmock.Registry{}
 
@@ -1125,13 +1364,31 @@ jobs:
 }
 
 // TestCheck_DefaultRun_DoesNotBumpBranchRef is the counterpart to the relock
-// test: without --relock a mutable branch ref is trusted from the lockfile
-// (fast path, no network) and its recorded SHA is left as-is.
+// test: without --relock a moved branch ref is detected but its recorded SHA
+// is left as-is.
 func TestCheck_DefaultRun_DoesNotBumpBranchRef(t *testing.T) {
 	reg := &httpmock.Registry{}
-	defer reg.Verify(t) // no stubs should be hit on the fast path
+	defer reg.Verify(t)
 
 	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status": "ahead",
+			"merge_base_commit": map[string]any{
+				"sha": staleSHA,
+			},
+		}),
+	)
 
 	workflowPath := writeTempWorkflow(t, `
 name: ci
@@ -1145,9 +1402,303 @@ jobs:
 		"example/action@main=sha1-"+staleSHA,
 	)
 
-	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	_, stderr, err := runCommandWithHTTP(t, reg, workflowPath)
 	require.NoError(t, err)
+	assert.Contains(t, stderr, "gh actions-lock --relock")
+	assert.NotContains(t, stderr, "All 1 workflow valid")
 
 	assert.Contains(t, readTempLockfilePins(t), staleSHA,
-		"a default run must not bump a trusted branch ref")
+		"a default run must not bump a moved branch ref without --relock")
+}
+
+func TestCheck_DefaultRun_RetainsMovedCompositeRecordedClosure(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	oldParentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveParentSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	oldChildSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	newChildSHA := "dddddddddddddddddddddddddddddddddddddddd"
+	liveComposite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: new/child@v2\n"
+
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveParentSHA, liveComposite),
+				"a1": testRepoResponse("old/child", oldChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": oldParentSHA},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'example/action@main':\n" +
+		"    ref: 'main'\n" +
+		"    commit: 'sha1-" + oldParentSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"    uses:\n" +
+		"      - 'old/child@v1'\n" +
+		"  'old/child@v1':\n" +
+		"    ref: 'v1'\n" +
+		"    commit: 'sha1-" + oldChildSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"  'new/child@v2':\n" +
+		"    ref: 'v2'\n" +
+		"    commit: 'sha1-" + newChildSHA + "'\n" +
+		"    owner_id: 3\n" +
+		"    repo_id: 3\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'example/action@main'\n" +
+		"    - 'new/child@v2'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--json=findings", workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `"category": "stale"`)
+
+	updatedLock := readTempLockfilePins(t)
+	assert.Contains(t, updatedLock, "sha1-"+oldParentSHA)
+	assert.Contains(t, updatedLock, "'old/child@v1'")
+	assert.NotContains(t, updatedLock, "'new/child@v2'")
+}
+
+func TestCheck_DefaultRun_RetainsRecordedClosureAfterPartialResolution(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	parentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	childSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	composite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: old/child@v1\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", parentSHA, composite),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": nil,
+			},
+			"errors": []any{
+				map[string]any{
+					"type":    "FORBIDDEN",
+					"message": "Resource protected by organization SAML enforcement.",
+					"path":    []any{"a0"},
+					"extensions": map[string]any{
+						"saml_failure": true,
+					},
+				},
+			},
+		}),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`)
+	writeTempCompositeLockfile(t, parentSHA, "old/child", "v1", childSHA)
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--json=findings", workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `"category": "reachability-unknown"`)
+	assert.NotContains(t, stdout, "no registered HTTP stubs")
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+parentSHA)
+	assert.Contains(t, lock, "'old/child@v1'")
+}
+
+func TestCheck_Relock_BumpsMovedTransitiveAlongsideNewDirect(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	parentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	oldChildSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	liveChildSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	newDirectSHA := "dddddddddddddddddddddddddddddddddddddddd"
+	composite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: old/child@v1\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", parentSHA, composite),
+				"a1": testRepoResponse("new/direct", newDirectSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("old/child", liveChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/old/child/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": oldChildSHA},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/new/direct$`),
+		httpmock.JSONResponse(map[string]any{
+			"id":    3,
+			"owner": map[string]any{"id": 2},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+      - uses: new/direct@v1
+`)
+	writeTempCompositeLockfile(t, parentSHA, "old/child", "v1", oldChildSHA)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--relock", "--no-narrow", workflowPath)
+	require.NoError(t, err)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+parentSHA)
+	assert.Contains(t, lock, "sha1-"+newDirectSHA)
+	assert.Contains(t, lock, "sha1-"+liveChildSHA)
+	assert.NotContains(t, lock, "sha1-"+oldChildSHA)
+}
+
+func TestCheck_Relock_PreservesClosureOnPartialResolution(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	oldParentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveParentSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	oldChildSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	liveComposite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: new/child@v2\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveParentSHA, liveComposite),
+				"a1": testRepoResponse("old/child", oldChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("new", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": nil},
+			"errors": []any{
+				map[string]any{
+					"type":    "FORBIDDEN",
+					"message": "Resource protected by organization SAML enforcement.",
+					"path":    []any{"a0"},
+					"extensions": map[string]any{
+						"saml_failure": true,
+					},
+				},
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": oldParentSHA},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`)
+	writeTempCompositeLockfile(t, oldParentSHA, "old/child", "v1", oldChildSHA)
+
+	stdout, _, err := runCommandWithHTTP(t, reg,
+		"--relock", "--no-narrow", "--json=findings", workflowPath,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `"category": "reachability-unknown"`)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+oldParentSHA)
+	assert.NotContains(t, lock, "sha1-"+liveParentSHA)
+	assert.Contains(t, lock, "'old/child@v1'")
+	assert.NotContains(t, lock, "'new/child@v2'")
+}
+
+func TestCheck_VerifySurfacesResolverFailure(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": nil},
+			"errors": []any{
+				map[string]any{
+					"type":    "FORBIDDEN",
+					"message": "Resource protected by organization SAML enforcement.",
+					"path":    []any{"a0"},
+					"extensions": map[string]any{
+						"saml_failure": true,
+					},
+				},
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@main
+`,
+		"example/action@main=sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--verify", workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "Dependency verification was inconclusive")
+	assert.Equal(t, 1, strings.Count(stderr, "Dependency verification was inconclusive"))
+	assert.Equal(t, 1, strings.Count(stderr, "could not re-resolve actions"))
 }

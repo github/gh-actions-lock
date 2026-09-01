@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
-	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -58,19 +57,16 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
 	}
 
-	directNWOs := make(map[ghapi.Repo]bool, len(pw.Refs))
-	for _, ref := range pw.Refs {
-		directNWOs[ghapi.ForRepo(ref.Owner, ref.Repo)] = true
-	}
-
 	// Resolve live state: hits cache when ParseAll's caller pre-warmed the
 	// resolver. Failure degrades to structural-only checks for any refs that
 	// couldn't be resolved — partial results are kept.
 	var liveDeps []dep.Dependency
-	var resolvedParents dep.ParentMap
 	if r != nil {
 		var resolveErr error
-		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		liveDeps, _, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		recordedLive, recordedErr := r.ResolveAllShallow(ctx, collectRecordedResolvable([]checks.ParsedWorkflow{pw}))
+		liveDeps = dep.Dedup(append(liveDeps, recordedLive...))
+		resolveErr = errors.Join(resolveErr, recordedErr)
 		if resolveErr != nil {
 			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {
@@ -116,19 +112,15 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		}
 	}
 
-	for _, dep := range pw.ExistingDeps {
-		owner, repo := dep.OwnerRepo()
+	for _, dep := range pw.RecordedDeps {
 		wr.Inventory = append(wr.Inventory, checks.InventoryEntry{
 			Dep:    dep,
 			File:   pw.Path,
-			Direct: directNWOs[ghapi.ForRepo(owner, repo)],
+			Direct: isDirectDependency(dep, pw.Refs),
 		})
 	}
-	parentMap := map[string][]string{}
-	if r != nil {
-		parentMap = resolvedParents
-		populateInventoryParents(wr.Inventory, parentMap)
-	}
+	parentMap := pw.RecordedParents
+	populateInventoryParents(wr.Inventory, parentMap)
 
 	var checkR checks.CheckResolver
 	if r != nil && liveDeps != nil {
@@ -136,12 +128,12 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 	rawFindings := checks.RunChecks(ctx, pw, store.File(), checkR)
 
-	depByKey := indexDeps(pw.ExistingDeps)
+	depByKey := indexDeps(pw.RecordedDeps)
 	for _, f := range rawFindings {
 		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap) {
 			continue
 		}
-		attachParent(&f, depByKey, directNWOs, parentMap)
+		attachParent(&f, depByKey, pw.Refs, parentMap)
 		f.DocURL = DocURLFor(f.Category)
 		wr.Findings = append(wr.Findings, f)
 	}

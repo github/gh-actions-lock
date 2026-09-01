@@ -2,8 +2,8 @@ package main
 
 // Verification modes for gh actions-lock:
 //
-//   --verify       Full re-verification of every pin against the network.
-//                  Equivalent to --rescan --no-fix. Requires auth.
+//   --verify       Read-only verification of every pin against the network.
+//                  Requires auth.
 //
 //   --verify-local Offline static coverage check. Every action ref must have
 //                  a lockfile entry. No network, no auth — ideal for pre-commit.
@@ -20,11 +20,10 @@ import (
 	"github.com/github/gh-actions-lock/internal/ui"
 )
 
-// applyVerifyFlags expands --verify into its constituent flags. Called at the
-// top of runCheck before any work begins.
+// applyVerifyFlags makes --verify read-only. Called at the top of runCheck
+// before any work begins.
 func applyVerifyFlags(opts *checkOptions) {
 	if opts.verify {
-		opts.rescan = true
 		opts.noFix = true
 	}
 }

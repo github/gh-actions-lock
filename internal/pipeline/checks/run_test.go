@@ -569,6 +569,38 @@ func TestRunChecks(t *testing.T) {
 	}
 }
 
+func TestCheckRefMovedAndForgery_TransitiveOrderIsStable(t *testing.T) {
+	alpha, ok := parserlock.ParsePin("alpha/action@v1")
+	if !ok {
+		t.Fatal("parse alpha pin")
+	}
+	zeta, ok := parserlock.ParsePin("zeta/action@v1")
+	if !ok {
+		t.Fatal("parse zeta pin")
+	}
+	depIndex := map[string]lockedPin{
+		alpha.IndexKey(): {Pin: alpha, Commit: "sha1-" + shaCheckoutV3},
+		zeta.IndexKey():  {Pin: zeta, Commit: "sha1-" + shaSetupGoV5},
+	}
+	r := &stubCheckResolver{
+		refs: map[stubRefKey]string{
+			{"alpha", "action", "v1"}: shaCheckoutV4,
+			{"zeta", "action", "v1"}:  shaImpostor,
+		},
+		ancestry: map[stubAncestryKey]resolve.AncestryStatus{
+			{"alpha", "action", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryConfirmed,
+			{"zeta", "action", shaSetupGoV5, shaImpostor}:     resolve.AncestryConfirmed,
+		},
+	}
+
+	for range 32 {
+		got := checkRefMovedAndForgery(context.Background(), ParsedWorkflow{Path: ".github/workflows/ci.yml"}, depIndex, r)
+		if len(got) != 2 || got[0].Dependency.NWO != "alpha/action" || got[1].Dependency.NWO != "zeta/action" {
+			t.Fatalf("transitive findings are not stable: %#v", got)
+		}
+	}
+}
+
 // TestRunChecks_AllFindingsCarryConfidence is the fail-fast guard the
 // confidence-axis card requires: every finding emitted by any check
 // path must carry a non-empty Confidence. A zero value here would mean

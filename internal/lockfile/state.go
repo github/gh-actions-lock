@@ -228,12 +228,64 @@ func (s *State) PruneWorkflows(keep map[string]bool) []string {
 func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	deps, ok := s.file.Workflows[workflowKey]
+	pins, ok := s.file.Workflows[workflowKey]
 	if !ok {
 		return nil, nil
 	}
-	out := make([]dep.Dependency, 0, len(deps))
-	for _, raw := range deps {
+	return s.dependenciesForPins(pins, workflowKey)
+}
+
+// GetClosure returns the recorded transitive closure and child-to-parent graph
+// for workflowKey.
+func (s *State) GetClosure(workflowKey string) ([]dep.Dependency, dep.ParentMap, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	roots, ok := s.file.LookupWorkflow(workflowKey)
+	if !ok {
+		return nil, nil, nil
+	}
+	pins := make([]string, 0, len(roots))
+	queued := make(map[string]bool)
+	for _, root := range roots {
+		if !queued[root] {
+			pins = append(pins, root)
+			queued[root] = true
+		}
+	}
+	parents := make(dep.ParentMap)
+	for i := 0; i < len(pins); i++ {
+		parentPin := pins[i]
+		parent, ok := parserlock.ParsePin(parentPin)
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid pin %q in %s for workflow %q", parentPin, parserlock.Path, workflowKey)
+		}
+		action, ok := s.file.Dependencies[parentPin]
+		if !ok {
+			continue
+		}
+		for _, childPin := range action.Uses {
+			child, ok := parserlock.ParsePin(childPin)
+			if !ok {
+				return nil, nil, fmt.Errorf("invalid pin %q in %s for workflow %q", childPin, parserlock.Path, workflowKey)
+			}
+			childKey := pinToDep(child).Key()
+			parents[childKey] = append(parents[childKey], pinToDep(parent).Key())
+			if !queued[childPin] {
+				pins = append(pins, childPin)
+				queued[childPin] = true
+			}
+		}
+	}
+	deps, err := s.dependenciesForPins(pins, workflowKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return deps, parents, nil
+}
+
+func (s *State) dependenciesForPins(pins []string, workflowKey string) ([]dep.Dependency, error) {
+	out := make([]dep.Dependency, 0, len(pins))
+	for _, raw := range pins {
 		pin, ok := parserlock.ParsePin(raw)
 		if !ok {
 			return nil, fmt.Errorf("invalid pin %q in %s for workflow %q", raw, parserlock.Path, workflowKey)
@@ -299,6 +351,16 @@ func (s *State) AllDeps() []dep.Dependency {
 // Resolution of owner/repo numeric IDs happens lazily per NWO and is cached
 // for the lifetime of the store.
 func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys map[string]bool) error {
+	return s.set(ctx, workflowKey, deps, parentMap, directKeys, nil)
+}
+
+// SetScoped updates a workflow while preserving existing graph edges on
+// dependencies also reached by workflows outside the current command scope.
+func (s *State) SetScoped(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys, scopedWorkflows map[string]bool) error {
+	return s.set(ctx, workflowKey, deps, parentMap, directKeys, scopedWorkflows)
+}
+
+func (s *State) set(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys, scopedWorkflows map[string]bool) error {
 	// Resolve repo IDs for every unique owner/repo BEFORE taking s.mu so
 	// concurrent pin workers don't serialize on the network round-trip.
 	// lookupIDs is safe to call without s.mu and dedups in-flight fetches
@@ -406,12 +468,18 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				ref = d.Branch
 			}
 		}
+		commit := d.HashAlgoOrDetect() + "-" + d.SHA
 		if existing, ok := s.file.Dependencies[pinKey]; ok {
 			if ref == "" {
 				ref = existing.Ref
 			}
-			for _, u := range existing.Uses {
-				usesSet[u] = true
+			if existing.Commit == commit || s.reachableFromUnscopedWorkflow(pinKey, workflowKey, scopedWorkflows) {
+				// ponytail: actions.lock stores a global edge union, so keep the
+				// old union when an untouched workflow reaches this parent.
+				// A full-scope refresh can replace it exactly.
+				for _, u := range existing.Uses {
+					usesSet[u] = true
+				}
 			}
 		}
 		var uses []string
@@ -424,7 +492,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		}
 		s.file.Dependencies[pinKey] = parserlock.Action{
 			Ref:     ref,
-			Commit:  d.HashAlgoOrDetect() + "-" + d.SHA,
+			Commit:  commit,
 			OwnerID: ids[0],
 			RepoID:  ids[1],
 			Uses:    uses,
@@ -433,6 +501,36 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 	sort.Strings(directPins)
 	s.file.Workflows[workflowKey] = directPins
 	return nil
+}
+
+func (s *State) reachableFromUnscopedWorkflow(target, workflowKey string, scopedWorkflows map[string]bool) bool {
+	var reaches func(string, map[string]bool) bool
+	reaches = func(key string, seen map[string]bool) bool {
+		if key == target {
+			return true
+		}
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+		for _, child := range s.file.Dependencies[key].Uses {
+			if reaches(child, seen) {
+				return true
+			}
+		}
+		return false
+	}
+	for workflow, roots := range s.file.Workflows {
+		if workflow == workflowKey || scopedWorkflows[workflow] {
+			continue
+		}
+		for _, root := range roots {
+			if reaches(root, make(map[string]bool)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Save persists the lockfile to disk, garbage-collecting orphan action

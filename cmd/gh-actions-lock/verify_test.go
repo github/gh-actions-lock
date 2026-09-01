@@ -8,34 +8,24 @@ import (
 
 func TestApplyVerifyFlags(t *testing.T) {
 	tests := []struct {
-		name       string
-		opts       checkOptions
-		wantRescan bool
-		wantNoFix  bool
+		name      string
+		opts      checkOptions
+		wantNoFix bool
 	}{
 		{
-			name:       "verify sets rescan and noFix",
-			opts:       checkOptions{verify: true},
-			wantRescan: true,
-			wantNoFix:  true,
+			name:      "verify sets noFix",
+			opts:      checkOptions{verify: true},
+			wantNoFix: true,
 		},
 		{
-			name:       "no verify leaves flags alone",
-			opts:       checkOptions{},
-			wantRescan: false,
-			wantNoFix:  false,
-		},
-		{
-			name:       "verify with existing rescan keeps both",
-			opts:       checkOptions{verify: true, rescan: true},
-			wantRescan: true,
-			wantNoFix:  true,
+			name:      "no verify leaves flags alone",
+			opts:      checkOptions{},
+			wantNoFix: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			applyVerifyFlags(&tt.opts)
-			assert.Equal(t, tt.wantRescan, tt.opts.rescan)
 			assert.Equal(t, tt.wantNoFix, tt.opts.noFix)
 		})
 	}
@@ -51,11 +41,6 @@ func TestValidateOutputFlags_VerifyConflicts(t *testing.T) {
 			name:    "verify and verify-local are mutually exclusive",
 			opts:    checkOptions{verify: true, verifyLocal: true},
 			wantErr: "mutually exclusive",
-		},
-		{
-			name:    "verify-local and rescan conflict",
-			opts:    checkOptions{verifyLocal: true, rescan: true},
-			wantErr: "offline",
 		},
 		{
 			name:    "verify-local and accept-moved conflict",

@@ -40,6 +40,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 		checkoutSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		setupGoSHA  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 		cacheSHA    = "cccccccccccccccccccccccccccccccccccccccc"
+		staleSHA    = "dddddddddddddddddddddddddddddddddddddddd"
 		helperSHA   = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	)
 
@@ -55,9 +56,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 		"    - uses: actions/cache@v4\n" +
 		"    - uses: helper/only-transitive@v1\n"
 
-	// Direct refs from the workflow: checkout@v6, setup-go@v6, cache@v3.
-	// The resolver batches them into a single GraphQL request keyed by
-	// owner/name pairs (a0/a1/a2).
+	// Current workflow roots are resolved first.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
@@ -68,16 +67,22 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 			},
 		}),
 	)
-
-	// Transitive batch discovered from the setup-go composite: cache@v4
-	// (same NWO as a direct workflow ref) and helper/only-transitive@v1
-	// (transitive-only, gives us a populated required_by[] in the JSON).
+	// Path-aware recursive discovery resolves the composite's children.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "cache"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
 				"a1": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
+			},
+		}),
+	)
+	// Recorded-only refs are validated without recursive discovery.
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "dead"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("old/dead", staleSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -94,7 +99,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		// The fixture's lockfile addresses the workflow as
 		// .github/workflows/ci.yml, so we run check on that exact path.
-		"--rescan", "--no-fix", "--json=valid,findings,workflows,dependencies",
+		"--no-fix", "--json=valid,findings,workflows,dependencies",
 		".github/workflows/ci.yml",
 	)
 	// We expect findings (ref-changed + stale), so the command exits

@@ -100,6 +100,35 @@ func cacheKey(ref parserlock.ActionRef) ghapi.ActionRef {
 // fixed request shape.
 const batchActionFileSize = 20
 
+// ResolveAllShallow resolves one wave of action refs without recursively
+// inspecting their action metadata for transitive dependencies.
+func (r *Resolver) ResolveAllShallow(ctx context.Context, refs []parserlock.ActionRef) ([]dep.Dependency, error) {
+	seen := make(map[ghapi.ActionRef]bool)
+	requests := make([]resolutionRequest, 0, len(refs))
+	uncached := 0
+	for _, ref := range refs {
+		key := cacheKey(ref)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		requests = append(requests, resolutionRequest{ref: ref})
+		if _, ok := r.cache.Get(key); !ok {
+			uncached++
+		}
+	}
+
+	var resolveDone atomic.Int64
+	var resolveTotal atomic.Int64
+	resolveTotal.Store(int64(uncached))
+	if uncached > 0 {
+		r.FireResolveProgress(0, uncached)
+	}
+
+	deps, _, err := r.resolveWithActionYMLParallel(ctx, requests, 0, &resolveDone, &resolveTotal)
+	return dep.Dedup(deps), err
+}
+
 // ResolveAllRecursive resolves action refs and recursively discovers transitive
 // dependencies from composite actions by reading their action.yml via GraphQL.
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
@@ -292,6 +321,7 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 	type resolveResult struct {
 		dep dep.Dependency
 		yml string
+		err error
 		ok  bool
 	}
 	results := make([]resolveResult, len(refs))
@@ -299,29 +329,32 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 	var uncachedIdx []int
 	for i, request := range refs {
 		if entry, ok := r.cache.Get(cacheKey(request.ref)); ok {
-			results[i] = resolveResult{dep: entry.dep, yml: entry.actionYML, ok: true}
+			results[i] = resolveResult{dep: entry.dep, yml: entry.actionYML, err: entry.err, ok: entry.err == nil}
 		} else {
 			uncachedIdx = append(uncachedIdx, i)
 		}
 	}
 
-	flatten := func() ([]dep.Dependency, []string) {
+	flatten := func() ([]dep.Dependency, []string, error) {
 		var deps []dep.Dependency
 		var ymls []string
+		var errs []error
 		for _, res := range results {
+			if res.err != nil {
+				errs = append(errs, res.err)
+			}
 			if !res.ok {
 				continue
 			}
 			deps = append(deps, res.dep)
 			ymls = append(ymls, res.yml)
 		}
-		return deps, ymls
+		return deps, ymls, errors.Join(errs...)
 	}
 
 	total := len(uncachedIdx)
 	if total == 0 {
-		deps, ymls := flatten()
-		return deps, ymls, nil
+		return flatten()
 	}
 
 	// Grow the rolling resolve total by the new uncached refs at this depth.
@@ -379,7 +412,6 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 		},
 		func(ctx context.Context, _ int, b actionBatch) error {
 			res := r.gh.ResolveActionFiles(ctx, b.reqs)
-			var errs []error
 			for j, idx := range b.idxs {
 				ref := refs[idx].ref
 				if j < len(res) && res[j].Err == nil {
@@ -391,18 +423,23 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 					}
 					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})
 					results[idx] = resolveResult{dep: d, yml: res[j].ActionYML, ok: true}
-				} else if j < len(res) && res[j].Err != nil {
-					errs = append(errs, fmt.Errorf("%s@%s: %w", ref.NWO(), ref.Ref, res[j].Err))
+				} else {
+					resolveErr := fmt.Errorf("%s@%s: no resolution result", ref.NWO(), ref.Ref)
+					if j < len(res) {
+						resolveErr = fmt.Errorf("%s@%s: %w", ref.NWO(), ref.Ref, res[j].Err)
+					}
+					r.cache.Put(cacheKey(ref), resolvedEntry{err: resolveErr})
+					results[idx] = resolveResult{err: resolveErr}
 				}
 				done := resolveDone.Add(1)
 				r.FireResolveProgress(int(done), int(resolveTotal.Load()))
 			}
-			return errors.Join(errs...)
+			return nil
 		},
 	)
 
-	deps, ymls := flatten()
-	return deps, ymls, poolErr
+	deps, ymls, cachedErr := flatten()
+	return deps, ymls, errors.Join(poolErr, cachedErr)
 }
 
 // selectLatestTag returns the highest semver tag from a list of tag names.

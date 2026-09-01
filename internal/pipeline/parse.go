@@ -2,10 +2,8 @@ package pipeline
 
 import (
 	"context"
-	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
-	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -22,7 +20,7 @@ import (
 func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
 	parsed := ParseAll(paths, store)
 	if r != nil {
-		refs, _ := CollectResolvable(parsed)
+		refs := CollectResolvable(parsed)
 		if len(refs) > 0 {
 			_, _, _ = r.ResolveAllRecursive(ctx, refs)
 		}
@@ -65,6 +63,13 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			} else {
 				pw.ExistingDeps = deps
 			}
+			closure, parents, closureErr := store.GetClosure(wfKey)
+			if closureErr != nil {
+				pw.DepsErr = closureErr
+			} else {
+				pw.RecordedDeps = closure
+				pw.RecordedParents = parents
+			}
 		}
 		out = append(out, pw)
 	}
@@ -102,31 +107,14 @@ func mergeStrings(groups ...[]string) []string {
 	return values
 }
 
-// CollectResolvable returns the deduplicated union of refs and existing deps
-// across all parsed workflows. Use the returned slices to pre-warm the
-// resolver caches once before per-workflow diagnostics.
-func CollectResolvable(parsed []checks.ParsedWorkflow) ([]parserlock.ActionRef, []dep.Dependency) {
-	return collectResolvable(parsed, nil)
-}
-
-// CollectUnrecordedResolvable is like CollectResolvable but excludes refs
-// whose NWO@Ref key appears in recordedKeys. Deps whose key is in
-// recordedKeys are also excluded. Use this when per-dep lockfile trust
-// has already seeded the resolver cache for recorded deps, so only
-// genuinely new refs need network resolution.
-func CollectUnrecordedResolvable(parsed []checks.ParsedWorkflow, recordedKeys map[string]bool) ([]parserlock.ActionRef, []dep.Dependency) {
-	return collectResolvable(parsed, recordedKeys)
-}
-
-func collectResolvable(parsed []checks.ParsedWorkflow, excludeKeys map[string]bool) ([]parserlock.ActionRef, []dep.Dependency) {
+// CollectResolvable returns the deduplicated current workflow roots across all
+// parsed workflows. Recorded closure entries lack sub-action paths and must not
+// become recursive discovery roots.
+func CollectResolvable(parsed []checks.ParsedWorkflow) []parserlock.ActionRef {
 	seenRef := make(map[ghapi.ActionRef]bool)
 	var refs []parserlock.ActionRef
 	for _, pw := range parsed {
 		for _, ref := range pw.Refs {
-			nwoRef := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
-			if excludeKeys[nwoRef] {
-				continue
-			}
 			key := ghapi.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 			if seenRef[key] {
 				continue
@@ -135,19 +123,36 @@ func collectResolvable(parsed []checks.ParsedWorkflow, excludeKeys map[string]bo
 			refs = append(refs, ref)
 		}
 	}
-	seenDep := make(map[string]bool)
-	var deps []dep.Dependency
+	return refs
+}
+
+// collectRecordedResolvable returns recorded closure refs that are not already
+// represented by a path-aware current workflow root.
+func collectRecordedResolvable(parsed []checks.ParsedWorkflow) []parserlock.ActionRef {
+	seenRef := make(map[ghapi.NWORef]bool)
 	for _, pw := range parsed {
-		for _, dep := range pw.ExistingDeps {
-			key := dep.Key()
-			if excludeKeys[key] || seenDep[key] {
-				continue
-			}
-			seenDep[key] = true
-			deps = append(deps, dep)
+		for _, ref := range pw.Refs {
+			seenRef[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
 		}
 	}
-	return refs, deps
+
+	var refs []parserlock.ActionRef
+	for _, pw := range parsed {
+		for _, d := range pw.RecordedDeps {
+			owner, repo := d.OwnerRepo()
+			key := ghapi.ForNWORef(owner, repo, d.Ref)
+			if seenRef[key] {
+				continue
+			}
+			seenRef[key] = true
+			refs = append(refs, parserlock.ActionRef{
+				Owner: owner,
+				Repo:  repo,
+				Ref:   d.Ref,
+			})
+		}
+	}
+	return refs
 }
 
 // DiagnoseParsed runs the engine diagnostics for each pre-parsed workflow.

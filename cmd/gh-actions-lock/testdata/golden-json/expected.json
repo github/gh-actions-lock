@@ -2,10 +2,13 @@
   "cli_version": "\u003cMASKED\u003e",
   "dependencies": [
     {
-      "direct": true,
+      "direct": false,
       "hash_algo": "sha1",
       "nwo": "actions/cache",
       "ref": "v4",
+      "required_by": [
+        "actions/setup-go@v6"
+      ],
       "sha": "cccccccccccccccccccccccccccccccccccccccc"
     },
     {
@@ -68,10 +71,13 @@
     {
       "dependencies": [
         {
-          "direct": true,
+          "direct": false,
           "hash_algo": "sha1",
           "nwo": "actions/cache",
           "ref": "v4",
+          "required_by": [
+            "actions/setup-go@v6"
+          ],
           "sha": "cccccccccccccccccccccccccccccccccccccccc"
         },
         {

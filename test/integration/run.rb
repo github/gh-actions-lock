@@ -342,7 +342,9 @@ end
 
 # ── Fixture data ────────────────────────────────────────────────────────
 
-CHECKOUT_SHA      = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+CHECKOUT_SHA      = "11d5960a326750d5838078e36cf38b85af677262"
+CHECKOUT_FULL_SHA = "d632683dd7b4114ad314bca15554477dd762a938"
+CHECKOUT_MAIN_SHA = "f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a"
 SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
 MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -437,7 +439,7 @@ LOCKFILE_TEMPLATES = {
       dependencies: {
         "actions/checkout@v4.2.0" => {
           "ref" => "v4.2.0",
-          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "commit" => "sha1-#{CHECKOUT_FULL_SHA}",
           "owner_id" => 44036562,
           "repo_id" => 197814629
         }
@@ -456,7 +458,7 @@ LOCKFILE_TEMPLATES = {
       dependencies: {
         "actions/checkout@main" => {
           "ref" => "main",
-          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "commit" => "sha1-#{CHECKOUT_MAIN_SHA}",
           "owner_id" => 44036562,
           "repo_id" => 197814629
         }
@@ -572,11 +574,18 @@ def checkout_graphql_success(srv)
     query = body["query"] || ""
 
     if query.include?("expression")
+      sha = if query.include?("v4.2.0")
+             CHECKOUT_FULL_SHA
+           elsif query.include?("main:")
+             CHECKOUT_MAIN_SHA
+           else
+             CHECKOUT_SHA
+           end
       [200, { "Content-Type" => "application/json" },
        JSON.generate({ data: { a0: {
          nameWithOwner: "actions/checkout",
          object: {
-           oid: CHECKOUT_SHA,
+           oid: sha,
            file: {
              object: {
                text: "name: Checkout\ndescription: Checkout\nruns:\n  using: node20\n  main: dist/index.js\n"
@@ -705,11 +714,6 @@ STUB_WIRING = {
     end
     s.env("GH_TOKEN" => "gho_fake_mixed_test_token")
   },
-  rescan_inconclusive_fails: ->(s) {
-    s.stub_server { |srv| sso_403_all(srv) }
-    s.env("GH_TOKEN" => "gho_fake_rescan_token")
-  },
-
   # Error icon / record / prefix scenarios: SSO 403 as a reliable failure trigger
   unresolved_uses_error_icon: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
@@ -796,7 +800,7 @@ STUB_WIRING = {
       # the move is benign (ref-moved, not an unreachable pin).
       srv.on(:GET, %r{/repos/actions/checkout/compare/}) do |_req|
         [200, { "Content-Type" => "application/json" },
-         JSON.generate({ status: "behind", merge_base_commit: { sha: CHECKOUT_SHA } })]
+         JSON.generate({ status: "behind", merge_base_commit: { sha: CHECKOUT_MAIN_SHA } })]
       end
     end
     s.env("GH_TOKEN" => "gho_fake_relock_token")

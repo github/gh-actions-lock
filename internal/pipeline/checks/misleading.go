@@ -3,9 +3,12 @@ package checks
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
@@ -76,10 +79,16 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 
 	// Check transitive deps (recorded in lockfile but not directly in the
 	// workflow). These can also drift when upstream releases new versions.
-	for indexKey, pin := range depIndex {
+	var transitiveKeys []string
+	for indexKey := range depIndex {
 		if directKeys[indexKey] {
 			continue
 		}
+		transitiveKeys = append(transitiveKeys, indexKey)
+	}
+	sort.Strings(transitiveKeys)
+	for _, indexKey := range transitiveKeys {
+		pin := depIndex[indexKey]
 		parsed, ok := parserlock.ParsePin(indexKey)
 		if !ok {
 			continue
@@ -91,6 +100,12 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 			Owner: parsed.Owner,
 			Repo:  parsed.Repo,
 			Ref:   parsed.Ref,
+		}
+		recorded := dep.Dependency{NWO: parsed.NWO, Ref: parsed.Ref, SHA: pin.SHA()}
+		if slices.ContainsFunc(pw.Refs, func(ref parserlock.ActionRef) bool {
+			return parserlock.IsFullSha(ref.Ref) && recorded.MatchesActionRef(ref)
+		}) {
+			continue
 		}
 		if f, ok := checkOneRefMoved(ctx, pw, ref, pin, r); ok {
 			out = append(out, f)
@@ -132,7 +147,7 @@ func checkOneRefMoved(ctx context.Context, pw ParsedWorkflow, ref parserlock.Act
 		f.Severity = SeverityWarning
 		f.Confidence = ConfidenceHigh
 		f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", ref.Ref, parserlock.ShortSHA(sha), parserlock.ShortSHA(pin.SHA()))
-		f.Remediation = "re-run `gh actions-lock` to refresh the lock entry"
+		f.Remediation = "re-run `gh actions-lock --relock` to advance the lock entry"
 	}
 	return f, true
 }

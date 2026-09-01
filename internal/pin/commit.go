@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -25,6 +26,12 @@ type CommitOptions struct {
 // fails, previously written files are not rolled back (best-effort),
 // but the error is returned immediately.
 func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *CommitOptions) error {
+	reconciled, err := reconcileSharedPins(rec, store)
+	if err != nil {
+		return err
+	}
+	rec = reconciled
+
 	progress := func(string) {}
 	if copts != nil && copts.OnProgress != nil {
 		progress = copts.OnProgress
@@ -60,6 +67,10 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 
 	// Phase 2: Update lockfile entries for each scanned workflow.
 	pinnedByWorkflow := groupPinnedByWorkflow(rec)
+	scopedWorkflows := make(map[string]bool, len(rec.Workflows))
+	for _, wp := range rec.Workflows {
+		scopedWorkflows[workflowfile.KeyFromPath(wp.Path)] = true
+	}
 	if len(rec.Workflows) > 0 {
 		progress("Updating lockfile")
 	}
@@ -73,7 +84,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
 		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
-		if err := store.Set(ctx, wfKey, deps, parentMap, directKeys); err != nil {
+		if err := store.SetScoped(ctx, wfKey, deps, parentMap, directKeys, scopedWorkflows); err != nil {
 			return fmt.Errorf("updating lockfile for %s: %w", wfPath, err)
 		}
 	}
@@ -84,6 +95,58 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 	}
 
 	return nil
+}
+
+// reconcileSharedPins retains recorded authority when scoped workflow plans
+// disagree about the commit or closure of a global lockfile dependency.
+func reconcileSharedPins(rec *Record, store *lockfile.State) (*Record, error) {
+	shasByKey := make(map[string]map[string]bool)
+	for _, e := range rec.Entries {
+		if !isPinOrVerified(e.Resolution) {
+			continue
+		}
+		key := strings.ToLower(e.NWO + "@" + e.Ref)
+		if shasByKey[key] == nil {
+			shasByKey[key] = make(map[string]bool)
+		}
+		shasByKey[key][strings.ToLower(e.SHA)] = true
+	}
+
+	conflicts := make(map[string]dep.Dependency)
+	for key, shas := range shasByKey {
+		if len(shas) < 2 {
+			continue
+		}
+		for _, existing := range store.AllDeps() {
+			if strings.EqualFold(existing.Key(), key) {
+				conflicts[key] = existing
+				break
+			}
+		}
+		if _, ok := conflicts[key]; !ok {
+			return nil, fmt.Errorf("conflicting planned commits for %s", key)
+		}
+	}
+	if len(conflicts) == 0 {
+		return rec, nil
+	}
+
+	reconciled := *rec
+	reconciled.Entries = slices.Clone(rec.Entries)
+	for i := range reconciled.Entries {
+		e := &reconciled.Entries[i]
+		key := strings.ToLower(e.NWO + "@" + e.Ref)
+		if existing, ok := conflicts[key]; ok && isPinOrVerified(e.Resolution) {
+			e.SHA = existing.SHA
+			e.OnBranch = existing.Branch
+			e.Tag = existing.Tag
+		}
+		e.RequiredBy = slices.DeleteFunc(slices.Clone(e.RequiredBy), func(parent string) bool {
+			_, conflicted := conflicts[strings.ToLower(parent)]
+			return conflicted
+		})
+	}
+	return &reconciled, nil
 }
 
 func rewriteWorkflow(wp WorkflowPlan) error {

@@ -1,8 +1,6 @@
 package checks
 
 import (
-	"strings"
-
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 )
@@ -27,77 +25,12 @@ type ParsedWorkflow struct {
 	SelfRepositoryRefErrs        []string
 	SelfRepositoryResolutionErrs []string
 	ExistingDeps                 []dep.Dependency
+	RecordedDeps                 []dep.Dependency
+	RecordedParents              dep.ParentMap
 	ParseWarnings                []string
 	LoadErr                      error
 	DepsErr                      error
-	// Resolved, when true, instructs DiagnoseParsed to run this
-	// workflow's diagnostics with a nil resolver. Network-bound checks
-	// (ref-moved) are skipped and the engine relies on
-	// purely structural validation against the on-disk lockfile. Caller
-	// is asserting "this workflow is already fully resolved" — typically
-	// set on the fast path when every direct ref in the workflow is
-	// already recorded in the lockfile.
+	// Resolved instructs DiagnoseParsed to skip network-bound checks for a
+	// workflow with structural blockers.
 	Resolved bool
-}
-
-// PartitionRefs splits refs into recorded (matching a lockfile entry by
-// NWO@Ref or NWO@SHA) and unrecorded (need network resolution). When an
-// error prevented loading refs or deps, everything is unrecorded.
-func (pw ParsedWorkflow) PartitionRefs() (recorded, unrecorded []parserlock.ActionRef) {
-	if pw.LoadErr != nil || pw.DepsErr != nil {
-		return nil, pw.Refs
-	}
-	if len(pw.Refs) == 0 {
-		return nil, nil
-	}
-	haveDep := make(map[string]bool, len(pw.ExistingDeps)*2)
-	for _, d := range pw.ExistingDeps {
-		nwo := strings.ToLower(d.NWO)
-		haveDep[nwo+"@"+d.Ref] = true
-		if d.SHA != "" {
-			haveDep[nwo+"@"+strings.ToLower(d.SHA)] = true
-		}
-	}
-	for _, r := range pw.Refs {
-		if haveDep[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] {
-			recorded = append(recorded, r)
-		} else {
-			unrecorded = append(unrecorded, r)
-		}
-	}
-	return recorded, unrecorded
-}
-
-// IsFullyRecorded returns true when every direct ref has a matching
-// lockfile entry — the steady-state happy path.
-func (pw ParsedWorkflow) IsFullyRecorded() bool {
-	_, unrecorded := pw.PartitionRefs()
-	return len(pw.Refs) == 0 || len(unrecorded) == 0
-}
-
-// IsImmutableRef reports whether ref is a full semver tag (e.g. v4.2.1),
-// which resolves to exactly one commit for its entire lifetime. Full semver
-// pins are re-verified against upstream on the default path; mutable refs
-// (v4, v4.2, branches) are trusted until --rescan because they legitimately
-// move.
-func IsImmutableRef(ref string) bool {
-	sv, ok := parserlock.ParseSemVer(ref)
-	return ok && sv.IsFull()
-}
-
-// RecordedDeps returns the subset of ExistingDeps whose NWO@Ref or
-// NWO@SHA matches one of the given recorded refs.
-func (pw ParsedWorkflow) RecordedDeps(recorded []parserlock.ActionRef) []dep.Dependency {
-	refKeys := make(map[string]bool, len(recorded))
-	for _, r := range recorded {
-		refKeys[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = true
-	}
-	var out []dep.Dependency
-	for _, d := range pw.ExistingDeps {
-		nwo := strings.ToLower(d.NWO)
-		if refKeys[nwo+"@"+d.Ref] || refKeys[nwo+"@"+strings.ToLower(d.SHA)] {
-			out = append(out, d)
-		}
-	}
-	return out
 }

@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"slices"
+
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
-	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 )
 
@@ -14,15 +16,14 @@ import (
 // and a Dependency synthesized from the workflow ref / lockfile pin. This
 // is purely about pointing the user at the composite that pulled in a
 // transitively-pinned dep.
-func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directNWOs map[ghapi.Repo]bool, parentMap map[string][]string) {
+func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directRefs []parserlock.ActionRef, parentMap map[string][]string) {
 	if f.Dependency == nil {
 		return
 	}
-	owner, repo := f.Dependency.OwnerRepo()
-	if directNWOs[ghapi.ForRepo(owner, repo)] {
+	if isDirectDependency(*f.Dependency, directRefs) {
 		return
 	}
-	// Prefer the dep snapshot from the workflow's ExistingDeps (it has the
+	// Prefer the dep snapshot from the workflow's RecordedDeps (it has the
 	// canonical NWO casing the parent map keys with). Synthesised deps
 	// already match — but the indexed lookup is cheap regardless.
 	key := f.Dependency.Key()
@@ -32,6 +33,10 @@ func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directN
 	if parents := parentMap[key]; len(parents) > 0 {
 		f.ParentNWO = parents[0]
 	}
+}
+
+func isDirectDependency(d dep.Dependency, directRefs []parserlock.ActionRef) bool {
+	return slices.ContainsFunc(directRefs, d.MatchesActionRef)
 }
 
 // isTransitivePin reports whether the finding refers to a dep reached via
@@ -59,4 +64,23 @@ func populateInventoryParents(inventory []checks.InventoryEntry, parentMap map[s
 			inventory[i].Parents = append([]string(nil), parents...)
 		}
 	}
+}
+
+func mergeParentMaps(maps ...dep.ParentMap) dep.ParentMap {
+	merged := make(dep.ParentMap)
+	for _, parentMap := range maps {
+		for child, parents := range parentMap {
+			seen := make(map[string]bool, len(merged[child]))
+			for _, parent := range merged[child] {
+				seen[parent] = true
+			}
+			for _, parent := range parents {
+				if !seen[parent] {
+					merged[child] = append(merged[child], parent)
+					seen[parent] = true
+				}
+			}
+		}
+	}
+	return merged
 }
