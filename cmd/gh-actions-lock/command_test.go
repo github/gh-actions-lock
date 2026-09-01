@@ -81,6 +81,10 @@ func TestCheckCommand_RewritesMovedRepository(t *testing.T) {
 	}{
 		{name: "fresh onboarding"},
 		{
+			name: "existing lockfile",
+			pins: []string{oldNWO + "@" + ref + "=sha1-" + sha},
+		},
+		{
 			name: "rescan",
 			pins: []string{oldNWO + "@" + ref + "=sha1-" + sha},
 			args: []string{"--rescan"},
