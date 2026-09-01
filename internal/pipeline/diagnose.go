@@ -58,9 +58,9 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		wr.Findings = append(wr.Findings, selfRepositoryFinding(pw))
 	}
 
-	directNWOs := make(map[ghapi.Repo]bool, len(pw.Refs))
+	directRefs := make(map[ghapi.NWORef]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {
-		directNWOs[ghapi.ForRepo(ref.Owner, ref.Repo)] = true
+		directRefs[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
 	}
 
 	// Resolve live state: hits cache when ParseAll's caller pre-warmed the
@@ -116,19 +116,16 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		}
 	}
 
-	for _, dep := range pw.ExistingDeps {
+	for _, dep := range pw.RecordedDeps {
 		owner, repo := dep.OwnerRepo()
 		wr.Inventory = append(wr.Inventory, checks.InventoryEntry{
 			Dep:    dep,
 			File:   pw.Path,
-			Direct: directNWOs[ghapi.ForRepo(owner, repo)],
+			Direct: directRefs[ghapi.ForNWORef(owner, repo, dep.Ref)],
 		})
 	}
-	parentMap := map[string][]string{}
-	if r != nil {
-		parentMap = mergeParentMaps(pw.RecordedParents, resolvedParents)
-		populateInventoryParents(wr.Inventory, parentMap)
-	}
+	parentMap := mergeParentMaps(pw.RecordedParents, resolvedParents)
+	populateInventoryParents(wr.Inventory, parentMap)
 
 	var checkR checks.CheckResolver
 	if r != nil && liveDeps != nil {
@@ -141,7 +138,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap) {
 			continue
 		}
-		attachParent(&f, depByKey, directNWOs, parentMap)
+		attachParent(&f, depByKey, directRefs, parentMap)
 		f.DocURL = DocURLFor(f.Category)
 		wr.Findings = append(wr.Findings, f)
 	}

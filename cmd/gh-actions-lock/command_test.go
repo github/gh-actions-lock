@@ -555,25 +555,20 @@ jobs:
 	}
 }
 
-func TestCheckCommand_JSONDependenciesInfersRequiredByWithoutComments(t *testing.T) {
+func TestCheckCommand_JSONDependenciesIncludesRecordedClosure(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
-	compositeYAML := "name: Setup Go\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@v4\n"
+	parentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	childSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	compositeYAML := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: example/action@v1\n"
 
 	reg.Register(
-		httpmock.GraphQLForRepo("actions", "setup-go"),
+		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
-				"a0": testRepoResponse("actions/setup-go", "d35c59abb061a4a6fb18e82ac0862c26744d6ab5", compositeYAML),
-			},
-		}),
-	)
-	reg.Register(
-		httpmock.GraphQLForRepo("actions", "cache"),
-		httpmock.JSONResponse(map[string]any{
-			"data": map[string]any{
-				"a0": testRepoResponse("actions/cache", "5a3ec84eff668545956fd18022155c47e93e2684", nodeActionYAML),
+				"a0": testRepoResponse("example/action", parentSHA, compositeYAML),
+				"a1": testRepoResponse("example/action", childSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -585,11 +580,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v6
-`,
-		"actions/setup-go@v6",
-		"actions/cache@v4",
-	)
+      - uses: example/action@main
+`)
+	writeTempCompositeLockfile(t, parentSHA, "example/action", "v1", childSHA)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		"--no-fix", "--json=workflows", workflowPath,
@@ -603,17 +596,18 @@ jobs:
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	require.Len(t, payload.Workflows, 1)
+	require.Len(t, payload.Workflows[0].Dependencies, 2)
 
 	var transitiveDep *format.Dependency
 	for i := range payload.Workflows[0].Dependencies {
-		if payload.Workflows[0].Dependencies[i].NWO == "actions/cache" {
+		if payload.Workflows[0].Dependencies[i].Ref == "v1" {
 			transitiveDep = &payload.Workflows[0].Dependencies[i]
 			break
 		}
 	}
-	require.NotNil(t, transitiveDep, "transitive dep actions/cache should be present")
+	require.NotNil(t, transitiveDep, "recorded transitive dependency should be present")
 	assert.False(t, transitiveDep.Direct)
-	assert.Equal(t, []string{"actions/setup-go@v6"}, transitiveDep.RequiredBy)
+	assert.Equal(t, []string{"example/action@main"}, transitiveDep.RequiredBy)
 }
 
 func TestCheckCommand_JSONDefaultFieldsExcludesDependencies(t *testing.T) {

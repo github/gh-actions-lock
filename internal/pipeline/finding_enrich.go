@@ -14,15 +14,15 @@ import (
 // and a Dependency synthesized from the workflow ref / lockfile pin. This
 // is purely about pointing the user at the composite that pulled in a
 // transitively-pinned dep.
-func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directNWOs map[ghapi.Repo]bool, parentMap map[string][]string) {
+func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directRefs map[ghapi.NWORef]bool, parentMap map[string][]string) {
 	if f.Dependency == nil {
 		return
 	}
 	owner, repo := f.Dependency.OwnerRepo()
-	if directNWOs[ghapi.ForRepo(owner, repo)] {
+	if directRefs[ghapi.ForNWORef(owner, repo, f.Dependency.Ref)] {
 		return
 	}
-	// Prefer the dep snapshot from the workflow's ExistingDeps (it has the
+	// Prefer the dep snapshot from the workflow's RecordedDeps (it has the
 	// canonical NWO casing the parent map keys with). Synthesised deps
 	// already match — but the indexed lookup is cheap regardless.
 	key := f.Dependency.Key()

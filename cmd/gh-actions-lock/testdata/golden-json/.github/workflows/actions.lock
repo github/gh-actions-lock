@@ -33,5 +33,4 @@ workflows:
     - 'actions/checkout@v6'
     - 'actions/setup-go@v6'
     - 'actions/cache@v4'
-    - 'helper/only-transitive@v1'
     - 'old/dead@v1'

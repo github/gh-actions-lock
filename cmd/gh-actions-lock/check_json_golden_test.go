@@ -65,8 +65,8 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 				"a1": testRepoResponse("actions/setup-go", setupGoSHA, compositeYAML),
 				"a2": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
 				"a3": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
-				"a4": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
-				"a5": testRepoResponse("old/dead", staleSHA, nodeActionYAML),
+				"a4": testRepoResponse("old/dead", staleSHA, nodeActionYAML),
+				"a5": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
 			},
 		}),
 	)
