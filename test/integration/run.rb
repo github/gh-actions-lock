@@ -347,6 +347,7 @@ end
 # ── Fixture data ────────────────────────────────────────────────────────
 
 CHECKOUT_SHA      = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+CHECKOUT_V420_SHA = "d632683dd7b4114ad314bca15554477dd762a938"
 SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
 MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -441,7 +442,7 @@ LOCKFILE_TEMPLATES = {
       dependencies: {
         "actions/checkout@v4.2.0" => {
           "ref" => "v4.2.0",
-          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "commit" => "sha1-#{CHECKOUT_V420_SHA}",
           "owner_id" => 44036562,
           "repo_id" => 197814629
         }
