@@ -76,16 +76,24 @@ func TestCheckCommand_RewritesMovedRepository(t *testing.T) {
 	)
 	for _, tt := range []struct {
 		name string
+		ref  string
 		pins []string
 		args []string
 	}{
-		{name: "fresh onboarding"},
+		{name: "fresh onboarding", ref: ref},
 		{
-			name: "existing lockfile",
+			name: "existing immutable lockfile",
+			ref:  ref,
 			pins: []string{oldNWO + "@" + ref + "=sha1-" + sha},
 		},
 		{
+			name: "existing mutable lockfile",
+			ref:  "v2",
+			pins: []string{oldNWO + "@v2=sha1-" + sha},
+		},
+		{
 			name: "rescan",
+			ref:  ref,
 			pins: []string{oldNWO + "@" + ref + "=sha1-" + sha},
 			args: []string{"--rescan"},
 		},
@@ -101,11 +109,22 @@ func TestCheckCommand_RewritesMovedRepository(t *testing.T) {
 					},
 				}),
 			)
+			if tt.name == "existing mutable lockfile" {
+				reg.Register(
+					httpmock.REST("GET", `repos/krzema12/github-actions-typing$`),
+					httpmock.JSONResponse(map[string]any{
+						"full_name": newNWO,
+						"id":        502427408,
+						"owner":     map[string]any{"id": 129620060},
+					}),
+				)
+			}
 			reg.Register(
 				httpmock.REST("GET", `repos/typesafegithub/github-actions-typing$`),
 				httpmock.JSONResponse(map[string]any{
-					"id":    502427408,
-					"owner": map[string]any{"id": 129620060},
+					"full_name": newNWO,
+					"id":        502427408,
+					"owner":     map[string]any{"id": 129620060},
 				}),
 			)
 			workflowPath := writeTempWorkflow(t, `
@@ -115,7 +134,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: `+oldNWO+`@`+ref+`
+      - uses: `+oldNWO+`@`+tt.ref+`
 `, tt.pins...)
 			args := append(tt.args, "--no-narrow", workflowPath)
 			stdout, _, err := runCommandWithHTTP(t, reg, args...)
@@ -123,10 +142,10 @@ jobs:
 			require.NoError(t, err, "stdout:\n%s", stdout)
 			workflow, readErr := os.ReadFile(workflowPath)
 			require.NoError(t, readErr)
-			assert.Contains(t, string(workflow), "uses: "+newNWO+"@"+ref)
+			assert.Contains(t, string(workflow), "uses: "+newNWO+"@"+tt.ref)
 			assert.NotContains(t, string(workflow), oldNWO)
 			pins := readTempLockfilePins(t)
-			assert.Contains(t, pins, "'"+newNWO+"@"+ref+"'")
+			assert.Contains(t, pins, "'"+newNWO+"@"+tt.ref+"'")
 			assert.NotContains(t, pins, oldNWO)
 
 			localReg := &httpmock.Registry{}
@@ -847,9 +866,9 @@ jobs:
 
 // TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps verifies that
 // SeedFromLockfile pre-warms the resolution cache so known deps skip
-// network calls, while new deps still resolve from the network.
+// action-file resolution, while new deps still resolve from the network.
 // The workflow has two deps: checkout (in lockfile) and setup-go (not in
-// lockfile). Only setup-go should hit the HTTP mock.
+// lockfile). Checkout needs only one repository identity request.
 func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -857,8 +876,12 @@ func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 
-	// Only register an HTTP stub for setup-go (the NEW dep).
-	// No stub for checkout — the seed must serve it from cache.
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"full_name": "actions/checkout"}),
+	)
+	// No GraphQL stub for checkout: after its NWO is validated, the seed
+	// must still serve its action resolution from cache.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "setup-go"),
 		httpmock.JSONResponse(map[string]any{
@@ -911,7 +934,7 @@ jobs:
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 
 	// The finding should be about setup-go being unpinned, NOT about checkout.
-	// If checkout required an HTTP call, reg.Verify would fail (no stub registered).
+	// If checkout required GraphQL action resolution, no stub would match.
 	require.Len(t, payload.Findings, 1)
 	assert.Equal(t, "not-pinned", payload.Findings[0].Category)
 	assert.Contains(t, payload.Findings[0].Dependency, "setup-go")

@@ -6,6 +6,7 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -56,9 +57,20 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Immutable full-semver pins (e.g. v4.2.1) are NOT trusted blindly:
 	// they're routed through live resolution + ancestry so a stale or
 	// unreachable pin is caught on the default path, not just under
-	// --rescan. Mutable recorded refs (v4, v4.2, branches) legitimately
-	// move, so they stay trusted (seeded from the lockfile) until --rescan.
+	// --rescan. Mutable recorded refs (v4, v4.2, branches) legitimately move,
+	// so they stay trusted after a cheap repository identity check confirms
+	// the NWO.
 	skippedRescan := 0
+	fastPlans := make([]fastPathPlan, len(parsed))
+	for i := range parsed {
+		if !opts.Rescan &&
+			len(parsed[i].LocalPaths) == 0 &&
+			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
+			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
+			fastPlans[i] = planFastPath(parsed[i])
+		}
+	}
+	canonicalRepos := validateMutableRepositoryIdentities(ctx, r, opts.Pool, fastPlans)
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	for i := range parsed {
@@ -73,9 +85,17 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		if opts.Rescan {
 			continue
 		}
-		plan := planFastPath(parsed[i])
-		// Mutable recorded refs are trusted without a live re-check
-		// (surfaced in the summary so the operator can --rescan them).
+		plan := fastPlans[i]
+		trustedMutable := plan.mutableRefs[:0]
+		for _, ref := range plan.mutableRefs {
+			if canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)] {
+				trustedMutable = append(trustedMutable, ref)
+			}
+		}
+		plan.resolved = plan.resolved && len(trustedMutable) == len(plan.mutableRefs)
+		plan.mutableRefs = trustedMutable
+		// Mutable recorded refs are trusted without live action resolution
+		// after the repository identity check above.
 		skippedRescan += len(plan.mutableRefs)
 		if plan.resolved {
 			parsed[i].Resolved = true
@@ -155,6 +175,40 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}, nil
 }
 
+func validateMutableRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, plans []fastPathPlan) map[ghapi.Repo]bool {
+	type indexedRef struct {
+		idx int
+		ref parserlock.ActionRef
+	}
+	var repos []indexedRef
+	seen := make(map[ghapi.Repo]bool)
+	for _, plan := range plans {
+		for _, ref := range plan.mutableRefs {
+			key := ghapi.ForRepo(ref.Owner, ref.Repo)
+			if !seen[key] {
+				seen[key] = true
+				repos = append(repos, indexedRef{idx: len(repos), ref: ref})
+			}
+		}
+	}
+	results := make([]bool, len(repos))
+	if r != nil {
+		_ = pinpool.RunTyped(pool, ctx, "", repos,
+			func(indexedRef) string { return "" },
+			func(ctx context.Context, _ int, item indexedRef) error {
+				canonical, err := r.CanonicalNWO(ctx, item.ref.Owner, item.ref.Repo)
+				results[item.idx] = err == nil && strings.EqualFold(canonical, item.ref.NWO())
+				return nil
+			},
+		)
+	}
+	valid := make(map[ghapi.Repo]bool, len(repos))
+	for _, item := range repos {
+		valid[ghapi.ForRepo(item.ref.Owner, item.ref.Repo)] = results[item.idx]
+	}
+	return valid
+}
+
 // fastPathPlan describes how the pre-resolution fast path treats one
 // recorded workflow.
 type fastPathPlan struct {
@@ -162,8 +216,8 @@ type fastPathPlan struct {
 	// no refs, is a local-path action, or every recorded ref is a trusted
 	// mutable pin.
 	resolved bool
-	// mutableRefs are recorded refs (v4, v4.2, branches) trusted from the
-	// lockfile without a live re-check.
+	// mutableRefs are recorded refs (v4, v4.2, branches) eligible for trust
+	// from the lockfile after their repository identities are validated.
 	mutableRefs []parserlock.ActionRef
 }
 

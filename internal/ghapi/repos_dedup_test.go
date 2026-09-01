@@ -60,6 +60,7 @@ func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		})(req)
 	default: // repos/{owner}/{repo}
 		return httpmock.JSONResponse(map[string]any{
+			"full_name":      "o/r",
 			"default_branch": "main",
 			"id":             int64(20),
 			"owner":          map[string]any{"id": int64(10)},
@@ -141,8 +142,8 @@ func TestRepoIDs_CoalescesConcurrent(t *testing.T) {
 	}
 }
 
-// RepoIDs and GetDefaultBranch both derive from repos/{owner}/{repo}; they
-// must share a single round-trip rather than fetching it twice.
+// Repository metadata consumers must share a single round-trip rather than
+// fetching it once per field.
 func TestRepoMetadata_SharedAcrossConsumers(t *testing.T) {
 	tr := newCountingTransport(2 * time.Millisecond)
 	c := newCountingClient(t, tr)
@@ -153,6 +154,9 @@ func TestRepoMetadata_SharedAcrossConsumers(t *testing.T) {
 		}
 		if owner, repo, err := c.RepoIDs(context.Background(), "o", "r"); err != nil || owner != 10 || repo != 20 {
 			t.Errorf("RepoIDs = (%d, %d, %v)", owner, repo, err)
+		}
+		if nwo, err := c.CanonicalNWO(context.Background(), "o", "r"); err != nil || nwo != "o/r" {
+			t.Errorf("CanonicalNWO = (%q, %v)", nwo, err)
 		}
 	})
 
