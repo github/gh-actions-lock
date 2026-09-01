@@ -1276,20 +1276,22 @@ jobs:
 	assert.Contains(t, lock, "'old/child@v1'")
 }
 
-func TestCheck_Relock_BumpsMovedTransitive(t *testing.T) {
+func TestCheck_Relock_BumpsMovedTransitiveAlongsideNewDirect(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
 	parentSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	oldChildSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	liveChildSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	newDirectSHA := "dddddddddddddddddddddddddddddddddddddddd"
 	composite := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: old/child@v1\n"
 	reg.Register(
 		httpmock.GraphQLForRepo("example", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", parentSHA, composite),
-				"a1": testRepoResponse("old/child", liveChildSHA, nodeActionYAML),
+				"a1": testRepoResponse("new/direct", newDirectSHA, nodeActionYAML),
+				"a2": testRepoResponse("old/child", liveChildSHA, nodeActionYAML),
 			},
 		}),
 	)
@@ -1298,6 +1300,13 @@ func TestCheck_Relock_BumpsMovedTransitive(t *testing.T) {
 		httpmock.JSONResponse(map[string]any{
 			"status":            "ahead",
 			"merge_base_commit": map[string]any{"sha": oldChildSHA},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/new/direct$`),
+		httpmock.JSONResponse(map[string]any{
+			"id":    3,
+			"owner": map[string]any{"id": 2},
 		}),
 	)
 
@@ -1309,6 +1318,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: example/action@main
+      - uses: new/direct@v1
 `)
 	writeTempCompositeLockfile(t, parentSHA, "old/child", "v1", oldChildSHA)
 
@@ -1317,6 +1327,7 @@ jobs:
 
 	lock := readTempLockfilePins(t)
 	assert.Contains(t, lock, "sha1-"+parentSHA)
+	assert.Contains(t, lock, "sha1-"+newDirectSHA)
 	assert.Contains(t, lock, "sha1-"+liveChildSHA)
 	assert.NotContains(t, lock, "sha1-"+oldChildSHA)
 }

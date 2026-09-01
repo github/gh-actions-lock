@@ -160,12 +160,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
 	entries = verifiedEntries(inventory, wr.Path)
 
-	// A moved *transitive* dep is pruned from inventory but is not a direct
-	// ActionRef, so partitionByInventory marks nothing unrecorded and the
-	// verified fast path would silently drop it instead of bumping it. Force
-	// the workflow's direct roots through recursive resolution so the moved
-	// transitive is re-pinned to its current SHA.
-	if len(unrecordedRefs) == 0 && repinMoved {
+	// A moved transitive is absent from the direct ActionRefs, so refresh the
+	// complete scoped closure whenever movement is accepted.
+	if repinMoved {
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
