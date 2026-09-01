@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -518,8 +519,8 @@ func TestState_GetClosureTraversesRecordedGraph(t *testing.T) {
 	}
 }
 
-func TestState_SetPreservesOrReplacesRecordedClosureByParentCommit(t *testing.T) {
-	t.Run("unchanged parent keeps recorded children", func(t *testing.T) {
+func TestState_SetPreservesOrReplacesRecordedClosureByAuthority(t *testing.T) {
+	t.Run("incomplete graph keeps recorded children", func(t *testing.T) {
 		dir := t.TempDir()
 		setupClosure(t, dir)
 		parent := dep.Dependency{
@@ -529,16 +530,59 @@ func TestState_SetPreservesOrReplacesRecordedClosureByParentCommit(t *testing.T)
 			SHA:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			HashAlgo: "sha1",
 		}
+		store, err := LoadState(dir, fakeMetadataResolver{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetWorkflows(context.Background(), []WorkflowUpdate{{
+			WorkflowKey: ".github/workflows/ci.yml",
+			Deps:        []dep.Dependency{parent},
+			DirectKeys:  map[string]bool{parent.Key(): true},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(filepath.Join(dir, parserlock.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(after), "actions/cache@v4") {
+			t.Fatalf("recorded child must survive an incomplete resolution:\n%s", after)
+		}
+	})
+
+	t.Run("complete unchanged parent replaces recorded children", func(t *testing.T) {
+		dir := t.TempDir()
+		setupClosure(t, dir)
+		parent := dep.Dependency{
+			NWO:      "actions/setup-go",
+			Ref:      "v6",
+			Branch:   "main",
+			SHA:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			HashAlgo: "sha1",
+		}
+		child := dep.Dependency{
+			NWO:      "new/child",
+			Ref:      "v2",
+			Branch:   "main",
+			SHA:      "2222222222222222222222222222222222222222",
+			HashAlgo: "sha1",
+		}
 		after := resaveBumped(
 			t,
 			dir,
 			".github/workflows/ci.yml",
-			[]dep.Dependency{parent},
-			nil,
+			[]dep.Dependency{parent, child},
+			map[string][]string{child.Key(): {parent.Key()}},
 			map[string]bool{parent.Key(): true},
 		)
-		if !strings.Contains(string(after), "actions/cache@v4") {
-			t.Fatalf("recorded child must survive an incomplete resolution:\n%s", after)
+		if strings.Contains(string(after), "actions/cache@v4") {
+			t.Fatalf("complete graph must drop its obsolete child:\n%s", after)
+		}
+		if !strings.Contains(string(after), "new/child@v2") {
+			t.Fatalf("complete graph must record its live child:\n%s", after)
 		}
 	})
 
@@ -574,6 +618,63 @@ func TestState_SetPreservesOrReplacesRecordedClosureByParentCommit(t *testing.T)
 			t.Fatalf("advanced parent must record its live child:\n%s", after)
 		}
 	})
+}
+
+func TestState_SetWorkflowsRebuildsCompleteScopedUnion(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := dep.Dependency{NWO: "owner/composite", Ref: "v1", SHA: strings.Repeat("1", 40), HashAlgo: "sha1"}
+	oldChild := dep.Dependency{NWO: "owner/old", Ref: "v1", SHA: strings.Repeat("2", 40), HashAlgo: "sha1"}
+	for _, workflow := range []string{"ci.yml", "release.yml"} {
+		if err := store.Set(context.Background(), workflow,
+			[]dep.Dependency{parent, oldChild},
+			dep.ParentMap{oldChild.Key(): {parent.Key()}},
+			map[string]bool{parent.Key(): true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	ciChild := dep.Dependency{NWO: "owner/ci-child", Ref: "v1", SHA: strings.Repeat("3", 40), HashAlgo: "sha1"}
+	releaseChild := dep.Dependency{NWO: "owner/release-child", Ref: "v1", SHA: strings.Repeat("4", 40), HashAlgo: "sha1"}
+	if err := store.SetWorkflows(context.Background(), []WorkflowUpdate{
+		{
+			WorkflowKey:  "ci.yml",
+			Deps:         []dep.Dependency{parent, ciChild},
+			ParentMap:    dep.ParentMap{ciChild.Key(): {parent.Key()}},
+			DirectKeys:   map[string]bool{parent.Key(): true},
+			ReplaceGraph: true,
+		},
+		{
+			WorkflowKey:  "release.yml",
+			Deps:         []dep.Dependency{parent, releaseChild},
+			ParentMap:    dep.ParentMap{releaseChild.Key(): {parent.Key()}},
+			DirectKeys:   map[string]bool{parent.Key(): true},
+			ReplaceGraph: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	action := store.File().Dependencies[parent.Key()]
+	wantUses := []string{ciChild.Key(), releaseChild.Key()}
+	if !slices.Equal(action.Uses, wantUses) {
+		t.Fatalf("complete scoped union = %v, want %v", action.Uses, wantUses)
+	}
+	if _, ok := store.File().Dependencies[oldChild.Key()]; ok {
+		t.Fatalf("obsolete child %s survived authoritative rebuild", oldChild.Key())
+	}
 }
 
 // resaveBumped reloads the store from disk (as `update` does), replaces the

@@ -650,6 +650,85 @@ jobs:
 	assert.Contains(t, string(got), "      - 'owner/child@v2'")
 }
 
+func TestCheckCommand_PathSwitchReplacesSameCommitClosure(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	parentSHA := strings.Repeat("1", 40)
+	oldChildSHA := strings.Repeat("2", 40)
+	newChildSHA := strings.Repeat("3", 40)
+	compositeYAML := "name: New sub-action\nruns:\n  using: composite\n  steps:\n    - uses: new/child@v2\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("owner/composite", parentSHA, compositeYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("new", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("new/child", newChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("old/child", oldChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST(http.MethodGet, `repos/new/child$`),
+		httpmock.JSONResponse(map[string]any{
+			"id":    3,
+			"owner": map[string]any{"id": 2},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/composite/new@v1
+`)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'owner/composite@v1':\n" +
+		"    ref: 'v1'\n" +
+		"    commit: 'sha1-" + parentSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"    uses:\n" +
+		"      - 'old/child@v1'\n" +
+		"  'old/child@v1':\n" +
+		"    ref: 'v1'\n" +
+		"    commit: 'sha1-" + oldChildSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'owner/composite@v1'\n"
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+
+	_, _, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+	require.NoError(t, err)
+
+	got, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(got), "'new/child@v2'")
+	assert.Contains(t, string(got), "      - 'new/child@v2'")
+	assert.NotContains(t, string(got), "'old/child@v1'")
+}
+
 func TestCheckCommand_JSONDependenciesIncludesRecordedClosure(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)

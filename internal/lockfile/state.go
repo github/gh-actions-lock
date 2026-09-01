@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -351,104 +352,120 @@ func (s *State) AllDeps() []dep.Dependency {
 // Resolution of owner/repo numeric IDs happens lazily per NWO and is cached
 // for the lifetime of the store.
 func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys map[string]bool) error {
-	return s.set(ctx, workflowKey, deps, parentMap, directKeys, nil)
+	return s.SetWorkflows(ctx, []WorkflowUpdate{{
+		WorkflowKey:  workflowKey,
+		Deps:         deps,
+		ParentMap:    parentMap,
+		DirectKeys:   directKeys,
+		ReplaceGraph: true,
+	}})
 }
 
-// SetScoped updates a workflow while preserving existing graph edges on
-// dependencies also reached by workflows outside the current command scope.
-func (s *State) SetScoped(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys, scopedWorkflows map[string]bool) error {
-	return s.set(ctx, workflowKey, deps, parentMap, directKeys, scopedWorkflows)
+// WorkflowUpdate is one workflow's contribution to a batch lockfile write.
+type WorkflowUpdate struct {
+	WorkflowKey  string
+	Deps         []dep.Dependency
+	ParentMap    dep.ParentMap
+	DirectKeys   map[string]bool
+	ReplaceGraph bool
 }
 
-func (s *State) set(ctx context.Context, workflowKey string, deps []dep.Dependency, parentMap map[string][]string, directKeys, scopedWorkflows map[string]bool) error {
+// SetWorkflows applies workflow roots and global dependency metadata together.
+// Complete live graphs replace recorded edges; incomplete or unscanned
+// workflows retain the recorded edge union they still reach.
+func (s *State) SetWorkflows(ctx context.Context, updates []WorkflowUpdate) error {
 	// Resolve repo IDs for every unique owner/repo BEFORE taking s.mu so
 	// concurrent pin workers don't serialize on the network round-trip.
 	// lookupIDs is safe to call without s.mu and dedups in-flight fetches
 	// for the same key via singleflight.
-	seenRepos := make(map[string]struct{}, len(deps))
-	for _, d := range deps {
-		pin, err := depToPin(d)
-		if err != nil {
-			return err
-		}
-		k := pin.Owner + "/" + pin.Repo
-		if _, ok := seenRepos[k]; ok {
-			continue
-		}
-		seenRepos[k] = struct{}{}
-		if _, err := s.lookupIDs(ctx, pin.Owner, pin.Repo); err != nil {
-			return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
+	seenRepos := make(map[string]struct{})
+	for _, update := range updates {
+		for _, d := range update.Deps {
+			pin, err := depToPin(d)
+			if err != nil {
+				return err
+			}
+			k := pin.Owner + "/" + pin.Repo
+			if _, ok := seenRepos[k]; ok {
+				continue
+			}
+			seenRepos[k] = struct{}{}
+			if _, err := s.lookupIDs(ctx, pin.Owner, pin.Repo); err != nil {
+				return fmt.Errorf("resolving repo IDs for %s/%s: %w", pin.Owner, pin.Repo, err)
+			}
 		}
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	directPins := make([]string, 0)
-	seenDirect := map[string]bool{}
-	// keyToPin: Dependency.Key() (NWO@Ref) → canonical pin (NWO@Ref:algo-hex).
-	keyToPin := make(map[string]string, len(deps))
-	for _, d := range deps {
-		pin, err := depToPin(d)
-		if err != nil {
-			return err
-		}
-		pin = pin.Canonical()
-		pinKey := pin.String()
-		keyToPin[d.Key()] = pinKey
-		var isDirect bool
-		if directKeys != nil {
-			isDirect = directKeys[d.Key()]
-		} else {
-			_, hasParent := parentMap[d.Key()]
-			isDirect = !hasParent
-		}
-		if isDirect && !seenDirect[pinKey] {
-			seenDirect[pinKey] = true
-			directPins = append(directPins, pinKey)
-		}
-	}
-
-	// Invert parentMap (child → parents) into parent → children, in canonical
-	// pin-key form. Translate both sides via keyToPin; entries that don't
-	// resolve to a known dep are skipped (they were filtered out before
-	// reaching the writer).
+	recordedDependencies := maps.Clone(s.file.Dependencies)
+	recordedWorkflows := maps.Clone(s.file.Workflows)
+	replacingWorkflows := make(map[string]bool, len(updates))
+	workflowPins := make(map[string][]string, len(updates))
+	depsByPin := make(map[string]dep.Dependency)
+	replacePins := make(map[string]bool)
 	parentToChildren := make(map[string]map[string]bool)
-	for childDepKey, parents := range parentMap {
-		childPin, ok := keyToPin[childDepKey]
-		if !ok {
+	for _, update := range updates {
+		replacingWorkflows[update.WorkflowKey] = update.ReplaceGraph
+		keyToPin := make(map[string]string, len(update.Deps))
+		seenDirect := make(map[string]bool)
+		for _, d := range update.Deps {
+			pin, err := depToPin(d)
+			if err != nil {
+				return err
+			}
+			pinKey := pin.Canonical().String()
+			keyToPin[d.Key()] = pinKey
+			if existing, ok := depsByPin[pinKey]; ok && !strings.EqualFold(existing.SHA, d.SHA) {
+				return fmt.Errorf("conflicting commits for %s", pinKey)
+			}
+			depsByPin[pinKey] = d
+			if update.ReplaceGraph {
+				replacePins[pinKey] = true
+			}
+			isDirect := update.DirectKeys[d.Key()]
+			if update.DirectKeys == nil {
+				_, hasParent := update.ParentMap[d.Key()]
+				isDirect = !hasParent
+			}
+			if isDirect && !seenDirect[pinKey] {
+				seenDirect[pinKey] = true
+				workflowPins[update.WorkflowKey] = append(workflowPins[update.WorkflowKey], pinKey)
+			}
+		}
+		if !update.ReplaceGraph {
 			continue
 		}
-		for _, parentDepKey := range parents {
-			parentPin, ok := keyToPin[parentDepKey]
+		for childDepKey, parents := range update.ParentMap {
+			childPin, ok := keyToPin[childDepKey]
 			if !ok {
 				continue
 			}
-			children, exists := parentToChildren[parentPin]
-			if !exists {
-				children = make(map[string]bool)
-				parentToChildren[parentPin] = children
+			for _, parentDepKey := range parents {
+				parentPin, ok := keyToPin[parentDepKey]
+				if !ok {
+					continue
+				}
+				if parentToChildren[parentPin] == nil {
+					parentToChildren[parentPin] = make(map[string]bool)
+				}
+				parentToChildren[parentPin][childPin] = true
 			}
-			children[childPin] = true
 		}
+		sort.Strings(workflowPins[update.WorkflowKey])
 	}
 
-	// Now upsert action entries with their per-pin uses lists.
-	for _, d := range deps {
+	for pinKey, d := range depsByPin {
 		pin, err := depToPin(d)
 		if err != nil {
 			return err
 		}
-		pin = pin.Canonical()
-		pinKey := pin.String()
 		// IDs were pre-resolved above (outside the mutex); read from cache
 		// directly so we don't recursively re-acquire s.mu.
 		ids, ok := s.idCache[strings.ToLower(pin.Owner+"/"+pin.Repo)]
 		if !ok {
 			return fmt.Errorf("resolving repo IDs for %s/%s: not in cache after pre-resolve", pin.Owner, pin.Repo)
 		}
-		// Merge uses: each workflow contributes its own transitive edges.
-		// A dep that is a parent in one workflow but direct (no children)
-		// in another must not clobber the first workflow's uses list.
 		usesSet := make(map[string]bool)
 		if children, ok := parentToChildren[pinKey]; ok {
 			for c := range children {
@@ -473,10 +490,7 @@ func (s *State) set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			if ref == "" {
 				ref = existing.Ref
 			}
-			if existing.Commit == commit || s.reachableFromUnscopedWorkflow(pinKey, workflowKey, scopedWorkflows) {
-				// ponytail: actions.lock stores a global edge union, so keep the
-				// old union when an untouched workflow reaches this parent.
-				// A full-scope refresh can replace it exactly.
+			if !replacePins[pinKey] || reachableFromPreservedWorkflow(pinKey, replacingWorkflows, recordedWorkflows, recordedDependencies) {
 				for _, u := range existing.Uses {
 					usesSet[u] = true
 				}
@@ -498,12 +512,18 @@ func (s *State) set(ctx context.Context, workflowKey string, deps []dep.Dependen
 			Uses:    uses,
 		}
 	}
-	sort.Strings(directPins)
-	s.file.Workflows[workflowKey] = directPins
+	for workflowKey, directPins := range workflowPins {
+		s.file.Workflows[workflowKey] = directPins
+	}
+	for _, update := range updates {
+		if _, ok := workflowPins[update.WorkflowKey]; !ok {
+			s.file.Workflows[update.WorkflowKey] = nil
+		}
+	}
 	return nil
 }
 
-func (s *State) reachableFromUnscopedWorkflow(target, workflowKey string, scopedWorkflows map[string]bool) bool {
+func reachableFromPreservedWorkflow(target string, replacingWorkflows map[string]bool, workflows map[string][]string, dependencies map[string]parserlock.Action) bool {
 	var reaches func(string, map[string]bool) bool
 	reaches = func(key string, seen map[string]bool) bool {
 		if key == target {
@@ -513,15 +533,15 @@ func (s *State) reachableFromUnscopedWorkflow(target, workflowKey string, scoped
 			return false
 		}
 		seen[key] = true
-		for _, child := range s.file.Dependencies[key].Uses {
+		for _, child := range dependencies[key].Uses {
 			if reaches(child, seen) {
 				return true
 			}
 		}
 		return false
 	}
-	for workflow, roots := range s.file.Workflows {
-		if workflow == workflowKey || scopedWorkflows[workflow] {
+	for workflow, roots := range workflows {
+		if replacingWorkflows[workflow] {
 			continue
 		}
 		for _, root := range roots {

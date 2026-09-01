@@ -346,9 +346,29 @@ end
 
 # ── Fixture data ────────────────────────────────────────────────────────
 
-CHECKOUT_SHA      = "11d5960a326750d5838078e36cf38b85af677262"
-CHECKOUT_FULL_SHA = "d632683dd7b4114ad314bca15554477dd762a938"
-CHECKOUT_MAIN_SHA = "f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a"
+checkout_refs = {
+  "refs/tags/v4" => "11d5960a326750d5838078e36cf38b85af677262",
+  "refs/tags/v4.2.0" => "d632683dd7b4114ad314bca15554477dd762a938",
+  "refs/heads/main" => "f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a"
+}
+unless ARGV.include?("--stub")
+  output = `git ls-remote https://github.com/actions/checkout.git #{checkout_refs.keys.join(" ")}`
+  raise "failed to resolve actions/checkout fixture refs" unless $?.success?
+
+  resolved = {}
+  output.lines.each do |line|
+    sha, ref = line.split
+    resolved[ref] = sha if checkout_refs.key?(ref)
+  end
+  missing = checkout_refs.keys - resolved.keys
+  raise "missing actions/checkout fixture refs: #{missing.join(", ")}" unless missing.empty?
+
+  checkout_refs = resolved
+end
+
+CHECKOUT_SHA      = checkout_refs.fetch("refs/tags/v4")
+CHECKOUT_FULL_SHA = checkout_refs.fetch("refs/tags/v4.2.0")
+CHECKOUT_MAIN_SHA = checkout_refs.fetch("refs/heads/main")
 SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
 MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -578,10 +598,11 @@ def checkout_graphql_success(srv)
     query = body["query"] || ""
 
     if query.include?("expression")
-      sha = if query.include?("v4.2.0")
-             CHECKOUT_FULL_SHA
-           elsif query.include?("main:")
-             CHECKOUT_MAIN_SHA
+      expression = body.dig("variables", "expr0").to_s
+      sha = if expression.start_with?("v4.2.0")
+            CHECKOUT_FULL_SHA
+           elsif expression.start_with?("main")
+            CHECKOUT_MAIN_SHA
            else
              CHECKOUT_SHA
            end
@@ -642,6 +663,12 @@ end
 # not listed here either use no stub or rely on catalog-level config.
 
 STUB_WIRING = {
+  stub_ref_specific_full_tag: ->(s) {
+    wire_checkout_success(s, "gho_fake_full_tag_token")
+  },
+  stub_ref_specific_branch: ->(s) {
+    wire_checkout_success(s, "gho_fake_branch_token")
+  },
   fresh_tag_warns_without_cooldown: ->(s) {
     wire_checkout_fresh(s, "gho_fake_fresh_warn_token")
   },

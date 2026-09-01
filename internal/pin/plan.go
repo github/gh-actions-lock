@@ -134,8 +134,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
 	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0 ||
 		opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0
+	movementRejected := wr.CountByCategory(checks.RefMoved) > 0 && !repinsMoved(opts) ||
+		wr.CountByCategory(checks.UnreachablePin) > 0 && !opts.AcceptMoved
+	useLiveGraph := wr.LiveComplete && (wr.LiveGraphChanged || repinMoved) && !movementRejected
 
-	if !wr.NeedsAttention() && !repinMoved {
+	if !wr.NeedsAttention() && !repinMoved && !useLiveGraph {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
@@ -160,22 +163,32 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
 	entries = verifiedEntries(inventory, wr.Path)
 
-	// A moved transitive is absent from the direct ActionRefs, so refresh the
-	// complete scoped closure whenever movement is accepted.
-	if repinMoved {
+	var deps []dep.Dependency
+	var parentMap dep.ParentMap
+	var resolveErr error
+	if useLiveGraph {
+		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
+		entries = verifiedEntries(nil, wr.Path)
+		deps = append([]dep.Dependency(nil), wr.LiveDeps...)
+		parentMap = cloneParentMap(wr.LiveParents)
+	} else if repinMoved {
+		// A moved transitive is absent from the direct ActionRefs, so refresh
+		// the complete scoped closure whenever movement is accepted.
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
 
-	if len(unrecordedRefs) == 0 {
+	if len(unrecordedRefs) == 0 && !useLiveGraph {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
-	// Resolve live state for unrecorded refs only.
-	status("resolving " + wr.Path)
-	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
+	if !useLiveGraph {
+		// Resolve live state for unrecorded refs only.
+		status("resolving " + wr.Path)
+		deps, parentMap, resolveErr = opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
+	}
 	if resolveErr != nil {
 		unresolved := unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)
 		if repinMoved {
@@ -273,12 +286,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		wplans = append(wplans, WorkflowPlan{
 			Path:            wr.Path,
 			Rewrites:        rewrites,
+			ReplaceGraph:    useLiveGraph,
 			SelfActionFiles: wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// No rewrites and no plan entry yet — still include the workflow
 		// so EnsureSentinel can be applied during commit.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, ReplaceGraph: useLiveGraph, SelfActionFiles: wr.SelfActionFiles})
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
@@ -289,24 +303,32 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	return planResult{entries: entries, wplans: wplans}, nil
 }
 
+func cloneParentMap(parents dep.ParentMap) dep.ParentMap {
+	cloned := make(dep.ParentMap, len(parents))
+	for child, values := range parents {
+		cloned[child] = append([]string(nil), values...)
+	}
+	return cloned
+}
+
 // unresolvedEntries flags findings whose refs were attempted but failed to
 // resolve. On a partial failure deps holds the refs that did resolve, so only
 // the genuine misses (attempted and not in deps) are marked Unresolved.
 func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.ActionRef, deps []dep.Dependency, resolveErr error) []Entry {
 	resolved := make(map[string]bool, len(deps))
 	for _, d := range deps {
-		resolved[strings.ToLower(d.NWO+"@"+d.Ref)] = true
+		resolved[dep.NormalizeKey(d.NWO+"@"+d.Ref)] = true
 	}
 	attempted := make(map[string]bool, len(unrecordedRefs))
 	for _, ref := range unrecordedRefs {
-		attempted[strings.ToLower(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
+		attempted[dep.NormalizeKey(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
 	}
 	var out []Entry
 	for _, f := range wr.Findings {
 		if f.ActionRef == nil {
 			continue
 		}
-		key := strings.ToLower(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
+		key := dep.NormalizeKey(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
 		if !attempted[key] || resolved[key] {
 			continue
 		}
@@ -579,14 +601,14 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 			continue
 		}
 		d := f.Dependency
-		stale[strings.ToLower(d.NWO+"@"+d.Ref+":"+d.SHA)] = true
+		stale[dep.NormalizeKey(d.NWO+"@"+d.Ref)+":"+strings.ToLower(d.SHA)] = true
 	}
 	if len(stale) == 0 {
 		return inventory
 	}
 	out := make([]checks.InventoryEntry, 0, len(inventory))
 	for _, inv := range inventory {
-		key := strings.ToLower(inv.Dep.NWO + "@" + inv.Dep.Ref + ":" + inv.Dep.SHA)
+		key := dep.NormalizeKey(inv.Dep.NWO+"@"+inv.Dep.Ref) + ":" + strings.ToLower(inv.Dep.SHA)
 		if stale[key] {
 			continue
 		}

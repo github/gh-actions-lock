@@ -75,6 +75,15 @@ type WorkflowReport struct {
 	Deps []dep.Dependency
 	// Inventory lists all dependencies with direct/transitive classification.
 	Inventory []InventoryEntry
+	// LiveDeps and LiveParents are the path-aware graph discovered from the
+	// current workflow roots. LiveComplete is false when recursive resolution
+	// returned any error, so callers must retain recorded graph authority.
+	LiveDeps     []dep.Dependency
+	LiveParents  dep.ParentMap
+	LiveComplete bool
+	// LiveGraphChanged reports a dependency or edge change at lockfile
+	// granularity. Commit may replace the recorded graph only when LiveComplete.
+	LiveGraphChanged bool
 	// ParseWarnings from ExtractActionRefs (e.g. malformed uses: lines).
 	ParseWarnings []string
 }

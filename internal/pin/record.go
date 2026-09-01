@@ -48,8 +48,9 @@ type Entry struct {
 // WorkflowPlan records what Commit must write for one workflow file.
 // Internal to the pin lifecycle; not serialized.
 type WorkflowPlan struct {
-	Path     string
-	Rewrites map[string]string
+	Path         string
+	Rewrites     map[string]string
+	ReplaceGraph bool
 	// SelfActionFiles are in-repo action definition files reached from this
 	// workflow through `$/…`. The same rewrites apply to their `uses:` lines.
 	SelfActionFiles []string

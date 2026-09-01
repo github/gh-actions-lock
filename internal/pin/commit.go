@@ -67,13 +67,10 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 
 	// Phase 2: Update lockfile entries for each scanned workflow.
 	pinnedByWorkflow := groupPinnedByWorkflow(rec)
-	scopedWorkflows := make(map[string]bool, len(rec.Workflows))
-	for _, wp := range rec.Workflows {
-		scopedWorkflows[workflowfile.KeyFromPath(wp.Path)] = true
-	}
 	if len(rec.Workflows) > 0 {
 		progress("Updating lockfile")
 	}
+	updates := make([]lockfile.WorkflowUpdate, 0, len(rec.Workflows))
 	for _, wp := range rec.Workflows {
 		wfPath := wp.Path
 		wfKey := workflowfile.KeyFromPath(wfPath)
@@ -84,9 +81,16 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
 		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
-		if err := store.SetScoped(ctx, wfKey, deps, parentMap, directKeys, scopedWorkflows); err != nil {
-			return fmt.Errorf("updating lockfile for %s: %w", wfPath, err)
-		}
+		updates = append(updates, lockfile.WorkflowUpdate{
+			WorkflowKey:  wfKey,
+			Deps:         deps,
+			ParentMap:    parentMap,
+			DirectKeys:   directKeys,
+			ReplaceGraph: wp.ReplaceGraph,
+		})
+	}
+	if err := store.SetWorkflows(ctx, updates); err != nil {
+		return fmt.Errorf("updating lockfile: %w", err)
 	}
 
 	// Phase 3: Persist lockfile to disk.
@@ -105,7 +109,7 @@ func reconcileSharedPins(rec *Record, store *lockfile.State) (*Record, error) {
 		if !isPinOrVerified(e.Resolution) {
 			continue
 		}
-		key := strings.ToLower(e.NWO + "@" + e.Ref)
+		key := dep.NormalizeKey(e.NWO + "@" + e.Ref)
 		if shasByKey[key] == nil {
 			shasByKey[key] = make(map[string]bool)
 		}
@@ -118,7 +122,7 @@ func reconcileSharedPins(rec *Record, store *lockfile.State) (*Record, error) {
 			continue
 		}
 		for _, existing := range store.AllDeps() {
-			if strings.EqualFold(existing.Key(), key) {
+			if dep.NormalizeKey(existing.Key()) == key {
 				conflicts[key] = existing
 				break
 			}
@@ -135,14 +139,14 @@ func reconcileSharedPins(rec *Record, store *lockfile.State) (*Record, error) {
 	reconciled.Entries = slices.Clone(rec.Entries)
 	for i := range reconciled.Entries {
 		e := &reconciled.Entries[i]
-		key := strings.ToLower(e.NWO + "@" + e.Ref)
+		key := dep.NormalizeKey(e.NWO + "@" + e.Ref)
 		if existing, ok := conflicts[key]; ok && isPinOrVerified(e.Resolution) {
 			e.SHA = existing.SHA
 			e.OnBranch = existing.Branch
 			e.Tag = existing.Tag
 		}
 		e.RequiredBy = slices.DeleteFunc(slices.Clone(e.RequiredBy), func(parent string) bool {
-			_, conflicted := conflicts[strings.ToLower(parent)]
+			_, conflicted := conflicts[dep.NormalizeKey(parent)]
 			return conflicted
 		})
 	}
@@ -242,7 +246,7 @@ func retainUnresolvablePins(rec *Record, store *lockfile.State, wfPath string, d
 		}
 		for _, wf := range e.Workflows {
 			if wf == wfPath {
-				retain[strings.ToLower(e.NWO+"@"+e.Ref)] = true
+				retain[dep.NormalizeKey(e.NWO+"@"+e.Ref)] = true
 			}
 		}
 	}
@@ -255,10 +259,10 @@ func retainUnresolvablePins(rec *Record, store *lockfile.State, wfPath string, d
 	}
 	have := make(map[string]bool, len(deps))
 	for _, d := range deps {
-		have[strings.ToLower(d.NWO+"@"+d.Ref)] = true
+		have[dep.NormalizeKey(d.NWO+"@"+d.Ref)] = true
 	}
 	for _, d := range existing {
-		k := strings.ToLower(d.NWO + "@" + d.Ref)
+		k := dep.NormalizeKey(d.NWO + "@" + d.Ref)
 		if retain[k] && !have[k] {
 			deps = append(deps, d)
 			directKeys[d.Key()] = true

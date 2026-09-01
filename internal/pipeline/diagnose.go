@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -62,11 +64,15 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	// couldn't be resolved — partial results are kept.
 	var liveDeps []dep.Dependency
 	if r != nil {
-		var resolveErr error
-		liveDeps, _, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		var recursiveErr error
+		var liveParents dep.ParentMap
+		liveDeps, liveParents, recursiveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		wr.LiveDeps, wr.LiveParents = alignLiveRootKeys(liveDeps, liveParents, pw.RecordedDeps, pw.Refs)
+		wr.LiveComplete = recursiveErr == nil
+		wr.LiveGraphChanged = wr.LiveComplete && !sameGraph(wr.LiveDeps, wr.LiveParents, pw.RecordedDeps, pw.RecordedParents)
 		recordedLive, recordedErr := r.ResolveAllShallow(ctx, collectRecordedResolvable([]checks.ParsedWorkflow{pw}))
 		liveDeps = dep.Dedup(append(liveDeps, recordedLive...))
-		resolveErr = errors.Join(resolveErr, recordedErr)
+		resolveErr := errors.Join(recursiveErr, recordedErr)
 		if resolveErr != nil {
 			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {
@@ -100,6 +106,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 			if blockingResolverError {
 				return wr
 			}
+
 			// Low: we're surfacing the resolver failure itself, not a
 			// verdict about any specific dependency.
 			wr.Findings = append(wr.Findings, checks.Finding{
@@ -149,6 +156,55 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 
 	return wr
+}
+
+func alignLiveRootKeys(live []dep.Dependency, parents dep.ParentMap, recorded []dep.Dependency, roots []parserlock.ActionRef) ([]dep.Dependency, dep.ParentMap) {
+	aligned := append([]dep.Dependency(nil), live...)
+	rewrites := make(map[string]string)
+	for i := range aligned {
+		for _, root := range roots {
+			if !parserlock.IsFullSha(root.Ref) || !aligned[i].MatchesActionRef(root) {
+				continue
+			}
+			for _, existing := range recorded {
+				if existing.MatchesActionRef(root) {
+					rewrites[aligned[i].Key()] = existing.Key()
+					aligned[i].Ref = existing.Ref
+					break
+				}
+			}
+		}
+	}
+	return aligned, dep.RekeyParentMap(parents, rewrites)
+}
+
+func sameGraph(aDeps []dep.Dependency, aParents dep.ParentMap, bDeps []dep.Dependency, bParents dep.ParentMap) bool {
+	signature := func(deps []dep.Dependency, parents dep.ParentMap) map[string]string {
+		graph := make(map[string]string, len(deps))
+		for _, d := range deps {
+			graph[dep.NormalizeKey(d.Key())] = ""
+		}
+		for child, rawParents := range parents {
+			normalized := make([]string, 0, len(rawParents))
+			for _, parent := range rawParents {
+				normalized = append(normalized, dep.NormalizeKey(parent))
+			}
+			sort.Strings(normalized)
+			graph[dep.NormalizeKey(child)] = strings.Join(normalized, "\x00")
+		}
+		return graph
+	}
+	a := signature(aDeps, aParents)
+	b := signature(bDeps, bParents)
+	if len(a) != len(b) {
+		return false
+	}
+	for key, parents := range a {
+		if other, ok := b[key]; !ok || other != parents {
+			return false
+		}
+	}
+	return true
 }
 
 // selfRepositoryFinding builds the informational finding for a workflow that

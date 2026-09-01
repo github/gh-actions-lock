@@ -704,6 +704,44 @@ scenarios:
       exit: 0
       stdout_is_json: true
 
+  - name: stub_ref_specific_full_tag
+    category: output_modes
+    description: "GraphQL stub resolves the ref from expression variables for a full tag"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-fix", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4.2.0"]
+      lockfile_template: pinned_checkout_full
+    expect:
+      exit: 0
+      stdout_is_json: true
+      jq:
+        - expr: ".findings | length"
+          equals: "0"
+
+  - name: stub_ref_specific_branch
+    category: output_modes
+    description: "GraphQL stub resolves the ref from expression variables for a branch"
+    needs_stub: true
+    tags: [stub]
+    flags: ["--no-fix", "--json=findings"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+      lockfile_template: pinned_checkout_main
+    expect:
+      exit: 0
+      stdout_is_json: true
+      jq:
+        - expr: ".findings | length"
+          equals: "0"
+
   - name: verify_local_all_covered
     category: output_modes
     description: "--verify-local with all refs covered — exits 0"

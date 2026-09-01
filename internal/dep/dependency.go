@@ -49,6 +49,16 @@ func (d Dependency) Key() string {
 	return d.NWO + "@" + d.Ref
 }
 
+// NormalizeKey lowercases the repository portion of an NWO@ref key while
+// preserving the case-sensitive git ref.
+func NormalizeKey(key string) string {
+	at := strings.LastIndex(key, "@")
+	if at < 0 {
+		return strings.ToLower(key)
+	}
+	return strings.ToLower(key[:at]) + key[at:]
+}
+
 // OwnerRepo splits NWO into owner and repo components.
 func (d Dependency) OwnerRepo() (string, string) {
 	owner, repo, _ := parserlock.SplitNWO(d.NWO)

@@ -140,7 +140,7 @@ jobs:
 			Direct:     true,
 			Workflows:  []string{workflowPath},
 		}},
-		Workflows: []WorkflowPlan{{Path: workflowPath}},
+		Workflows: []WorkflowPlan{{Path: workflowPath, ReplaceGraph: true}},
 	}
 	require.NoError(t, Commit(context.Background(), rec, store, nil))
 
@@ -180,7 +180,7 @@ func TestCommitScopedParentAdvanceKeepsUntouchedWorkflowEdges(t *testing.T) {
 			{NWO: parent.NWO, Ref: parent.Ref, SHA: newParentSHA, Resolution: Pinned, Direct: true, Workflows: []string{ciPath}},
 			{NWO: "owner/ci-child", Ref: "v2", SHA: ciChildSHA, Resolution: Pinned, RequiredBy: []string{parent.Key()}, Workflows: []string{ciPath}},
 		},
-		Workflows: []WorkflowPlan{{Path: ciPath}},
+		Workflows: []WorkflowPlan{{Path: ciPath, ReplaceGraph: true}},
 	}
 	require.NoError(t, Commit(ctx, rec, store, nil))
 
@@ -232,7 +232,10 @@ func TestCommitConflictingScopedPlansKeepRecordedSharedClosure(t *testing.T) {
 			rec := &Record{}
 			for _, path := range workflows {
 				rec.Entries = append(rec.Entries, entriesByWorkflow[path]...)
-				rec.Workflows = append(rec.Workflows, WorkflowPlan{Path: path})
+				rec.Workflows = append(rec.Workflows, WorkflowPlan{
+					Path:         path,
+					ReplaceGraph: path == ".github/workflows/ci.yml",
+				})
 			}
 
 			require.NoError(t, Commit(ctx, rec, store, nil))
@@ -245,4 +248,29 @@ func TestCommitConflictingScopedPlansKeepRecordedSharedClosure(t *testing.T) {
 			assert.NotContains(t, file.Dependencies, newChild.Key())
 		})
 	}
+}
+
+func TestCommitKeepsCaseSensitiveRefsDistinct(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(workflowPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), []byte("on: push\njobs: {}\n"), 0o644))
+	t.Chdir(dir)
+
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+	upperSHA := strings.Repeat("1", 40)
+	lowerSHA := strings.Repeat("2", 40)
+	rec := &Record{
+		Entries: []Entry{
+			{NWO: "owner/action", Ref: "Release", SHA: upperSHA, Resolution: Pinned, Direct: true, Workflows: []string{workflowPath}},
+			{NWO: "OWNER/ACTION", Ref: "release", SHA: lowerSHA, Resolution: Pinned, Direct: true, Workflows: []string{workflowPath}},
+		},
+		Workflows: []WorkflowPlan{{Path: workflowPath, ReplaceGraph: true}},
+	}
+
+	require.NoError(t, Commit(context.Background(), rec, store, nil))
+	file := store.File()
+	assert.Equal(t, "sha1-"+upperSHA, file.Dependencies["owner/action@Release"].Commit)
+	assert.Equal(t, "sha1-"+lowerSHA, file.Dependencies["owner/action@release"].Commit)
 }
