@@ -441,6 +441,39 @@ func TestPlanRejectsConflictingSameRunRepairs(t *testing.T) {
 	require.ErrorContains(t, err, "conflicting planned target actions/checkout@v4.2.1")
 }
 
+func TestPlanRejectsRepairConflictingWithSymbolicEntry(t *testing.T) {
+	const repairedSHA = "abc1230000000000000000000000000000000000"
+	const symbolicSHA = "def4560000000000000000000000000000000000"
+	repair := checks.WorkflowReport{
+		Path: ".github/workflows/repair.yml",
+		ActionRefs: []parserlock.ActionRef{{
+			Owner: "actions", Repo: "checkout", Ref: repairedSHA,
+		}},
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "actions/checkout", Ref: repairedSHA, SHA: repairedSHA, Tag: "v4.2.1"},
+			File:   ".github/workflows/repair.yml",
+			Direct: true,
+		}},
+	}
+	symbolic := checks.WorkflowReport{
+		Path: ".github/workflows/symbolic.yml",
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "actions/checkout", Ref: "v4.2.1", SHA: symbolicSHA},
+			File:   ".github/workflows/symbolic.yml",
+			Direct: true,
+		}},
+	}
+
+	_, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{repair, symbolic},
+	}, PlanOptions{
+		Tagger: new(tag.Lister),
+		Pool:   pinpool.New(2, nil),
+	})
+
+	require.ErrorContains(t, err, "conflicting planned target actions/checkout@v4.2.1")
+}
+
 func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {
 	const sha = "abc1230000000000000000000000000000000000"
 

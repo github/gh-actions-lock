@@ -108,7 +108,8 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	targetSHAs := make(map[string]string)
 	for _, pr := range results {
 		for _, entry := range pr.entries {
-			if planErr != nil || entry.AutoFixedRef == "" {
+			if planErr != nil || entry.SHA == "" ||
+				entry.Resolution != Pinned && entry.Resolution != Verified {
 				continue
 			}
 			key := strings.ToLower(entry.NWO) + "@" + entry.Ref
