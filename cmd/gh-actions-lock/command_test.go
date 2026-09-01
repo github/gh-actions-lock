@@ -1426,6 +1426,6 @@ jobs:
 	_, stderr, err := runCommandWithHTTP(t, reg, "--verify", workflowPath)
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "Dependency verification was inconclusive")
-	assert.Contains(t, stderr, "could not re-resolve actions")
 	assert.Equal(t, 1, strings.Count(stderr, "Dependency verification was inconclusive"))
+	assert.Equal(t, 1, strings.Count(stderr, "could not re-resolve actions"))
 }

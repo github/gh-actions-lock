@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -76,10 +77,16 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 
 	// Check transitive deps (recorded in lockfile but not directly in the
 	// workflow). These can also drift when upstream releases new versions.
-	for indexKey, pin := range depIndex {
+	var transitiveKeys []string
+	for indexKey := range depIndex {
 		if directKeys[indexKey] {
 			continue
 		}
+		transitiveKeys = append(transitiveKeys, indexKey)
+	}
+	sort.Strings(transitiveKeys)
+	for _, indexKey := range transitiveKeys {
+		pin := depIndex[indexKey]
 		parsed, ok := parserlock.ParsePin(indexKey)
 		if !ok {
 			continue
