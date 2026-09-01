@@ -190,3 +190,59 @@ func TestCommitScopedParentAdvanceKeepsUntouchedWorkflowEdges(t *testing.T) {
 	assert.Equal(t, []string{"owner/ci-child@v2", "owner/release-child@v1"}, action.Uses)
 	assert.Contains(t, file.Dependencies, "owner/release-child@v1")
 }
+
+func TestCommitConflictingScopedPlansKeepRecordedSharedClosure(t *testing.T) {
+	for _, workflows := range [][]string{
+		{".github/workflows/ci.yml", ".github/workflows/release.yml"},
+		{".github/workflows/release.yml", ".github/workflows/ci.yml"},
+	} {
+		t.Run(strings.Join(workflows, "_then_"), func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+			for _, path := range workflows {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, path), []byte("on: push\njobs: {}\n"), 0o644))
+			}
+			t.Chdir(dir)
+
+			ctx := context.Background()
+			store, err := lockfile.LoadState(dir, fakeMeta{})
+			require.NoError(t, err)
+			oldParent := dep.Dependency{NWO: "owner/composite", Ref: "main", SHA: strings.Repeat("1", 40), HashAlgo: "sha1"}
+			oldChild := dep.Dependency{NWO: "owner/old-child", Ref: "v1", SHA: strings.Repeat("2", 40), HashAlgo: "sha1"}
+			for _, path := range workflows {
+				require.NoError(t, store.Set(ctx, path,
+					[]dep.Dependency{oldParent, oldChild},
+					dep.ParentMap{oldChild.Key(): {oldParent.Key()}},
+					map[string]bool{oldParent.Key(): true}))
+			}
+			require.NoError(t, store.Save())
+
+			newParentSHA := strings.Repeat("3", 40)
+			newChild := dep.Dependency{NWO: "owner/new-child", Ref: "v2", SHA: strings.Repeat("4", 40), HashAlgo: "sha1"}
+			entriesByWorkflow := map[string][]Entry{
+				".github/workflows/ci.yml": {
+					{NWO: oldParent.NWO, Ref: oldParent.Ref, SHA: newParentSHA, Resolution: Pinned, Direct: true, Workflows: []string{".github/workflows/ci.yml"}},
+					{NWO: newChild.NWO, Ref: newChild.Ref, SHA: newChild.SHA, Resolution: Pinned, RequiredBy: []string{oldParent.Key()}, Workflows: []string{".github/workflows/ci.yml"}},
+				},
+				".github/workflows/release.yml": {
+					{NWO: oldParent.NWO, Ref: oldParent.Ref, SHA: oldParent.SHA, Resolution: Verified, Direct: true, Workflows: []string{".github/workflows/release.yml"}},
+					{NWO: oldChild.NWO, Ref: oldChild.Ref, SHA: oldChild.SHA, Resolution: Verified, RequiredBy: []string{oldParent.Key()}, Workflows: []string{".github/workflows/release.yml"}},
+				},
+			}
+			rec := &Record{}
+			for _, path := range workflows {
+				rec.Entries = append(rec.Entries, entriesByWorkflow[path]...)
+				rec.Workflows = append(rec.Workflows, WorkflowPlan{Path: path})
+			}
+
+			require.NoError(t, Commit(ctx, rec, store, nil))
+
+			file := store.File()
+			action := file.Dependencies[oldParent.Key()]
+			assert.Equal(t, "sha1-"+oldParent.SHA, action.Commit)
+			assert.Equal(t, []string{oldChild.Key()}, action.Uses)
+			assert.Contains(t, file.Dependencies, oldChild.Key())
+			assert.NotContains(t, file.Dependencies, newChild.Key())
+		})
+	}
+}

@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,4 +48,22 @@ jobs:
 	assert.Equal(t, []string{actionPath}, pw.SelfActionFiles)
 	assert.ElementsMatch(t, []string{"$/actions/root", "$/.github/workflows/reusable.yml"}, pw.SelfRepositoryRefs)
 	assert.Empty(t, pw.SelfRepositoryResolutionErrs)
+}
+
+func TestCollectResolvableExcludesPathlessRecordedClosure(t *testing.T) {
+	root := parserlock.ActionRef{Owner: "owner", Repo: "composite", Path: "sub-action", Ref: "v1"}
+	parsed := []checks.ParsedWorkflow{{
+		Refs: []parserlock.ActionRef{root},
+		RecordedDeps: []dep.Dependency{
+			{NWO: "owner/composite", Ref: "v1", SHA: "111"},
+			{NWO: "owner/child", Ref: "v2", SHA: "222"},
+		},
+	}}
+
+	assert.Equal(t, []parserlock.ActionRef{root}, CollectResolvable(parsed))
+	assert.Equal(t, []parserlock.ActionRef{{
+		Owner: "owner",
+		Repo:  "child",
+		Ref:   "v2",
+	}}, collectRecordedResolvable(parsed))
 }

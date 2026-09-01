@@ -107,13 +107,14 @@ func mergeStrings(groups ...[]string) []string {
 	return values
 }
 
-// CollectResolvable returns the deduplicated union of current workflow refs
-// and recorded closure refs across all parsed workflows.
+// CollectResolvable returns the deduplicated current workflow roots across all
+// parsed workflows. Recorded closure entries lack sub-action paths and must not
+// become recursive discovery roots.
 func CollectResolvable(parsed []checks.ParsedWorkflow) []parserlock.ActionRef {
 	seenRef := make(map[ghapi.ActionRef]bool)
 	var refs []parserlock.ActionRef
 	for _, pw := range parsed {
-		for _, ref := range resolvableRefs(pw) {
+		for _, ref := range pw.Refs {
 			key := ghapi.ForActionRef(ref.Owner, ref.Repo, ref.Path, ref.Ref)
 			if seenRef[key] {
 				continue
@@ -125,23 +126,31 @@ func CollectResolvable(parsed []checks.ParsedWorkflow) []parserlock.ActionRef {
 	return refs
 }
 
-func resolvableRefs(pw checks.ParsedWorkflow) []parserlock.ActionRef {
-	refs := append([]parserlock.ActionRef(nil), pw.Refs...)
-	current := make(map[ghapi.NWORef]bool, len(pw.Refs))
-	for _, ref := range pw.Refs {
-		current[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
-	}
-	for _, d := range pw.RecordedDeps {
-		owner, repo := d.OwnerRepo()
-		if current[ghapi.ForNWORef(owner, repo, d.Ref)] {
-			continue
+// collectRecordedResolvable returns recorded closure refs that are not already
+// represented by a path-aware current workflow root.
+func collectRecordedResolvable(parsed []checks.ParsedWorkflow) []parserlock.ActionRef {
+	seenRef := make(map[ghapi.NWORef]bool)
+	for _, pw := range parsed {
+		for _, ref := range pw.Refs {
+			seenRef[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
 		}
-		refs = append(refs, parserlock.ActionRef{
-			Owner: owner,
-			Repo:  repo,
-			Path:  d.Path,
-			Ref:   d.Ref,
-		})
+	}
+
+	var refs []parserlock.ActionRef
+	for _, pw := range parsed {
+		for _, d := range pw.RecordedDeps {
+			owner, repo := d.OwnerRepo()
+			key := ghapi.ForNWORef(owner, repo, d.Ref)
+			if seenRef[key] {
+				continue
+			}
+			seenRef[key] = true
+			refs = append(refs, parserlock.ActionRef{
+				Owner: owner,
+				Repo:  repo,
+				Ref:   d.Ref,
+			})
+		}
 	}
 	return refs
 }

@@ -100,6 +100,35 @@ func cacheKey(ref parserlock.ActionRef) ghapi.ActionRef {
 // fixed request shape.
 const batchActionFileSize = 20
 
+// ResolveAllShallow resolves one wave of action refs without recursively
+// inspecting their action metadata for transitive dependencies.
+func (r *Resolver) ResolveAllShallow(ctx context.Context, refs []parserlock.ActionRef) ([]dep.Dependency, error) {
+	seen := make(map[ghapi.ActionRef]bool)
+	requests := make([]resolutionRequest, 0, len(refs))
+	uncached := 0
+	for _, ref := range refs {
+		key := cacheKey(ref)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		requests = append(requests, resolutionRequest{ref: ref})
+		if _, ok := r.cache.Get(key); !ok {
+			uncached++
+		}
+	}
+
+	var resolveDone atomic.Int64
+	var resolveTotal atomic.Int64
+	resolveTotal.Store(int64(uncached))
+	if uncached > 0 {
+		r.FireResolveProgress(0, uncached)
+	}
+
+	deps, _, err := r.resolveWithActionYMLParallel(ctx, requests, 0, &resolveDone, &resolveTotal)
+	return dep.Dedup(deps), err
+}
+
 // ResolveAllRecursive resolves action refs and recursively discovers transitive
 // dependencies from composite actions by reading their action.yml via GraphQL.
 // The returned ParentMap (child dep key → parent dep keys) is owned by the

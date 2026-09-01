@@ -61,6 +61,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		}
 	}
 	refs := CollectResolvable(unresolved)
+	recordedRefs := collectRecordedResolvable(unresolved)
 
 	// Phase 2: Resolve.
 	if r == nil {
@@ -75,6 +76,11 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		if len(refs) > 0 {
 			endResolve := prof.Phase("  resolve refs")
 			_, _, _ = r.ResolveAllRecursive(ctx, refs)
+			endResolve()
+		}
+		if len(recordedRefs) > 0 {
+			endResolve := prof.Phase("  resolve recorded refs")
+			_, _ = r.ResolveAllShallow(ctx, recordedRefs)
 			endResolve()
 		}
 

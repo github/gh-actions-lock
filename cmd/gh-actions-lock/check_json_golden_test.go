@@ -56,7 +56,7 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 		"    - uses: actions/cache@v4\n" +
 		"    - uses: helper/only-transitive@v1\n"
 
-	// Direct refs and the recorded closure are resolved in one GraphQL batch.
+	// Current workflow roots are resolved first.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "checkout"),
 		httpmock.JSONResponse(map[string]any{
@@ -64,9 +64,25 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
 				"a1": testRepoResponse("actions/setup-go", setupGoSHA, compositeYAML),
 				"a2": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
-				"a3": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
-				"a4": testRepoResponse("old/dead", staleSHA, nodeActionYAML),
-				"a5": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
+			},
+		}),
+	)
+	// Path-aware recursive discovery resolves the composite's children.
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "cache"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/cache", cacheSHA, nodeActionYAML),
+				"a1": testRepoResponse("helper/only-transitive", helperSHA, nodeActionYAML),
+			},
+		}),
+	)
+	// Recorded-only refs are validated without recursive discovery.
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "dead"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("old/dead", staleSHA, nodeActionYAML),
 			},
 		}),
 	)

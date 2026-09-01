@@ -63,7 +63,10 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	var liveDeps []dep.Dependency
 	if r != nil {
 		var resolveErr error
-		liveDeps, _, resolveErr = r.ResolveAllRecursive(ctx, resolvableRefs(pw))
+		liveDeps, _, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		recordedLive, recordedErr := r.ResolveAllShallow(ctx, collectRecordedResolvable([]checks.ParsedWorkflow{pw}))
+		liveDeps = dep.Dedup(append(liveDeps, recordedLive...))
+		resolveErr = errors.Join(resolveErr, recordedErr)
 		if resolveErr != nil {
 			blockingResolverError := false
 			if resolve.IsCompositeLocalPath(resolveErr) {

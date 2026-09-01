@@ -577,6 +577,79 @@ jobs:
 	}
 }
 
+func TestCheckCommand_RecordedSubActionClosureDoesNotResolveRepositoryRoot(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	parentSHA := strings.Repeat("1", 40)
+	childSHA := strings.Repeat("2", 40)
+	compositeYAML := "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: owner/child/save@v2\n"
+	rootChildYAML := "name: Wrong root\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("owner/composite", parentSHA, compositeYAML),
+				"a1": testRepoResponse("owner/child", childSHA, rootChildYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("owner/child", childSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("owner", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("owner/child", childSHA, rootChildYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/composite@v1
+`)
+	lock := "version: '" + parserlock.Version + "'\n" +
+		"dependencies:\n" +
+		"  'owner/composite@v1':\n" +
+		"    ref: 'v1'\n" +
+		"    commit: 'sha1-" + parentSHA + "'\n" +
+		"    owner_id: 1\n" +
+		"    repo_id: 1\n" +
+		"    uses:\n" +
+		"      - 'owner/child@v2'\n" +
+		"  'owner/child@v2':\n" +
+		"    ref: 'v2'\n" +
+		"    commit: 'sha1-" + childSHA + "'\n" +
+		"    owner_id: 2\n" +
+		"    repo_id: 2\n" +
+		"workflows:\n" +
+		"  '.github/workflows/workflow.yml':\n" +
+		"    - 'owner/composite@v1'\n"
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "uses local path")
+
+	got, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(got), "'owner/child@v2'")
+	assert.Contains(t, string(got), "      - 'owner/child@v2'")
+}
+
 func TestCheckCommand_JSONDependenciesIncludesRecordedClosure(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -1421,13 +1494,20 @@ func TestCheck_DefaultRun_RetainsRecordedClosureAfterPartialResolution(t *testin
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", parentSHA, composite),
-				"a1": nil,
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": nil,
 			},
 			"errors": []any{
 				map[string]any{
 					"type":    "FORBIDDEN",
 					"message": "Resource protected by organization SAML enforcement.",
-					"path":    []any{"a1"},
+					"path":    []any{"a0"},
 					"extensions": map[string]any{
 						"saml_failure": true,
 					},
@@ -1471,7 +1551,14 @@ func TestCheck_Relock_BumpsMovedTransitiveAlongsideNewDirect(t *testing.T) {
 			"data": map[string]any{
 				"a0": testRepoResponse("example/action", parentSHA, composite),
 				"a1": testRepoResponse("new/direct", newDirectSHA, nodeActionYAML),
-				"a2": testRepoResponse("old/child", liveChildSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "child"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("old/child", liveChildSHA, nodeActionYAML),
 			},
 		}),
 	)
