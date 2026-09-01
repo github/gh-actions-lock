@@ -284,8 +284,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// Build entries for all pinned deps (skip any already emitted from inventory).
 	entries = append(entries, buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA)...)
 
-	// Record findings that are informational (ref-moved, misleading-sha).
-	entries = append(entries, informationalEntries(wr, opts)...)
+	entries = append(entries, misleadingSHAEntries(wr)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
 }
@@ -514,20 +513,10 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 	return out
 }
 
-// informationalEntries records ref-moved and misleading-sha findings as
-// Investigate entries. When the run re-pins moved refs (--relock or
-// --accept-moved), ref-moved is resolved by the re-pin and is not recorded
-// for investigation.
-func informationalEntries(wr checks.WorkflowReport, opts PlanOptions) []Entry {
+func misleadingSHAEntries(wr checks.WorkflowReport) []Entry {
 	var out []Entry
 	for _, f := range wr.Findings {
-		switch f.Category {
-		case checks.RefMoved:
-			if repinsMoved(opts) {
-				continue
-			}
-			out = append(out, informationalEntry(f, wr.Path))
-		case checks.MisleadingSHA:
+		if f.Category == checks.MisleadingSHA {
 			out = append(out, informationalEntry(f, wr.Path))
 		}
 	}

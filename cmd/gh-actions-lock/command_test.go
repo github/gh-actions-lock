@@ -1029,6 +1029,59 @@ jobs:
 	assert.True(t, hasRefMoved, "default runs must detect ref movement: %+v", payload.Findings)
 }
 
+func TestCheck_DefaultRun_MovedRefRemainsNonBlockingAlongsideNewDependency(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	liveSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	newSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	reg.Register(
+		httpmock.GraphQLForRepo("example", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("example/action", liveSHA, nodeActionYAML),
+				"a1": testRepoResponse("example/new", newSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", "repos/example/action/compare/"),
+		httpmock.JSONResponse(map[string]any{
+			"status":            "ahead",
+			"merge_base_commit": map[string]any{"sha": staleSHA},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/example/new$`),
+		httpmock.JSONResponse(map[string]any{
+			"id":    3,
+			"owner": map[string]any{"id": 2},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example/action@v1
+      - uses: example/new@v2.0.0
+`,
+		"example/action@v1=sha1-"+staleSHA,
+	)
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--json=findings", workflowPath)
+	require.NoError(t, err, "ref-moved must remain non-blocking while fixing another dependency")
+	assert.Contains(t, stdout, `"category": "ref-moved"`)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "sha1-"+staleSHA)
+	assert.Contains(t, lock, "'example/new@v2.0.0'")
+}
+
 func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
 	// When two workflow files share the same dep, top-level dependencies
 	// should deduplicate them.
