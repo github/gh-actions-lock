@@ -12,6 +12,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	lockstore "github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/stretchr/testify/assert"
@@ -152,6 +153,84 @@ jobs:
 			_, _, verifyErr := runCommandWithHTTP(t, localReg, "--verify-local", workflowPath)
 			require.NoError(t, verifyErr)
 			localReg.Verify(t)
+		})
+	}
+}
+
+func TestCheckCommand_PrefersLiveMovedRepositoryOverSeededAlias(t *testing.T) {
+	const (
+		oldNWO   = "old/action"
+		newNWO   = "new/action"
+		oldSHA   = "1111111111111111111111111111111111111111"
+		liveSHA  = "2222222222222222222222222222222222222222"
+		childSHA = "3333333333333333333333333333333333333333"
+	)
+	for _, tt := range []struct {
+		name string
+		refs []string
+	}{
+		{name: "seeded alias first", refs: []string{newNWO + "@v1", oldNWO + "@v1"}},
+		{name: "live redirect first", refs: []string{oldNWO + "@v1", newNWO + "@v1"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(
+				httpmock.REST("GET", `repos/new/action$`),
+				httpmock.JSONResponse(map[string]any{
+					"full_name": newNWO,
+					"id":        2,
+					"owner":     map[string]any{"id": 1},
+				}),
+			)
+			reg.Register(
+				httpmock.GraphQLForRepo("old", "action"),
+				httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{
+						"a0": testRepoResponse(newNWO, liveSHA, "runs:\n  using: composite\n  steps:\n    - uses: child/action@v1\n"),
+					},
+				}),
+			)
+			reg.Register(
+				httpmock.GraphQLForRepo("child", "action"),
+				httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{
+						"a0": testRepoResponse("child/action", childSHA, nodeActionYAML),
+					},
+				}),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/child/action$`),
+				httpmock.JSONResponse(map[string]any{
+					"full_name": "child/action",
+					"id":        4,
+					"owner":     map[string]any{"id": 3},
+				}),
+			)
+			workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+strings.Join(tt.refs, `
+      - uses: `)+`
+`, newNWO+"@v1=sha1-"+oldSHA)
+
+			stdout, _, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+			require.NoError(t, err, "stdout:\n%s", stdout)
+			store, loadErr := lockstore.LoadState(".", nil)
+			require.NoError(t, loadErr)
+			file := store.File()
+			action, ok := file.Dependencies[newNWO+"@v1"]
+			require.True(t, ok)
+			assert.Equal(t, "sha1-"+liveSHA, action.Commit)
+			assert.Equal(t, []string{"child/action@v1"}, action.Uses)
+			workflow, readErr := os.ReadFile(workflowPath)
+			require.NoError(t, readErr)
+			assert.NotContains(t, string(workflow), oldNWO)
 		})
 	}
 }

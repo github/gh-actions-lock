@@ -58,20 +58,37 @@ func TestDependencyKey(t *testing.T) {
 }
 
 func TestDedupMergesTransferredSources(t *testing.T) {
-	deps := []Dependency{
-		{NWO: "new/action", Ref: "v1"},
-		{
-			NWO: "new/action",
-			Ref: "v1",
-			OriginalRefs: []parserlock.ActionRef{
-				{Owner: "old", Repo: "action", Ref: "v1"},
-			},
+	live := Dependency{
+		NWO:  "new/action",
+		Ref:  "v1",
+		SHA:  "live",
+		Path: "live-path",
+		OriginalRefs: []parserlock.ActionRef{
+			{Owner: "old", Repo: "action", Ref: "v1"},
 		},
 	}
+	seeded := Dependency{NWO: "new/action", Ref: "v1", SHA: "seeded"}
+	for _, tt := range []struct {
+		name string
+		deps []Dependency
+	}{
+		{
+			name: "seeded before live redirect",
+			deps: []Dependency{seeded, live},
+		},
+		{
+			name: "live redirect before seeded",
+			deps: []Dependency{live, seeded},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Dedup(tt.deps)
 
-	got := Dedup(deps)
-
-	require.Len(t, got, 1)
-	require.Len(t, got[0].OriginalRefs, 1)
-	assert.Equal(t, "old/action", got[0].OriginalRefs[0].NWO())
+			require.Len(t, got, 1)
+			assert.Equal(t, "live", got[0].SHA)
+			assert.Equal(t, "live-path", got[0].Path)
+			require.Len(t, got[0].OriginalRefs, 1)
+			assert.Equal(t, "old/action", got[0].OriginalRefs[0].NWO())
+		})
+	}
 }

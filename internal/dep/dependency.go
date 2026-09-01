@@ -76,14 +76,19 @@ func detectHashAlgo(hash string) string {
 	return "sha1"
 }
 
-// Dedup returns a copy of deps with duplicates (by Key) removed,
-// preserving first-seen order.
+// Dedup returns a copy of deps with duplicates (by Key) removed, preserving
+// first-seen order. A redirected result replaces a seeded result because it
+// carries the live repository identity, SHA, and action metadata.
 func Dedup(deps []Dependency) []Dependency {
 	seen := make(map[string]int, len(deps))
 	out := make([]Dependency, 0, len(deps))
 	for _, d := range deps {
 		k := d.Key()
 		if idx, ok := seen[k]; ok {
+			if len(out[idx].OriginalRefs) == 0 && len(d.OriginalRefs) > 0 {
+				out[idx] = d
+				continue
+			}
 			have := make(map[string]bool, len(out[idx].OriginalRefs))
 			for _, ref := range out[idx].OriginalRefs {
 				have[ref.FullName()+"@"+ref.Ref] = true
