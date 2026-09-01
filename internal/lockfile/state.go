@@ -415,9 +415,13 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				usesSet[u] = true
 			}
 		}
-		if !isSHARef(d.Ref) && isSHARef(d.SHA) {
+		oldRef := d.OriginalRef
+		if oldRef == "" {
+			oldRef = d.SHA
+		}
+		if !isSHARef(d.Ref) && isSHARef(oldRef) {
 			shaPin := pin
-			shaPin.Ref = d.SHA
+			shaPin.Ref = oldRef
 			if shaExisting, shaOK := s.file.Dependencies[shaPin.String()]; shaOK {
 				if !ok && ref == "" {
 					ref = shaExisting.Ref
