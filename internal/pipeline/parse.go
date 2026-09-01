@@ -38,6 +38,15 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 	out := make([]checks.ParsedWorkflow, 0, total)
 	for _, path := range paths {
 		pw := checks.ParsedWorkflow{Path: path}
+		if store != nil {
+			wfKey := workflowfile.KeyFromPath(path)
+			deps, depsErr := store.Get(wfKey)
+			if depsErr != nil {
+				pw.DepsErr = depsErr
+			} else {
+				pw.ExistingDeps = deps
+			}
+		}
 		wf, err := workflowfile.Load(path)
 		if err != nil {
 			pw.LoadErr = err
@@ -58,18 +67,6 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		pw.SelfRepositoryRefErrs = mergeStrings(scan.SelfRepositoryRefErrs, selfScan.SelfRepositoryRefErrs)
 		pw.SelfRepositoryResolutionErrs = selfScan.Errors
 		pw.ParseWarnings = append(scan.Warnings, selfScan.Warnings...)
-		hasTerminalRefs := len(pw.LocalPaths) > 0 ||
-			len(pw.SelfRepositoryRefErrs) > 0 ||
-			len(pw.SelfRepositoryResolutionErrs) > 0
-		if store != nil && (len(pw.Refs) > 0 || hasTerminalRefs) {
-			wfKey := workflowfile.KeyFromPath(path)
-			deps, depsErr := store.Get(wfKey)
-			if depsErr != nil {
-				pw.DepsErr = depsErr
-			} else {
-				pw.ExistingDeps = deps
-			}
-		}
 		out = append(out, pw)
 	}
 	return out

@@ -411,6 +411,36 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	})
 }
 
+func TestPlanRejectsConflictingSameRunRepairs(t *testing.T) {
+	const firstSHA = "abc1230000000000000000000000000000000000"
+	const secondSHA = "def4560000000000000000000000000000000000"
+	report := func(path, sha string) checks.WorkflowReport {
+		return checks.WorkflowReport{
+			Path: path,
+			ActionRefs: []parserlock.ActionRef{{
+				Owner: "actions", Repo: "checkout", Ref: sha,
+			}},
+			Inventory: []checks.InventoryEntry{{
+				Dep:    dep.Dependency{NWO: "actions/checkout", Ref: sha, SHA: sha, Tag: "v4.2.1"},
+				File:   path,
+				Direct: true,
+			}},
+		}
+	}
+
+	_, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			report(".github/workflows/first.yml", firstSHA),
+			report(".github/workflows/second.yml", secondSHA),
+		},
+	}, PlanOptions{
+		Tagger: new(tag.Lister),
+		Pool:   pinpool.New(2, nil),
+	})
+
+	require.ErrorContains(t, err, "conflicting planned target actions/checkout@v4.2.1")
+}
+
 func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {
 	const sha = "abc1230000000000000000000000000000000000"
 

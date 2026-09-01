@@ -187,6 +187,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 			Detail:     fmt.Sprintf("failed to load workflow: %s", pw.LoadErr),
 			DocURL:     DocURLFor(checks.NotPinned),
 		})
+		preserveExistingInventory(&wr, pw)
 		return wr, true
 	}
 
@@ -249,14 +250,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	}
 
 	if hasTerminalFinding {
-		wr.Deps = pw.ExistingDeps
-		for _, d := range pw.ExistingDeps {
-			wr.Inventory = append(wr.Inventory, checks.InventoryEntry{
-				Dep:    d,
-				File:   pw.Path,
-				Direct: true,
-			})
-		}
+		preserveExistingInventory(&wr, pw)
 		return wr, true
 	}
 
@@ -290,6 +284,17 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	}
 
 	return wr, false
+}
+
+func preserveExistingInventory(wr *checks.WorkflowReport, pw checks.ParsedWorkflow) {
+	wr.Deps = pw.ExistingDeps
+	for _, d := range pw.ExistingDeps {
+		wr.Inventory = append(wr.Inventory, checks.InventoryEntry{
+			Dep:    d,
+			File:   pw.Path,
+			Direct: true,
+		})
+	}
 }
 
 func indexDeps(deps []dep.Dependency) map[string]dep.Dependency {

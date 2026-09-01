@@ -299,6 +299,7 @@ workflows:
 	for name, workflow := range map[string]string{
 		"remote and local actions": workflowWithRemoteAction,
 		"only local action":        workflowWithOnlyLocalAction,
+		"malformed workflow":       "name: [",
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

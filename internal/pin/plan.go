@@ -105,7 +105,19 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		planErr = poolErr
 	}
 
+	targetSHAs := make(map[string]string)
 	for _, pr := range results {
+		for _, entry := range pr.entries {
+			if planErr != nil || entry.AutoFixedRef == "" {
+				continue
+			}
+			key := strings.ToLower(entry.NWO) + "@" + entry.Ref
+			if sha, ok := targetSHAs[key]; ok && !strings.EqualFold(sha, entry.SHA) {
+				planErr = fmt.Errorf("conflicting planned target %s resolves to both %s and %s", key, sha, entry.SHA)
+				continue
+			}
+			targetSHAs[key] = entry.SHA
+		}
 		rec.Entries = append(rec.Entries, pr.entries...)
 		rec.Workflows = append(rec.Workflows, pr.wplans...)
 	}
