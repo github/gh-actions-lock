@@ -321,6 +321,53 @@ jobs:
 	assert.Contains(t, payload.Findings[1].Detail, oldNWO+" has been renamed or transferred to "+newNWO)
 }
 
+func TestCheckCommand_FixRejectsKnownMoveWhenResolutionFails(t *testing.T) {
+	const (
+		oldNWO = "old/action"
+		newNWO = "new/action"
+		ref    = "v1"
+		sha    = "1111111111111111111111111111111111111111"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", `repos/old/action$`),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+	)
+	for range 2 {
+		reg.Register(
+			httpmock.GraphQLForRepo("old", "action"),
+			httpmock.StatusResponse(http.StatusInternalServerError),
+		)
+	}
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+ref+`
+`, oldNWO+"@"+ref+"=sha1-"+sha)
+	workflowBefore, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	lockBefore, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "resolving transferred repository")
+	assert.NotContains(t, stdout+stderr, "All workflows valid")
+	workflowAfter, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflowBefore, workflowAfter)
+	lockAfter, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, lockBefore, lockAfter)
+}
+
 func TestCheckCommand_RejectsAnchoredMovedRepositoryRewrite(t *testing.T) {
 	const (
 		oldNWO = "krzema12/github-actions-typing"

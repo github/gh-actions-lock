@@ -88,7 +88,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		trustedMutable := plan.mutableRefs[:0]
 		for _, ref := range plan.mutableRefs {
 			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
-			if canonical == "" || strings.EqualFold(canonical, ref.NWO()) {
+			if canonical != "" && strings.EqualFold(canonical, ref.NWO()) {
 				trustedMutable = append(trustedMutable, ref)
 			}
 		}
@@ -220,11 +220,13 @@ func appendKnownTransferFindings(report *checks.Report, parsed []checks.ParsedWo
 			if canonical == "" || strings.EqualFold(canonical, ref.NWO()) || resolvedTransfer(wr.ResolvedDeps, ref) {
 				continue
 			}
-			appendTransferredRepositoryFindings(wr, []dep.Dependency{{
+			known := dep.Dependency{
 				NWO:          canonical,
 				Ref:          ref.Ref,
 				OriginalRefs: []parserlock.ActionRef{ref},
-			}}, nil)
+			}
+			wr.ResolvedDeps = append(wr.ResolvedDeps, known)
+			appendTransferredRepositoryFindings(wr, []dep.Dependency{known}, nil)
 		}
 	}
 }

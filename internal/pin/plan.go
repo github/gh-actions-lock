@@ -135,8 +135,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		return planResult{}, transferErr
 	}
 	hasTransfer := false
+	knownTransfersNeedingResolution := make(map[ghapi.NWORef]bool)
 	for _, d := range wr.ResolvedDeps {
 		hasTransfer = hasTransfer || len(d.OriginalRefs) > 0
+		if d.SHA == "" {
+			for _, ref := range d.OriginalRefs {
+				knownTransfersNeedingResolution[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+			}
+		}
 	}
 
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
@@ -193,6 +199,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
+		for _, d := range deps {
+			for _, ref := range d.OriginalRefs {
+				delete(knownTransfersNeedingResolution, ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref))
+			}
+		}
+		if len(knownTransfersNeedingResolution) > 0 {
+			return planResult{}, fmt.Errorf("resolving transferred repository: %w", resolveErr)
+		}
 		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
 		if len(deps) == 0 {
 			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
