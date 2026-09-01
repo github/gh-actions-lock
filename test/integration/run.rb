@@ -346,7 +346,7 @@ end
 
 # ── Fixture data ────────────────────────────────────────────────────────
 
-CHECKOUT_SHA      = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+CHECKOUT_SHA      = "11d5960a326750d5838078e36cf38b85af677262"
 SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
 MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
