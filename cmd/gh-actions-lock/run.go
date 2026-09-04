@@ -176,17 +176,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if err != nil {
 		return err
 	}
-	// Pre-warm resolver caches from the lockfile so repeat runs skip
-	// redundant GraphQL and REST calls. Skipped when --rescan is set:
-	// a full re-verification must hit the network to detect ref movement.
-	// --accept-moved and --relock both imply --rescan (must detect what
-	// moved before re-pinning).
 	if opts.acceptMoved || opts.relock {
 		opts.rescan = true
-	}
-	trustLockfileCaches := !opts.rescan
-	if trustLockfileCaches {
-		r.SeedFromLockfile(store.AllDeps())
 	}
 	endSetup()
 

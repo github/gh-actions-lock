@@ -1956,7 +1956,7 @@ scenarios:
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
-    description: "SSO 403 on a previously-pinned action — pin retained, clean exit"
+    description: "SSO 403 on a previously-pinned action — pin retained with an inconclusive warning"
     needs_stub: true
     tags: [stub]
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
@@ -1974,7 +1974,9 @@ scenarios:
         - expr: '.valid'
           equals: "true"
         - expr: '.findings | length'
-          equals: "0"
+          equals: "1"
+        - expr: '.findings[0].category'
+          equals: "reachability-unknown"
 
       lockfile_contains:
         - "version: 'v0.0.2'"
@@ -1982,11 +1984,6 @@ scenarios:
         - "ref: 'v4'"
         - "commit: 'sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd'"
 
-      golden_json:
-        cli_version: (devel)
-        findings: []
-        lockfile_version: v0.0.2
-        valid: true
   - name: dbot_impostor_blocks
     category: dependabot
     description: "Orphaned commit (no tag or branch) produces reachability-unknown warning in JSON findings"
@@ -2007,6 +2004,31 @@ scenarios:
           gt: 0
         - expr: '.findings[0].category'
           equals: 'reachability-unknown'
+
+  - name: transferred_repository_rewritten
+    category: security
+    description: "Real compiled binary and GitHub API redirect an old repository NWO, rewrite writable workflow source, and emit canonical lock metadata"
+    needs_token: true
+    tags: [smoke]
+    flags: ["--no-narrow", "--no-interactive"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["krzema12/github-actions-typing@v2.2.2"]
+    expect:
+      exit: 0
+      lockfile_exists: true
+      lockfile_contains:
+        - "'typesafegithub/github-actions-typing@v2.2.2':"
+      lockfile_excludes:
+        - "krzema12/github-actions-typing"
+      files_contain:
+        .github/workflows/ci.yml:
+          - "uses: typesafegithub/github-actions-typing@v2.2.2"
+      files_exclude:
+        .github/workflows/ci.yml:
+          - "uses: krzema12/github-actions-typing@v2.2.2"
 
   - name: dbot_forgery_blocks
     category: dependabot

@@ -343,6 +343,7 @@ end
 # ── Fixture data ────────────────────────────────────────────────────────
 
 CHECKOUT_SHA      = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+CHECKOUT_V420_SHA = "d632683dd7b4114ad314bca15554477dd762a938"
 SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
 MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -437,7 +438,7 @@ LOCKFILE_TEMPLATES = {
       dependencies: {
         "actions/checkout@v4.2.0" => {
           "ref" => "v4.2.0",
-          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "commit" => "sha1-#{CHECKOUT_V420_SHA}",
           "owner_id" => 44036562,
           "repo_id" => 197814629
         }
@@ -671,7 +672,7 @@ STUB_WIRING = {
            JSON.generate([{ name: "v4", commit: { sha: fake_sha } }])]
         elsif req.path.match?(%r{/repos/actions/checkout$})
           [200, { "Content-Type" => "application/json" },
-           JSON.generate({ default_branch: "main", visibility: "private", pushed_at: "2024-01-01T00:00:00Z", id: 1, owner: { id: 44036562 } })]
+           JSON.generate({ full_name: "actions/checkout", default_branch: "main", visibility: "private", pushed_at: "2024-01-01T00:00:00Z", id: 1, owner: { id: 44036562 } })]
         elsif req.path.include?("/compare/")
           [200, { "Content-Type" => "application/json" },
            JSON.generate({ status: "behind", merge_base_commit: { sha: fake_sha } })]

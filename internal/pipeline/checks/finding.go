@@ -73,6 +73,10 @@ type WorkflowReport struct {
 	SelfActionFiles []string
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []dep.Dependency
+	// ResolvedDeps and ResolvedParents retain live resolver identity details
+	// needed by the pin planner, including repository transfers.
+	ResolvedDeps    []dep.Dependency
+	ResolvedParents dep.ParentMap
 	// Inventory lists all dependencies with direct/transitive classification.
 	Inventory []InventoryEntry
 	// ParseWarnings from ExtractActionRefs (e.g. malformed uses: lines).

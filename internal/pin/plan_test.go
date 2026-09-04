@@ -2,20 +2,143 @@ package pin
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
-	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTransferredRepositoryRewritePreservesSubpath(t *testing.T) {
+	deps := []dep.Dependency{{
+		NWO: "new/action",
+		OriginalRefs: []parserlock.ActionRef{{
+			Owner: "old", Repo: "action", Path: "sub", Ref: "v1.2.3",
+		}},
+		Path: "sub",
+		Ref:  "v1.2.3",
+	}}
+	refs := []parserlock.ActionRef{{
+		Owner: "old", Repo: "action", Path: "sub", Ref: "v1.2.3",
+	}}
+	tracker := lockfile.NewDirectTracker(refs, deps)
+
+	rekeys, err := validateTransferredRepositories(deps, tracker, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "new/action@v1.2.3", rekeys["old/action@v1.2.3"])
+
+	rewrites := map[string]string{}
+	addTransferredRepositoryRewrites(deps, tracker, rewrites)
+	assert.Equal(t, "new/action/sub@v1.2.3", rewrites["old/action/sub@v1.2.3"])
+}
+
+func TestTransferredRepositoryRejectsRemoteParentEvenWhenAlsoDirect(t *testing.T) {
+	original := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"}
+	deps := []dep.Dependency{{
+		NWO:          "new/action",
+		OriginalRefs: []parserlock.ActionRef{original},
+		Ref:          "v1",
+	}}
+	tracker := lockfile.NewDirectTracker([]parserlock.ActionRef{original}, deps)
+
+	_, err := validateTransferredRepositories(deps, tracker, dep.ParentMap{
+		"old/action@v1": {"root/composite@v2"},
+	})
+
+	var transferred *resolve.TransferredRepositoryError
+	require.ErrorAs(t, err, &transferred)
+	assert.Equal(t, "root/composite@v2", transferred.Parent)
+}
+
+func TestTransferredRepositoryRewriteAfterEarlierLookupIssue(t *testing.T) {
+	const (
+		orphanSHA      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		transferredSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.GraphQLForRepo("orphan", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": map[string]any{
+					"nameWithOwner": "orphan/action",
+					"object": map[string]any{
+						"oid":  orphanSHA,
+						"file": map[string]any{"object": map[string]any{"text": "runs:\n  using: node20\n"}},
+					},
+				},
+				"a1": map[string]any{
+					"nameWithOwner": "new/action",
+					"object": map[string]any{
+						"oid":  transferredSHA,
+						"file": map[string]any{"object": map[string]any{"text": "runs:\n  using: node20\n"}},
+					},
+				},
+			},
+		}),
+	)
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodPost {
+			return reg.RoundTrip(req)
+		}
+		status, body := http.StatusOK, "[]"
+		if strings.HasSuffix(req.URL.Path, "/repos/orphan/action") {
+			body = `{"default_branch":"main"}`
+		} else if strings.Contains(req.URL.Path, "/git/ref/") {
+			status, body = http.StatusNotFound, `{"message":"Not Found"}`
+		}
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    req,
+		}, nil
+	})
+	pool := pinpool.New(2, nil)
+	resolver, err := resolve.New("github.com", pool, resolve.WithTransport(transport))
+	require.NoError(t, err)
+	original := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"}
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/test.yml",
+		Findings: []checks.Finding{{
+			ActionRef:  &original,
+			Category:   "unpinned",
+			Severity:   checks.SeverityWarning,
+			Confidence: checks.ConfidenceHigh,
+		}},
+		ActionRefs: []parserlock.ActionRef{
+			{Owner: "orphan", Repo: "action", Ref: orphanSHA},
+			original,
+		},
+		RewriteRefs: []parserlock.ActionRef{original},
+	}
+
+	result, err := planWorkflow(context.Background(), wr, PlanOptions{
+		Resolver: resolver,
+		Pool:     pool,
+	}, func(string) {})
+	require.NoError(t, err)
+	reg.Verify(t)
+	require.Len(t, result.wplans, 1)
+	assert.Equal(t, "new/action@v1", result.wplans[0].RequiredRewrites["old/action@v1"])
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestNarrowDirectDeps_PreservesRefWhenExactTagIsFromAnotherFamily(t *testing.T) {
 	const sha = "94de994a9f6fffee200243214e17002e2920bb59"
@@ -122,14 +245,14 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 
 	goodSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	// Both refs fold into one batched query: a0=good/action resolves,
+	// Both refs fold into one batched query: a0=old/action redirects and resolves,
 	// a1=bad/private is null (repo not found).
 	reg.Register(
-		httpmock.GraphQLForRepo("good", "action"),
+		httpmock.GraphQLForRepo("old", "action"),
 		httpmock.JSONResponse(map[string]any{
 			"data": map[string]any{
 				"a0": map[string]any{
-					"nameWithOwner": "good/action",
+					"nameWithOwner": "new/action",
 					"object": map[string]any{
 						"oid":  goodSHA,
 						"file": map[string]any{"object": map[string]any{"text": "name: Good\nruns:\n  using: node20\n"}},
@@ -148,7 +271,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 		Path: ".github/workflows/test.yml",
 		Findings: []checks.Finding{
 			{
-				ActionRef:  &parserlock.ActionRef{Owner: "good", Repo: "action", Ref: "v1"},
+				ActionRef:  &parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "v1"},
 				Category:   "unpinned",
 				Severity:   checks.SeverityWarning,
 				Confidence: checks.ConfidenceHigh,
@@ -161,7 +284,7 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 			},
 		},
 		ActionRefs: []parserlock.ActionRef{
-			{Owner: "good", Repo: "action", Ref: "v1"},
+			{Owner: "old", Repo: "action", Ref: "v1"},
 			{Owner: "bad", Repo: "private", Ref: "main"},
 		},
 	}
@@ -191,10 +314,29 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	assert.Equal(t, "main", unresolved[0].Ref)
 	assert.Contains(t, unresolved[0].Reason, "not found")
 
-	// good/action must be pinned (not poisoned by the bad ref).
+	// The redirected action must be pinned under its canonical NWO, not
+	// misclassified as unresolved because the sibling failed.
 	require.Len(t, pinned, 1, "expected exactly one pinned entry")
-	assert.Equal(t, "good/action", pinned[0].NWO)
+	assert.Equal(t, "new/action", pinned[0].NWO)
 	assert.Equal(t, goodSHA, pinned[0].SHA)
+}
+
+func TestUnresolvedEntriesPreservesRefCase(t *testing.T) {
+	resolvedRef := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "Release"}
+	failedRef := parserlock.ActionRef{Owner: "old", Repo: "action", Ref: "release"}
+	wr := checks.WorkflowReport{Findings: []checks.Finding{
+		{ActionRef: &resolvedRef, Category: checks.NotPinned},
+		{ActionRef: &failedRef, Category: checks.NotPinned},
+	}}
+
+	got := unresolvedEntries(wr, []parserlock.ActionRef{resolvedRef, failedRef}, []dep.Dependency{{
+		NWO:          "new/action",
+		Ref:          resolvedRef.Ref,
+		OriginalRefs: []parserlock.ActionRef{resolvedRef},
+	}}, assert.AnError)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, failedRef.Ref, got[0].Ref)
 }
 
 // TestPlanWorkflow_AllResolutionsFail verifies that when ALL refs in a

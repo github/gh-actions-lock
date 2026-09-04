@@ -252,13 +252,37 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		Ref:   ref.Ref,
 	}
 
+	var canonical string
+	if c.restOnly {
+		var metadata struct {
+			FullName string `json:"full_name"`
+		}
+		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(ref.Owner), url.PathEscape(ref.Repo))
+		if err := c.anonGet(ctx, path, &metadata); err != nil {
+			result.Err = fmt.Errorf("anonymous fallback: %w", err)
+			return result
+		}
+		canonical = metadata.FullName
+	} else {
+		metadata, err := c.repoMetadata(ctx, ref.Owner, ref.Repo)
+		if err != nil {
+			result.Err = fmt.Errorf("anonymous fallback: %w", err)
+			return result
+		}
+		canonical = metadata.NameWithOwner
+	}
+	if err := canonicalizeActionFileResult(&result, ref, canonical); err != nil {
+		result.Err = err
+		return result
+	}
+
 	base := c.anonBase()
 
 	// Resolve ref → commit SHA via the commits endpoint.
 	commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s",
 		base,
-		url.PathEscape(ref.Owner),
-		url.PathEscape(ref.Repo),
+		url.PathEscape(result.Owner),
+		url.PathEscape(result.Repo),
 		url.PathEscape(ref.Ref),
 	)
 	sha, err := c.anonGetCommitSHA(ctx, commitURL)
@@ -276,10 +300,10 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		yamlPath = ref.Path + "/action.yaml"
 	}
 
-	content, err := c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, ymlPath)
+	content, err := c.anonGetFileContent(ctx, base, result.Owner, result.Repo, sha, ymlPath)
 	if err != nil {
 		// Try .yaml extension.
-		content, err = c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, yamlPath)
+		content, err = c.anonGetFileContent(ctx, base, result.Owner, result.Repo, sha, yamlPath)
 		if err != nil {
 			// Not fatal — some actions don't have action.yml (reusable workflows).
 			return result

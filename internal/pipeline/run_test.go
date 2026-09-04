@@ -91,6 +91,31 @@ func TestPlanFastPath(t *testing.T) {
 	}
 }
 
+func TestRepositoryIdentityRefsIncludesMutableClosureInPartialWorkflow(t *testing.T) {
+	file := parserlock.File{
+		Workflows: map[string][]string{
+			".github/workflows/ci.yml": {"root/composite@v1", "other/action@v1"},
+		},
+		Dependencies: map[string]parserlock.Action{
+			"root/composite@v1": {Uses: []string{"old/action@v1"}},
+			"old/action@v1":     {},
+			"other/action@v1":   {},
+		},
+	}
+	plan := fastPathPlan{
+		resolved:    false,
+		mutableRefs: []parserlock.ActionRef{ref("root", "composite", "", "v1")},
+	}
+
+	got := repositoryIdentityRefs(".github/workflows/ci.yml", plan, file)
+
+	assert.Len(t, got, 2)
+	assert.Equal(t, "old/action", got[0].Ref.NWO())
+	assert.Equal(t, "root/composite@v1", got[0].Parent)
+	assert.Equal(t, "root/composite", got[1].Ref.NWO())
+	assert.Empty(t, got[1].Parent)
+}
+
 func TestPartitionRefs(t *testing.T) {
 	tests := []struct {
 		name             string

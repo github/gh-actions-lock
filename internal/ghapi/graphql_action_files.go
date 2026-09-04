@@ -27,13 +27,14 @@ func (r ActionFileRequest) NWO() string { return r.Owner + "/" + r.Repo }
 // for one ActionFileRequest. Err is non-nil when this specific ref could
 // not be resolved (e.g. not found, SSO required).
 type ActionFileResult struct {
-	Owner     string
-	Repo      string
-	Path      string
-	Ref       string
-	CommitOID string
-	ActionYML string
-	Err       error
+	Owner       string
+	Repo        string
+	OriginalNWO string
+	Path        string
+	Ref         string
+	CommitOID   string
+	ActionYML   string
+	Err         error
 }
 
 // repoResponse is the raw GraphQL response shape for a single repository alias.
@@ -260,6 +261,12 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 			results[idx].Err = fmt.Errorf("failed to parse: %w", err)
 			continue
 		}
+		if repo.NameWithOwner != "" {
+			if err := canonicalizeActionFileResult(&results[idx], ref, repo.NameWithOwner); err != nil {
+				results[idx].Err = err
+				continue
+			}
+		}
 
 		if repo.Object == nil || repo.Object.OID == "" {
 			n := len(ref.Ref)
@@ -287,6 +294,20 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 	}
 
 	return results
+}
+
+func canonicalizeActionFileResult(result *ActionFileResult, ref ActionFileRequest, canonical string) error {
+	owner, name, ok := strings.Cut(canonical, "/")
+	if !ok || owner == "" || name == "" {
+		return fmt.Errorf("invalid canonical repository name %q", canonical)
+	}
+	if strings.EqualFold(canonical, ref.NWO()) {
+		return nil
+	}
+	result.OriginalNWO = ref.NWO()
+	result.Owner = owner
+	result.Repo = name
+	return nil
 }
 
 // samlBlockedOwners returns the set of repository owners whose resolution

@@ -127,7 +127,10 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	parentMap := map[string][]string{}
 	if r != nil {
 		parentMap = resolvedParents
+		wr.ResolvedDeps = liveDeps
+		wr.ResolvedParents = resolvedParents
 		populateInventoryParents(wr.Inventory, parentMap)
+		appendTransferredRepositoryFindings(&wr, liveDeps, parentMap)
 	}
 
 	var checkR checks.CheckResolver
@@ -157,6 +160,33 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	}
 
 	return wr
+}
+
+func appendTransferredRepositoryFindings(wr *checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap) {
+	direct := lockfile.NewDirectTracker(wr.RewriteRefs, deps)
+	for i, d := range deps {
+		for _, ref := range d.OriginalRefs {
+			finding := checks.Finding{
+				WorkflowPath: wr.Path,
+				Category:     checks.RefChanged,
+				Severity:     checks.SeverityError,
+				Confidence:   checks.ConfidenceHigh,
+				ActionRef:    &ref,
+				Detail:       fmt.Sprintf("repository %s has been renamed or transferred to %s", ref.NWO(), d.NWO),
+				Remediation:  fmt.Sprintf("update `uses:` from %s to %s", ref.NWO(), d.NWO),
+			}
+			oldKey := ref.NWO() + "@" + ref.Ref
+			if parents := parentMap[oldKey]; len(parents) > 0 {
+				finding.ParentNWO = parents[0]
+				finding.Detail += fmt.Sprintf(" in upstream composite %s", parents[0])
+				finding.Remediation = "the upstream composite must update its `uses:` reference"
+			} else if !direct.IsDirect(i) {
+				finding.ParentNWO = "unknown"
+				finding.Remediation = "the upstream composite containing this reference must update its `uses:` reference"
+			}
+			wr.Findings = append(wr.Findings, finding)
+		}
+	}
 }
 
 // selfRepositoryFinding builds the informational finding for a workflow that

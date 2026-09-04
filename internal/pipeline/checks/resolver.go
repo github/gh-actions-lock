@@ -44,6 +44,9 @@ func NewPrewarmedResolver(r *resolve.Resolver, live []dep.Dependency) *prewarmed
 	for _, d := range live {
 		owner, repo := d.OwnerRepo()
 		a.refs[ghapi.ForNWORef(owner, repo, d.Ref)] = d.SHA
+		for _, ref := range d.OriginalRefs {
+			a.refs[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = d.SHA
+		}
 	}
 	return a
 }

@@ -126,6 +126,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 // branch, the numeric owner and repo IDs (lockfile write), and the visibility
 // and last-push time (tag freshness/immutability checks).
 type repoMeta struct {
+	NameWithOwner string
 	DefaultBranch string
 	OwnerID       int64
 	RepoID        int64
@@ -134,9 +135,10 @@ type repoMeta struct {
 }
 
 // repoMetadata fetches repos/{owner}/{repo} at most once per run, coalescing
-// concurrent callers via singleflight and caching the result. GetDefaultBranch,
-// RepoIDs, and RepoMetadata all derive from it, so a repo costs one round-trip
-// instead of one per consumer. The request runs under a cancel-free context:
+// concurrent callers via singleflight and caching the result. CanonicalNWO,
+// GetDefaultBranch, RepoIDs, and RepoMetadata all derive from it, so a repo
+// costs one round-trip instead of one per consumer. The request runs under a
+// cancel-free context:
 // callers fan out under scan/errgroup contexts that cancel on first
 // match/error, and a coalesced caller's cancellation must not abort the shared
 // fetch for the others waiting on it.
@@ -150,6 +152,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			return m, nil
 		}
 		var resp struct {
+			FullName      string `json:"full_name"`
 			DefaultBranch string `json:"default_branch"`
 			Visibility    string `json:"visibility"`
 			PushedAt      string `json:"pushed_at"`
@@ -169,6 +172,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			}
 		}
 		m := repoMeta{
+			NameWithOwner: resp.FullName,
 			DefaultBranch: resp.DefaultBranch,
 			OwnerID:       resp.Owner.ID,
 			RepoID:        resp.ID,
@@ -182,6 +186,15 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 		return repoMeta{}, err
 	}
 	return v.(repoMeta), nil
+}
+
+// CanonicalNWO returns the repository's current owner/name.
+func (c *Client) CanonicalNWO(ctx context.Context, owner, repo string) (string, error) {
+	m, err := c.repoMetadata(ctx, owner, repo)
+	if err != nil {
+		return "", err
+	}
+	return m.NameWithOwner, nil
 }
 
 // GetDefaultBranch returns the repo's default branch name (e.g. "main"), or

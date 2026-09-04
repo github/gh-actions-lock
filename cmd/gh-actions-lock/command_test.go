@@ -12,6 +12,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	lockstore "github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/stretchr/testify/assert"
@@ -65,6 +66,459 @@ jobs:
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 	assert.True(t, payload.Valid)
 	assert.Empty(t, payload.Findings)
+}
+
+func TestCheckCommand_RewritesMovedRepository(t *testing.T) {
+	const (
+		oldNWO = "krzema12/github-actions-typing"
+		newNWO = "typesafegithub/github-actions-typing"
+		ref    = "v2.2.2"
+		sha    = "9ddf35b71a482be7d8922b28e8d00df16b77e315"
+	)
+	for _, tt := range []struct {
+		name string
+		ref  string
+		pins []string
+		args []string
+	}{
+		{name: "fresh onboarding", ref: ref},
+		{
+			name: "existing immutable lockfile",
+			ref:  ref,
+			pins: []string{oldNWO + "@" + ref + "=sha1-" + sha},
+		},
+		{
+			name: "existing mutable lockfile",
+			ref:  "v2",
+			pins: []string{oldNWO + "@v2=sha1-" + sha},
+		},
+		{
+			name: "rescan",
+			ref:  ref,
+			pins: []string{oldNWO + "@" + ref + "=sha1-" + sha},
+			args: []string{"--rescan"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(
+				httpmock.GraphQLForRepo("krzema12", "github-actions-typing"),
+				httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{
+						"a0": testRepoResponse(newNWO, sha, nodeActionYAML),
+					},
+				}),
+			)
+			if tt.name == "existing mutable lockfile" {
+				reg.Register(
+					httpmock.REST("GET", `repos/krzema12/github-actions-typing$`),
+					httpmock.JSONResponse(map[string]any{
+						"full_name": newNWO,
+						"id":        502427408,
+						"owner":     map[string]any{"id": 129620060},
+					}),
+				)
+			}
+			reg.Register(
+				httpmock.REST("GET", `repos/typesafegithub/github-actions-typing$`),
+				httpmock.JSONResponse(map[string]any{
+					"full_name": newNWO,
+					"id":        502427408,
+					"owner":     map[string]any{"id": 129620060},
+				}),
+			)
+			workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+tt.ref+`
+`, tt.pins...)
+			args := append(tt.args, "--no-narrow", workflowPath)
+			stdout, stderr, err := runCommandWithHTTP(t, reg, args...)
+
+			require.NoError(t, err, "stdout:\n%s", stdout)
+			assert.Contains(t, stdout+stderr, "Action repository transferred: "+oldNWO+" → "+newNWO)
+			workflow, readErr := os.ReadFile(workflowPath)
+			require.NoError(t, readErr)
+			assert.Contains(t, string(workflow), "uses: "+newNWO+"@"+tt.ref)
+			assert.NotContains(t, string(workflow), oldNWO)
+			pins := readTempLockfilePins(t)
+			assert.Contains(t, pins, "'"+newNWO+"@"+tt.ref+"'")
+			assert.NotContains(t, pins, oldNWO)
+
+			localReg := &httpmock.Registry{}
+			_, _, verifyErr := runCommandWithHTTP(t, localReg, "--verify-local", workflowPath)
+			require.NoError(t, verifyErr)
+			localReg.Verify(t)
+		})
+	}
+}
+
+func TestCheckCommand_PrefersLiveMovedRepositoryOverSeededAlias(t *testing.T) {
+	const (
+		oldNWO   = "old/action"
+		newNWO   = "new/action"
+		oldSHA   = "1111111111111111111111111111111111111111"
+		liveSHA  = "2222222222222222222222222222222222222222"
+		childSHA = "3333333333333333333333333333333333333333"
+	)
+	for _, tt := range []struct {
+		name string
+		refs []string
+	}{
+		{name: "seeded alias first", refs: []string{newNWO + "@v1", oldNWO + "@v1"}},
+		{name: "live redirect first", refs: []string{oldNWO + "@v1", newNWO + "@v1"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(
+				httpmock.REST("GET", `repos/new/action$`),
+				httpmock.JSONResponse(map[string]any{
+					"full_name": newNWO,
+					"id":        2,
+					"owner":     map[string]any{"id": 1},
+				}),
+			)
+			reg.Register(
+				httpmock.GraphQLForRepo("old", "action"),
+				httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{
+						"a0": testRepoResponse(newNWO, liveSHA, "runs:\n  using: composite\n  steps:\n    - uses: child/action@v1\n"),
+					},
+				}),
+			)
+			reg.Register(
+				httpmock.GraphQLForRepo("child", "action"),
+				httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{
+						"a0": testRepoResponse("child/action", childSHA, nodeActionYAML),
+					},
+				}),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/child/action$`),
+				httpmock.JSONResponse(map[string]any{
+					"full_name": "child/action",
+					"id":        4,
+					"owner":     map[string]any{"id": 3},
+				}),
+			)
+			workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+strings.Join(tt.refs, `
+      - uses: `)+`
+`, newNWO+"@v1=sha1-"+oldSHA)
+
+			stdout, _, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+			require.NoError(t, err, "stdout:\n%s", stdout)
+			store, loadErr := lockstore.LoadState(".", nil)
+			require.NoError(t, loadErr)
+			file := store.File()
+			action, ok := file.Dependencies[newNWO+"@v1"]
+			require.True(t, ok)
+			assert.Equal(t, "sha1-"+liveSHA, action.Commit)
+			assert.Equal(t, []string{"child/action@v1"}, action.Uses)
+			workflow, readErr := os.ReadFile(workflowPath)
+			require.NoError(t, readErr)
+			assert.NotContains(t, string(workflow), oldNWO)
+		})
+	}
+}
+
+func TestCheckCommand_VerifyRejectsMovedRepositoryInExistingLockfile(t *testing.T) {
+	const (
+		oldNWO = "krzema12/github-actions-typing"
+		newNWO = "typesafegithub/github-actions-typing"
+		ref    = "v2.2.2"
+		sha    = "9ddf35b71a482be7d8922b28e8d00df16b77e315"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("krzema12", "github-actions-typing"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(newNWO, sha, nodeActionYAML),
+			},
+		}),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+ref+`
+`, oldNWO+"@"+ref+"=sha1-"+sha)
+	workflowBefore, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	lockBefore, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg, "--verify", "--no-narrow", workflowPath)
+
+	require.Error(t, err)
+	assert.Contains(t, stdout+stderr, "repository "+oldNWO+" has been renamed or transferred to "+newNWO)
+	workflowAfter, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflowBefore, workflowAfter)
+	lockAfter, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, lockBefore, lockAfter)
+}
+
+func TestCheckCommand_VerifyRejectsKnownMoveWhenResolutionFails(t *testing.T) {
+	const (
+		oldNWO = "old/action"
+		newNWO = "new/action"
+		ref    = "v1"
+		sha    = "1111111111111111111111111111111111111111"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", `repos/old/action$`),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "action"),
+		httpmock.StatusResponse(http.StatusInternalServerError),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+ref+`
+`, oldNWO+"@"+ref+"=sha1-"+sha)
+
+	stdout, _, err := runCommandWithHTTP(t, reg, "--verify", "--json=valid,findings", workflowPath)
+
+	require.ErrorIs(t, err, errSilent)
+	var payload struct {
+		Valid    bool             `json:"valid"`
+		Findings []format.Finding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.False(t, payload.Valid)
+	require.Len(t, payload.Findings, 2)
+	assert.Equal(t, "reachability-unknown", payload.Findings[0].Category)
+	assert.Equal(t, "ref-changed", payload.Findings[1].Category)
+	assert.Contains(t, payload.Findings[1].Detail, oldNWO+" has been renamed or transferred to "+newNWO)
+}
+
+func TestCheckCommand_FixRejectsKnownMoveWhenResolutionFails(t *testing.T) {
+	const (
+		oldNWO = "old/action"
+		newNWO = "new/action"
+		ref    = "v1"
+		sha    = "1111111111111111111111111111111111111111"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", `repos/old/action$`),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+	)
+	for range 2 {
+		reg.Register(
+			httpmock.GraphQLForRepo("old", "action"),
+			httpmock.StatusResponse(http.StatusInternalServerError),
+		)
+	}
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+oldNWO+`@`+ref+`
+`, oldNWO+"@"+ref+"=sha1-"+sha)
+	workflowBefore, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	lockBefore, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "resolving transferred repository")
+	assert.NotContains(t, stdout+stderr, "All workflows valid")
+	workflowAfter, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflowBefore, workflowAfter)
+	lockAfter, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, lockBefore, lockAfter)
+}
+
+func TestCheckCommand_RejectsAnchoredMovedRepositoryRewrite(t *testing.T) {
+	const (
+		oldNWO = "krzema12/github-actions-typing"
+		newNWO = "typesafegithub/github-actions-typing"
+		ref    = "v2.2.2"
+		sha    = "9ddf35b71a482be7d8922b28e8d00df16b77e315"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("krzema12", "github-actions-typing"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(newNWO, sha, nodeActionYAML),
+			},
+		}),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - &typing
+        uses: `+oldNWO+`@`+ref+`
+      - *typing
+`)
+	before, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+	require.ErrorContains(t, err, "cannot update an anchored or aliased `uses:` value")
+	after, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, string(before), string(after))
+	_, statErr := os.Stat(filepath.Join(".github", "workflows", "actions.lock"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestCheckCommand_RejectsMovedRepositoryInRemoteComposite(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.GraphQLForRepo("root", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("root/composite", strings.Repeat("a", 40), "runs:\n  using: composite\n  steps:\n    - uses: old/action@v1\n"),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("new/action", strings.Repeat("b", 40), nodeActionYAML),
+			},
+		}),
+	)
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: root/composite@v1
+`)
+
+	_, _, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowPath)
+
+	var transferred *resolve.TransferredRepositoryError
+	require.ErrorAs(t, err, &transferred)
+	assert.Equal(t, "old/action", transferred.Original)
+	assert.Equal(t, "new/action", transferred.Canonical)
+	assert.Equal(t, "root/composite@v1", transferred.Parent)
+	_, statErr := os.Stat(filepath.Join(".github", "workflows", "actions.lock"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestCheckCommand_RejectsTransferredRecordedRemoteCompositeRef(t *testing.T) {
+	const (
+		parentNWO = "root/composite"
+		oldNWO    = "old/action"
+		newNWO    = "new/action"
+		parentSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		childSHA  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", `repos/root/composite$`),
+		httpmock.JSONResponse(map[string]any{"full_name": parentNWO}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/old/action$`),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("root", "composite"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(parentNWO, parentSHA, "runs:\n  using: composite\n  steps:\n    - uses: "+oldNWO+"@v1\n"),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.GraphQLForRepo("old", "action"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse(newNWO, childSHA, nodeActionYAML),
+			},
+		}),
+	)
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
+	workflow := "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: " + parentNWO + "@v1\n"
+	require.NoError(t, os.WriteFile(workflowPath, []byte(workflow), 0o600))
+	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
+	lockYAML := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  '" + parentNWO + "@v1':\n" +
+		"    ref: 'v1'\n    commit: 'sha1-" + parentSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"    uses:\n      - '" + oldNWO + "@v1'\n" +
+		"  '" + oldNWO + "@v1':\n" +
+		"    ref: 'v1'\n    commit: 'sha1-" + childSHA + "'\n    owner_id: 2\n    repo_id: 2\n" +
+		"workflows:\n  '.github/workflows/ci.yml':\n    - '" + parentNWO + "@v1'\n"
+	require.NoError(t, os.WriteFile(lockPath, []byte(lockYAML), 0o600))
+	t.Chdir(dir)
+	workflowArg := ".github/workflows/ci.yml"
+
+	workflowBefore, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	lockBefore, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+
+	stdout, stderr, err := runCommandWithHTTP(t, reg, "--no-narrow", workflowArg)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, oldNWO+" has been renamed or transferred to "+newNWO)
+	require.ErrorContains(t, err, "upstream composite "+parentNWO+"@v1")
+	assert.NotContains(t, stdout+stderr, "All workflows valid")
+	workflowAfter, readErr := os.ReadFile(workflowPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, workflowBefore, workflowAfter)
+	lockAfter, readErr := os.ReadFile(lockPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, lockBefore, lockAfter)
 }
 
 func TestCheck_BareSHAUsesExactMajorTagAndVerifiesLocally(t *testing.T) {
@@ -769,9 +1223,9 @@ jobs:
 
 // TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps verifies that
 // SeedFromLockfile pre-warms the resolution cache so known deps skip
-// network calls, while new deps still resolve from the network.
+// action-file resolution, while new deps still resolve from the network.
 // The workflow has two deps: checkout (in lockfile) and setup-go (not in
-// lockfile). Only setup-go should hit the HTTP mock.
+// lockfile). Checkout needs only one repository identity request.
 func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -779,8 +1233,12 @@ func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 	setupGoSHA := "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 
-	// Only register an HTTP stub for setup-go (the NEW dep).
-	// No stub for checkout — the seed must serve it from cache.
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"full_name": "actions/checkout"}),
+	)
+	// No GraphQL stub for checkout: after its NWO is validated, the seed
+	// must still serve its action resolution from cache.
 	reg.Register(
 		httpmock.GraphQLForRepo("actions", "setup-go"),
 		httpmock.JSONResponse(map[string]any{
@@ -833,7 +1291,7 @@ jobs:
 	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
 
 	// The finding should be about setup-go being unpinned, NOT about checkout.
-	// If checkout required an HTTP call, reg.Verify would fail (no stub registered).
+	// If checkout required GraphQL action resolution, no stub would match.
 	require.Len(t, payload.Findings, 1)
 	assert.Equal(t, "not-pinned", payload.Findings[0].Category)
 	assert.Contains(t, payload.Findings[0].Dependency, "setup-go")

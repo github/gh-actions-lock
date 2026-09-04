@@ -77,6 +77,63 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 	return []byte(strings.Join(lines, "\n")), changed, nil
 }
 
+// ValidateRequiredActionRefRewrites rejects replacements that cannot be
+// applied without changing every alias of an anchored scalar.
+func (f *File) ValidateRequiredActionRefRewrites(replacements map[string]string) (map[string]int, error) {
+	matches := make(map[string]int)
+	blocked := ""
+	var walk func(*yaml.Node, bool, int)
+	walk = func(node *yaml.Node, anchored bool, depth int) {
+		if node == nil || depth > maxYAMLWalkDepth {
+			return
+		}
+		anchored = anchored || node.Anchor != "" || node.Kind == yaml.AliasNode
+		switch node.Kind {
+		case yaml.DocumentNode, yaml.SequenceNode:
+			for _, child := range node.Content {
+				walk(child, anchored, depth+1)
+			}
+		case yaml.MappingNode:
+			for i := 0; i < len(node.Content)-1; i += 2 {
+				keyNode := node.Content[i]
+				valueNode := node.Content[i+1]
+				if keyNode.Value == "uses" {
+					target := valueNode
+					if valueNode.Kind == yaml.AliasNode && valueNode.Alias != nil {
+						target = valueNode.Alias
+					}
+					if target.Kind == yaml.ScalarNode {
+						oldValue := strings.TrimSpace(target.Value)
+						if _, ok := replacements[oldValue]; ok {
+							matches[oldValue]++
+							if anchored || valueNode.Kind == yaml.AliasNode || target.Anchor != "" {
+								blocked = oldValue
+							}
+						}
+					}
+				}
+				walk(valueNode, anchored, depth+1)
+			}
+		}
+	}
+	walk(&f.root, false, 0)
+	if blocked != "" {
+		return nil, fmt.Errorf("required action rewrite for %s cannot update an anchored or aliased `uses:` value", blocked)
+	}
+	_, changed, err := f.RewriteActionRefs(replacements)
+	if err != nil {
+		return nil, err
+	}
+	total := 0
+	for _, count := range matches {
+		total += count
+	}
+	if changed != total {
+		return nil, fmt.Errorf("required action rewrite matched %d `uses:` values but could update only %d", total, changed)
+	}
+	return matches, nil
+}
+
 // MigrateLocalActionsToSelfRepository rewrites same-repo `./…` composite action
 // references to the inherently-pinned `$/…` form. Only local paths that
 // resolve to an in-repo action file are rewritten — that in-repo existence is
