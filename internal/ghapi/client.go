@@ -61,15 +61,17 @@ type ClientOption func(*clientConfig)
 type clientConfig struct {
 	transport http.RoundTripper
 	profile   *profile.Session
-	authToken string // non-empty → use explicit token (tests)
-	logIgnore bool   // suppress log env vars (tests)
+	authToken string
+	logIgnore bool // suppress log env vars (tests)
 }
 
 // WithClientTransport overrides the HTTP transport. Use in tests with httpmock.
 func WithClientTransport(t http.RoundTripper) ClientOption {
 	return func(c *clientConfig) {
 		c.transport = t
-		c.authToken = "test-placeholder-token"
+		if c.authToken == "" {
+			c.authToken = "test-placeholder-token"
+		}
 		c.logIgnore = true
 	}
 }
@@ -79,9 +81,13 @@ func WithClientProfile(p *profile.Session) ClientOption {
 	return func(c *clientConfig) { c.profile = p }
 }
 
-// New creates an authenticated Client for the given hostname using the
-// ambient gh credential store. Use WithClientTransport for test stubs
-// and WithClientProfile for profiling.
+// WithClientAuthToken binds the client to an explicitly selected credential.
+func WithClientAuthToken(token string) ClientOption {
+	return func(c *clientConfig) { c.authToken = token }
+}
+
+// New creates an authenticated Client for the given hostname. By default it
+// uses go-gh credential resolution; WithClientAuthToken bypasses that lookup.
 func New(hostname string, opts ...ClientOption) (*Client, error) {
 	if hostname == "" {
 		hostname = "github.com"
@@ -97,7 +103,7 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		restOnly: os.Getenv("GH_ACTIONS_LOCK_DEPENDABOT_PROXY") == "1",
 	}
 
-	apiOpts := api.ClientOptions{Host: hostname}
+	apiOpts := api.ClientOptions{Host: hostname, AuthToken: cfg.authToken}
 
 	switch {
 	case cfg.transport != nil:
