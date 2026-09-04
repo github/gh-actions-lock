@@ -27,6 +27,8 @@ type Dependency struct {
 	Ref      string // resolved ref as given in uses:
 	SHA      string // full commit hash
 	HashAlgo string // "sha1" or "sha256"
+	// OriginalRef is the lockfile key ref before an in-memory rewrite.
+	OriginalRef string
 	// Tag is the discovered release/tag pointing at SHA, if any. Optional.
 	// Populated by the pin-time discovery pass; not read from `uses:`.
 	Tag string

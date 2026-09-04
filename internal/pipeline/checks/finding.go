@@ -63,6 +63,8 @@ type InventoryEntry struct {
 type WorkflowReport struct {
 	Path     string
 	Findings []Finding
+	// SkipCommit prevents terminal parse failures from entering the write phase.
+	SkipCommit bool
 	// ActionRefs are all remote dependency roots attributed to the workflow,
 	// including refs found inside in-repo `$/…` actions.
 	ActionRefs []parserlock.ActionRef
@@ -71,6 +73,8 @@ type WorkflowReport struct {
 	RewriteRefs []parserlock.ActionRef
 	// SelfActionFiles are in-repo action definition files reached via `$/…`.
 	SelfActionFiles []string
+	// SelfActionRefs are the remote refs found specifically inside SelfActionFiles.
+	SelfActionRefs []parserlock.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []dep.Dependency
 	// Inventory lists all dependencies with direct/transitive classification.

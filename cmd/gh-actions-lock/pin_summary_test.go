@@ -11,6 +11,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/ui"
+	"github.com/stretchr/testify/assert"
 )
 
 // A workflow shared between two different actions must still be listed under
@@ -37,6 +38,23 @@ func TestRenderPinnedEntries_WorkflowSharedAcrossActions(t *testing.T) {
 	if !strings.Contains(out, "Pinned 2 actions across 2 workflows") {
 		t.Fatalf("expected header counting 2 actions across 2 workflows, got:\n%s", out)
 	}
+}
+
+func TestRenderNarrowedEntries_BranchRepair(t *testing.T) {
+	var buf bytes.Buffer
+	console := ui.NewPlain(&buf)
+
+	renderNarrowedEntries(console, []pin.Entry{{
+		NWO:          "owner/action",
+		Ref:          "main",
+		AutoFixedRef: strings.Repeat("a", 40),
+	}})
+
+	out := buf.String()
+	assert.Contains(t, out, "Updated 1 ref")
+	assert.NotContains(t, out, "semver")
+	assert.Contains(t, out, "owner/action@aaaaaaaa")
+	assert.Contains(t, out, "→ main")
 }
 
 func TestReportHasUnfixableErrors_ClassifiesWorkflowNotPinned(t *testing.T) {

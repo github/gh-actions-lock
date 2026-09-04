@@ -143,6 +143,7 @@ jobs:
 		}},
 		Workflows: []WorkflowPlan{{Path: workflowPath}},
 	}
+
 	require.NoError(t, Commit(context.Background(), rec, store, nil))
 
 	gotWorkflow, err := os.ReadFile(filepath.Join(dir, workflowPath))
@@ -154,4 +155,61 @@ jobs:
 	assert.Contains(t, string(got), "actions/checkout@v7")
 	assert.NotContains(t, string(got), "owner/action@main")
 	assert.NotContains(t, string(got), "actions/setup-go@v5")
+}
+
+func TestCommitRekeysAnnotatedTagObjectWithUses(t *testing.T) {
+	const tagObjectSHA = "1111111111111111111111111111111111111111"
+	const commitSHA = "2222222222222222222222222222222222222222"
+	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(workflowPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), []byte(`on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/action@`+tagObjectSHA+`
+`), 0o644))
+	t.Chdir(dir)
+
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+	parent := dep.Dependency{
+		NWO: "owner/action", Ref: tagObjectSHA, SHA: tagObjectSHA,
+		HashAlgo: "sha1", Tag: "v3.2.0",
+	}
+	child := dep.Dependency{
+		NWO: "actions/checkout", Ref: "v4", SHA: strings.Repeat("3", 40),
+		HashAlgo: "sha1",
+	}
+	require.NoError(t, store.Set(context.Background(), workflowPath,
+		[]dep.Dependency{parent, child},
+		map[string][]string{child.Key(): {parent.Key()}},
+		map[string]bool{parent.Key(): true}))
+	require.NoError(t, store.Save())
+
+	rec := &Record{
+		Entries: []Entry{{
+			NWO:          parent.NWO,
+			Ref:          "v3.2.0",
+			SHA:          commitSHA,
+			Resolution:   Verified,
+			AutoFixedRef: tagObjectSHA,
+			Direct:       true,
+			Workflows:    []string{workflowPath},
+		}},
+		Workflows: []WorkflowPlan{{
+			Path: workflowPath,
+			Rewrites: map[string]string{
+				parent.NWO + "@" + tagObjectSHA: parent.NWO + "@v3.2.0",
+			},
+		}},
+	}
+	require.NoError(t, Commit(context.Background(), rec, store, nil))
+
+	got, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "actions.lock"))
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "'owner/action@v3.2.0'")
+	assert.Contains(t, string(got), "uses:\n            - 'actions/checkout@v4'")
+	assert.NotContains(t, string(got), "'owner/action@"+tagObjectSHA+"'")
 }

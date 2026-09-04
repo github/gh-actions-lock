@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -393,6 +394,125 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite for a sticky entry")
 	})
 
+	t.Run("sticky sibling does not suppress SHA metadata repair", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Tag = "v4.2.1"
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+		opts := PlanOptions{
+			Tagger:           tagger,
+			prevImpreciseNWO: map[string]bool{"actions/checkout": true},
+		}
+
+		result, err := planWorkflow(context.Background(), report, opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4.2.1", result.entries[0].Ref)
+		assert.Equal(t, sha, result.entries[0].AutoFixedRef)
+		require.Len(t, result.wplans, 1)
+		assert.Equal(t,
+			map[string]string{"actions/checkout@" + sha: "actions/checkout@v4.2.1"},
+			result.wplans[0].Rewrites,
+		)
+	})
+
+	t.Run("SHA metadata does not rewrite to itself", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Branch = sha
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, sha, result.entries[0].Ref)
+		assert.Empty(t, result.entries[0].AutoFixedRef)
+		assert.Empty(t, result.wplans[0].Rewrites)
+	})
+
+	t.Run("SHA metadata repairs to branch", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Branch = "main"
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "main", result.entries[0].Ref)
+		assert.Equal(t, sha, result.entries[0].AutoFixedRef)
+		assert.Equal(t,
+			map[string]string{"actions/checkout@" + sha: "actions/checkout@main"},
+			result.wplans[0].Rewrites,
+		)
+	})
+
+	t.Run("repair preserves source NWO spelling", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Tag = "v4.2.1"
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "Actions",
+			Repo:  "Checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4.2.1", result.entries[0].Ref)
+		assert.Equal(t,
+			map[string]string{"Actions/Checkout@" + sha: "Actions/Checkout@v4.2.1"},
+			result.wplans[0].Rewrites,
+		)
+	})
+
+	t.Run("repair declines conflicting symbolic target", func(t *testing.T) {
+		tagger, _ := newTagger(t)
+		store, err := lockfile.LoadState(t.TempDir(), fakeMeta{})
+		require.NoError(t, err)
+		target := dep.Dependency{
+			NWO:      "actions/checkout",
+			Ref:      "v4.2.1",
+			SHA:      "def4560000000000000000000000000000000000",
+			HashAlgo: "sha1",
+		}
+		require.NoError(t, store.Set(context.Background(), "other.yml",
+			[]dep.Dependency{target}, nil, map[string]bool{target.Key(): true}))
+
+		report := fastPathReport(sha)
+		report.Inventory[0].Dep.Tag = target.Ref
+		report.ActionRefs = []parserlock.ActionRef{{
+			Owner: "actions",
+			Repo:  "checkout",
+			Ref:   sha,
+		}}
+
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger, Store: store}, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, sha, result.entries[0].Ref)
+		assert.Empty(t, result.entries[0].AutoFixedRef)
+		assert.Empty(t, result.wplans[0].Rewrites)
+	})
+
 	t.Run("branch ref main is NOT narrowed", func(t *testing.T) {
 		// main is not version-shaped, so narrowing must not touch it.
 		// Non-version refs are intentional choices (e.g. vercel/next.js@canary).
@@ -407,6 +527,92 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		require.Len(t, result.wplans, 1)
 		assert.Nil(t, result.wplans[0].Rewrites)
 	})
+}
+
+func TestPlanRejectsConflictingSameRunRepairs(t *testing.T) {
+	const firstSHA = "abc1230000000000000000000000000000000000"
+	const secondSHA = "def4560000000000000000000000000000000000"
+	report := func(path, sha string) checks.WorkflowReport {
+		return checks.WorkflowReport{
+			Path: path,
+			ActionRefs: []parserlock.ActionRef{{
+				Owner: "actions", Repo: "checkout", Ref: sha,
+			}},
+			Inventory: []checks.InventoryEntry{{
+				Dep:    dep.Dependency{NWO: "actions/checkout", Ref: sha, SHA: sha, Tag: "v4.2.1"},
+				File:   path,
+				Direct: true,
+			}},
+		}
+	}
+
+	_, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{
+			report(".github/workflows/first.yml", firstSHA),
+			report(".github/workflows/second.yml", secondSHA),
+		},
+	}, PlanOptions{
+		Tagger: new(tag.Lister),
+		Pool:   pinpool.New(2, nil),
+	})
+
+	require.ErrorContains(t, err, "conflicting planned target actions/checkout@v4.2.1")
+}
+
+func TestPlanRejectsRepairConflictingWithSymbolicEntry(t *testing.T) {
+	const repairedSHA = "abc1230000000000000000000000000000000000"
+	const symbolicSHA = "def4560000000000000000000000000000000000"
+	repair := checks.WorkflowReport{
+		Path: ".github/workflows/repair.yml",
+		ActionRefs: []parserlock.ActionRef{{
+			Owner: "actions", Repo: "checkout", Ref: repairedSHA,
+		}},
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "actions/checkout", Ref: repairedSHA, SHA: repairedSHA, Tag: "v4.2.1"},
+			File:   ".github/workflows/repair.yml",
+			Direct: true,
+		}},
+	}
+	symbolic := checks.WorkflowReport{
+		Path: ".github/workflows/symbolic.yml",
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "actions/checkout", Ref: "v4.2.1", SHA: symbolicSHA},
+			File:   ".github/workflows/symbolic.yml",
+			Direct: true,
+		}},
+	}
+
+	_, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{repair, symbolic},
+	}, PlanOptions{
+		Tagger: new(tag.Lister),
+		Pool:   pinpool.New(2, nil),
+	})
+
+	require.ErrorContains(t, err, "conflicting planned target actions/checkout@v4.2.1")
+}
+
+func TestPlanExcludesLoadFailuresFromCommit(t *testing.T) {
+	const sha = "abc1230000000000000000000000000000000000"
+	blocked := checks.WorkflowReport{
+		Path:       ".github/workflows/broken.yml",
+		SkipCommit: true,
+		Inventory: []checks.InventoryEntry{{
+			Dep:  dep.Dependency{NWO: "actions/checkout", Ref: "v4", SHA: sha},
+			File: ".github/workflows/broken.yml",
+		}},
+	}
+	valid := checks.WorkflowReport{Path: ".github/workflows/valid.yml"}
+
+	record, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{blocked, valid},
+	}, PlanOptions{Pool: pinpool.New(2, nil)})
+	require.NoError(t, err)
+
+	require.Len(t, record.Workflows, 1)
+	assert.Equal(t, valid.Path, record.Workflows[0].Path)
+	require.Len(t, record.Entries, 1)
+	assert.Equal(t, blocked.Path, record.Entries[0].Workflows[0])
 }
 
 func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {
@@ -589,6 +795,20 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 		assert.Contains(t, result.wplans[0].Rewrites,
 			"actions/checkout@"+sha,
 			"rewrite map should record the original SHA ref")
+	})
+
+	t.Run("partial scan rejects unrecorded shared action rewrite", func(t *testing.T) {
+		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
+		wr.SelfActionRefs = append([]parserlock.ActionRef(nil), wr.ActionRefs...)
+
+		_, err := planWorkflow(context.Background(), wr, PlanOptions{
+			Resolver:    resolver,
+			Tagger:      tagger,
+			Pool:        pinpool.New(2, nil),
+			PartialScan: true,
+		}, func(string) {})
+
+		require.ErrorContains(t, err, "shared local action during a partial workflow scan")
 	})
 }
 

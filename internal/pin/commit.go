@@ -154,11 +154,12 @@ func groupPinnedByWorkflow(rec *Record) map[string][]dep.Dependency {
 		}
 		for _, wf := range e.Workflows {
 			result[wf] = append(result[wf], dep.Dependency{
-				NWO:    e.NWO,
-				Ref:    e.Ref,
-				SHA:    e.SHA,
-				Branch: e.OnBranch,
-				Tag:    e.Tag,
+				NWO:         e.NWO,
+				Ref:         e.Ref,
+				SHA:         e.SHA,
+				OriginalRef: e.AutoFixedRef,
+				Branch:      e.OnBranch,
+				Tag:         e.Tag,
 			})
 		}
 	}

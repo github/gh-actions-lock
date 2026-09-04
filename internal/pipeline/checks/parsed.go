@@ -20,7 +20,9 @@ type ParsedWorkflow struct {
 	RewriteRefs []parserlock.ActionRef
 	// SelfActionFiles are the in-repo action definition files reached through
 	// step-level `$/…` refs. They are rewritten alongside the workflow.
-	SelfActionFiles    []string
+	SelfActionFiles []string
+	// SelfActionRefs are the remote refs found specifically inside SelfActionFiles.
+	SelfActionRefs     []parserlock.ActionRef
 	LocalPaths         []string
 	SelfRepositoryRefs []string
 	// SelfRepositoryRefErrs holds malformed `$/…@ref` values (the invalid form).

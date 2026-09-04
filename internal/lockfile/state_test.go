@@ -111,6 +111,47 @@ func actionKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+func TestState_DoesNotMergeImplicitSHAEdges(t *testing.T) {
+	dir := t.TempDir()
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const sha = "1111111111111111111111111111111111111111"
+	symbolic := dep.Dependency{NWO: "owner/action", Ref: "v1", SHA: sha, HashAlgo: "sha1"}
+	shaParent := dep.Dependency{NWO: "owner/action", Ref: sha, SHA: sha, HashAlgo: "sha1"}
+	child := dep.Dependency{
+		NWO: "actions/checkout", Ref: "v4",
+		SHA: "2222222222222222222222222222222222222222", HashAlgo: "sha1",
+	}
+	ctx := context.Background()
+	if err := store.Set(ctx, "symbolic.yml", []dep.Dependency{symbolic}, nil, map[string]bool{symbolic.Key(): true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(ctx, "sha.yml", []dep.Dependency{shaParent, child},
+		map[string][]string{child.Key(): {shaParent.Key()}},
+		map[string]bool{shaParent.Key(): true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Set(ctx, "symbolic.yml", []dep.Dependency{symbolic}, nil, map[string]bool{symbolic.Key(): true}); err != nil {
+		t.Fatal(err)
+	}
+	store.PruneWorkflows(map[string]bool{"symbolic.yml": true})
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	action := store.file.Dependencies["owner/action@v1"]
+	if len(action.Uses) != 0 {
+		t.Fatalf("symbolic dependency retained unrelated SHA edges: %v", action.Uses)
+	}
+	if _, ok := store.file.Dependencies[child.Key()]; ok {
+		t.Fatalf("stale child %q was not garbage-collected", child.Key())
+	}
+}
+
 // TestState_SetAcceptsEmptyBranch verifies that deps with no discovered
 // branch are accepted — the new schema makes ref optional.
 func TestState_SetAcceptsEmptyBranch(t *testing.T) {

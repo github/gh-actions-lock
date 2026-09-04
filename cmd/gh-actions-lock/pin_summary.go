@@ -176,10 +176,9 @@ func renderCooldownFindings(console *ui.UI, report *checks.Report) {
 	}
 }
 
-// renderNarrowedEntries shows refs that were upgraded from mutable (main, v4)
-// to full semver (v6.0.2) on already-pinned workflows.
+// renderNarrowedEntries shows refs updated on already-pinned workflows.
 func renderNarrowedEntries(console *ui.UI, narrowed []pin.Entry) {
-	console.TermSuccess("Narrowed %d %s to full semver",
+	console.TermSuccess("Updated %d %s",
 		len(narrowed), ui.Pluralize(len(narrowed), "ref", "refs"))
 	for _, e := range narrowed {
 		console.TermDetail(" %s@%s → %s", e.NWO, e.AutoFixedRef, e.Ref)

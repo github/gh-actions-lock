@@ -41,6 +41,10 @@ type PlanOptions struct {
 	// findings untouched so possible tampering stays a hard error.
 	Relock bool
 
+	// PartialScan reports that explicit workflow paths, rather than the full
+	// workflow directory, define this run's mutation authority.
+	PartialScan bool
+
 	// prevImpreciseNWO is computed once in Plan() from the global lockfile
 	// state. It holds lowercased NWOs that are already recorded with a
 	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
@@ -80,7 +84,6 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	if opts.prevImpreciseNWO == nil && opts.Store != nil {
 		opts.prevImpreciseNWO = impreciseDirectNWOs(opts.Store)
 	}
-
 	results := make([]planResult, len(report.Workflows))
 	var planErr error
 	poolErr := pinpool.RunTyped(opts.Pool, ctx, "Planning pins",
@@ -102,7 +105,20 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		planErr = poolErr
 	}
 
+	targetSHAs := make(map[string]string)
 	for _, pr := range results {
+		for _, entry := range pr.entries {
+			if planErr != nil || entry.SHA == "" ||
+				entry.Resolution != Pinned && entry.Resolution != Verified {
+				continue
+			}
+			key := strings.ToLower(entry.NWO) + "@" + entry.Ref
+			if sha, ok := targetSHAs[key]; ok && !strings.EqualFold(sha, entry.SHA) {
+				planErr = fmt.Errorf("conflicting planned target %s resolves to both %s and %s", key, sha, entry.SHA)
+				continue
+			}
+			targetSHAs[key] = entry.SHA
+		}
 		rec.Entries = append(rec.Entries, pr.entries...)
 		rec.Workflows = append(rec.Workflows, pr.wplans...)
 	}
@@ -118,6 +134,9 @@ type planResult struct {
 func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, status func(string)) (planResult, error) {
 	var entries []Entry
 	var wplans []WorkflowPlan
+	if wr.SkipCommit {
+		return planResult{entries: verifiedEntries(wr.Inventory, wr.Path)}, nil
+	}
 	for _, finding := range wr.Findings {
 		if finding.Category == checks.InvalidSelfRepositoryRef {
 			return planResult{}, nil
@@ -127,8 +146,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if rewriteRefs == nil {
 		rewriteRefs = wr.ActionRefs
 	}
-	rewriteRefKeys := actionRefKeys(rewriteRefs)
-
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
@@ -136,7 +153,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if !wr.NeedsAttention() && !repinMoved {
 		entries = verifiedEntries(inventory, wr.Path)
-		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
+		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
+		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
+			return planResult{}, err
+		}
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -170,7 +190,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 
 	if len(unrecordedRefs) == 0 {
-		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys)
+		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
+		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
+			return planResult{}, err
+		}
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
@@ -259,10 +282,13 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	// Record workflow plan if there are rewrites.
 	// Also narrow any verified (already-recorded) entries that have imprecise refs.
-	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts, rewriteRefKeys); len(verifiedRW) > 0 {
+	if verifiedRW := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs); len(verifiedRW) > 0 {
 		for k, v := range verifiedRW {
 			rewrites[k] = v
 		}
+	}
+	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
+		return planResult{}, err
 	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
@@ -282,6 +308,24 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = append(entries, informationalEntries(wr, opts)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
+}
+
+func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlock.ActionRef, rewrites map[string]string) error {
+	if !opts.PartialScan || len(rewrites) == 0 {
+		return nil
+	}
+	selfKeys := actionRefKeys(selfActionRefs)
+	for oldUses := range rewrites {
+		ref := parserlock.ParseActionRef(oldUses)
+		if ref == nil {
+			continue
+		}
+		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
+		if selfKeys[key] {
+			return fmt.Errorf("cannot rewrite %s in a shared local action during a partial workflow scan; scan all workflows", key)
+		}
+	}
+	return nil
 }
 
 // unresolvedEntries flags findings whose refs were attempted but failed to
@@ -585,6 +629,8 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 			Ref:        inv.Dep.Ref,
 			SHA:        inv.Dep.SHA,
 			Resolution: Verified,
+			OnBranch:   inv.Dep.Branch,
+			Tag:        inv.Dep.Tag,
 			Workflows:  []string{path},
 			Direct:     inv.Direct,
 			RequiredBy: inv.Parents,
@@ -596,10 +642,11 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 // narrowVerifiedEntries upgrades already-recorded direct deps to full semver
 // tags when possible, returning the workflow-YAML rewrites. Skipped for
 // --no-narrow, transitive deps, and refs the user kept imprecise (sticky v4).
-func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions, rewriteRefKeys map[string]bool) map[string]string {
+func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOptions, rewriteRefs []parserlock.ActionRef) map[string]string {
 	if opts.NoNarrow || opts.Tagger == nil {
 		return nil
 	}
+	rewriteRefKeys := actionRefKeys(rewriteRefs)
 	rewrites := make(map[string]string)
 	for i := range entries {
 		e := &entries[i]
@@ -607,6 +654,27 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 			continue
 		}
 		if !rewriteRefKeys[strings.ToLower(e.NWO)+"@"+e.Ref] {
+			continue
+		}
+		if parserlock.IsFullSha(e.Ref) {
+			newRef := e.Tag
+			if newRef == "" {
+				newRef = e.OnBranch
+			}
+			if newRef == "" {
+				continue
+			}
+			if parserlock.IsFullSha(newRef) || hasConflictingLockTarget(opts.Store, e.NWO, newRef, e.SHA) {
+				continue
+			}
+			oldRef := e.Ref
+			for _, ref := range rewriteRefs {
+				if strings.EqualFold(ref.Owner+"/"+ref.Repo, e.NWO) && ref.Ref == oldRef {
+					rewrites[ref.FullName()+"@"+oldRef] = ref.FullName() + "@" + newRef
+				}
+			}
+			e.Ref = newRef
+			e.AutoFixedRef = oldRef
 			continue
 		}
 		owner, repo := splitNWO(e.NWO)
@@ -646,6 +714,18 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		return nil
 	}
 	return rewrites
+}
+
+func hasConflictingLockTarget(store *lockfile.State, nwo, ref, sha string) bool {
+	if store == nil {
+		return false
+	}
+	action, ok := store.File().Dependencies[nwo+"@"+ref]
+	if !ok {
+		return false
+	}
+	_, targetSHA, ok := strings.Cut(action.Commit, "-")
+	return ok && !strings.EqualFold(targetSHA, sha)
 }
 
 func actionRefKeys(refs []parserlock.ActionRef) map[string]bool {

@@ -173,9 +173,7 @@ jobs:
 
 	t.Chdir(dir)
 
-	_, _, err := runCommandWithHTTP(t, reg,
-		".github/workflows/workflow.yml",
-	)
+	_, _, err := runCommandWithHTTP(t, reg)
 	require.NoError(t, err)
 
 	read := func(rel string) string {
@@ -266,4 +264,59 @@ jobs:
 		assert.Contains(t, got, "uses: ./.github/actions/foo", "opt-out leaves the ./… ref in place")
 		assert.NotContains(t, got, "$/", "opt-out means no migration to $/")
 	})
+}
+
+func TestNoMigrateLocalActions_PreservesExistingPins(t *testing.T) {
+	const workflowWithRemoteAction = `name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/foo
+      - uses: actions/checkout@v4
+`
+	const workflowWithOnlyLocalAction = `name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/foo
+`
+	const lock = `version: 'v0.0.2'
+dependencies:
+  'actions/checkout@v4':
+    ref: 'v4'
+    commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    owner_id: 1
+    repo_id: 1
+workflows:
+  '.github/workflows/ci.yml':
+    - 'actions/checkout@v4'
+`
+
+	for name, workflow := range map[string]string{
+		"remote and local actions": workflowWithRemoteAction,
+		"only local action":        workflowWithOnlyLocalAction,
+		"malformed workflow":       "name: [",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+			require.NoError(t, os.WriteFile(workflowPath, []byte(workflow), 0o600))
+			lockPath := filepath.Join(".github", "workflows", "actions.lock")
+			require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+
+			transport := &requestCountingTransport{}
+			_, _, err := runCommandWithHTTP(t, transport, "--rescan", "--no-migrate-local-actions")
+			require.Error(t, err)
+			got, readErr := os.ReadFile(lockPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, 2, strings.Count(string(got), "'actions/checkout@v4'"))
+			assert.NotContains(t, string(got), "'.github/workflows/ci.yml': []")
+		})
+	}
 }

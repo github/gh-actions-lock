@@ -38,6 +38,15 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 	out := make([]checks.ParsedWorkflow, 0, total)
 	for _, path := range paths {
 		pw := checks.ParsedWorkflow{Path: path}
+		if store != nil {
+			wfKey := workflowfile.KeyFromPath(path)
+			deps, depsErr := store.Get(wfKey)
+			if depsErr != nil {
+				pw.DepsErr = depsErr
+			} else {
+				pw.ExistingDeps = deps
+			}
+		}
 		wf, err := workflowfile.Load(path)
 		if err != nil {
 			pw.LoadErr = err
@@ -52,20 +61,12 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		// rewritten alongside the workflow, so narrowing stays in sync.
 		pw.RewriteRefs = pw.Refs
 		pw.SelfActionFiles = selfScan.ActionFiles
+		pw.SelfActionRefs = selfScan.Refs
 		pw.LocalPaths = mergeStrings(scan.LocalPaths, selfScan.LocalPaths)
 		pw.SelfRepositoryRefs = mergeStrings(scan.SelfRepositoryRefs, selfScan.SelfRepositoryRefs)
 		pw.SelfRepositoryRefErrs = mergeStrings(scan.SelfRepositoryRefErrs, selfScan.SelfRepositoryRefErrs)
 		pw.SelfRepositoryResolutionErrs = selfScan.Errors
 		pw.ParseWarnings = append(scan.Warnings, selfScan.Warnings...)
-		if len(pw.Refs) > 0 && store != nil {
-			wfKey := workflowfile.KeyFromPath(path)
-			deps, depsErr := store.Get(wfKey)
-			if depsErr != nil {
-				pw.DepsErr = depsErr
-			} else {
-				pw.ExistingDeps = deps
-			}
-		}
 		out = append(out, pw)
 	}
 	return out
