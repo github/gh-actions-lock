@@ -138,9 +138,10 @@ jobs:
       - uses: `+oldNWO+`@`+tt.ref+`
 `, tt.pins...)
 			args := append(tt.args, "--no-narrow", workflowPath)
-			stdout, _, err := runCommandWithHTTP(t, reg, args...)
+			stdout, stderr, err := runCommandWithHTTP(t, reg, args...)
 
 			require.NoError(t, err, "stdout:\n%s", stdout)
+			assert.Contains(t, stdout+stderr, "Action repository transferred: "+oldNWO+" → "+newNWO)
 			workflow, readErr := os.ReadFile(workflowPath)
 			require.NoError(t, readErr)
 			assert.Contains(t, string(workflow), "uses: "+newNWO+"@"+tt.ref)
