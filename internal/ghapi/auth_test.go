@@ -1,9 +1,10 @@
 package ghapi
 
 import (
-	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,16 +12,28 @@ import (
 
 func TestSecureTokensStayBoundToTheirHosts(t *testing.T) {
 	t.Setenv("GH_TOKEN", "ambient-must-not-win")
-
-	tokens := map[string]string{
-		"tenant.ghe.com": "tenant-sentinel",
-		"github.com":     "dotcom-sentinel",
-	}
-	var calls [][]string
-	output := func(name string, args ...string) ([]byte, error) {
-		calls = append(calls, append([]string{name}, args...))
-		return []byte(tokens[args[len(args)-1]] + "\n"), nil
-	}
+	t.Setenv("GITHUB_TOKEN", "ambient-must-not-win")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "ambient-must-not-win")
+	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "ambient-must-not-win")
+	t.Setenv("GH_CONFIG_DIR", "/config-must-survive")
+	t.Setenv("HOME", "/home-must-survive")
+	fakeGH(t, `
+test -z "${GH_TOKEN+x}" || exit 90
+test -z "${GITHUB_TOKEN+x}" || exit 91
+test -z "${GH_ENTERPRISE_TOKEN+x}" || exit 92
+test -z "${GITHUB_ENTERPRISE_TOKEN+x}" || exit 93
+test "$GH_CONFIG_DIR" = "/config-must-survive" || exit 94
+test "$HOME" = "/home-must-survive" || exit 95
+test "$#" -eq 4 || exit 96
+test "$1" = "auth" || exit 97
+test "$2" = "token" || exit 98
+test "$3" = "--hostname" || exit 99
+case "$4" in
+	tenant.ghe.com) printf 'tenant-sentinel\n' ;;
+	github.com) printf 'dotcom-sentinel\n' ;;
+	*) exit 100 ;;
+esac
+`)
 
 	var gotAuth []string
 	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -33,9 +46,9 @@ func TestSecureTokensStayBoundToTheirHosts(t *testing.T) {
 	})
 
 	for _, host := range []string{"tenant.ghe.com", "github.com"} {
-		token, err := secureToken(host, output)
+		token, err := SecureToken(host)
 		if err != nil {
-			t.Fatalf("secureToken(%q): %v", host, err)
+			t.Fatalf("SecureToken(%q): %v", host, err)
 		}
 		client, err := New(host, WithClientAuthToken(token), WithClientTransport(transport))
 		if err != nil {
@@ -46,13 +59,6 @@ func TestSecureTokensStayBoundToTheirHosts(t *testing.T) {
 		}
 	}
 
-	wantCalls := [][]string{
-		{"gh", "auth", "token", "--secure-storage", "--hostname", "tenant.ghe.com"},
-		{"gh", "auth", "token", "--secure-storage", "--hostname", "github.com"},
-	}
-	if !reflect.DeepEqual(calls, wantCalls) {
-		t.Fatalf("calls = %#v, want %#v", calls, wantCalls)
-	}
 	wantAuth := []string{"token tenant-sentinel", "token dotcom-sentinel"}
 	if !reflect.DeepEqual(gotAuth, wantAuth) {
 		t.Fatal("clients did not receive their distinct host tokens")
@@ -60,17 +66,55 @@ func TestSecureTokensStayBoundToTheirHosts(t *testing.T) {
 }
 
 func TestSecureTokenMissingDotcomAuthIsActionableAndSecretFree(t *testing.T) {
-	const sentinel = "must-not-appear"
-	_, err := secureToken("github.com", func(string, ...string) ([]byte, error) {
-		return []byte(sentinel), errors.New(sentinel)
-	})
+	fakeGH(t, `printf 'no oauth token found for github.com\n' >&2; exit 1`)
+	_, err := SecureToken("github.com")
 	if err == nil {
-		t.Fatal("secureToken() error = nil")
-	}
-	if strings.Contains(err.Error(), sentinel) {
-		t.Fatalf("error exposed credential: %v", err)
+		t.Fatal("SecureToken() error = nil")
 	}
 	if want := "gh auth login --hostname github.com"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %q, want actionable command %q", err, want)
 	}
+}
+
+func TestSecureTokenReportsCommandFailureWithoutStderr(t *testing.T) {
+	const sentinel = "stderr-must-not-appear"
+	fakeGH(t, `printf '`+sentinel+`\n' >&2; exit 7`)
+	_, err := SecureToken("github.com")
+	if err == nil {
+		t.Fatal("SecureToken() error = nil")
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("error exposed subprocess stderr: %v", err)
+	}
+	if strings.Contains(err.Error(), "gh auth login") {
+		t.Fatalf("command failure misreported as missing auth: %v", err)
+	}
+	if !strings.Contains(err.Error(), "failed (exit status 7)") {
+		t.Fatalf("error = %q, want exit status", err)
+	}
+}
+
+func TestSecureTokenReportsMissingExecutable(t *testing.T) {
+	t.Setenv("GH_PATH", filepath.Join(t.TempDir(), "missing-gh"))
+	_, err := SecureToken("github.com")
+	if err == nil {
+		t.Fatal("SecureToken() error = nil")
+	}
+	if strings.Contains(err.Error(), "gh auth login") {
+		t.Fatalf("executable failure misreported as missing auth: %v", err)
+	}
+	if !strings.Contains(err.Error(), "running gh credential lookup") {
+		t.Fatalf("error = %q, want executable failure", err)
+	}
+}
+
+func fakeGH(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_PATH", "")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
