@@ -389,6 +389,10 @@ func TestReverseLookup_FailsClosedOnImpostor(t *testing.T) {
 	if issues[0].NWO != "actions/checkout" {
 		t.Errorf("expected NWO=actions/checkout, got %q", issues[0].NWO)
 	}
+	want := "this commit has no exact tag and is not on any branch. Update the workflow to use a current upstream tag or branch, then rerun"
+	if issues[0].Message != want {
+		t.Errorf("message = %q, want %q", issues[0].Message, want)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

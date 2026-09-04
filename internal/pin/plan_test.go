@@ -140,6 +140,101 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+func TestNarrowDirectDeps_PreservesRefWhenExactTagIsFromAnotherFamily(t *testing.T) {
+	const sha = "94de994a9f6fffee200243214e17002e2920bb59"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-send-mail/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v18", sha, "v3.12.0", sha)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-send-mail/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	deps := []dep.Dependency{{NWO: "dawidd6/action-send-mail", Ref: "v18", SHA: sha}}
+	direct := lockfile.NewDirectTracker(
+		[]parserlock.ActionRef{{Owner: "dawidd6", Repo: "action-send-mail", Ref: "v18"}},
+		deps,
+	)
+	rewrites := make(map[string]string)
+
+	narrowDirectDeps(
+		context.Background(),
+		PlanOptions{Tagger: tag.NewListerForTest(t, reg)},
+		deps,
+		direct,
+		rewrites,
+		make(map[int]bool),
+	)
+
+	assert.Equal(t, "v18", deps[0].Ref)
+	assert.Empty(t, rewrites)
+}
+
+func TestNarrowDirectDeps_SameNWOSiblingRefsNormalizeIndependently(t *testing.T) {
+	const (
+		patchSHA = "4444444444444444444444444444444444444444"
+		bareSHA  = "2121212121212121212121212121212121212121"
+	)
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{
+			"ref": "refs/heads/main", "object": map[string]any{"sha": bareSHA, "type": "commit"},
+		}),
+	)
+
+	deps := []dep.Dependency{
+		{NWO: "actions/checkout", Ref: "v4", SHA: patchSHA},
+		{NWO: "actions/checkout", Ref: bareSHA, SHA: bareSHA},
+	}
+	refs := []parserlock.ActionRef{
+		{Owner: "actions", Repo: "checkout", Ref: "v4"},
+		{Owner: "actions", Repo: "checkout", Ref: bareSHA},
+	}
+	direct := lockfile.NewDirectTracker(refs, deps)
+	rewrites := make(map[string]string)
+	preserved := make(map[int]bool)
+	tagger := tag.NewListerForTest(t, reg)
+
+	narrowDirectDeps(context.Background(), PlanOptions{Tagger: tagger}, deps, direct, rewrites, preserved)
+
+	resolver, err := resolve.New("github.com", pinpool.New(2, nil), resolve.WithTransport(reg))
+	require.NoError(t, err)
+	reverseRewrites, issues, err := reverseLookupRewrites(
+		context.Background(),
+		PlanOptions{Resolver: resolver},
+		checks.WorkflowReport{},
+		deps,
+		direct,
+		preserved,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+	assert.Equal(t, "v4.2.1", deps[0].Ref)
+	assert.Equal(t, "v21", deps[1].Ref)
+	assert.Equal(t, "actions/checkout@v21", reverseRewrites["actions/checkout@"+bareSHA])
+}
+
 // TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
 // workflow fails resolution (e.g. repo not found), only the failed ref is
 // marked Unresolved. The successful ref proceeds through reachability and
@@ -523,12 +618,13 @@ func TestPlanWorkflow_InvalidSelfRepositoryRefDoesNotMutateWorkflow(t *testing.T
 // (Resolver + ReverseLookup + Tagger), confirming that --no-narrow protects the
 // SHA from rewriting and that the default path still narrows it to a tag.
 func TestNoNarrow_BareSHA(t *testing.T) {
-	const sha = "abc1230000000000000000000000000000000000"
+	const (
+		sha         = "b6e2e70617bc3265edd6dab6c906732b2f1ae151"
+		ancestorSHA = "09f2f74827fd0000000000000000000000000000"
+	)
 
-	// newSlowPathFixtures wires up a Resolver and a Tagger that would narrow
-	// the SHA to v4.2.1.
 	// The report has a Finding so NeedsAttention() is true and the slow path runs.
-	newSlowPathFixtures := func(t *testing.T, reverseLookup bool) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
+	newSlowPathFixtures := func(t *testing.T) (*resolve.Resolver, *tag.Lister, checks.WorkflowReport, *httpmock.Registry) {
 		t.Helper()
 		reg := &httpmock.Registry{}
 
@@ -548,20 +644,16 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			}),
 		)
 
-		if reverseLookup {
-			reg.Register(
-				httpmock.REST("GET", `repos/actions/checkout/branches`),
-				httpmock.JSONResponse([]any{
-					map[string]any{"name": "main", "commit": map[string]any{"sha": sha}},
-				}),
-			)
-		}
+		reg.Register(
+			httpmock.REST("GET", `repos/actions/checkout/branches`),
+			httpmock.JSONResponse(httpmock.BranchListResponse("main", sha)),
+		)
 		reg.Register(
 			httpmock.REST("GET", `repos/actions/checkout/tags`),
-			httpmock.JSONResponse([]any{
-				map[string]any{"name": "v4", "commit": map[string]any{"sha": sha}},
-				map[string]any{"name": "v4.2.1", "commit": map[string]any{"sha": sha}},
-			}),
+			httpmock.JSONResponse(httpmock.TagListResponse(
+				"v21", sha,
+				"v3.1.4", ancestorSHA,
+			)),
 		)
 
 		pool := pinpool.New(2, nil)
@@ -587,7 +679,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	}
 
 	t.Run("no-narrow preserves bare SHA through ReverseLookup", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, true)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 
 		opts := PlanOptions{
 			Resolver: resolver,
@@ -612,8 +704,8 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite when --no-narrow")
 	})
 
-	t.Run("default narrows bare SHA to tag", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
+	t.Run("default narrows bare SHA to exact major tag", func(t *testing.T) {
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 
 		opts := PlanOptions{
 			Resolver: resolver,
@@ -632,7 +724,9 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			}
 		}
 		require.Len(t, pinned, 1, "expected exactly one pinned entry")
-		assert.Equal(t, "v4.2.1", pinned[0].Ref, "bare SHA should be narrowed to full semver tag")
+		assert.Equal(t, "v21", pinned[0].Ref)
+		assert.Equal(t, sha, pinned[0].SHA)
+		assert.Equal(t, "v21", pinned[0].Tag)
 		require.Len(t, result.wplans, 1)
 		assert.Contains(t, result.wplans[0].Rewrites,
 			"actions/checkout@"+sha,

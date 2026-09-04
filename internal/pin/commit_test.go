@@ -113,11 +113,12 @@ func TestCommitRemovesDependenciesDroppedFromWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(workflowPath)), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), []byte(`on: push
+	workflow := []byte(`on: push
 jobs:
   lint:
     uses: owner/reusable/.github/workflows/lint.yml@main
-`), 0o644))
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), workflow, 0o644))
 	t.Chdir(dir)
 
 	store, err := lockfile.LoadState(dir, fakeMeta{})
@@ -143,6 +144,10 @@ jobs:
 		Workflows: []WorkflowPlan{{Path: workflowPath}},
 	}
 	require.NoError(t, Commit(context.Background(), rec, store, nil))
+
+	gotWorkflow, err := os.ReadFile(filepath.Join(dir, workflowPath))
+	require.NoError(t, err)
+	assert.Equal(t, workflow, gotWorkflow)
 
 	got, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "actions.lock"))
 	require.NoError(t, err)

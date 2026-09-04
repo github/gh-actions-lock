@@ -23,15 +23,15 @@ type PickerTag struct {
 	Installed bool   // true if this tag matches the currently pinned SHA
 }
 
-// BestPatchTagForSHA returns the highest full-semver patch tag pointing at the
-// given SHA, or "" if none exists. This is used to narrow mutable version refs
-// (like "v4") to a specific patch version (like "v4.2.1") when pinning.
-func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha string) (string, error) {
+// BestPatchTagForSHA returns the highest full-semver patch tag in ref's version
+// family pointing at the given SHA. An empty ref accepts any family.
+func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha, ref string) (string, error) {
 	matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
 	if err != nil {
 		return "", err
 	}
 
+	refSV, restrictFamily := parserlock.ParseSemVer(ref)
 	var best parserlock.SemVer
 	bestFound := false
 	for _, t := range matching {
@@ -40,6 +40,9 @@ func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha strin
 		}
 		sv, ok := parserlock.ParseSemVer(t.Name)
 		if !ok || !sv.IsFull() {
+			continue
+		}
+		if restrictFamily && !sameVersionFamily(sv, refSV) {
 			continue
 		}
 		if !bestFound || sv.Major > best.Major ||
@@ -54,44 +57,6 @@ func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha strin
 		return "", nil
 	}
 	return best.Raw, nil
-}
-
-// BestAncestorTag returns the latest full-semver tag that is an ancestor of
-// the given SHA. Used when no tag points at the exact SHA but the repo
-// follows semver release conventions — we walk back to the nearest release.
-// Checks at most 3 candidate tags (latest first) to limit API calls.
-func (tl *Lister) BestAncestorTag(ctx context.Context, owner, repo, sha string) (string, error) {
-	all, err := tl.ListTags(ctx, owner, repo)
-	if err != nil {
-		return "", err
-	}
-
-	// Collect full-semver candidates, already sorted latest-first by ListTags.
-	var candidates []Info
-	for _, t := range all {
-		if t.IsMajor {
-			continue
-		}
-		sv, ok := parserlock.ParseSemVer(t.Name)
-		if !ok || !sv.IsFull() || sv.Rest != "" {
-			continue
-		}
-		candidates = append(candidates, t)
-		if len(candidates) >= 3 {
-			break
-		}
-	}
-
-	for _, t := range candidates {
-		isAncestor, err := tl.client.CompareCommits(ctx, owner, repo, t.SHA, sha)
-		if err != nil {
-			continue
-		}
-		if isAncestor {
-			return t.Name, nil
-		}
-	}
-	return "", nil
 }
 
 // UniquePatchTagForRef returns the sole full-semver patch tag that matches the
@@ -120,11 +85,7 @@ func (tl *Lister) UniquePatchTagForRef(ctx context.Context, owner, repo, sha, re
 			continue
 		}
 		// Must be in the same family as the original ref.
-		if sv.Major != refSV.Major {
-			continue
-		}
-		// If original ref specifies minor (e.g. "v4.2"), patch must match that minor.
-		if ref != refSV.MajorTag() && sv.Minor != refSV.Minor {
+		if !sameVersionFamily(sv, refSV) {
 			continue
 		}
 		candidates = append(candidates, sv)
@@ -134,6 +95,10 @@ func (tl *Lister) UniquePatchTagForRef(ctx context.Context, owner, repo, sha, re
 		return "", nil
 	}
 	return candidates[0].Raw, nil
+}
+
+func sameVersionFamily(candidate, ref parserlock.SemVer) bool {
+	return candidate.Major == ref.Major && (ref.IsMajorOnly() || candidate.Minor == ref.Minor)
 }
 
 // TagsForSHA returns all tags whose commit SHA matches the given SHA.

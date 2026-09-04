@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +50,6 @@ jobs:
 	gotWorkflow, err := os.ReadFile(workflowPath)
 	require.NoError(t, err)
 	assert.Equal(t, workflow, gotWorkflow)
-	assert.NotContains(t, string(gotWorkflow), workflowfile.SentinelComment)
 
 	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
 	if lockContent, readErr := os.ReadFile(lockPath); readErr == nil {
@@ -92,7 +90,6 @@ jobs:
 	gotWorkflow, readErr := os.ReadFile(workflowPath)
 	require.NoError(t, readErr)
 	assert.Equal(t, workflow, gotWorkflow)
-	assert.NotContains(t, string(gotWorkflow), workflowfile.SentinelComment)
 	lockPath := filepath.Join(dir, ".github", "workflows", "actions.lock")
 	_, readErr = os.Stat(lockPath)
 	assert.ErrorIs(t, readErr, os.ErrNotExist)
