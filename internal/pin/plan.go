@@ -123,6 +123,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		if finding.Category == checks.InvalidSelfRepositoryRef {
 			return planResult{}, nil
 		}
+		if finding.Category == checks.RepositoryChanged {
+			return planResult{}, fmt.Errorf("%s; %s", finding.Detail, finding.Remediation)
+		}
 	}
 	rewriteRefs := wr.RewriteRefs
 	if rewriteRefs == nil {

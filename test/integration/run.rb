@@ -648,6 +648,26 @@ STUB_WIRING = {
   self_repository_shared_dependency: ->(s) {
     wire_checkout_success(s, "gho_fake_self_repository_token")
   },
+  transferred_repository_rewritten: ->(s) {
+    fixture_sha = "ea53476fdc172d8552df5af9658a45a367e4f41d"
+    s.stub_server do |srv|
+      srv.on(:POST, %r{/graphql$}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({ data: { a0: {
+           nameWithOwner: "nodeselector/actions-test-fixtures",
+           object: {
+             oid: fixture_sha,
+             file: { object: { text: "name: Fixture\nruns:\n  using: node20\n  main: index.js\n" } }
+           }
+         } } })]
+      end
+      srv.on(:GET, %r{/repos/nodeselector/actions-test-fixtures$}) do |_req|
+        [200, { "Content-Type" => "application/json" },
+         JSON.generate({ full_name: "nodeselector/actions-test-fixtures", id: 1_203_329_948, owner: { id: 29_457_092 } })]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_transfer_fixture_token")
+  },
 
   # SSO scenarios: catch-all 403 with X-GitHub-SSO header
   sso_auth_failure: ->(s) {

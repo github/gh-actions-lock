@@ -36,6 +36,7 @@ var docURLs = map[checks.Category]string{
 	checks.MisleadingSHA:       securityHardeningBase + "#using-third-party-actions",
 	checks.RefMoved:            securityHardeningBase + "#using-third-party-actions",
 	checks.UnreachablePin:      securityHardeningBase + "#using-third-party-actions",
+	checks.RepositoryChanged:   securityHardeningBase + "#using-third-party-actions",
 	checks.OnboardingRequired:  securityHardeningBase + "#using-third-party-actions",
 	checks.AncestryUnknown:     securityHardeningBase + "#using-third-party-actions",
 	checks.ReachabilityUnknown: securityHardeningBase + "#using-third-party-actions",

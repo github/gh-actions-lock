@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -73,10 +74,10 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
 			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
 			fastPlans[i] = planFastPath(parsed[i])
-			identityRefs[i] = repositoryIdentityRefs(parsed[i].Path, fastPlans[i], lockSnapshot)
+			identityRefs[i] = repositoryIdentityRefs(parsed[i].Path, lockSnapshot)
 		}
 	}
-	canonicalRepos := lookupRepositoryIdentities(ctx, r, opts.Pool, identityRefs)
+	repositoryIdentities := lookupRepositoryIdentities(ctx, r, opts.Pool, identityRefs)
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	for i := range parsed {
@@ -94,8 +95,8 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		plan := fastPlans[i]
 		trustedMutable := plan.mutableRefs[:0]
 		for _, ref := range plan.mutableRefs {
-			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
-			if canonical != "" && strings.EqualFold(canonical, ref.NWO()) {
+			identity := repositoryIdentities[ghapi.ForRepo(ref.Owner, ref.Repo)]
+			if identity.matches(ref.NWO(), lockedRepoID(identityRefs[i], ref)) {
 				trustedMutable = append(trustedMutable, ref)
 			}
 		}
@@ -103,8 +104,8 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			if item.Parent == "" {
 				continue
 			}
-			canonical := canonicalRepos[ghapi.ForRepo(item.Ref.Owner, item.Ref.Repo)]
-			if canonical == "" || !strings.EqualFold(canonical, item.Ref.NWO()) {
+			identity := repositoryIdentities[ghapi.ForRepo(item.Ref.Owner, item.Ref.Repo)]
+			if !identity.matches(item.Ref.NWO(), item.RepoID) {
 				trustedMutable = nil
 				break
 			}
@@ -182,7 +183,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Phase 3: Diagnose.
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
-	appendKnownTransferFindings(report, identityRefs, canonicalRepos)
+	appendKnownRepositoryIdentityFindings(report, identityRefs, repositoryIdentities)
 	endDiag()
 	valid := report.IsValid()
 
@@ -196,26 +197,25 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 type repositoryIdentityRef struct {
 	Ref    parserlock.ActionRef
 	Parent string
+	RepoID int64
 }
 
-func repositoryIdentityRefs(path string, plan fastPathPlan, file parserlock.File) []repositoryIdentityRef {
-	refs := make([]repositoryIdentityRef, 0, len(plan.mutableRefs))
+func repositoryIdentityRefs(path string, file parserlock.File) []repositoryIdentityRef {
+	var refs []repositoryIdentityRef
 	index := make(map[ghapi.NWORef]int)
-	mutable := make(map[ghapi.NWORef]bool, len(plan.mutableRefs))
-	add := func(ref parserlock.ActionRef, parent string) {
+	add := func(ref parserlock.ActionRef, parent string, repoID int64) {
 		key := ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)
 		if i, ok := index[key]; ok {
 			if parent != "" {
 				refs[i].Parent = parent
 			}
+			if repoID != 0 {
+				refs[i].RepoID = repoID
+			}
 			return
 		}
 		index[key] = len(refs)
-		refs = append(refs, repositoryIdentityRef{Ref: ref, Parent: parent})
-	}
-
-	for _, ref := range plan.mutableRefs {
-		mutable[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+		refs = append(refs, repositoryIdentityRef{Ref: ref, Parent: parent, RepoID: repoID})
 	}
 	seen := make(map[string]bool)
 	var walk func(string, string)
@@ -228,27 +228,39 @@ func repositoryIdentityRefs(path string, plan fastPathPlan, file parserlock.File
 		if !ok {
 			return
 		}
-		add(parserlock.ActionRef{Owner: pin.Owner, Repo: pin.Repo, Ref: pin.Ref}, parent)
-		for _, child := range file.Dependencies[pinKey].Uses {
+		action := file.Dependencies[pinKey]
+		add(parserlock.ActionRef{Owner: pin.Owner, Repo: pin.Repo, Ref: pin.Ref}, parent, action.RepoID)
+		for _, child := range action.Uses {
 			walk(child, pinKey)
 		}
 	}
 	for _, root := range file.Workflows[workflowfile.KeyFromPath(path)] {
-		pin, ok := parserlock.ParsePin(root)
-		if !ok || !mutable[ghapi.ForNWORef(pin.Owner, pin.Repo, pin.Ref)] {
-			continue
-		}
-		for _, child := range file.Dependencies[root].Uses {
-			walk(child, root)
-		}
-	}
-	for _, ref := range plan.mutableRefs {
-		add(ref, "")
+		walk(root, "")
 	}
 	return refs
 }
 
-func lookupRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, workflows [][]repositoryIdentityRef) map[ghapi.Repo]string {
+type repositoryIdentity struct {
+	canonical string
+	repoID    int64
+}
+
+func (i repositoryIdentity) matches(nwo string, repoID int64) bool {
+	return i.canonical != "" && strings.EqualFold(i.canonical, nwo) &&
+		(repoID == 0 || i.repoID == repoID)
+}
+
+func lockedRepoID(refs []repositoryIdentityRef, ref parserlock.ActionRef) int64 {
+	key := ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)
+	for _, item := range refs {
+		if ghapi.ForNWORef(item.Ref.Owner, item.Ref.Repo, item.Ref.Ref) == key {
+			return item.RepoID
+		}
+	}
+	return 0
+}
+
+func lookupRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, workflows [][]repositoryIdentityRef) map[ghapi.Repo]repositoryIdentity {
 	type indexedRef struct {
 		idx int
 		ref parserlock.ActionRef
@@ -265,37 +277,58 @@ func lookupRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *
 			}
 		}
 	}
-	results := make([]string, len(repos))
+	results := make([]repositoryIdentity, len(repos))
 	if r != nil {
 		_ = pinpool.RunTyped(pool, ctx, "", repos,
 			func(indexedRef) string { return "" },
 			func(ctx context.Context, _ int, item indexedRef) error {
 				canonical, err := r.CanonicalNWO(ctx, item.ref.Owner, item.ref.Repo)
 				if err == nil {
-					results[item.idx] = canonical
+					results[item.idx].canonical = canonical
+					_, repoID, idErr := r.RepoIDs(ctx, item.ref.Owner, item.ref.Repo)
+					if idErr == nil {
+						results[item.idx].repoID = repoID
+					}
 				}
 				return nil
 			},
 		)
 	}
-	canonical := make(map[ghapi.Repo]string, len(repos))
+	identities := make(map[ghapi.Repo]repositoryIdentity, len(repos))
 	for _, item := range repos {
-		canonical[ghapi.ForRepo(item.ref.Owner, item.ref.Repo)] = results[item.idx]
+		identities[ghapi.ForRepo(item.ref.Owner, item.ref.Repo)] = results[item.idx]
 	}
-	return canonical
+	return identities
 }
 
-func appendKnownTransferFindings(report *checks.Report, workflows [][]repositoryIdentityRef, canonicalRepos map[ghapi.Repo]string) {
+func appendKnownRepositoryIdentityFindings(report *checks.Report, workflows [][]repositoryIdentityRef, identities map[ghapi.Repo]repositoryIdentity) {
 	for i := range report.Workflows {
 		wr := &report.Workflows[i]
 		for _, item := range workflows[i] {
 			ref := item.Ref
-			canonical := canonicalRepos[ghapi.ForRepo(ref.Owner, ref.Repo)]
-			if canonical == "" || strings.EqualFold(canonical, ref.NWO()) || resolvedTransfer(wr.ResolvedDeps, ref) {
+			identity := identities[ghapi.ForRepo(ref.Owner, ref.Repo)]
+			if identity.canonical == "" {
+				continue
+			}
+			if strings.EqualFold(identity.canonical, ref.NWO()) {
+				if item.RepoID != 0 && identity.repoID != 0 && identity.repoID != item.RepoID {
+					wr.Findings = append(wr.Findings, checks.Finding{
+						WorkflowPath: wr.Path,
+						Category:     checks.RepositoryChanged,
+						Severity:     checks.SeverityError,
+						Confidence:   checks.ConfidenceHigh,
+						ActionRef:    &ref,
+						Detail:       fmt.Sprintf("repository %s has repository ID %d, but the lockfile records %d; the repository was deleted or replaced", ref.NWO(), identity.repoID, item.RepoID),
+						Remediation:  "review the replacement repository, then remove its lockfile entry and run `gh actions-lock` to trust it",
+					})
+				}
+				continue
+			}
+			if resolvedTransfer(wr.ResolvedDeps, ref) {
 				continue
 			}
 			known := dep.Dependency{
-				NWO:          canonical,
+				NWO:          identity.canonical,
 				Ref:          ref.Ref,
 				OriginalRefs: []parserlock.ActionRef{ref},
 			}

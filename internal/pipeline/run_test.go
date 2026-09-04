@@ -91,29 +91,29 @@ func TestPlanFastPath(t *testing.T) {
 	}
 }
 
-func TestRepositoryIdentityRefsIncludesMutableClosureInPartialWorkflow(t *testing.T) {
+func TestRepositoryIdentityRefsIncludesLockedClosure(t *testing.T) {
 	file := parserlock.File{
 		Workflows: map[string][]string{
 			".github/workflows/ci.yml": {"root/composite@v1", "other/action@v1"},
 		},
 		Dependencies: map[string]parserlock.Action{
-			"root/composite@v1": {Uses: []string{"old/action@v1"}},
-			"old/action@v1":     {},
-			"other/action@v1":   {},
+			"root/composite@v1": {RepoID: 10, Uses: []string{"old/action@v1"}},
+			"old/action@v1":     {RepoID: 20},
+			"other/action@v1":   {RepoID: 30},
 		},
 	}
-	plan := fastPathPlan{
-		resolved:    false,
-		mutableRefs: []parserlock.ActionRef{ref("root", "composite", "", "v1")},
-	}
+	got := repositoryIdentityRefs(".github/workflows/ci.yml", file)
 
-	got := repositoryIdentityRefs(".github/workflows/ci.yml", plan, file)
-
-	assert.Len(t, got, 2)
-	assert.Equal(t, "old/action", got[0].Ref.NWO())
-	assert.Equal(t, "root/composite@v1", got[0].Parent)
-	assert.Equal(t, "root/composite", got[1].Ref.NWO())
-	assert.Empty(t, got[1].Parent)
+	assert.Len(t, got, 3)
+	assert.Equal(t, "root/composite", got[0].Ref.NWO())
+	assert.EqualValues(t, 10, got[0].RepoID)
+	assert.Empty(t, got[0].Parent)
+	assert.Equal(t, "old/action", got[1].Ref.NWO())
+	assert.EqualValues(t, 20, got[1].RepoID)
+	assert.Equal(t, "root/composite@v1", got[1].Parent)
+	assert.Equal(t, "other/action", got[2].Ref.NWO())
+	assert.EqualValues(t, 30, got[2].RepoID)
+	assert.Empty(t, got[2].Parent)
 }
 
 func TestPartitionRefs(t *testing.T) {

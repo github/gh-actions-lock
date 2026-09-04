@@ -2007,28 +2007,30 @@ scenarios:
 
   - name: transferred_repository_rewritten
     category: security
-    description: "Real compiled binary and GitHub API redirect an old repository NWO, rewrite writable workflow source, and emit canonical lock metadata"
-    needs_token: true
-    tags: [smoke]
+    description: "Real compiled binary consumes a controlled GraphQL redirect fixture, rewrites writable workflow source, and emits canonical lock metadata"
+    needs_stub: true
+    tags: [stub]
     flags: ["--no-narrow", "--no-interactive"]
     fixtures:
       workflows:
         ci.yml:
           name: CI
-          actions: ["krzema12/github-actions-typing@v2.2.2"]
+          actions: ["nodeselector/actions-test-fixtures-old@v1"]
     expect:
       exit: 0
       lockfile_exists: true
       lockfile_contains:
-        - "'typesafegithub/github-actions-typing@v2.2.2':"
+        - "'nodeselector/actions-test-fixtures@v1':"
       lockfile_excludes:
-        - "krzema12/github-actions-typing"
+        - "nodeselector/actions-test-fixtures-old"
+      output_contains:
+        - "Action repository transferred: nodeselector/actions-test-fixtures-old → nodeselector/actions-test-fixtures"
       files_contain:
         .github/workflows/ci.yml:
-          - "uses: typesafegithub/github-actions-typing@v2.2.2"
+          - "uses: nodeselector/actions-test-fixtures@v1"
       files_exclude:
         .github/workflows/ci.yml:
-          - "uses: krzema12/github-actions-typing@v2.2.2"
+          - "uses: nodeselector/actions-test-fixtures-old@v1"
 
   - name: dbot_forgery_blocks
     category: dependabot

@@ -158,6 +158,68 @@ jobs:
 	}
 }
 
+func TestCheckCommand_RejectsReplacedRepository(t *testing.T) {
+	const (
+		nwo = "owner/action"
+		ref = "v1"
+		sha = "1111111111111111111111111111111111111111"
+	)
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "default"},
+		{name: "verify", args: []string{"--verify"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(
+				httpmock.REST("GET", `repos/owner/action$`),
+				httpmock.JSONResponse(map[string]any{
+					"full_name": nwo,
+					"id":        2,
+					"owner":     map[string]any{"id": 1},
+				}),
+			)
+			reg.Register(
+				httpmock.GraphQLForRepo("owner", "action"),
+				httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{
+						"a0": testRepoResponse(nwo, sha, nodeActionYAML),
+					},
+				}),
+			)
+			workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: `+nwo+`@`+ref+`
+`, nwo+"@"+ref+"=sha1-"+sha)
+			workflowBefore, err := os.ReadFile(workflowPath)
+			require.NoError(t, err)
+			lockPath := filepath.Join(".github", "workflows", "actions.lock")
+			lockBefore, err := os.ReadFile(lockPath)
+			require.NoError(t, err)
+
+			args := append(tt.args, "--no-narrow", workflowPath)
+			stdout, stderr, err := runCommandWithHTTP(t, reg, args...)
+
+			require.Error(t, err)
+			assert.Contains(t, stdout+stderr+err.Error(), "repository "+nwo+" has repository ID 2, but the lockfile records 1")
+			workflowAfter, readErr := os.ReadFile(workflowPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, workflowBefore, workflowAfter)
+			lockAfter, readErr := os.ReadFile(lockPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, lockBefore, lockAfter)
+		})
+	}
+}
+
 func TestCheckCommand_PrefersLiveMovedRepositoryOverSeededAlias(t *testing.T) {
 	const (
 		oldNWO   = "old/action"
@@ -180,7 +242,7 @@ func TestCheckCommand_PrefersLiveMovedRepositoryOverSeededAlias(t *testing.T) {
 				httpmock.REST("GET", `repos/new/action$`),
 				httpmock.JSONResponse(map[string]any{
 					"full_name": newNWO,
-					"id":        2,
+					"id":        1,
 					"owner":     map[string]any{"id": 1},
 				}),
 			)
@@ -685,10 +747,6 @@ func writeTempWorkflow(t *testing.T, body string, pins ...string) string {
 	return filepath.ToSlash(wfRel)
 }
 
-// writeTempLockfile writes a v0.0.1 actions.lock fixture covering the given
-// workflow file. Owner/repo IDs are stubbed; the read path doesn't validate
-// them. All user-supplied scalars are single-quoted to mirror the
-// production emitter (see internal/lockfile/store.go::marshalDeterministic).
 // writeTempLockfile writes a minimal lockfile for the given pins. Each
 // pinString has the form "owner/repo@ref" (the v0.0.2 pin key format).
 // A synthetic commit hash is generated from the pin key for each entry.
@@ -1235,7 +1293,11 @@ func TestCheck_SeedFromLockfile_SkipsHTTPForCachedDeps(t *testing.T) {
 
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout$`),
-		httpmock.JSONResponse(map[string]any{"full_name": "actions/checkout"}),
+		httpmock.JSONResponse(map[string]any{
+			"full_name": "actions/checkout",
+			"id":        1,
+			"owner":     map[string]any{"id": 1},
+		}),
 	)
 	// No GraphQL stub for checkout: after its NWO is validated, the seed
 	// must still serve its action resolution from cache.

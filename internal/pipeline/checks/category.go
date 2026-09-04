@@ -33,6 +33,9 @@ const (
 	// entry was tampered with. The check can't distinguish those, so it
 	// fails closed without asserting an attack.
 	UnreachablePin Category = "unreachable-pin"
+	// RepositoryChanged means the repository at a locked name has a different
+	// numeric repository ID and is therefore not the repository that was pinned.
+	RepositoryChanged Category = "repository-changed"
 	// Valid means the dependency is pinned and verified.
 	Valid Category = "valid"
 	// RunOnly means the workflow has no action refs (only run:
