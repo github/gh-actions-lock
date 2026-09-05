@@ -209,7 +209,10 @@ jobs:
 			stdout, stderr, err := runCommandWithHTTP(t, reg, args...)
 
 			require.Error(t, err)
-			assert.Contains(t, stdout+stderr+err.Error(), "repository "+nwo+" has repository ID 2, but the lockfile records 1")
+			output := stdout + stderr + err.Error()
+			assert.Contains(t, output, "repository identity changed for "+nwo+": the lockfile records repository ID 1, but the current repository ID is 2")
+			assert.Contains(t, output, "This may indicate a namespace takeover")
+			assert.Contains(t, output, "review "+nwo+" before trusting it")
 			workflowAfter, readErr := os.ReadFile(workflowPath)
 			require.NoError(t, readErr)
 			assert.Equal(t, workflowBefore, workflowAfter)

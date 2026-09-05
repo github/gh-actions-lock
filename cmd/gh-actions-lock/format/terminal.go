@@ -185,7 +185,7 @@ func categoryLabel(c checks.Category) string {
 	case checks.UnreachablePin:
 		return "Unreachable pin"
 	case checks.RepositoryChanged:
-		return "Repository changed"
+		return "Repository identity changed"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}

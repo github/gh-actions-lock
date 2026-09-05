@@ -318,8 +318,8 @@ func appendKnownRepositoryIdentityFindings(report *checks.Report, workflows [][]
 						Severity:     checks.SeverityError,
 						Confidence:   checks.ConfidenceHigh,
 						ActionRef:    &ref,
-						Detail:       fmt.Sprintf("repository %s has repository ID %d, but the lockfile records %d; the repository was deleted or replaced", ref.NWO(), identity.repoID, item.RepoID),
-						Remediation:  "review the replacement repository, then remove its lockfile entry and run `gh actions-lock` to trust it",
+						Detail:       fmt.Sprintf("repository identity changed for %s: the lockfile records repository ID %d, but the current repository ID is %d. This may indicate a namespace takeover", ref.NWO(), item.RepoID, identity.repoID),
+						Remediation:  fmt.Sprintf("review %s before trusting it. If the replacement is expected, remove its lockfile entry and run `gh actions-lock` again", ref.NWO()),
 					})
 				}
 				continue
