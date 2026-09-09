@@ -31,6 +31,15 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 	if copts != nil && copts.OnProgress != nil {
 		progress = copts.OnProgress
 	}
+	if copts != nil && copts.SkipNewWorkflowEntries {
+		workflows := rec.Workflows[:0]
+		for _, wp := range rec.Workflows {
+			if store.HasWorkflow(workflowfile.KeyFromPath(wp.Path)) {
+				workflows = append(workflows, wp)
+			}
+		}
+		rec.Workflows = workflows
+	}
 
 	// Phase 1: Rewrite workflow files (uses: line changes).
 	if len(rec.Workflows) > 0 {
@@ -69,9 +78,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		wfPath := wp.Path
 		wfKey := workflowfile.KeyFromPath(wfPath)
 		deps := pinnedByWorkflow[wfPath]
-		allResolutionsFailed := wp.ResolveErr != nil && len(deps) == 0
-		skipNewWorkflowEntries := copts != nil && copts.SkipNewWorkflowEntries
-		if !store.HasWorkflow(wfKey) && (allResolutionsFailed || skipNewWorkflowEntries) {
+		if len(deps) == 0 && !store.HasWorkflow(wfKey) && wp.ResolveErr != nil {
 			continue
 		}
 		parentMap := buildParentMap(rec, wfPath)
