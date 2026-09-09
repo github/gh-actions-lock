@@ -10,7 +10,6 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
-	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
@@ -798,7 +797,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	})
 
 	t.Run("partial scan rejects unrecorded shared action rewrite", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 		wr.SelfActionRefs = append([]parserlock.ActionRef(nil), wr.ActionRefs...)
 
 		_, err := planWorkflow(context.Background(), wr, PlanOptions{
