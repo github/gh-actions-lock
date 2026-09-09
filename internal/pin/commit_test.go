@@ -109,6 +109,90 @@ func TestBuildDirectKeys(t *testing.T) {
 	assert.NotContains(t, keys, "g/h@v4", "investigate should be excluded")
 }
 
+func TestCommitDependencyFreeWorkflow(t *testing.T) {
+	tests := []struct {
+		name                   string
+		resolveErr             error
+		skipNewWorkflowEntries bool
+		wantEntry              bool
+	}{
+		{"records empty entry", nil, false, true},
+		{"skips unresolved workflow", assert.AnError, false, false},
+		{"skips onboarding", nil, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(workflowPath)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), []byte("on: push\n"), 0o644))
+			t.Chdir(dir)
+
+			store, err := lockfile.LoadState(dir, fakeMeta{})
+			require.NoError(t, err)
+			rec := &Record{Workflows: []WorkflowPlan{{Path: workflowPath, ResolveErr: tt.resolveErr}}}
+
+			require.NoError(t, Commit(context.Background(), rec, store, &CommitOptions{SkipNewWorkflowEntries: tt.skipNewWorkflowEntries}))
+			assert.Equal(t, tt.wantEntry, store.HasWorkflow(workflowPath))
+		})
+	}
+}
+
+func TestCommitPartialResolution(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(workflowPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workflowPath), []byte("on: push\n"), 0o644))
+	t.Chdir(dir)
+
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+	rec := &Record{
+		Entries: []Entry{{
+			NWO: "actions/checkout", Ref: "v4", SHA: strings.Repeat("a", 40),
+			Resolution: Pinned, Workflows: []string{workflowPath}, Direct: true,
+		}},
+		Workflows: []WorkflowPlan{{Path: workflowPath, ResolveErr: assert.AnError}},
+	}
+
+	require.NoError(t, Commit(context.Background(), rec, store, nil))
+	deps, err := store.Get(workflowPath)
+	require.NoError(t, err)
+	assert.Len(t, deps, 1)
+}
+
+func TestCommitSkipNewWorkflowEntriesPreventsRewrites(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+	actionPath := filepath.Join(".github", "actions", "local", "action.yml")
+	oldUses := "actions/checkout@" + strings.Repeat("a", 40)
+	newUses := "actions/checkout@v4.2.0"
+	workflowContent := []byte("on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: " + oldUses + "\n")
+	actionContent := []byte("name: local\nruns:\n  using: composite\n  steps:\n    - uses: " + oldUses + "\n")
+	for path, content := range map[string][]byte{workflowPath: workflowContent, actionPath: actionContent} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(path)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), content, 0o644))
+	}
+	t.Chdir(dir)
+
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+	rec := &Record{Workflows: []WorkflowPlan{{
+		Path:            workflowPath,
+		Rewrites:        map[string]string{oldUses: newUses},
+		SelfActionFiles: []string{actionPath},
+	}}}
+
+	require.NoError(t, Commit(context.Background(), rec, store, &CommitOptions{SkipNewWorkflowEntries: true}))
+	workflowAfter, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	actionAfter, err := os.ReadFile(actionPath)
+	require.NoError(t, err)
+	assert.Equal(t, workflowContent, workflowAfter)
+	assert.Equal(t, actionContent, actionAfter)
+	assert.False(t, store.HasWorkflow(workflowPath))
+}
+
 func TestCommitRemovesDependenciesDroppedFromWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(".github", "workflows", "ci.yml")

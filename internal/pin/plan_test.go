@@ -10,7 +10,6 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
-	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
@@ -196,6 +195,8 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	require.Len(t, pinned, 1, "expected exactly one pinned entry")
 	assert.Equal(t, "good/action", pinned[0].NWO)
 	assert.Equal(t, goodSHA, pinned[0].SHA)
+	require.Len(t, result.wplans, 1)
+	assert.Error(t, result.wplans[0].ResolveErr)
 }
 
 // TestPlanWorkflow_AllResolutionsFail verifies that when ALL refs in a
@@ -249,6 +250,8 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 		assert.Equal(t, Unresolved, e.Resolution, "expected %s to be Unresolved", e.NWO)
 		assert.Contains(t, e.Reason, "not found")
 	}
+	require.Len(t, result.wplans, 1)
+	assert.Error(t, result.wplans[0].ResolveErr)
 }
 
 func newTransitivePlanFixture(t *testing.T, compSHA, transSHA string) (*resolve.Resolver, *pinpool.Pool, *tag.Lister) {
@@ -615,6 +618,18 @@ func TestPlanExcludesLoadFailuresFromCommit(t *testing.T) {
 	assert.Equal(t, blocked.Path, record.Entries[0].Workflows[0])
 }
 
+func TestPlanExcludesBlockingResolverErrorsFromCommit(t *testing.T) {
+	record, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path:                  ".github/workflows/ci.yml",
+			BlockingResolverError: true,
+		}},
+	}, PlanOptions{Pool: pinpool.New(2, nil)})
+	require.NoError(t, err)
+
+	assert.Empty(t, record.Workflows)
+}
+
 func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {
 	const sha = "abc1230000000000000000000000000000000000"
 
@@ -798,7 +813,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	})
 
 	t.Run("partial scan rejects unrecorded shared action rewrite", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 		wr.SelfActionRefs = append([]parserlock.ActionRef(nil), wr.ActionRefs...)
 
 		_, err := planWorkflow(context.Background(), wr, PlanOptions{
