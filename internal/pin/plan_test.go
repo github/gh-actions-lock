@@ -195,6 +195,8 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	require.Len(t, pinned, 1, "expected exactly one pinned entry")
 	assert.Equal(t, "good/action", pinned[0].NWO)
 	assert.Equal(t, goodSHA, pinned[0].SHA)
+	require.Len(t, result.wplans, 1)
+	assert.Error(t, result.wplans[0].ResolveErr)
 }
 
 // TestPlanWorkflow_AllResolutionsFail verifies that when ALL refs in a
@@ -248,6 +250,8 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 		assert.Equal(t, Unresolved, e.Resolution, "expected %s to be Unresolved", e.NWO)
 		assert.Contains(t, e.Reason, "not found")
 	}
+	require.Len(t, result.wplans, 1)
+	assert.Error(t, result.wplans[0].ResolveErr)
 }
 
 func newTransitivePlanFixture(t *testing.T, compSHA, transSHA string) (*resolve.Resolver, *pinpool.Pool, *tag.Lister) {
