@@ -618,6 +618,18 @@ func TestPlanExcludesLoadFailuresFromCommit(t *testing.T) {
 	assert.Equal(t, blocked.Path, record.Entries[0].Workflows[0])
 }
 
+func TestPlanExcludesBlockingResolverErrorsFromCommit(t *testing.T) {
+	record, err := Plan(context.Background(), &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path:                  ".github/workflows/ci.yml",
+			BlockingResolverError: true,
+		}},
+	}, PlanOptions{Pool: pinpool.New(2, nil)})
+	require.NoError(t, err)
+
+	assert.Empty(t, record.Workflows)
+}
+
 func TestPlanWorkflow_SelfRepositoryDependencyIsNotRewrittenOnFastPath(t *testing.T) {
 	const sha = "abc1230000000000000000000000000000000000"
 
