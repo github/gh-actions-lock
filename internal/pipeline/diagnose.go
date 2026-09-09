@@ -102,6 +102,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 				blockingResolverError = true
 			}
 			if blockingResolverError {
+				wr.BlockingResolverError = true
 				return wr
 			}
 			// Low: we're surfacing the resolver failure itself, not a

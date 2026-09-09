@@ -134,7 +134,7 @@ type planResult struct {
 func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOptions, status func(string)) (planResult, error) {
 	var entries []Entry
 	var wplans []WorkflowPlan
-	if wr.SkipCommit {
+	if wr.SkipCommit || wr.BlockingResolverError {
 		return planResult{entries: verifiedEntries(wr.Inventory, wr.Path)}, nil
 	}
 	for _, finding := range wr.Findings {
@@ -204,7 +204,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if resolveErr != nil {
 		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
 		if len(deps) == 0 {
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles, ResolveErr: resolveErr})
 			return planResult{entries: entries, wplans: wplans}, nil
 		}
 		// Fall through with partial deps to pin what we can.
@@ -295,10 +295,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			Path:            wr.Path,
 			Rewrites:        rewrites,
 			SelfActionFiles: wr.SelfActionFiles,
+			ResolveErr:      resolveErr,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles, ResolveErr: resolveErr})
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
