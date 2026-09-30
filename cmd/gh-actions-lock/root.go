@@ -117,6 +117,7 @@ $ gh actions-lock --no-fix --json=valid,findings
 # All fields as JSON
 $ gh actions-lock --json
 `),
+		Version: cliVersion(),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.workflowPaths = args
