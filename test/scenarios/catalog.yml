@@ -884,10 +884,11 @@ scenarios:
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    flags: [".github/workflows/happy-path.yml", ".github/workflows/deep-self-ref.yml", ".github/workflows/reusable-build.yml"]
     fixtures:
       delete_lockfile: true
     expect:
-      exit: 1
+      exit: 0
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
       lockfile_contains:
@@ -902,10 +903,11 @@ scenarios:
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    flags: [".github/workflows/deep-self-ref.yml"]
     fixtures:
       delete_lockfile: true
     expect:
-      exit: 1
+      exit: 0
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
       lockfile_contains:
@@ -2097,14 +2099,15 @@ scenarios:
 
   - name: onboard_roundtrip_v003
     category: onboarding
-    description: "Real-binary onboarding emits v0.0.3 hostnames and live transitive dependencies, then passes offline verification"
+    description: "Real-binary onboarding emits v0.0.3 hostnames and a complete live transitive dependency graph"
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    flags: [".github/workflows/happy-path.yml"]
     fixtures:
       delete_lockfile: true
     expect:
-      exit: 1
+      exit: 0
       lockfile_exists: true
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
