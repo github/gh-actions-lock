@@ -1726,12 +1726,13 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - dependencies:
               - direct: true
                 hash_algo: sha1
+                hostname: github.com
                 nwo: actions/checkout
                 ref: v4
                 sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -1774,7 +1775,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - findings:
@@ -1821,12 +1822,13 @@ scenarios:
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - dependencies:
               - direct: true
                 hash_algo: sha1
+                hostname: github.com
                 nwo: actions/checkout
                 ref: v4
                 sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -1899,12 +1901,13 @@ scenarios:
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - dependencies:
               - direct: true
                 hash_algo: sha1
+                hostname: github.com
                 nwo: actions/checkout
                 ref: v4
                 sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -1952,7 +1955,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
@@ -2092,9 +2095,9 @@ scenarios:
         - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
       lockfile_comment_excludes: "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 
-  - name: onboard_roundtrip_v002
+  - name: onboard_roundtrip_v003
     category: onboarding
-    description: "Fresh onboard writes a v0.0.2 lockfile with correct key format, ref field, and commit field"
+    description: "Real-binary onboarding emits v0.0.3 hostnames and live transitive dependencies, then passes offline verification"
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
@@ -2106,7 +2109,8 @@ scenarios:
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
       lockfile_contains:
-        - "version: 'v0.0.2'"
+        - "version: 'v0.0.3'"
+        - "hostname: 'github.com'"
         - "ref:"
         - "commit: 'sha1-"
         - "owner_id:"

@@ -278,6 +278,12 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		if gqlErr != nil {
 			for _, item := range gqlErr.Errors {
 				if len(item.Path) > 0 && item.Path[0] == alias {
+					// Both metadata spellings are queried; either may be absent.
+					// Reusable workflows can have neither.
+					if item.Type == "NOT_FOUND" && len(item.Path) == 3 && item.Path[1] == "object" &&
+						(item.Path[2] == "file" || item.Path[2] == "fileYaml") {
+						continue
+					}
 					results[idx].Err = fmt.Errorf("%s", item.Message)
 					break
 				}
