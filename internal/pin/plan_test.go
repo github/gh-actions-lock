@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
-	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -113,10 +112,7 @@ func TestNarrowDirectDeps_SameNWOSiblingRefsNormalizeIndependently(t *testing.T)
 	assert.Equal(t, "actions/checkout@v21", reverseRewrites["actions/checkout@"+bareSHA])
 }
 
-// TestPlanWorkflow_PartialResolutionFailure verifies that when one ref in a
-// workflow fails resolution (e.g. repo not found), only the failed ref is
-// marked Unresolved. The successful ref proceeds through reachability and
-// pinning. This is the cascade-failure regression test.
+// An incomplete graph must not become an apparently complete lockfile.
 func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -174,33 +170,14 @@ func TestPlanWorkflow_PartialResolutionFailure(t *testing.T) {
 
 	result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
 	require.NoError(t, err)
-
-	// Classify entries.
-	var unresolved, pinned []Entry
-	for _, e := range result.entries {
-		switch e.Resolution {
-		case Unresolved:
-			unresolved = append(unresolved, e)
-		case Pinned:
-			pinned = append(pinned, e)
-		}
+	require.Len(t, result.entries, 2)
+	for _, entry := range result.entries {
+		assert.Equal(t, Unresolved, entry.Resolution)
+		assert.Contains(t, entry.Reason, "bad/private@main")
 	}
-
-	// bad/private must be unresolved.
-	require.Len(t, unresolved, 1, "expected exactly one unresolved entry")
-	assert.Equal(t, "bad/private", unresolved[0].NWO)
-	assert.Equal(t, "main", unresolved[0].Ref)
-	assert.Contains(t, unresolved[0].Reason, "not found")
-
-	// good/action must be pinned (not poisoned by the bad ref).
-	require.Len(t, pinned, 1, "expected exactly one pinned entry")
-	assert.Equal(t, "good/action", pinned[0].NWO)
-	assert.Equal(t, goodSHA, pinned[0].SHA)
+	assert.Empty(t, result.wplans)
 }
 
-// TestPlanWorkflow_AllResolutionsFail verifies that when ALL refs in a
-// workflow fail resolution, every finding is marked Unresolved and no
-// reachability is attempted.
 func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -243,12 +220,12 @@ func TestPlanWorkflow_AllResolutionsFail(t *testing.T) {
 		Pool:     pool,
 	}, func(string) {})
 	require.NoError(t, err)
-
 	require.Len(t, result.entries, 2)
-	for _, e := range result.entries {
-		assert.Equal(t, Unresolved, e.Resolution, "expected %s to be Unresolved", e.NWO)
-		assert.Contains(t, e.Reason, "not found")
+	for _, entry := range result.entries {
+		assert.Equal(t, Unresolved, entry.Resolution)
+		assert.Contains(t, entry.Reason, "not found")
 	}
+	assert.Empty(t, result.wplans)
 }
 
 func newTransitivePlanFixture(t *testing.T, compSHA, transSHA string) (*resolve.Resolver, *pinpool.Pool, *tag.Lister) {
@@ -798,7 +775,7 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 	})
 
 	t.Run("partial scan rejects unrecorded shared action rewrite", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t, false)
+		resolver, tagger, wr, _ := newSlowPathFixtures(t)
 		wr.SelfActionRefs = append([]parserlock.ActionRef(nil), wr.ActionRefs...)
 
 		_, err := planWorkflow(context.Background(), wr, PlanOptions{

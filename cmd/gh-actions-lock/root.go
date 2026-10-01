@@ -208,6 +208,12 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 	// Now that the resolver is available, set it as the metadata resolver
 	// for the store and re-seed branch hints.
 	store.SetMetadataResolver(r)
+	if err := store.SetHostname(r.Hostname()); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := r.SeedHosts(store.AllDeps()); err != nil {
+		return nil, nil, nil, err
+	}
 	r.SeedBranchHints(store.AllDeps())
 
 	return paths, r, store, nil

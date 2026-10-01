@@ -57,6 +57,9 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		for _, k := range keys {
 			a := file.Dependencies[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
+			if file.Version == "v0.0.3" {
+				addQuotedField(entry, "hostname", hostOrDotcom(a.Hostname))
+			}
 			if a.Ref != "" {
 				addQuotedField(entry, "ref", a.Ref)
 			}

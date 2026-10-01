@@ -28,6 +28,7 @@ type RepoInfo struct {
 
 // Entry records the plan decision for one action dependency.
 type Entry struct {
+	Hostname     string     `json:"hostname,omitempty"`
 	NWO          string     `json:"nwo"`
 	Ref          string     `json:"ref"`
 	SHA          string     `json:"sha,omitempty"`
@@ -165,7 +166,7 @@ func dedupActions(entries []Entry) []Entry {
 	seen := map[string]*slot{}
 	var out []Entry
 	for _, e := range entries {
-		key := e.NWO + "@" + e.Ref
+		key := e.Hostname + "/" + e.NWO + "@" + e.Ref
 		if s, ok := seen[key]; ok {
 			out[s.idx].Workflows = appendUnique(out[s.idx].Workflows, e.Workflows...)
 			continue

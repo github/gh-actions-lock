@@ -74,6 +74,7 @@ type Finding struct {
 // Dependency is the JSON-safe view of a resolved dependency, deduplicated
 // across workflows in the JSON output.
 type Dependency struct {
+	Hostname   string   `json:"hostname,omitempty"`
 	NWO        string   `json:"nwo"`
 	Ref        string   `json:"ref"`
 	SHA        string   `json:"sha"`
@@ -176,6 +177,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 					continue
 				}
 				d := Dependency{
+					Hostname:   inv.Dep.Hostname,
 					NWO:        inv.Dep.NWO,
 					Ref:        inv.Dep.Ref,
 					SHA:        inv.Dep.SHA,
@@ -212,6 +214,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 			}
 			for _, inv := range wr.Inventory {
 				wf.Dependencies = append(wf.Dependencies, Dependency{
+					Hostname:   inv.Dep.Hostname,
 					NWO:        inv.Dep.NWO,
 					Ref:        inv.Dep.Ref,
 					SHA:        inv.Dep.SHA,

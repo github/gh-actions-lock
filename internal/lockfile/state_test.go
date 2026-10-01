@@ -14,7 +14,7 @@ import (
 
 type fakeMetadataResolver struct{}
 
-func (fakeMetadataResolver) RepoIDs(_ context.Context, owner, repo string) (int64, int64, error) {
+func (fakeMetadataResolver) RepoIDs(_ context.Context, _, owner, repo string) (int64, int64, error) {
 	return 1, 2, nil
 }
 
@@ -761,6 +761,7 @@ func TestState_SaveFormatIsStable(t *testing.T) {
 		"        - 'actions/setup-go@v5'\n" +
 		"dependencies:\n" +
 		"    'actions/checkout@v4':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v4'\n" +
 		"        commit: 'sha1-11111111111111111111111111111111111111aa'\n" +
 		"        owner_id: 1\n" +
@@ -768,11 +769,13 @@ func TestState_SaveFormatIsStable(t *testing.T) {
 		"        uses:\n" +
 		"            - 'shared/dep@v1'\n" +
 		"    'actions/setup-go@v5':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v5'\n" +
 		"        commit: 'sha1-22222222222222222222222222222222222222bb'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"    'shared/dep@v1':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v1'\n" +
 		"        commit: 'sha1-33333333333333333333333333333333333333cc'\n" +
 		"        owner_id: 1\n" +
@@ -845,11 +848,13 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 		"        - 'my-org/leaf@main'\n" +
 		"dependencies:\n" +
 		"    'actions/checkout@v4':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v4'\n" +
 		"        commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"    'my-org/composite-a@v1':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v1'\n" +
 		"        commit: 'sha1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'\n" +
 		"        owner_id: 1\n" +
@@ -858,6 +863,7 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 		"            - 'my-org/composite-b@v2'\n" +
 		"            - 'other-org/external@v1'\n" +
 		"    'my-org/composite-b@v2':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v2'\n" +
 		"        commit: 'sha1-cccccccccccccccccccccccccccccccccccccccc'\n" +
 		"        owner_id: 1\n" +
@@ -865,6 +871,7 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 		"        uses:\n" +
 		"            - 'my-org/leaf@main'\n" +
 		"    'my-org/composite-c@v1':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v1'\n" +
 		"        commit: 'sha1-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'\n" +
 		"        owner_id: 1\n" +
@@ -872,11 +879,13 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 		"        uses:\n" +
 		"            - 'my-org/composite-b@v2'\n" +
 		"    'my-org/leaf@main':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'main'\n" +
 		"        commit: 'sha1-dddddddddddddddddddddddddddddddddddddddd'\n" +
 		"        owner_id: 1\n" +
 		"        repo_id: 2\n" +
 		"    'other-org/external@v1':\n" +
+		"        hostname: 'github.com'\n" +
 		"        ref: 'v1'\n" +
 		"        commit: 'sha1-ffffffffffffffffffffffffffffffffffffffff'\n" +
 		"        owner_id: 1\n" +

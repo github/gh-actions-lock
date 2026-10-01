@@ -38,6 +38,10 @@ type RepoRelease struct {
 
 // Releases lists a repository's most recent releases (up to 30).
 func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoRelease, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("repos/%s/%s/releases?per_page=30",
 		url.PathEscape(owner), url.PathEscape(repo))
 
@@ -89,6 +93,10 @@ func (c *Client) RepoMetadata(ctx context.Context, owner, repo string) (RepoMeta
 // CommitSHA resolves a ref (branch, tag, or SHA) to its commit SHA via the
 // repos/commits endpoint.
 func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return "", err
+	}
 	path := fmt.Sprintf("repos/%s/%s/commits/%s",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref))
 

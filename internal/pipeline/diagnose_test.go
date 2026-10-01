@@ -12,7 +12,7 @@ import (
 
 type noopMeta struct{}
 
-func (noopMeta) RepoIDs(context.Context, string, string) (int64, int64, error) {
+func (noopMeta) RepoIDs(context.Context, string, string, string) (int64, int64, error) {
 	return 0, 0, nil
 }
 
