@@ -384,10 +384,11 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 				ref := refs[idx].ref
 				if j < len(res) && res[j].Err == nil {
 					d := dep.Dependency{
-						NWO:  res[j].Owner + "/" + res[j].Repo,
-						Path: res[j].Path,
-						Ref:  ref.Ref,
-						SHA:  res[j].CommitOID,
+						Hostname: res[j].Hostname,
+						NWO:      res[j].Owner + "/" + res[j].Repo,
+						Path:     res[j].Path,
+						Ref:      ref.Ref,
+						SHA:      res[j].CommitOID,
 					}
 					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})
 					results[idx] = resolveResult{dep: d, yml: res[j].ActionYML, ok: true}

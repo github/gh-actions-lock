@@ -137,11 +137,22 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	rawFindings := checks.RunChecks(ctx, pw, store.File(), checkR)
 
 	depByKey := indexDeps(pw.ExistingDeps)
+	liveByKey := indexDeps(liveDeps)
 	for _, f := range rawFindings {
 		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap) {
 			continue
 		}
 		attachParent(&f, depByKey, directNWOs, parentMap)
+		if f.Dependency != nil {
+			d, ok := depByKey[f.Dependency.Key()]
+			if !ok {
+				d = liveByKey[f.Dependency.Key()]
+			}
+			f.Dependency.Hostname = d.Hostname
+			if f.Category == checks.ShaAsRef && d.Hostname != "" {
+				f.Remediation = fmt.Sprintf("pin to a tag instead: https://%s/%s/releases", d.Hostname, d.NWO)
+			}
+		}
 		f.DocURL = DocURLFor(f.Category)
 		wr.Findings = append(wr.Findings, f)
 	}

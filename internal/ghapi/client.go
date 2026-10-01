@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -29,6 +30,11 @@ type Client struct {
 	rest     *api.RESTClient
 	Hostname string
 	restOnly bool
+	local    *Client
+	public   *Client
+	routes   syncmap.Map[Repo, *Client]
+	routeSF  singleflight.Group
+	pinned   map[Repo]string
 
 	// anonBaseURL overrides the base URL for anonymous REST fallback calls.
 	// Empty uses the default "https://api.<Hostname>". Set in tests.
@@ -63,6 +69,7 @@ type clientConfig struct {
 	profile   *profile.Session
 	authToken string // non-empty → use explicit token (tests)
 	logIgnore bool   // suppress log env vars (tests)
+	anonymous bool
 }
 
 // WithClientTransport overrides the HTTP transport. Use in tests with httpmock.
@@ -83,10 +90,26 @@ func WithClientProfile(p *profile.Session) ClientOption {
 // ambient gh credential store. Use WithClientTransport for test stubs
 // and WithClientProfile for profiling.
 func New(hostname string, opts ...ClientOption) (*Client, error) {
+	hostname = strings.ToLower(hostname)
 	if hostname == "" {
 		hostname = "github.com"
 	}
+	local, err := newClient(hostname, opts...)
+	if err != nil || !IsProxima(hostname) {
+		return local, err
+	}
+	// GH_TOKEN applies to both dotcom and Proxima in go-gh. Public fallback
+	// must never reuse it across those trust domains.
+	publicOpts := append([]ClientOption(nil), opts...)
+	publicOpts = append(publicOpts, func(c *clientConfig) { c.anonymous = true })
+	public, err := newClient("github.com", publicOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{Hostname: hostname, local: local, public: public, pinned: map[Repo]string{}}, nil
+}
 
+func newClient(hostname string, opts ...ClientOption) (*Client, error) {
 	var cfg clientConfig
 	for _, o := range opts {
 		o(&cfg)
@@ -118,6 +141,11 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 		}
 		apiOpts.Transport = t
 	}
+	if cfg.anonymous {
+		apiOpts.AuthToken = "anonymous"
+		apiOpts.Transport = anonymousTransport{inner: apiOpts.Transport}
+		c.restOnly = true
+	}
 
 	gql, err := api.NewGraphQLClient(apiOpts)
 	if err != nil {
@@ -143,8 +171,20 @@ func New(hostname string, opts ...ClientOption) (*Client, error) {
 	} else {
 		c.anonHTTP = http.DefaultClient
 	}
+	if cfg.anonymous {
+		c.anonHTTP = &http.Client{Transport: apiOpts.Transport}
+	}
 
 	return c, nil
+}
+
+type anonymousTransport struct{ inner http.RoundTripper }
+
+func (t anonymousTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Del("Authorization")
+	req.Header.Del("Cookie")
+	return t.inner.RoundTrip(req)
 }
 
 // retryTransport wraps an http.RoundTripper with retry logic for transient

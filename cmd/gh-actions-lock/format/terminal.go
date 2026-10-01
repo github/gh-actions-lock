@@ -147,7 +147,7 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	if f.Category == checks.UnreachablePin && f.Dependency != nil {
 		owner, repo := f.Dependency.OwnerRepo()
 		if owner != "" {
-			out.TermDetail("  ↳ %s", out.TermDim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
+			out.TermDetail("  ↳ %s", out.TermDim(DepReleaseURL(f.Dependency.Hostname, owner+"/"+repo, nil)))
 		}
 	}
 	if IsAlertedCategory(f.Category) && f.Remediation != "" {
@@ -278,7 +278,7 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 	if f.Category == checks.UnreachablePin && f.Dependency != nil {
 		owner, repo := f.Dependency.OwnerRepo()
 		if owner != "" {
-			out.Detail("  ↳ %s", out.Dim(fmt.Sprintf("https://github.com/%s/%s/releases", owner, repo)))
+			out.Detail("  ↳ %s", out.Dim(DepReleaseURL(f.Dependency.Hostname, owner+"/"+repo, nil)))
 		}
 	}
 	if IsAlertedCategory(f.Category) && f.Remediation != "" {

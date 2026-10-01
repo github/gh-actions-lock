@@ -15,7 +15,7 @@ import (
 
 type fakeMeta struct{}
 
-func (fakeMeta) RepoIDs(_ context.Context, _, _ string) (int64, int64, error) {
+func (fakeMeta) RepoIDs(_ context.Context, _, _, _ string) (int64, int64, error) {
 	return 1, 2, nil
 }
 

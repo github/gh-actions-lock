@@ -176,6 +176,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if err != nil {
 		return err
 	}
+	if err := store.VerifyLegacyHosts(ctx); err != nil {
+		return err
+	}
 	// Pre-warm resolver caches from the lockfile so repeat runs skip
 	// redundant GraphQL and REST calls. Skipped when --rescan is set:
 	// a full re-verification must hit the network to detect ref movement.
@@ -383,8 +386,26 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		PartialScan: !fullScan,
 	})
 	endPlan()
+	if planErr == nil && len(record.Unresolved()) > 0 {
+		planErr = fmt.Errorf("cannot write an incomplete lockfile: %d unresolved dependencies", len(record.Unresolved()))
+	}
 	if planErr != nil {
 		console.StopProgress()
+		if opts.jsonFields != "" {
+			if err := format.WriteJSON(out, report, false, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+				return err
+			}
+		}
+		if len(record.Unresolved()) > 0 {
+			record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: r.Hostname()}
+			if opts.jsonFields == "" {
+				renderUnresolvedWarnings(console, record.Unresolved())
+			}
+			if path, err := record.WriteJSON(); err == nil && opts.jsonFields == "" {
+				console.TermDetail("Resolution record: %s", path)
+			}
+			return errSilent
+		}
 		return fmt.Errorf("planning pins: %w", planErr)
 	}
 

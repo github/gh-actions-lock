@@ -380,7 +380,7 @@ func renderInvestigationAlerts(console *ui.UI, investigated []pin.Entry, r *reso
 		ui.Pluralize(len(groups), "requires", "require"))
 	for _, g := range groups {
 		dep := g.NWO + "@" + g.Ref
-		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(dep, r.IsKnownTagObject)))
+		console.TermDetail("  %s", console.TermLink(console.TermYellow(dep), format.DepReleaseURL(g.Hostname, dep, r.IsKnownTagObject)))
 		for _, wf := range g.workflows {
 			console.TermDetail("    └─ %s", console.TermDim(wf))
 		}

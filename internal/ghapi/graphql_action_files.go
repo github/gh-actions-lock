@@ -27,6 +27,7 @@ func (r ActionFileRequest) NWO() string { return r.Owner + "/" + r.Repo }
 // for one ActionFileRequest. Err is non-nil when this specific ref could
 // not be resolved (e.g. not found, SSO required).
 type ActionFileResult struct {
+	Hostname  string
 	Owner     string
 	Repo      string
 	Path      string
@@ -67,6 +68,26 @@ type repoResponse struct {
 func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileRequest) []ActionFileResult {
 	if len(refs) == 0 {
 		return nil
+	}
+	if c.local != nil {
+		results := make([]ActionFileResult, len(refs))
+		groups := make(map[*Client][]ActionFileRequest)
+		indices := make(map[*Client][]int)
+		for i, ref := range refs {
+			client, err := c.ForRepo(ctx, ref.Owner, ref.Repo)
+			if err != nil {
+				results[i] = ActionFileResult{Owner: ref.Owner, Repo: ref.Repo, Path: ref.Path, Ref: ref.Ref, Err: err}
+				continue
+			}
+			groups[client] = append(groups[client], ref)
+			indices[client] = append(indices[client], i)
+		}
+		for client, batch := range groups {
+			for j, result := range client.ResolveActionFiles(ctx, batch) {
+				results[indices[client][j]] = result
+			}
+		}
+		return results
 	}
 	if c.restOnly {
 		results := make([]ActionFileResult, len(refs))
@@ -222,7 +243,7 @@ func buildActionFileQuery(refs []ActionFileRequest) (string, map[string]any, map
 func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileRequest, aliasMap map[string]int, gqlErr *api.GraphQLError, hostname string) []ActionFileResult {
 	results := make([]ActionFileResult, len(refs))
 	for i, r := range refs {
-		results[i] = ActionFileResult{Owner: r.Owner, Repo: r.Repo, Path: r.Path, Ref: r.Ref}
+		results[i] = ActionFileResult{Hostname: hostname, Owner: r.Owner, Repo: r.Repo, Path: r.Path, Ref: r.Ref}
 	}
 
 	samlOwners := samlBlockedOwners(gqlErr, refs, aliasMap)
@@ -253,6 +274,23 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 				results[idx].Err = fmt.Errorf("repository not found or not accessible")
 			}
 			continue
+		}
+		if gqlErr != nil {
+			for _, item := range gqlErr.Errors {
+				if len(item.Path) > 0 && item.Path[0] == alias {
+					// Both metadata spellings are queried; either may be absent.
+					// Reusable workflows can have neither.
+					if item.Type == "NOT_FOUND" && len(item.Path) == 3 && item.Path[1] == "object" &&
+						(item.Path[2] == "file" || item.Path[2] == "fileYaml") {
+						continue
+					}
+					results[idx].Err = fmt.Errorf("%s", item.Message)
+					break
+				}
+			}
+			if results[idx].Err != nil {
+				continue
+			}
 		}
 
 		var repo repoResponse
