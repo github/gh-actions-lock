@@ -1,0 +1,96 @@
+# Example: install this as `.github/workflows/actions-lock.yml`
+#
+# Regenerates the Actions lockfile on push and verifies it on pull requests.
+# See docs/repository-developer-experience.md for the rationale.
+#
+# NOTE: handling of job-level reusable workflow calls
+# (jobs.<id>.uses: owner/repo/.github/workflows/x.yml@ref) is still under
+# review. Until that is settled, if this repository calls remote reusable
+# workflows, delete the `update` job below and keep only `verify`.
+
+name: Maintain Actions lockfile
+
+on:
+  push:
+    paths:
+      - ".github/workflows/**"
+      - "**/action.yml"
+      - "**/action.yaml"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "**/action.yml"
+      - "**/action.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actions-lock-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Update lockfile
+    # Tag pushes are excluded: the commit step pushes back to a branch.
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # During public preview, add --pin <tag> to hold a tested release:
+        #   gh extension install github/gh-actions-lock --pin v0.1.6
+        run: gh extension install github/gh-actions-lock
+
+      # Also rewrites workflow refs and migrates same-repo `./…` actions to
+      # `$/…`, so the commit step stages more than just the lockfile.
+      - name: Update lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh actions-lock --no-interactive
+
+      - name: Commit lockfile updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Lockfile is already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Update GitHub Actions lockfile"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # GITHUB_TOKEN pushes do not retrigger workflows, so verify the bot's
+          # own commit explicitly.
+          gh workflow run actions-lock.yml --ref "${GITHUB_REF_NAME}"
+
+  verify:
+    name: Verify lockfile
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh extension install github/gh-actions-lock
+
+      - name: Verify lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh actions-lock --verify

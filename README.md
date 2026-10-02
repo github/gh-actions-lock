@@ -2,8 +2,8 @@
 
 Lock your workflow dependencies.
 
-> [!WARNING]
-> **Technical Preview.** gh-actions-lock is pre-1.0 and under active development. The
+> [!NOTE]
+> **Public preview.** gh-actions-lock is pre-1.0 and under active development. The
 > lockfile format, command flags, and behavior may change without notice between
 > releases. Use it, file issues, and expect rough edges.
 
@@ -83,6 +83,12 @@ A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://gi
 Workflows that are onboarded to the lockfile enforce that all dependencies are present in the lockfile and guarantees that the locked commit for an Action is what's executed on the runner. Lockfiles are also verified for forgeries. The sha must exist in the refs it's stated to exist in. Repository identity is recorded and redirects and mismatches are blocked at runtime. 
 
 Finally, locked actions must have a branch that the commit being locked exists within. This is to make impostor commit style attacks harder.
+
+## Documentation
+
+- [Keeping a repository's Actions lockfile current](./docs/repository-developer-experience.md) — examples of a Copilot skill and workflow that run the CLI when dependencies change.
+- [Dependabot and the Actions lockfile](./docs/dependabot.md) — how Dependabot regenerates lockfile entries when it bumps an action, and how cooldowns fit in.
+- [Rolling out lockfiles across an organization or enterprise](./docs/organization-and-enterprise-rollout.md) — opening lockfile pull requests at scale, tracking them to merge, and enabling the Require lockfile policy.
 
 ## Limitations
 
