@@ -28,7 +28,7 @@ func TestCheckCommand_HelpExplainsHostAndAuthOverrides(t *testing.T) {
 		"Host selection: --hostname, then GH_HOST",
 		"GH_REPO or a remote on a host known to gh",
 		"GH_TOKEN takes precedence over GITHUB_TOKEN",
-		"GH_ENTERPRISE_TOKEN and GITHUB_ENTERPRISE_TOKEN",
+		"GitHub Enterprise Server (GHES) is not supported.",
 		"--hostname selects the host; it does not override token variables.",
 		"env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname TENANT.ghe.com",
 	} {

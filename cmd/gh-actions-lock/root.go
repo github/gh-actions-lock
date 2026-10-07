@@ -85,14 +85,16 @@ lockfile. Pass --no-fix for a read-only check that writes nothing.
 
 HOST AND AUTHENTICATION
 
+Supported targets are github.com and GitHub Enterprise Cloud with data
+residency (*.ghe.com). GitHub Enterprise Server (GHES) is not supported.
+
 In a tenant repository checkout, authenticate with
 gh auth login --hostname TENANT.ghe.com, then run gh actions-lock.
 
 Host selection: --hostname, then GH_HOST, then the current repository
 (GH_REPO or a remote on a host known to gh), then github.com.
 For github.com and *.ghe.com, GH_TOKEN takes precedence over GITHUB_TOKEN
-and stored per-host credentials. For GitHub Enterprise Server, the
-equivalent variables are GH_ENTERPRISE_TOKEN and GITHUB_ENTERPRISE_TOKEN.
+and stored per-host credentials.
 --hostname selects the host; it does not override token variables.
 
 If an unintended token override causes authentication to fail, check

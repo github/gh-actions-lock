@@ -15,6 +15,10 @@ Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get start
 
 ## Requirements
 
+Supported targets are `github.com` and GitHub Enterprise Cloud with data
+residency (`*.ghe.com`), subject to the [availability note below](#github-enterprise-cloud-with-data-residency).
+GitHub Enterprise Server (GHES) is not supported.
+
 Requires the [`gh` CLI](https://cli.github.com/). Install it first, then install the extension:
 
 ```bash
@@ -92,12 +96,8 @@ unambiguous host override:
 gh actions-lock --hostname octocorp.ghe.com --no-interactive
 ```
 
-For the selected host, the first **nonempty** credential source wins:
-
-| Selected host | Credential precedence |
-| --- | --- |
-| `github.com` or `*.ghe.com` (GitHub Enterprise Cloud) | `GH_TOKEN`, then `GITHUB_TOKEN`, then stored credentials for that host |
-| GitHub Enterprise Server, such as `github.example.com` | `GH_ENTERPRISE_TOKEN`, then `GITHUB_ENTERPRISE_TOKEN`, then stored credentials for that host |
+For `github.com` and `*.ghe.com`, the first **nonempty** credential source wins:
+`GH_TOKEN`, then `GITHUB_TOKEN`, then stored credentials for that host.
 
 Stored credentials come from `gh` configuration or its secure credential store.
 `GH_ENTERPRISE_TOKEN` does **not** select credentials for `*.ghe.com`.
@@ -111,7 +111,7 @@ credentials or anonymous access.
 Check which overrides are set without printing their values:
 
 ```bash
-for name in GH_HOST GH_REPO GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN; do
+for name in GH_HOST GH_REPO GH_TOKEN GITHUB_TOKEN; do
   if printenv "$name" >/dev/null; then
     printf '%s is set\n' "$name"
   fi
@@ -145,9 +145,7 @@ env -u GH_HOST -u GH_REPO -u GH_TOKEN -u GITHUB_TOKEN \
 ```
 
 Keep intentional overrides, especially in automation; supply a token valid for
-the selected host instead. For GitHub Enterprise Server, use the corresponding
-`GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` variables when diagnosing
-credential conflicts. Do not share token values or use
+the selected host instead. Do not share token values or use
 `gh auth status --show-token` in diagnostic output. A `403` can also mean missing repository
 access or an organization policy restriction; changing hosts or retrying
 anonymously is not a remedy.
@@ -169,8 +167,7 @@ repository are rejected.
 
 Public fallback uses unauthenticated dotcom requests, subject to GitHub's
 anonymous API rate limit. Tenant tokens and headers are never forwarded to
-dotcom. GitHub Enterprise Server remains host-local and writes v0.0.2, since
-the v0.0.3 hostname field does not support GitHub Enterprise Server hosts.
+dotcom.
 
 If any dependency cannot be resolved, generation exits nonzero without writing
 an incomplete lockfile. `--json` reports `valid: false`. `--verify-local` checks
