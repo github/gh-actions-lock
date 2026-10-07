@@ -2099,7 +2099,7 @@ scenarios:
 
   - name: onboard_roundtrip_v003
     category: onboarding
-    description: "Real-binary onboarding emits v0.0.3 hostnames and a complete live transitive dependency graph"
+    description: "Real-binary dotcom onboarding emits v0.0.3 without hostnames and a complete live transitive dependency graph"
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
@@ -2113,11 +2113,11 @@ scenarios:
       lockfile_deps_cover_indirect: true
       lockfile_contains:
         - "version: 'v0.0.3'"
-        - "hostname: 'github.com'"
         - "ref:"
         - "commit: 'sha1-"
         - "owner_id:"
         - "repo_id:"
+      lockfile_excludes: ["hostname:"]
       lockfile_comment_excludes: '^\s+tag:'
       lockfile_comment_matches: "ref: '"
 

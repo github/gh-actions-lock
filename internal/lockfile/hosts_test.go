@@ -16,6 +16,48 @@ import (
 
 type hostMetadata struct{}
 
+func TestDotcomSaveOmitsHostname(t *testing.T) {
+	for _, version := range []string{"", "v0.0.2", "v0.0.3"} {
+		t.Run("input version="+version, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, parserlock.Path)
+			sha := strings.Repeat("a", 40)
+			if version != "" {
+				hostname := ""
+				if version == "v0.0.3" {
+					hostname = "    hostname: github.com\n"
+				}
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				body := fmt.Sprintf("version: %s\nworkflows:\n  .github/workflows/ci.yml:\n    - o/r@v1\ndependencies:\n  o/r@v1:\n%s    ref: v1\n    commit: sha1-%s\n    owner_id: 1\n    repo_id: 2\n", version, hostname, sha)
+				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+			}
+			store, err := LoadState(dir, hostMetadata{})
+			require.NoError(t, err)
+			require.NoError(t, store.SetHostname("github.com"))
+			if version == "" {
+				require.NoError(t, store.Set(context.Background(), ".github/workflows/ci.yml", []dep.Dependency{
+					{Hostname: "github.com", NWO: "o/r", Ref: "v1", SHA: sha},
+				}, nil, nil))
+			}
+			require.NoError(t, store.Save())
+			raw, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(raw), "version: 'v0.0.3'")
+			assert.NotContains(t, string(raw), "hostname:")
+			reloaded, err := LoadState(dir, nil)
+			require.NoError(t, err)
+			require.Len(t, reloaded.AllDeps(), 1)
+			assert.Equal(t, "github.com", reloaded.AllDeps()[0].Hostname)
+			assert.Equal(t, sha, reloaded.AllDeps()[0].SHA)
+			assert.EqualValues(t, 2, reloaded.File().Dependencies["o/r@v1"].RepoID)
+			require.NoError(t, reloaded.Save())
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, raw, after)
+		})
+	}
+}
+
 func (hostMetadata) RepoIDs(_ context.Context, host, _, _ string) (int64, int64, error) {
 	if host == "tenant.ghe.com" {
 		return 10, 20, nil
@@ -27,6 +69,7 @@ func TestHostScopedMetadataAndPinCollisions(t *testing.T) {
 	dir := t.TempDir()
 	store, err := LoadState(dir, hostMetadata{})
 	require.NoError(t, err)
+	require.NoError(t, store.SetHostname("tenant.ghe.com"))
 	sha := strings.Repeat("a", 40)
 	tenant := dep.Dependency{Hostname: "tenant.ghe.com", NWO: "o/r", Ref: "tenant", SHA: sha}
 	public := dep.Dependency{Hostname: "github.com", NWO: "o/r", Ref: "public", SHA: sha}

@@ -18,7 +18,7 @@ import (
 // can collide with YAML 1.1 booleans ("y", "no", "on", "off"). Schema
 // field names (version, dependencies, workflows, ref, …) stay
 // unquoted because they're hardcoded and trivially safe.
-func marshalDeterministic(file parserlock.File) ([]byte, error) {
+func marshalDeterministic(file parserlock.File, explicitDotcomHost bool) ([]byte, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	addQuotedField(root, "version", file.Version)
 
@@ -57,7 +57,7 @@ func marshalDeterministic(file parserlock.File) ([]byte, error) {
 		for _, k := range keys {
 			a := file.Dependencies[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
-			if file.Version == "v0.0.3" {
+			if file.Version == "v0.0.3" && (explicitDotcomHost || hostOrDotcom(a.Hostname) != "github.com") {
 				addQuotedField(entry, "hostname", hostOrDotcom(a.Hostname))
 			}
 			if a.Ref != "" {

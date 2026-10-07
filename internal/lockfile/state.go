@@ -570,7 +570,7 @@ func (s *State) Save() error {
 		return nil
 	}
 
-	out, err := marshalDeterministic(s.file)
+	out, err := marshalDeterministic(s.file, ghapi.IsProxima(s.hostname))
 	if err != nil {
 		return err
 	}
