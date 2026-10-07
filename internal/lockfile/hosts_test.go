@@ -77,14 +77,18 @@ func TestHostScopedMetadataAndPinCollisions(t *testing.T) {
 	require.NoError(t, store.Save())
 	reloaded, err := LoadState(dir, nil)
 	require.NoError(t, err)
+	require.NoError(t, reloaded.SetHostname("tenant.ghe.com"))
 	file := reloaded.File()
-	assert.Equal(t, "tenant.ghe.com", file.Dependencies["o/r@tenant"].Hostname)
+	assert.Empty(t, file.Dependencies["o/r@tenant"].Hostname)
 	assert.EqualValues(t, 20, file.Dependencies["o/r@tenant"].RepoID)
 	assert.Equal(t, "github.com", file.Dependencies["o/r@public"].Hostname)
 	assert.EqualValues(t, 2, file.Dependencies["o/r@public"].RepoID)
 	deps, err := reloaded.Get(".github/workflows/ci.yml")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"github.com", "tenant.ghe.com"}, []string{deps[0].Hostname, deps[1].Hostname})
+	require.NoError(t, reloaded.Set(context.Background(), ".github/workflows/ci.yml", deps, nil, nil))
+	assert.EqualValues(t, 20, reloaded.File().Dependencies["o/r@tenant"].RepoID)
+	assert.EqualValues(t, 2, reloaded.File().Dependencies["o/r@public"].RepoID)
 
 	public.Ref = tenant.Ref
 	require.ErrorContains(t, store.Set(context.Background(), ".github/workflows/other.yml", []dep.Dependency{public}, nil, nil), "conflicting hosts")
@@ -103,28 +107,59 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 				ref = "tag: v1"
 			}
 			path := filepath.Join(t.TempDir(), "actions.lock")
-			body := fmt.Sprintf("version: %s\nworkflows:\n  .github/workflows/ci.yml:\n    - %s\ndependencies:\n  %s:\n    %s\n    commit: sha1-%s\n    owner_id: 1\n    repo_id: 2\n", version, key, key, ref, strings.Repeat("a", 40))
+			host := "github.com"
+			ownerID, repoID := 1, 2
+			if version == "v0.0.3" {
+				host = "tenant.ghe.com"
+				ownerID, repoID = 10, 20
+			}
+			body := fmt.Sprintf("version: %s\nworkflows:\n  .github/workflows/ci.yml:\n    - %s\ndependencies:\n  %s:\n    %s\n    commit: sha1-%s\n    owner_id: %d\n    repo_id: %d\n", version, key, key, ref, strings.Repeat("a", 40), ownerID, repoID)
 			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 			store, err := LoadStateAt(path, nil)
 			require.NoError(t, err)
 			require.NoError(t, store.SetHostname("tenant.ghe.com"))
 			deps := store.AllDeps()
 			require.Len(t, deps, 1)
-			assert.Equal(t, "github.com", deps[0].Hostname)
+			assert.Equal(t, host, deps[0].Hostname)
+			assert.Equal(t, strings.Repeat("a", 40), deps[0].SHA)
 			store.SetMetadataResolver(hostMetadata{})
-			require.NoError(t, store.VerifyLegacyHosts(context.Background()))
-			if version != "v0.0.3" {
-				action := store.file.Dependencies["o/r@v1"]
-				action.RepoID = 200
-				store.file.Dependencies["o/r@v1"] = action
-				require.ErrorContains(t, store.VerifyLegacyHosts(context.Background()), "regenerate the lockfile")
-			}
+			require.NoError(t, store.VerifyHosts(context.Background()))
 			require.NoError(t, store.Save())
 			raw, err := os.ReadFile(path)
 			require.NoError(t, err)
-			assert.Contains(t, string(raw), "hostname: 'github.com'")
+			assert.Contains(t, string(raw), "version: 'v0.0.3'")
+			if version == "v0.0.3" {
+				assert.NotContains(t, string(raw), "hostname:")
+			} else {
+				assert.Contains(t, string(raw), "hostname: 'github.com'")
+			}
+			action := store.file.Dependencies["o/r@v1"]
+			for _, field := range []string{"owner", "repo"} {
+				t.Run("rejects changed "+field+" ID", func(t *testing.T) {
+					changed := action
+					if field == "owner" {
+						changed.OwnerID = 200
+					} else {
+						changed.RepoID = 200
+					}
+					store.file.Dependencies["o/r@v1"] = changed
+					require.ErrorContains(t, store.VerifyHosts(context.Background()), "regenerate the lockfile")
+				})
+			}
 		})
 	}
+}
+
+func TestSaveRejectsForeignTenant(t *testing.T) {
+	store, err := LoadState(t.TempDir(), hostMetadata{})
+	require.NoError(t, err)
+	require.NoError(t, store.SetHostname("tenant.ghe.com"))
+	require.NoError(t, store.Set(context.Background(), ".github/workflows/ci.yml", []dep.Dependency{
+		{Hostname: "other.ghe.com", NWO: "o/r", Ref: "v1", SHA: strings.Repeat("a", 40)},
+	}, nil, nil))
+	require.ErrorContains(t, store.Save(), "not the home host")
+	_, err = os.Stat(store.lockPath)
+	assert.True(t, os.IsNotExist(err))
 }
 
 func TestGHESKeepsHostLocalFormat(t *testing.T) {

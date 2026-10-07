@@ -121,7 +121,6 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	// legacy mixed-case keys are rewritten on the next Save.
 	normalizedDependencies := make(map[string]parserlock.Action, len(file.Dependencies))
 	for pinKey, action := range file.Dependencies {
-		action.Hostname = hostOrDotcom(action.Hostname)
 		pin, ok := parserlock.ParsePin(pinKey)
 		if !ok {
 			normalizedDependencies[pinKey] = action
@@ -157,13 +156,19 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	return s, nil
 }
 
-// SetHostname preserves the legacy host-local format on GHES, whose hostnames
-// are not supported by the v0.0.3 schema.
+// SetHostname binds omitted v0.0.3 hostnames to the invocation's home host.
+// Legacy pins retain the SDK's explicit github.com binding.
 func (s *State) SetHostname(hostname string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.hostname = hostname
 	if hostname == "github.com" || ghapi.IsProxima(hostname) {
+		s.idCache = map[string][2]int64{}
+		for key, action := range s.file.Dependencies {
+			if pin, ok := parserlock.ParsePin(key); ok && action.OwnerID != 0 && action.RepoID != 0 {
+				s.idCache[repoIDKey(s.hostOrHome(action.Hostname), pin.Owner, pin.Repo)] = [2]int64{action.OwnerID, action.RepoID}
+			}
+		}
 		return nil
 	}
 	if s.originalVersion == "v0.0.3" {
@@ -205,12 +210,12 @@ func (s *State) SetMetadataResolver(meta MetadataResolver) {
 	s.meta = meta
 }
 
-// VerifyLegacyHosts prevents old tenant-generated pins from being relabeled as
-// dotcom pins during migration. Legacy schemas carry no host provenance.
-func (s *State) VerifyLegacyHosts(ctx context.Context) error {
+// VerifyHosts checks recorded identities before trusting pins on Proxima.
+// Older producers used omission for dotcom, not the home tenant.
+func (s *State) VerifyHosts(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !ghapi.IsProxima(s.hostname) || s.originalVersion == "" || s.originalVersion == "v0.0.3" {
+	if !ghapi.IsProxima(s.hostname) || s.originalVersion == "" {
 		return nil
 	}
 	for key, action := range s.file.Dependencies {
@@ -221,12 +226,13 @@ func (s *State) VerifyLegacyHosts(ctx context.Context) error {
 		if !ok {
 			return fmt.Errorf("invalid dependency %q", key)
 		}
-		ownerID, repoID, err := s.meta.RepoIDs(ctx, "github.com", pin.Owner, pin.Repo)
+		hostname := s.hostOrHome(action.Hostname)
+		ownerID, repoID, err := s.meta.RepoIDs(ctx, hostname, pin.Owner, pin.Repo)
 		if err != nil {
-			return fmt.Errorf("verifying legacy dotcom identity for %s: %w", key, err)
+			return fmt.Errorf("verifying repository identity for %s on %s: %w", key, hostname, err)
 		}
 		if ownerID != action.OwnerID || repoID != action.RepoID {
-			return fmt.Errorf("legacy dependency %s does not match its github.com repository IDs; regenerate the lockfile with the selected hostname", key)
+			return fmt.Errorf("dependency %s does not match its %s repository IDs; restore a lockfile for this host or regenerate the lockfile after reviewing the dependency", key, hostname)
 		}
 	}
 	return nil
@@ -295,7 +301,7 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 		}
 		d := pinToDep(pin)
 		if action, found := s.file.Dependencies[raw]; found {
-			d.Hostname = action.Hostname
+			d.Hostname = s.hostOrHome(action.Hostname)
 			d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
 			if idx := strings.Index(action.Commit, "-"); idx >= 0 {
 				d.HashAlgo = action.Commit[:idx]
@@ -321,7 +327,7 @@ func (s *State) AllDeps() []dep.Dependency {
 			continue
 		}
 		d := pinToDep(pin)
-		d.Hostname = action.Hostname
+		d.Hostname = s.hostOrHome(action.Hostname)
 		d.Tag, d.Branch = parserlock.SplitRef(action.Ref)
 		if idx := strings.Index(action.Commit, "-"); idx >= 0 {
 			d.HashAlgo = action.Commit[:idx]
@@ -403,8 +409,8 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		if hostname == "" {
 			hostname = s.hostname
 		}
-		if existing, ok := s.file.Dependencies[pinKey]; ok && hostOrDotcom(existing.Hostname) != hostname {
-			return fmt.Errorf("dependency %s has conflicting hosts %s and %s", pinKey, hostOrDotcom(existing.Hostname), hostname)
+		if existing, ok := s.file.Dependencies[pinKey]; ok && s.hostOrHome(existing.Hostname) != hostname {
+			return fmt.Errorf("dependency %s has conflicting hosts %s and %s", pinKey, s.hostOrHome(existing.Hostname), hostname)
 		}
 		keyToPin[d.Key()] = pinKey
 		var isDirect bool
@@ -570,7 +576,7 @@ func (s *State) Save() error {
 		return nil
 	}
 
-	out, err := marshalDeterministic(s.file, ghapi.IsProxima(s.hostname))
+	out, err := marshalDeterministic(s.file, s.hostname)
 	if err != nil {
 		return err
 	}
@@ -635,6 +641,13 @@ func (s *State) lookupIDs(ctx context.Context, hostname, owner, repo string) ([2
 func hostOrDotcom(hostname string) string {
 	if hostname == "" {
 		return "github.com"
+	}
+	return hostname
+}
+
+func (s *State) hostOrHome(hostname string) string {
+	if hostname == "" {
+		return s.hostname
 	}
 	return hostname
 }

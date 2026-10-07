@@ -176,7 +176,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if err != nil {
 		return err
 	}
-	if err := store.VerifyLegacyHosts(ctx); err != nil {
+	if err := store.VerifyHosts(ctx); err != nil {
 		return err
 	}
 	// Pre-warm resolver caches from the lockfile so repeat runs skip

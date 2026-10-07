@@ -62,6 +62,9 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 	if err != nil {
 		return fmt.Errorf("opening lockfile: %w", err)
 	}
+	if err := store.SetHostname(resolveHostname(opts.hostname)); err != nil {
+		return err
+	}
 
 	parsed := pipeline.ParseAll(paths, store)
 	report := pipeline.VerifyLocalCoverage(parsed, store)
