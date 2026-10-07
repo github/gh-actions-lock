@@ -83,6 +83,25 @@ Scans all workflows under .github/workflows/ by default and fixes
 what it can — pinning every resolvable action and updating the
 lockfile. Pass --no-fix for a read-only check that writes nothing.
 
+HOST AND AUTHENTICATION
+
+In a tenant repository checkout, authenticate with
+gh auth login --hostname TENANT.ghe.com, then run gh actions-lock.
+
+Host selection: --hostname, then GH_HOST, then the current repository
+(GH_REPO or a remote on a host known to gh), then github.com.
+For github.com and *.ghe.com, GH_TOKEN takes precedence over GITHUB_TOKEN
+and stored per-host credentials. For GitHub Enterprise Server, the
+equivalent variables are GH_ENTERPRISE_TOKEN and GITHUB_ENTERPRISE_TOKEN.
+--hostname selects the host; it does not override token variables.
+
+If an unintended token override causes authentication to fail, check
+stored tenant credentials without exposing tokens:
+  env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname TENANT.ghe.com
+
+For setup and troubleshooting:
+  https://github.com/github/gh-actions-lock#github-enterprise-cloud-with-data-residency
+
 REF NARROWING
 
 When a new workflow is first pinned and uses a partial version ref

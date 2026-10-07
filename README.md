@@ -50,11 +50,109 @@ those as well.
 
 ### GitHub Enterprise Cloud with data residency
 
-Select your tenant with `--hostname` or `GH_HOST`:
+> [!IMPORTANT]
+> Hostname-aware tenant/public resolution is not yet released. It is being
+> developed in [#137](https://github.com/github/gh-actions-lock/pull/137);
+> neither v0.1.6 nor v0.1.7-rc.1 includes it. Installing or upgrading the
+> published extension does not install this draft implementation.
+
+With a build that includes this support, authenticate `gh` to your tenant, then
+run the extension from your tenant repository checkout:
+
+```bash
+gh auth login --hostname octocorp.ghe.com
+# From the repository checkout:
+gh actions-lock
+```
+
+With no conflicting environment overrides, the CLI infers the host from the
+repository remote and uses the credentials stored by `gh` for that host. You do
+not need to export a token or pass `--hostname` on every run. The account must
+have read access to the tenant repositories used by your workflows.
+
+#### Host and credential overrides
+
+Host selection and credential selection are separate. Host selection uses the
+first available source:
+
+1. `--hostname`.
+2. `GH_HOST`.
+3. The current repository from `gh`: `GH_REPO` if set, otherwise a remote on a
+   host known to `gh`. Among eligible remotes, `upstream` takes precedence over
+   `github`, then `origin`.
+4. `github.com` if the current repository cannot be determined.
+
+A host-qualified `GH_REPO` such as `octocorp.ghe.com/OWNER/REPO` overrides remote
+discovery. An unqualified `OWNER/REPO` uses `gh`'s default host: the sole
+configured host if there is one, otherwise `github.com` (unless `GH_HOST` is set).
+Authenticate to the tenant before relying on remote discovery. For an
+unambiguous host override:
 
 ```bash
 gh actions-lock --hostname octocorp.ghe.com --no-interactive
 ```
+
+For the selected host, the first **nonempty** credential source wins:
+
+| Selected host | Credential precedence |
+| --- | --- |
+| `github.com` or `*.ghe.com` (GitHub Enterprise Cloud) | `GH_TOKEN`, then `GITHUB_TOKEN`, then stored credentials for that host |
+| GitHub Enterprise Server, such as `github.example.com` | `GH_ENTERPRISE_TOKEN`, then `GITHUB_ENTERPRISE_TOKEN`, then stored credentials for that host |
+
+Stored credentials come from `gh` configuration or its secure credential store.
+`GH_ENTERPRISE_TOKEN` does **not** select credentials for `*.ghe.com`.
+Conversely, a dotcom `GH_TOKEN` can override valid stored tenant credentials
+and cause a tenant `401`. `--hostname` does not override token environment
+variables. For tenant requests, a rejected token is not retried using stored
+credentials or anonymous access.
+
+#### Diagnose authentication without exposing tokens
+
+Check which overrides are set without printing their values:
+
+```bash
+for name in GH_HOST GH_REPO GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN; do
+  if printenv "$name" >/dev/null; then
+    printf '%s is set\n' "$name"
+  fi
+done
+```
+
+If the overrides are unintended, test stored tenant credentials with a
+command-scoped clean environment. These commands do not change your shell's
+environment or print token values:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN \
+  gh auth status --hostname octocorp.ghe.com
+env -u GH_TOKEN -u GITHUB_TOKEN \
+  gh api --hostname octocorp.ghe.com user --silent
+```
+
+If needed, sign in without the conflicting token overrides:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN \
+  gh auth login --hostname octocorp.ghe.com
+```
+
+Then, from the tenant checkout, bypass unintended host, repository, and token
+overrides for a read-only remote check:
+
+```bash
+env -u GH_HOST -u GH_REPO -u GH_TOKEN -u GITHUB_TOKEN \
+  gh actions-lock --hostname octocorp.ghe.com --rescan --no-fix
+```
+
+Keep intentional overrides, especially in automation; supply a token valid for
+the selected host instead. For GitHub Enterprise Server, use the corresponding
+`GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` variables when diagnosing
+credential conflicts. Do not share token values or use
+`gh auth status --show-token` in diagnostic output. A `403` can also mean missing repository
+access or an organization policy restriction; changing hosts or retrying
+anonymously is not a remedy.
+
+#### Resolution and lockfile behavior
 
 New dependencies resolve on the tenant first. Only a repository-level `404`
 permits fallback to a **public** repository on `github.com`. A tenant repository
