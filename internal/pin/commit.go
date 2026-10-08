@@ -30,6 +30,10 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		progress = copts.OnProgress
 	}
 
+	if err := validateRequiredRewrites(rec.Workflows); err != nil {
+		return err
+	}
+
 	// Phase 1: Rewrite workflow files (uses: line changes).
 	if len(rec.Workflows) > 0 {
 		progress("Rewriting workflows")
@@ -83,6 +87,35 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		return fmt.Errorf("saving lockfile: %w", err)
 	}
 
+	return nil
+}
+
+func validateRequiredRewrites(plans []WorkflowPlan) error {
+	for _, wp := range plans {
+		if len(wp.RequiredRewrites) == 0 {
+			continue
+		}
+		found := make(map[string]int)
+		paths := append([]string{wp.Path}, wp.SelfActionFiles...)
+		for _, path := range paths {
+			wf, err := workflowfile.Load(path)
+			if err != nil {
+				return fmt.Errorf("validating required rewrites in %s: %w", path, err)
+			}
+			matches, err := wf.ValidateRequiredActionRefRewrites(wp.RequiredRewrites)
+			if err != nil {
+				return fmt.Errorf("validating required rewrites in %s: %w", path, err)
+			}
+			for oldUse, count := range matches {
+				found[oldUse] += count
+			}
+		}
+		for oldUse := range wp.RequiredRewrites {
+			if found[oldUse] == 0 {
+				return fmt.Errorf("required action rewrite for %s was not found in writable workflow sources", oldUse)
+			}
+		}
+	}
 	return nil
 }
 

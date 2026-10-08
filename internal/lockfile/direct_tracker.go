@@ -34,6 +34,9 @@ func NewDirectTracker(refs []parserlock.ActionRef, deps []dep.Dependency) Direct
 	direct := make([]bool, len(deps))
 	for i, d := range deps {
 		direct[i] = want[d.Key()]
+		for _, ref := range d.OriginalRefs {
+			direct[i] = direct[i] || want[ref.NWO()+"@"+ref.Ref]
+		}
 	}
 	return DirectTracker{direct: direct}
 }

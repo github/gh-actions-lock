@@ -180,6 +180,11 @@ func (r *Resolver) RepoIDs(ctx context.Context, hostname, owner, repo string) (i
 	return client.RepoIDs(ctx, owner, repo)
 }
 
+// CanonicalNWO returns the repository's current owner/name.
+func (r *Resolver) CanonicalNWO(ctx context.Context, owner, repo string) (string, error) {
+	return r.gh.CanonicalNWO(ctx, owner, repo)
+}
+
 // branchHint returns the branch previously recorded as containing sha in
 // owner/repo, or "" if no hint exists.
 func (r *Resolver) branchHint(owner, repo, sha string) string {

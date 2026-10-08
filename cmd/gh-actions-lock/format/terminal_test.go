@@ -609,6 +609,18 @@ func TestPresentReadOnlyFailures_FixableReported(t *testing.T) {
 	}
 }
 
+func TestTransferredRepositoryAutoFixableOnlyWhenWritable(t *testing.T) {
+	direct := checks.Finding{Category: checks.RefChanged}
+	remote := checks.Finding{Category: checks.RefChanged, ParentNWO: "root/composite@v2"}
+
+	if !IsAutoFixable(direct) {
+		t.Fatal("direct transfer should be auto-fixable")
+	}
+	if IsAutoFixable(remote) {
+		t.Fatal("remote transfer should not be auto-fixable")
+	}
+}
+
 // TestPresentReadOnlyFailures_ValidReportSilent verifies a clean report
 // produces no output and reports nothing fixable.
 func TestPresentReadOnlyFailures_ValidReportSilent(t *testing.T) {

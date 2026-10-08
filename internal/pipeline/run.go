@@ -2,15 +2,18 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // RunOptions configures the Run pipeline.
@@ -56,9 +59,29 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Immutable full-semver pins (e.g. v4.2.1) are NOT trusted blindly:
 	// they're routed through live resolution + ancestry so a stale or
 	// unreachable pin is caught on the default path, not just under
-	// --rescan. Mutable recorded refs (v4, v4.2, branches) legitimately
-	// move, so they stay trusted (seeded from the lockfile) until --rescan.
+	// --rescan. Mutable recorded refs (v4, v4.2, branches) legitimately move,
+	// so they stay trusted after a cheap repository identity check confirms
+	// the NWO.
 	skippedRescan := 0
+	fastPlans := make([]fastPathPlan, len(parsed))
+	identityRefs := make([][]repositoryIdentityRef, len(parsed))
+	var lockSnapshot parserlock.File
+	if opts.Store != nil {
+		lockSnapshot = opts.Store.File()
+	}
+	homeHostname := ""
+	if r != nil {
+		homeHostname = r.Hostname()
+	}
+	for i := range parsed {
+		if len(parsed[i].LocalPaths) == 0 &&
+			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
+			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
+			fastPlans[i] = planFastPath(parsed[i])
+			identityRefs[i] = repositoryIdentityRefs(parsed[i].Path, lockSnapshot, homeHostname)
+		}
+	}
+	repositoryIdentities := lookupRepositoryIdentities(ctx, r, opts.Pool, identityRefs)
 	var seedDeps []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	for i := range parsed {
@@ -73,9 +96,29 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		if opts.Rescan {
 			continue
 		}
-		plan := planFastPath(parsed[i])
-		// Mutable recorded refs are trusted without a live re-check
-		// (surfaced in the summary so the operator can --rescan them).
+		plan := fastPlans[i]
+		trustedMutable := plan.mutableRefs[:0]
+		for _, ref := range plan.mutableRefs {
+			identityRef := lockedRepositoryIdentity(identityRefs[i], ref)
+			identity := repositoryIdentities[repositoryIdentityKey(identityRef.Hostname, ref)]
+			if identity.matches(ref.NWO(), identityRef.RepoID) {
+				trustedMutable = append(trustedMutable, ref)
+			}
+		}
+		for _, item := range identityRefs[i] {
+			if item.Parent == "" {
+				continue
+			}
+			identity := repositoryIdentities[repositoryIdentityKey(item.Hostname, item.Ref)]
+			if !identity.matches(item.Ref.NWO(), item.RepoID) {
+				trustedMutable = nil
+				break
+			}
+		}
+		plan.resolved = plan.resolved && len(trustedMutable) == len(plan.mutableRefs)
+		plan.mutableRefs = trustedMutable
+		// Mutable recorded refs are trusted without live action resolution
+		// after the repository identity check above.
 		skippedRescan += len(plan.mutableRefs)
 		if plan.resolved {
 			parsed[i].Resolved = true
@@ -145,6 +188,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Phase 3: Diagnose.
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
+	appendKnownRepositoryIdentityFindings(report, identityRefs, repositoryIdentities)
 	endDiag()
 	valid := report.IsValid()
 
@@ -155,6 +199,183 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}, nil
 }
 
+type repositoryIdentityRef struct {
+	Ref      parserlock.ActionRef
+	Hostname string
+	Parent   string
+	RepoID   int64
+}
+
+func repositoryIdentityRefs(path string, file parserlock.File, homeHostname string) []repositoryIdentityRef {
+	var refs []repositoryIdentityRef
+	index := make(map[ghapi.NWORef]int)
+	add := func(ref parserlock.ActionRef, hostname, parent string, repoID int64) {
+		key := ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)
+		if i, ok := index[key]; ok {
+			if hostname != "" {
+				refs[i].Hostname = hostname
+			}
+			if parent != "" {
+				refs[i].Parent = parent
+			}
+			if repoID != 0 {
+				refs[i].RepoID = repoID
+			}
+			return
+		}
+		index[key] = len(refs)
+		refs = append(refs, repositoryIdentityRef{Ref: ref, Hostname: hostname, Parent: parent, RepoID: repoID})
+	}
+	seen := make(map[string]bool)
+	var walk func(string, string)
+	walk = func(pinKey, parent string) {
+		if seen[pinKey] {
+			return
+		}
+		seen[pinKey] = true
+		pin, ok := parserlock.ParsePin(pinKey)
+		if !ok {
+			return
+		}
+		action := file.Dependencies[pinKey]
+		hostname := action.Hostname
+		if hostname == "" {
+			hostname = homeHostname
+		}
+		add(parserlock.ActionRef{Owner: pin.Owner, Repo: pin.Repo, Ref: pin.Ref}, hostname, parent, action.RepoID)
+		for _, child := range action.Uses {
+			walk(child, pinKey)
+		}
+	}
+	for _, root := range file.Workflows[workflowfile.KeyFromPath(path)] {
+		walk(root, "")
+	}
+	return refs
+}
+
+type repositoryIdentity struct {
+	canonical string
+	repoID    int64
+}
+
+func (i repositoryIdentity) matches(nwo string, repoID int64) bool {
+	return i.canonical != "" && strings.EqualFold(i.canonical, nwo) &&
+		(repoID == 0 || i.repoID == repoID)
+}
+
+func lockedRepositoryIdentity(refs []repositoryIdentityRef, ref parserlock.ActionRef) repositoryIdentityRef {
+	key := ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)
+	for _, item := range refs {
+		if ghapi.ForNWORef(item.Ref.Owner, item.Ref.Repo, item.Ref.Ref) == key {
+			return item
+		}
+	}
+	return repositoryIdentityRef{Ref: ref}
+}
+
+func repositoryIdentityKey(hostname string, ref parserlock.ActionRef) string {
+	return strings.ToLower(hostname + "/" + ref.NWO())
+}
+
+func lookupRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *pinpool.Pool, workflows [][]repositoryIdentityRef) map[string]repositoryIdentity {
+	type indexedRef struct {
+		idx int
+		ref repositoryIdentityRef
+	}
+	var repos []indexedRef
+	seen := make(map[string]bool)
+	for _, identities := range workflows {
+		for _, item := range identities {
+			if item.Hostname == "" && r != nil {
+				item.Hostname = r.Hostname()
+			}
+			key := repositoryIdentityKey(item.Hostname, item.Ref)
+			if !seen[key] {
+				seen[key] = true
+				repos = append(repos, indexedRef{idx: len(repos), ref: item})
+			}
+		}
+	}
+	results := make([]repositoryIdentity, len(repos))
+	if r != nil {
+		_ = pinpool.RunTyped(pool, ctx, "", repos,
+			func(indexedRef) string { return "" },
+			func(ctx context.Context, _ int, item indexedRef) error {
+				ref := item.ref.Ref
+				canonical, err := r.CanonicalNWO(ctx, ref.Owner, ref.Repo)
+				if err == nil {
+					results[item.idx].canonical = canonical
+					_, repoID, idErr := r.RepoIDs(ctx, item.ref.Hostname, ref.Owner, ref.Repo)
+					if idErr == nil {
+						results[item.idx].repoID = repoID
+					}
+				}
+				return nil
+			},
+		)
+	}
+	identities := make(map[string]repositoryIdentity, len(repos))
+	for _, item := range repos {
+		identities[repositoryIdentityKey(item.ref.Hostname, item.ref.Ref)] = results[item.idx]
+	}
+	return identities
+}
+
+func appendKnownRepositoryIdentityFindings(report *checks.Report, workflows [][]repositoryIdentityRef, identities map[string]repositoryIdentity) {
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		for _, item := range workflows[i] {
+			ref := item.Ref
+			identity := identities[repositoryIdentityKey(item.Hostname, ref)]
+			if identity.canonical == "" {
+				continue
+			}
+			if strings.EqualFold(identity.canonical, ref.NWO()) {
+				if item.RepoID != 0 && identity.repoID != 0 && identity.repoID != item.RepoID {
+					wr.Findings = append(wr.Findings, checks.Finding{
+						WorkflowPath: wr.Path,
+						Category:     checks.RepositoryChanged,
+						Severity:     checks.SeverityError,
+						Confidence:   checks.ConfidenceHigh,
+						ActionRef:    &ref,
+						Detail:       fmt.Sprintf("repository identity changed for %s: the lockfile records repository ID %d, but the current repository ID is %d. This may indicate a namespace takeover", ref.NWO(), item.RepoID, identity.repoID),
+						Remediation:  fmt.Sprintf("review %s before trusting it. If the replacement is expected, remove its lockfile entry and run `gh actions-lock` again", ref.NWO()),
+					})
+				}
+				continue
+			}
+			if resolvedTransfer(wr.ResolvedDeps, ref) {
+				continue
+			}
+			known := dep.Dependency{
+				Hostname:     item.Hostname,
+				NWO:          identity.canonical,
+				Ref:          ref.Ref,
+				OriginalRefs: []parserlock.ActionRef{ref},
+			}
+			wr.ResolvedDeps = append(wr.ResolvedDeps, known)
+			if item.Parent != "" {
+				if wr.ResolvedParents == nil {
+					wr.ResolvedParents = make(dep.ParentMap)
+				}
+				wr.ResolvedParents[ref.NWO()+"@"+ref.Ref] = []string{item.Parent}
+			}
+			appendTransferredRepositoryFindings(wr, []dep.Dependency{known}, wr.ResolvedParents)
+		}
+	}
+}
+
+func resolvedTransfer(deps []dep.Dependency, original parserlock.ActionRef) bool {
+	for _, d := range deps {
+		for _, ref := range d.OriginalRefs {
+			if strings.EqualFold(ref.NWO(), original.NWO()) && ref.Ref == original.Ref {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // fastPathPlan describes how the pre-resolution fast path treats one
 // recorded workflow.
 type fastPathPlan struct {
@@ -162,8 +383,8 @@ type fastPathPlan struct {
 	// no refs, is a local-path action, or every recorded ref is a trusted
 	// mutable pin.
 	resolved bool
-	// mutableRefs are recorded refs (v4, v4.2, branches) trusted from the
-	// lockfile without a live re-check.
+	// mutableRefs are recorded refs (v4, v4.2, branches) eligible for trust
+	// from the lockfile after their repository identities are validated.
 	mutableRefs []parserlock.ActionRef
 }
 

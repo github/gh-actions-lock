@@ -70,6 +70,8 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	investigated := record.Investigated()
 	narrowed := record.Narrowed()
 
+	renderTransferredRepositories(console, report)
+
 	if len(pinned) > 0 {
 		console.TermBlank()
 		renderPinnedEntries(console, pinned)
@@ -162,6 +164,21 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 		return errSilent
 	}
 	return nil
+}
+
+func renderTransferredRepositories(console *ui.UI, report *checks.Report) {
+	seen := map[string]bool{}
+	for _, wr := range report.Workflows {
+		for _, d := range wr.ResolvedDeps {
+			for _, ref := range d.OriginalRefs {
+				change := ref.NWO() + " → " + d.NWO
+				if !seen[change] {
+					seen[change] = true
+					console.TermSuccess("Action repository transferred: %s", change)
+				}
+			}
+		}
+	}
 }
 
 // renderCooldownFindings surfaces the fresh-tag nudge on the terminal in fix

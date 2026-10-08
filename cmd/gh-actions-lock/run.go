@@ -227,10 +227,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if opts.acceptMoved || opts.relock {
 		opts.rescan = true
 	}
-	trustLockfileCaches := !opts.rescan
-	if trustLockfileCaches {
-		r.SeedFromLockfile(store.AllDeps())
-	}
 	endSetup()
 
 	opts.workflowPaths = paths

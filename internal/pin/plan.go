@@ -8,6 +8,7 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -142,17 +143,36 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		if finding.Category == checks.InvalidSelfRepositoryRef {
 			return planResult{}, nil
 		}
+		if finding.Category == checks.RepositoryChanged {
+			return planResult{}, fmt.Errorf("%s; %s", finding.Detail, finding.Remediation)
+		}
 	}
 	rewriteRefs := wr.RewriteRefs
 	if rewriteRefs == nil {
 		rewriteRefs = wr.ActionRefs
 	}
+	resolvedTracker := lockfile.NewDirectTracker(rewriteRefs, wr.ResolvedDeps)
+	_, transferErr := validateTransferredRepositories(wr.ResolvedDeps, resolvedTracker, wr.ResolvedParents)
+	if transferErr != nil {
+		return planResult{}, transferErr
+	}
+	hasTransfer := false
+	knownTransfersNeedingResolution := make(map[ghapi.NWORef]bool)
+	for _, d := range wr.ResolvedDeps {
+		hasTransfer = hasTransfer || len(d.OriginalRefs) > 0
+		if d.SHA == "" {
+			for _, ref := range d.OriginalRefs {
+				knownTransfersNeedingResolution[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+			}
+		}
+	}
+
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
 	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
 
-	if !wr.NeedsAttention() && !repinMoved {
+	if !wr.NeedsAttention() && !repinMoved && !hasTransfer {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
 		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
@@ -189,6 +209,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
+	if hasTransfer {
+		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
+		entries = verifiedEntries(nil, wr.Path)
+	}
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
@@ -203,6 +227,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
+		for _, d := range deps {
+			for _, ref := range d.OriginalRefs {
+				delete(knownTransfersNeedingResolution, ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref))
+			}
+		}
+		if len(knownTransfersNeedingResolution) > 0 {
+			return planResult{}, fmt.Errorf("resolving transferred repository: %w", resolveErr)
+		}
 		// A resolved root is not pinnable when its transitive graph is incomplete.
 		for _, ref := range unrecordedRefs {
 			entries = append(entries, Entry{
@@ -220,6 +252,11 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// workflow YAML.
 	rootTracker := lockfile.NewDirectTracker(unrecordedRefs, deps)
 	rewriteTracker := lockfile.NewDirectTracker(rewriteRefs, deps)
+	canonicalRekeys, err := validateTransferredRepositories(deps, rewriteTracker, parentMap)
+	if err != nil {
+		return planResult{}, err
+	}
+	parentMap = dep.RekeyParentMap(parentMap, canonicalRekeys)
 
 	// Narrow mutable version tags to exact patch tags.
 	status("pinning " + wr.Path)
@@ -258,12 +295,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			}
 		}
 		deps = filtered
-		// Rebuild the root tracker against the filtered slice.
+		// Filtering changes indices, so both index-aligned trackers must follow.
 		rootTracker = lockfile.NewDirectTracker(unrecordedRefs, deps)
+		rewriteTracker = lockfile.NewDirectTracker(rewriteRefs, deps)
 	}
 	for k, v := range rlRewrites {
 		rewrites[k] = v
 	}
+	requiredRewrites := addTransferredRepositoryRewrites(deps, rewriteTracker, rewrites)
 
 	// Update parent map keys to reflect narrowed/normalized refs.
 	parentRewrites := make(map[string]string)
@@ -295,9 +334,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
-			Path:            wr.Path,
-			Rewrites:        rewrites,
-			SelfActionFiles: wr.SelfActionFiles,
+			Path:             wr.Path,
+			Rewrites:         rewrites,
+			RequiredRewrites: requiredRewrites,
+			SelfActionFiles:  wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
@@ -329,6 +369,51 @@ func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlo
 		}
 	}
 	return nil
+}
+
+func validateTransferredRepositories(deps []dep.Dependency, directTracker lockfile.DirectTracker, parentMap dep.ParentMap) (map[string]string, error) {
+	rekeys := make(map[string]string)
+	for i, d := range deps {
+		for _, ref := range d.OriginalRefs {
+			oldKey := ref.NWO() + "@" + ref.Ref
+			if parents := parentMap[oldKey]; len(parents) > 0 {
+				return nil, &resolve.TransferredRepositoryError{
+					Original:  ref.NWO(),
+					Canonical: d.NWO,
+					Parent:    parents[0],
+				}
+			}
+			if !directTracker.IsDirect(i) {
+				return nil, &resolve.TransferredRepositoryError{
+					Original:  ref.NWO(),
+					Canonical: d.NWO,
+					Parent:    "unknown",
+				}
+			}
+			rekeys[oldKey] = d.Key()
+		}
+	}
+	return rekeys, nil
+}
+
+func addTransferredRepositoryRewrites(deps []dep.Dependency, directTracker lockfile.DirectTracker, rewrites map[string]string) map[string]string {
+	required := make(map[string]string)
+	for i, d := range deps {
+		if !directTracker.IsDirect(i) {
+			continue
+		}
+		for _, ref := range d.OriginalRefs {
+			newUse := d.NWO
+			if ref.Path != "" {
+				newUse += "/" + ref.Path
+			}
+			oldUse := ref.FullName() + "@" + ref.Ref
+			newUse += "@" + d.Ref
+			rewrites[oldUse] = newUse
+			required[oldUse] = newUse
+		}
+	}
+	return required
 }
 
 // narrowDirectDeps rewrites direct partial semver refs to exact patch tags,

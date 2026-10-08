@@ -181,7 +181,7 @@ dependencies:
 
 	_, _, err = runCommandWithHTTP(t, transport)
 	require.NoError(t, err)
-	assert.Zero(t, transport.calls.Load())
+	assert.Positive(t, transport.calls.Load(), "recorded repositories must still revalidate identity")
 
 	action, err = os.ReadFile(actionPath)
 	require.NoError(t, err)
