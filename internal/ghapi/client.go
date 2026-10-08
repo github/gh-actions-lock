@@ -132,7 +132,6 @@ func newClient(hostname string, opts ...ClientOption) (*Client, error) {
 		// Integration tests: skip TLS verification when GH_ACTIONS_LOCK_INSECURE is set.
 		if os.Getenv("GH_ACTIONS_LOCK_INSECURE") != "" {
 			base = &http.Transport{
-				Proxy:           http.ProxyFromEnvironment,
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // integration tests only
 			}
 		}

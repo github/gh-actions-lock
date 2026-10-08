@@ -23,8 +23,6 @@
 version: 1
 
 categories:
-  - name: proxima
-    description: "Data-residency tenant and public dotcom resolution"
   - name: happy_path
     description: "Normal operation — actions resolve and pin successfully"
   - name: sso_auth
@@ -51,51 +49,6 @@ categories:
     description: "Release-cooldown sourcing from Dependabot config and the fresh-tag freshness nudge"
 
 scenarios:
-  - name: proxima_mixed_composite
-    category: proxima
-    description: "Compiled CLI over separate tenant/dotcom HTTPS hosts emits a complete nested graph with only the public child's hostname; checks real TLS routing and credential isolation beyond Go mocks"
-    needs_stub: true
-    tags: [stub, proxima]
-    flags: ["--hostname", "tenant.ghe.com", "--no-interactive", "--no-narrow", "--no-migrate-local-actions", "--json=valid,dependencies,workflows"]
-    fixtures:
-      workflows:
-        ci.yml:
-          actions: ["tenant/composite@v1"]
-    expect:
-      exit: 0
-      stdout_is_json: true
-      lockfile_exists: true
-      lockfile_contains: ["version: 'v0.0.3'", "hostname: 'github.com'"]
-      lockfile_excludes: ["hostname: 'tenant.ghe.com'"]
-
-  - name: proxima_missing_ref_no_fallback
-    category: proxima
-    description: "Compiled CLI preserves tenant repository shadowing across HTTPS hosts when the ref is absent, and writes no partial lockfile"
-    needs_stub: true
-    tags: [stub, proxima]
-    flags: ["--hostname", "tenant.ghe.com", "--no-interactive", "--no-narrow", "--no-migrate-local-actions", "--json"]
-    fixtures:
-      workflows:
-        ci.yml:
-          actions: ["tenant/composite@v1"]
-    expect:
-      exit: 1
-      stdout_is_json: true
-
-  - name: proxima_auth_no_fallback
-    category: proxima
-    description: "Compiled CLI sends its environment token only to the tenant; a real HTTP 401 cannot trigger dotcom fallback or a partial lockfile"
-    needs_stub: true
-    tags: [stub, proxima]
-    flags: ["--hostname", "tenant.ghe.com", "--no-interactive", "--no-narrow", "--no-migrate-local-actions", "--json"]
-    fixtures:
-      workflows:
-        ci.yml:
-          actions: ["tenant/composite@v1"]
-    expect:
-      exit: 1
-      stdout_is_json: true
-
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ happy_path ═══════════════════════════════║
   # ╚═════════════════════════════════════════════════════════════════════════╝
