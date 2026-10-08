@@ -57,11 +57,14 @@ func marshalDeterministic(file parserlock.File, homeHost string) ([]byte, error)
 		for _, k := range keys {
 			a := file.Dependencies[k]
 			entry := &yaml.Node{Kind: yaml.MappingNode}
-			if file.Version == "v0.0.3" && a.Hostname != "" && a.Hostname != homeHost {
-				if a.Hostname != "github.com" {
+			hostname := hostOrDotcom(a.Hostname)
+			if file.Version == "v0.0.3" {
+				if hostname != "github.com" && hostname != homeHost {
 					return nil, fmt.Errorf("dependency %s is pinned to %s, not the home host %s or github.com", k, a.Hostname, homeHost)
 				}
-				addQuotedField(entry, "hostname", a.Hostname)
+				if homeHost != "github.com" || hostname != "github.com" {
+					addQuotedField(entry, "hostname", hostname)
+				}
 			}
 			if a.Ref != "" {
 				addQuotedField(entry, "ref", a.Ref)

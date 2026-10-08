@@ -79,7 +79,7 @@ func TestHostScopedMetadataAndPinCollisions(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, reloaded.SetHostname("tenant.ghe.com"))
 	file := reloaded.File()
-	assert.Empty(t, file.Dependencies["o/r@tenant"].Hostname)
+	assert.Equal(t, "tenant.ghe.com", file.Dependencies["o/r@tenant"].Hostname)
 	assert.EqualValues(t, 20, file.Dependencies["o/r@tenant"].RepoID)
 	assert.Equal(t, "github.com", file.Dependencies["o/r@public"].Hostname)
 	assert.EqualValues(t, 2, file.Dependencies["o/r@public"].RepoID)
@@ -107,12 +107,7 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 				ref = "tag: v1"
 			}
 			path := filepath.Join(t.TempDir(), "actions.lock")
-			host := "github.com"
 			ownerID, repoID := 1, 2
-			if version == "v0.0.3" {
-				host = "tenant.ghe.com"
-				ownerID, repoID = 10, 20
-			}
 			body := fmt.Sprintf("version: %s\nworkflows:\n  .github/workflows/ci.yml:\n    - %s\ndependencies:\n  %s:\n    %s\n    commit: sha1-%s\n    owner_id: %d\n    repo_id: %d\n", version, key, key, ref, strings.Repeat("a", 40), ownerID, repoID)
 			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 			store, err := LoadStateAt(path, nil)
@@ -120,7 +115,7 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 			require.NoError(t, store.SetHostname("tenant.ghe.com"))
 			deps := store.AllDeps()
 			require.Len(t, deps, 1)
-			assert.Equal(t, host, deps[0].Hostname)
+			assert.Equal(t, "github.com", deps[0].Hostname)
 			assert.Equal(t, strings.Repeat("a", 40), deps[0].SHA)
 			store.SetMetadataResolver(hostMetadata{})
 			require.NoError(t, store.VerifyHosts(context.Background()))
@@ -128,11 +123,7 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 			raw, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Contains(t, string(raw), "version: 'v0.0.3'")
-			if version == "v0.0.3" {
-				assert.NotContains(t, string(raw), "hostname:")
-			} else {
-				assert.Contains(t, string(raw), "hostname: 'github.com'")
-			}
+			assert.Contains(t, string(raw), "hostname: 'github.com'")
 			action := store.file.Dependencies["o/r@v1"]
 			for _, field := range []string{"owner", "repo"} {
 				t.Run("rejects changed "+field+" ID", func(t *testing.T) {
