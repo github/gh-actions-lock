@@ -18,6 +18,7 @@ require "pty"
 require "reline"
 require "set"
 require "shellwords"
+require "socket"
 require "tmpdir"
 require "webrick"
 require "webrick/https"
@@ -48,9 +49,10 @@ module ActionsPin
 
     # ── StubServer ──────────────────────────────────────────────────────
     class StubServer
-      attr_reader :port, :url
+      attr_reader :port, :url, :proxy_url
 
-      def initialize
+      def initialize(hosts: [])
+        @hosts = hosts
         @routes = []
         @port = nil
         @server = nil
@@ -87,6 +89,7 @@ module ActionsPin
         cert.sign(key, OpenSSL::Digest::SHA256.new)
 
         @server = WEBrick::HTTPServer.new(
+          BindAddress: "127.0.0.1",
           Port: 0,
           Logger: WEBrick::Log.new("/dev/null"),
           AccessLog: [],
@@ -120,11 +123,60 @@ module ActionsPin
 
         @thread = Thread.new { @server.start }
         sleep 0.1 until @server.status == :Running
+        start_proxy unless @hosts.empty?
         self
       end
 
+      # Preserve real API hostnames and TLS through a loopback-only CONNECT
+      # tunnel. Unknown destinations cannot escape to the network.
+      def start_proxy
+        @proxy = TCPServer.new("127.0.0.1", 0)
+        @proxy_url = "http://127.0.0.1:#{@proxy.addr[1]}"
+        @connections = []
+        @workers = []
+        @proxy_thread = Thread.new do
+          loop do
+            socket = @proxy.accept
+            @connections << socket
+            @workers << Thread.new(socket) do |client|
+              begin
+                request = client.gets
+                method, target = request.to_s.split
+                while (line = client.gets) && line != "\r\n"; end
+                unless method == "CONNECT" && @hosts.include?(target)
+                  client.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                  next
+                end
+                upstream = TCPSocket.new("127.0.0.1", @port)
+                @connections << upstream
+                client.write("HTTP/1.1 200 Connection established\r\n\r\n")
+                loop do
+                  IO.select([client, upstream]).first.each do |source|
+                    destination = source == client ? upstream : client
+                    destination.write(source.readpartial(16_384))
+                  end
+                end
+              rescue EOFError, Errno::ECONNRESET
+                # A closed TLS connection ends its tunnel.
+              rescue IOError, Errno::EBADF
+                raise unless @proxy.closed?
+              ensure
+                upstream&.close
+                client.close
+              end
+            end
+          end
+        rescue IOError, Errno::EBADF
+          raise unless @proxy.closed?
+        end
+      end
+
       def stop
+        @proxy&.close
+        @proxy_thread&.join
         @server&.shutdown
+        @connections&.each { |socket| socket.close unless socket.closed? }
+        @workers&.each { |worker| worker.join(5) }
         @thread&.join(5)
       end
     end
@@ -200,8 +252,8 @@ module ActionsPin
         self
       end
 
-      def stub_server(&block)
-        @stub_server = StubServer.new
+      def stub_server(hosts: [], &block)
+        @stub_server = StubServer.new(hosts: hosts)
         block.call(@stub_server) if block
         self
       end
@@ -455,9 +507,18 @@ module ActionsPin
         if @stub_server
           server = @stub_server
           server.start
-          env["GH_HOST"] = "127.0.0.1:#{server.port}"
-          token = env.delete("GH_TOKEN") || "stub-token"
-          env["GH_ENTERPRISE_TOKEN"] = token
+          if server.proxy_url
+            env["HTTPS_PROXY"] = server.proxy_url
+            env["HTTP_PROXY"] = server.proxy_url
+            env["NO_PROXY"] = ""
+            env["no_proxy"] = ""
+            env["GH_HOST"] ||= "tenant.ghe.com"
+            env["GH_TOKEN"] ||= "stub-token"
+          else
+            env["GH_HOST"] = "127.0.0.1:#{server.port}"
+            token = env.delete("GH_TOKEN") || "stub-token"
+            env["GH_ENTERPRISE_TOKEN"] = token
+          end
           env["GH_ACTIONS_LOCK_INSECURE"] = "1"
         end
 
