@@ -157,19 +157,23 @@ permits fallback to a **public** repository on `github.com`. A tenant repository
 shadows its dotcom namesake even when the requested ref is missing. Authorization
 errors, rate limits, and network failures do not trigger fallback.
 
-Generation and refresh write v0.0.3. On Proxima, every dependency records its
-hostname: the exact `<tenant>.ghe.com` for tenant-local pins, or `github.com`
-for public dotcom pins. Dotcom-root output omits `hostname` for dotcom pins.
-An omitted hostname always means `github.com`, never the current tenant.
+Generation and refresh write v0.0.3. An omitted `hostname` binds a pin to the
+home host: `github.com` in a dotcom repository, or the selected tenant in a
+`*.ghe.com` repository. Tenant-local pins omit `hostname`; public dotcom pins
+on a tenant explicitly record `hostname: github.com`. Dotcom-root output omits
+`hostname`. No explicit tenant hostname is emitted.
 
-Legacy v0.0.1/v0.0.2 pins and omitted-host v0.0.3 pins retain their dotcom
-binding. On Proxima, recorded repository IDs are checked on the bound host
-before pins are reused or migrated. A missing repository or mismatched IDs
-fails without switching hosts or rewriting the pin. Tenant pins generated
-without a hostname by an older or preview CLI must not be silently relabeled:
-restore a correctly host-bound lockfile or review the dependencies before
-regenerating. Read-only checks do not migrate files. `--verify-local` checks
-coverage, not host identity.
+Proxima execution requires v0.0.3. During migration, legacy v0.0.1/v0.0.2 pins
+retain their dotcom binding, with repository IDs verified before writing
+explicit `github.com`. Older preview files with an explicit home-tenant hostname
+are rewritten to omit it without changing the pinned identity. On Proxima,
+recorded repository IDs are checked on the bound host before pins are reused.
+An omitted v0.0.3 public pin from an older producer is now tenant-bound: a missing
+tenant repository or mismatched IDs fails without falling back or rewriting the
+pin. Restore a correctly host-bound lockfile or review the dependencies before
+regenerating. Read-only checks do not migrate files or prove that their wire
+format is accepted for execution. `--verify-local` checks coverage, not host
+identity.
 
 Existing pins retain their SHA and host binding during ordinary runs.
 `--rescan` and `--relock` do not change the bound host. Conflicting host

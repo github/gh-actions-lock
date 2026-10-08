@@ -116,9 +116,8 @@ func TestPinnedHostBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.PinHost("o", "r", "github.com"))
 	require.ErrorContains(t, c.PinHost("O", "R", "tenant.ghe.com"), "conflicting")
-	require.NoError(t, c.PinHost("o", "omitted", ""))
-	require.NoError(t, c.PinHost("o", "omitted", "github.com"))
-	require.ErrorContains(t, c.PinHost("o", "omitted", "tenant.ghe.com"), "conflicting")
+	require.NoError(t, c.PinHost("o", "home", ""))
+	require.ErrorContains(t, c.PinHost("o", "home", "github.com"), "conflicting")
 	require.ErrorContains(t, c.PinHost("o", "else", "other.ghe.com"), "not the selected host")
 	require.ErrorContains(t, c.PinHost("o", "else", "evil.example"), "not the selected host")
 

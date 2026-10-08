@@ -82,6 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: tenant/internal@v1
+      - uses: actions/public@v2
 `)
 	args := []string{"--hostname", "tenant.ghe.com", "--no-interactive", "--no-narrow", "--no-migrate-local-actions", "--json", path}
 	_, _, err := runCommandWithHTTP(t, proximaFixture(t, 200), args...)
@@ -92,8 +93,7 @@ jobs:
 	assert.Equal(t, "v0.0.3", file.Version)
 	require.Len(t, file.Dependencies, 2)
 	local := file.Dependencies["tenant/internal@v1"]
-	assert.Equal(t, "tenant.ghe.com", local.Hostname)
-	assert.Equal(t, []string{"tenant/internal@v1"}, file.Workflows[path])
+	assert.Empty(t, local.Hostname)
 	assert.Equal(t, "sha1-"+tenantSHA, local.Commit)
 	assert.EqualValues(t, 11, local.OwnerID)
 	assert.EqualValues(t, 111, local.RepoID)
@@ -119,20 +119,16 @@ jobs:
 	require.NoError(t, err)
 	assert.Equal(t, raw, readTempLockfilePins(t))
 
-	// Omitted public hostnames retain their dotcom binding.
-	omitted := strings.Replace(raw, "        hostname: 'github.com'\n", "", 1)
-	require.NotEqual(t, raw, omitted)
-	require.NoError(t, os.WriteFile(parserlock.Path, []byte(omitted), 0o600))
-	_, _, err = runCommandWithHTTP(t, pinnedTransport,
-		"--hostname", "tenant.ghe.com", "--rescan", "--no-fix", "--json", path)
-	require.NoError(t, err)
-	assert.Equal(t, omitted, readTempLockfilePins(t))
+	// Convert the previous preview's explicit home host without moving its pin.
+	explicit := strings.Replace(raw, "'tenant/internal@v1':\n", "'tenant/internal@v1':\n        hostname: 'tenant.ghe.com'\n", 1)
+	require.NotEqual(t, raw, explicit)
+	require.NoError(t, os.WriteFile(parserlock.Path, []byte(explicit), 0o600))
 	_, _, err = runCommandWithHTTP(t, proximaFixture(t, 200), args...)
 	require.NoError(t, err)
 	assert.Equal(t, raw, readTempLockfilePins(t))
 }
 
-func TestProximaOmittedPinsCannotBecomeTenantPins(t *testing.T) {
+func TestProximaOmittedPinsCannotMoveToDotcomOrTenantNamesakes(t *testing.T) {
 	for _, status := range []int{200, 401, 403, 404} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			path := writeTempWorkflow(t, `
@@ -142,29 +138,28 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: tenant/internal@v1
-`, "tenant/internal@v1=sha1-"+tenantSHA)
+      - uses: actions/public@v2
+`, "actions/public@v2=sha1-"+publicSHA)
 			raw := readTempLockfilePins(t)
-			raw = strings.ReplaceAll(raw, "owner_id: 1", "owner_id: 11")
-			raw = strings.ReplaceAll(raw, "repo_id: 1", "repo_id: 111")
+			raw = strings.ReplaceAll(raw, "owner_id: 1", "owner_id: 22")
+			raw = strings.ReplaceAll(raw, "repo_id: 1", "repo_id: 222")
 			require.NoError(t, os.WriteFile(parserlock.Path, []byte(raw), 0o600))
 			transport := proximaTransport(func(req *http.Request) (*http.Response, error) {
-				assert.Equal(t, "api.github.com", req.URL.Host, "omitted pins must bind to dotcom, never the tenant")
-				assert.Equal(t, "/repos/tenant/internal", req.URL.Path)
-				assert.Empty(t, req.Header.Get("Authorization"))
-				assert.Empty(t, req.Header.Get("Cookie"))
+				assert.Equal(t, "api.tenant.ghe.com", req.URL.Host, "omitted pins must not fall back to dotcom")
+				assert.Equal(t, "/repos/actions/public", req.URL.Path)
+				assert.NotEmpty(t, req.Header.Get("Authorization"))
 				if status != 200 {
 					return httpmock.StatusResponse(status)(req)
 				}
 				return httpmock.JSONResponse(map[string]any{
-					"visibility": "public", "id": 333, "owner": map[string]any{"id": 33},
+					"visibility": "internal", "id": 333, "owner": map[string]any{"id": 33},
 				})(req)
 			})
 			_, _, err := runCommandWithHTTP(t, transport,
 				"--hostname", "tenant.ghe.com", "--no-narrow", "--no-migrate-local-actions", "--json", path)
 			require.Error(t, err)
 			if status == 200 {
-				assert.ErrorContains(t, err, "does not match its github.com repository IDs")
+				assert.ErrorContains(t, err, "does not match its tenant.ghe.com repository IDs")
 			} else {
 				assert.ErrorContains(t, err, "verifying repository identity")
 			}

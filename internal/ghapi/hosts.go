@@ -17,7 +17,7 @@ func IsProxima(hostname string) bool { return proximaHost.MatchString(hostname) 
 // repository-scoped, and guessing would mix identities.
 func (c *Client) PinHost(owner, repo, hostname string) error {
 	if hostname == "" {
-		hostname = "github.com"
+		hostname = c.Hostname
 	}
 	if hostname != c.Hostname && !(c.local != nil && hostname == "github.com") {
 		return fmt.Errorf("%s/%s is pinned to %s, not the selected host %s", owner, repo, hostname, c.Hostname)
