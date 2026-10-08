@@ -162,6 +162,8 @@ home host: `github.com` in a dotcom repository, or the selected tenant in a
 `*.ghe.com` repository. Tenant-local pins omit `hostname`; public dotcom pins
 on a tenant explicitly record `hostname: github.com`. Dotcom-root output omits
 `hostname`. No explicit tenant hostname is emitted.
+The `--json` dependency output follows the same rule: `hostname` appears only
+for dotcom dependencies when running against a Proxima tenant.
 
 Proxima execution requires v0.0.3. During migration, legacy v0.0.1/v0.0.2 pins
 retain their dotcom binding, with repository IDs verified before writing

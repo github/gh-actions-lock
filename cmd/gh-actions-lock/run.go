@@ -336,7 +336,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if opts.noFix {
 		console.StopProgress()
 		if opts.jsonFields != "" {
-			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 				return err
 			}
 		}
@@ -392,7 +392,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if planErr != nil {
 		console.StopProgress()
 		if opts.jsonFields != "" {
-			if err := format.WriteJSON(out, report, false, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+			if err := format.WriteJSON(out, report, false, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 				return err
 			}
 		}
@@ -463,7 +463,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// non-zero exit only when findings remain that can't be auto-fixed
 	// (lockfile forgery).
 	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 			return err
 		}
 		if reportHasUnfixableErrors(report, opts.acceptMoved) || len(record.Investigated()) > 0 {

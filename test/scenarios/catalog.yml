@@ -1734,7 +1734,6 @@ scenarios:
           - dependencies:
               - direct: true
                 hash_algo: sha1
-                hostname: github.com
                 nwo: actions/checkout
                 ref: v4
                 sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -1830,7 +1829,6 @@ scenarios:
           - dependencies:
               - direct: true
                 hash_algo: sha1
-                hostname: github.com
                 nwo: actions/checkout
                 ref: v4
                 sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -1909,7 +1907,6 @@ scenarios:
           - dependencies:
               - direct: true
                 hash_algo: sha1
-                hostname: github.com
                 nwo: actions/checkout
                 ref: v4
                 sha: de0fac2e4500dabe0009e67214ff5f5447ce83dd

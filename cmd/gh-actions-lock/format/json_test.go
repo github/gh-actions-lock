@@ -1,6 +1,56 @@
 package format
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"testing"
+
+	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestJSONHostnameOnlyForProximaDotcomDependencies(t *testing.T) {
+	for _, tt := range []struct {
+		name, homeHost, depHost, want string
+	}{
+		{"dotcom", "github.com", "github.com", ""},
+		{"tenant local", "tenant.ghe.com", "tenant.ghe.com", ""},
+		{"tenant public", "tenant.ghe.com", "github.com", "github.com"},
+		{"unresolved", "tenant.ghe.com", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &checks.Report{Workflows: []checks.WorkflowReport{{
+				Path: ".github/workflows/ci.yml",
+				Inventory: []checks.InventoryEntry{{
+					Dep:    dep.Dependency{Hostname: tt.depHost, NWO: "o/r", Ref: "v1", SHA: "abc"},
+					Direct: true,
+				}},
+			}}}
+			var out bytes.Buffer
+			require.NoError(t, WriteJSON(&out, report, true, "dependencies,workflows", "dev", "v0.0.3", tt.homeHost))
+			var payload struct {
+				Dependencies []map[string]any `json:"dependencies"`
+				Workflows    []struct {
+					Dependencies []map[string]any `json:"dependencies"`
+				} `json:"workflows"`
+			}
+			require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
+			require.Len(t, payload.Dependencies, 1)
+			require.Len(t, payload.Workflows, 1)
+			require.Len(t, payload.Workflows[0].Dependencies, 1)
+			for _, entry := range []map[string]any{payload.Dependencies[0], payload.Workflows[0].Dependencies[0]} {
+				if tt.want == "" {
+					assert.NotContains(t, entry, "hostname")
+				} else {
+					assert.Equal(t, tt.want, entry["hostname"])
+				}
+			}
+			assert.Equal(t, tt.depHost, report.Workflows[0].Inventory[0].Dep.Hostname)
+		})
+	}
+}
 
 func TestValidateJSONFields(t *testing.T) {
 	tests := []struct {
