@@ -125,7 +125,7 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
+		return &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
 	}
 	return json.NewDecoder(resp.Body).Decode(dest)
 }

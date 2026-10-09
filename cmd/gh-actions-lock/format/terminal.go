@@ -184,6 +184,8 @@ func categoryLabel(c checks.Category) string {
 		return "Misleading SHA"
 	case checks.UnreachablePin:
 		return "Unreachable pin"
+	case checks.RepoMoved:
+		return "Repository moved"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}
@@ -361,12 +363,8 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 				bareSHADeps = append(bareSHADeps, key)
 			}
 		case f.Category == checks.RefMoved:
-			// TODO: surface ref-moved warnings once the `gh actions-lock
-			// update` path exists. Today the guidance ("run gh actions-lock
-			// to update") is wrong — a plain re-run trusts the lockfile and
-			// repins nothing; only --rescan even detects the movement. Until
-			// there's a command that actually advances a moved ref, swallow
-			// these rather than print misleading instructions.
+			// Moved mutable refs are sticky; --relock advances them, so
+			// there is nothing actionable to print here.
 		case f.Category.IsInconclusive() &&
 			strings.Contains(f.Remediation, "transitive dependency"):
 			// transitive reachability unknown: silently swallowed
@@ -424,7 +422,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired:
+	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoMoved:
 		return true
 	}
 	return false

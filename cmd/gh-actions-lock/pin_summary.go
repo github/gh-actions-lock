@@ -25,7 +25,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.InvalidSelfRepositoryRef:
+			case checks.LocalAction, checks.InvalidSelfRepositoryRef, checks.RepoMoved:
 				return true
 			case checks.NotPinned:
 				if !f.IsRemediableNotPinned() {
@@ -54,6 +54,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 			}
 			if f.Category == checks.LocalAction ||
 				f.Category == checks.InvalidSelfRepositoryRef ||
+				f.Category == checks.RepoMoved ||
 				f.Category == checks.NotPinned && !f.IsRemediableNotPinned() {
 				return true
 			}
@@ -65,7 +66,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string, prunedWorkflows []string) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string, prunedWorkflows []string) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 	narrowed := record.Narrowed()
@@ -116,20 +117,9 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
 	hasUnfixable := reportHasUnfixableErrors(report, acceptMoved)
-	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
+	if allClean && !hasUnfixable && onboardingRefused == 0 {
 		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
-		if noNarrow && skippedRescan > 0 {
-			// Mutable refs (v4, main) were trusted without a live check.
-			// With narrowing on, the version-ref nudge above already tells
-			// the user to pin precisely — which also buys live
-			// re-verification — so we don't add a competing --rescan line.
-			// Under --no-narrow that nudge is suppressed, so this is the
-			// only place the trust gap and its escape hatch surface.
-			console.TermDetail("%d mutable %s trusted without a live check — branch or partial-version pins (e.g. v4, main) that can move; run `gh actions-lock --rescan` to re-verify %s.",
-				skippedRescan, ui.Pluralize(skippedRescan, "ref", "refs"),
-				ui.Pluralize(skippedRescan, "it", "them"))
-		}
 		return nil
 	}
 

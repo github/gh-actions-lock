@@ -142,7 +142,7 @@ func (r *Resolver) SeedBranchHints(deps []dep.Dependency) {
 }
 
 // SeedFromLockfile pre-warms the resolution cache so repeat runs skip
-// redundant API calls. Do NOT call with --rescan: seeding would hide
+// redundant API calls. Do NOT call with --relock: seeding would hide
 // ref movement.
 func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 	for _, d := range deps {

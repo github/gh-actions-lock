@@ -316,6 +316,44 @@ func (s *State) Get(workflowKey string) ([]dep.Dependency, error) {
 	return out, nil
 }
 
+// LockedPin is one entry in a workflow's recorded closure.
+type LockedPin struct {
+	Pin    parserlock.Pin
+	Action parserlock.Action
+	// Parent is the canonical key of the composite action that pulls this
+	// pin in; empty for the workflow's direct pins.
+	Parent string
+}
+
+// Closure returns the workflow's recorded pins, direct and transitive, by
+// walking each direct pin's `uses:` list. Each pin appears once.
+func (s *State) Closure(workflowKey string) []LockedPin {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []LockedPin
+	seen := map[string]bool{}
+	var walk func(key, parent string)
+	walk = func(key, parent string) {
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		pin, ok := parserlock.ParsePin(key)
+		action, found := s.file.Dependencies[key]
+		if !ok || !found {
+			return
+		}
+		out = append(out, LockedPin{Pin: pin, Action: action, Parent: parent})
+		for _, child := range action.Uses {
+			walk(child, key)
+		}
+	}
+	for _, key := range s.file.Workflows[workflowKey] {
+		walk(key, "")
+	}
+	return out
+}
+
 // AllDeps returns every action entry in the lockfile as a Dependency,
 // populated with Tag and Branch inferred from the action's ref field.
 // Order is undefined. Intended for callers that need the union of recorded

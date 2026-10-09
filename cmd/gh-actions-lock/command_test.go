@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -72,7 +73,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--relock", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -207,6 +208,9 @@ const nodeActionYAML = "name: Test Action\nruns:\n  using: node20\n"
 func testRepoResponse(nameWithOwner, oid, actionYAML string) map[string]any {
 	return map[string]any{
 		"nameWithOwner": nameWithOwner,
+		// commit and tag answer the parity query from the same fixture.
+		"commit": map[string]any{"oid": oid},
+		"tag":    map[string]any{"oid": oid},
 		"object": map[string]any{
 			"oid": oid,
 			"file": map[string]any{
@@ -217,6 +221,35 @@ func testRepoResponse(nameWithOwner, oid, actionYAML string) map[string]any {
 			"fileYaml": nil,
 		},
 	}
+}
+
+// registerParity stubs one parity query that reports every pin intact.
+func registerParity(reg *httpmock.Registry) {
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), parityOK)
+}
+
+// parityOK answers a parity query as if every locked pin still matches.
+func parityOK(req *http.Request) (*http.Response, error) {
+	var body struct {
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	data := map[string]any{}
+	for i := 0; ; i++ {
+		owner, ok := body.Variables[fmt.Sprintf("owner%d", i)].(string)
+		if !ok {
+			break
+		}
+		oid := map[string]any{"oid": body.Variables[fmt.Sprintf("oid%d", i)]}
+		data[fmt.Sprintf("a%d", i)] = map[string]any{
+			"nameWithOwner": owner + "/" + body.Variables[fmt.Sprintf("name%d", i)].(string),
+			"commit":        oid,
+			"tag":           oid,
+		}
+	}
+	return httpmock.JSONResponse(map[string]any{"data": data})(req)
 }
 
 // writeTempWorkflow writes a workflow YAML body to a scratch repo at
@@ -379,7 +412,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--relock", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -445,7 +478,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--relock", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.ErrorIs(t, err, errSilent, "JSON mode should exit non-zero for forgery findings")
 
@@ -507,7 +540,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--relock", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -565,7 +598,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--relock", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	require.NoError(t, err, "ref-moved is a warning, should not error")
 
@@ -644,7 +677,7 @@ jobs:
 
 	// Test per-workflow dependencies view
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--relock", "--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -719,7 +752,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=workflows", workflowPath,
+		"--relock", "--no-fix", "--json=workflows", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -770,7 +803,7 @@ jobs:
 
 	// --json with no value should use the default fields (valid,findings,workflows)
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json", workflowPath,
+		"--relock", "--no-fix", "--json", workflowPath,
 	)
 	require.NoError(t, err)
 
@@ -834,7 +867,8 @@ jobs:
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "workflows", "actions.lock"), []byte(lockYAML), 0o600))
 	t.Chdir(dir)
 
-	// Run WITHOUT --rescan so SeedFromLockfile is active.
+	// Locked checkout is only parity-checked, never re-resolved.
+	registerParity(reg)
 	stdout, _, err := runCommandWithHTTP(t, reg,
 		"--no-fix", "--json=valid,findings",
 		".github/workflows/workflow.yml",
@@ -987,11 +1021,11 @@ jobs:
 	assert.Contains(t, pins, "actions/setup-go", "autofix should have pinned setup-go")
 }
 
-// TestCheck_Rescan_DetectsRefMovementDespiteLockfile is a regression test
-// ensuring --rescan does NOT seed the resolution cache. If seeding occurred,
+// TestCheck_Relock_DetectsRefMovementDespiteLockfile is a regression test
+// ensuring --relock does NOT seed the resolution cache. If seeding occurred,
 // the resolver would return the stale lockfile SHA and the ref-moved finding
 // would be suppressed — exactly the bug we fixed.
-func TestCheck_Rescan_DetectsRefMovementDespiteLockfile(t *testing.T) {
+func TestCheck_Relock_DetectsRefMovementDespiteLockfile(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 
@@ -1032,7 +1066,7 @@ jobs:
 	)
 
 	stdout, _, err := runCommandWithHTTP(t, reg,
-		"--rescan", "--no-fix", "--json=valid,findings", workflowPath,
+		"--relock", "--no-fix", "--json=valid,findings", workflowPath,
 	)
 	// ref-moved is a warning (valid=true), not an error.
 	require.NoError(t, err, "ref-moved is a warning, should not error")
@@ -1052,8 +1086,8 @@ jobs:
 		}
 	}
 	assert.True(t, hasRefMoved,
-		"--rescan must detect ref movement (stale lockfile SHA vs live SHA); "+
-			"if this fails, SeedFromLockfile is poisoning the resolution cache during rescan: %+v",
+		"--relock must detect ref movement (stale lockfile SHA vs live SHA); "+
+			"if this fails, SeedFromLockfile is poisoning the resolution cache during relock: %+v",
 		payload.Findings)
 }
 
@@ -1204,7 +1238,7 @@ func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
 
 // TestCheck_Relock_BumpsMovedBranchRef covers github/actions-dispatch#751:
 // a branch ref (main) whose upstream head advanced is trusted as-is on a
-// normal run and merely flagged ref-moved under --rescan. --relock must
+// normal run. --relock must
 // re-resolve it and rewrite the lockfile to the new live SHA.
 func TestCheck_Relock_BumpsMovedBranchRef(t *testing.T) {
 	reg := &httpmock.Registry{}

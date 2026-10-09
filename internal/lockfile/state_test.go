@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -953,5 +954,29 @@ func TestState_TransitiveClosureGolden(t *testing.T) {
 	}
 	if string(raw) != golden {
 		t.Fatalf("lockfile content drifted from golden.\n--- got ---\n%s\n--- want ---\n%s", raw, golden)
+	}
+}
+
+func TestStateClosureIncludesTransitivePins(t *testing.T) {
+	dir := t.TempDir()
+	setupClosure(t, dir)
+	store, err := LoadState(dir, fakeMetadataResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	for _, lp := range store.Closure(".github/workflows/ci.yml") {
+		got[lp.Pin.String()] = lp.Parent
+	}
+	want := map[string]string{
+		"actions/setup-go@v6": "",
+		"actions/cache@v4":    "actions/setup-go@v6",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Closure() = %v, want %v", got, want)
+	}
+	if c := store.Closure(".github/workflows/missing.yml"); len(c) != 0 {
+		t.Errorf("Closure(missing) = %v, want empty", c)
 	}
 }

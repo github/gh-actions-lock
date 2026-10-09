@@ -2,8 +2,8 @@ package main
 
 // Verification modes for gh actions-lock:
 //
-//   --verify       Full re-verification of every pin against the network.
-//                  Equivalent to --rescan --no-fix. Requires auth.
+//   --verify       Frozen check: the default checks, including runner parity
+//                  for every locked pin, without writing. Requires auth.
 //
 //   --verify-local Offline static coverage check. Every action ref must have
 //                  a lockfile entry. No network, no auth — ideal for pre-commit.
@@ -24,7 +24,6 @@ import (
 // top of runCheck before any work begins.
 func applyVerifyFlags(opts *checkOptions) {
 	if opts.verify {
-		opts.rescan = true
 		opts.noFix = true
 	}
 }

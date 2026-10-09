@@ -292,6 +292,8 @@ func TestProximaPrunesBeforeVerifyingHosts(t *testing.T) {
 				case "/repos/actions/setup-go":
 					staleCalls++
 					return httpmock.StatusResponse(http.StatusNotFound)(req)
+				case "/graphql":
+					return parityOK(req)
 				case "/repos/actions/checkout/tags", "/repos/actions/checkout/releases":
 					return httpmock.JSONResponse([]any{})(req)
 				default:

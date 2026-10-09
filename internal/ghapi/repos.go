@@ -130,10 +130,12 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 	return res.tags, res.err
 }
 
-// repoMeta is the subset of repos/{owner}/{repo} the tool needs: the default
-// branch, the numeric owner and repo IDs (lockfile write), and the visibility
-// and last-push time (tag freshness/immutability checks).
+// repoMeta is the subset of repos/{owner}/{repo} the tool needs: the
+// canonical name (transfer detection), the default branch, the numeric owner
+// and repo IDs (lockfile write), and the visibility and last-push time (tag
+// freshness/immutability checks).
 type repoMeta struct {
+	FullName      string
 	DefaultBranch string
 	OwnerID       int64
 	RepoID        int64
@@ -162,6 +164,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			return m, nil
 		}
 		var resp struct {
+			FullName      string `json:"full_name"`
 			DefaultBranch string `json:"default_branch"`
 			Visibility    string `json:"visibility"`
 			PushedAt      string `json:"pushed_at"`
@@ -181,6 +184,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			}
 		}
 		m := repoMeta{
+			FullName:      resp.FullName,
 			DefaultBranch: resp.DefaultBranch,
 			OwnerID:       resp.Owner.ID,
 			RepoID:        resp.ID,

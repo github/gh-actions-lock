@@ -61,7 +61,7 @@ func proximaFixture(t *testing.T, publicStatus int) http.RoundTripper {
 			return httpmock.JSONResponse(map[string]any{"data": map[string]any{
 				"a0": testRepoResponse("tenant/internal", tenantSHA, composite),
 			}})(req)
-		case !tenant && path == "/repos/actions/public/commits/v2":
+		case !tenant && (path == "/repos/actions/public/commits/v2" || path == "/repos/actions/public/commits/"+publicSHA):
 			return httpmock.JSONResponse(map[string]any{"sha": publicSHA})(req)
 		case !tenant && path == "/repos/actions/public/contents/action.yml":
 			assert.Equal(t, publicSHA, req.URL.Query().Get("ref"))
@@ -115,7 +115,7 @@ jobs:
 		return base.RoundTrip(req)
 	})
 	_, _, err = runCommandWithHTTP(t, pinnedTransport,
-		"--hostname", "tenant.ghe.com", "--rescan", "--no-fix", "--json", path)
+		"--hostname", "tenant.ghe.com", "--verify", "--json", path)
 	require.NoError(t, err)
 	assert.Equal(t, raw, readTempLockfilePins(t))
 
