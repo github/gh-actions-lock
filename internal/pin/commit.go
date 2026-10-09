@@ -252,11 +252,13 @@ func buildDirectKeys(rec *Record, wfPath string) map[string]bool {
 }
 
 func validateRequiredRewrites(plans []WorkflowPlan) error {
-	for _, wp := range plans {
+	for i := range plans {
+		wp := &plans[i]
 		if len(wp.RequiredRewrites) == 0 {
 			continue
 		}
 		found := make(map[string]int)
+		wp.RewrittenIn = make(map[string][]string)
 		for _, path := range append([]string{wp.Path}, wp.SelfActionFiles...) {
 			wf, err := workflowfile.Load(path)
 			if err != nil {
@@ -268,6 +270,9 @@ func validateRequiredRewrites(plans []WorkflowPlan) error {
 			}
 			for oldUse, n := range matches {
 				found[oldUse] += n
+				if n > 0 {
+					wp.RewrittenIn[oldUse] = append(wp.RewrittenIn[oldUse], path)
+				}
 			}
 		}
 		for oldUse := range wp.RequiredRewrites {

@@ -193,6 +193,29 @@ func TestCommitSkipNewWorkflowEntriesPreventsRewrites(t *testing.T) {
 	assert.False(t, store.HasWorkflow(workflowPath))
 }
 
+func TestValidateRequiredRewritesRecordsFiles(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
+	actionPath := filepath.Join("actions", "a", "action.yml")
+	files := map[string]string{
+		workflowPath: "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/actions/a\n",
+		actionPath:   "name: a\nruns:\n  using: composite\n  steps:\n    - uses: old/action@v1\n",
+	}
+	for path, content := range files {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(path)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644))
+	}
+	t.Chdir(dir)
+
+	plans := []WorkflowPlan{{
+		Path:             workflowPath,
+		SelfActionFiles:  []string{actionPath},
+		RequiredRewrites: map[string]string{"old/action@v1": "new/action@v1"},
+	}}
+	require.NoError(t, validateRequiredRewrites(plans))
+	assert.Equal(t, []string{actionPath}, plans[0].RewrittenIn["old/action@v1"])
+}
+
 func TestCommitRemovesDependenciesDroppedFromWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(".github", "workflows", "ci.yml")
