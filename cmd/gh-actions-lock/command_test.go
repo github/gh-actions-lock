@@ -1291,3 +1291,48 @@ jobs:
 	assert.Contains(t, readTempLockfilePins(t), staleSHA,
 		"a default run must not bump a trusted branch ref")
 }
+
+// TestCheck_MixedCaseUsesAcrossWorkflowsPinsEach pins the same action written
+// with two casings in two workflows. The resolver cache folds owner/repo case,
+// so both workflows get back the first spelling; every workflow must still
+// record the pin as a direct dependency instead of an empty list.
+func TestCheck_MixedCaseUsesAcrossWorkflowsPinsEach(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	checkoutSHA := "11bd71901bbe5b1630ceea73d27597364c9af683"
+	reg.Register(
+		httpmock.GraphQLForRepo("actions", "checkout"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("actions/checkout", checkoutSHA, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(httpmock.REST("GET", `repos/actions/checkout$`), httpmock.JSONResponse(map[string]any{
+		"id":    2,
+		"owner": map[string]any{"id": 1},
+	}))
+
+	dir := t.TempDir()
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	require.NoError(t, os.MkdirAll(wfDir, 0o755))
+	write := func(name, uses string) {
+		body := "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: " + uses + "\n"
+		require.NoError(t, os.WriteFile(filepath.Join(wfDir, name), []byte(body), 0o600))
+	}
+	write("a.yml", "actions/checkout@v4.2.2")
+	write("b.yml", "Actions/Checkout@v4.2.2")
+	t.Chdir(dir)
+
+	_, _, err := runCommandWithHTTP(t, reg)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(wfDir, "actions.lock"))
+	require.NoError(t, err)
+	file, err := parserlock.Parse(data)
+	require.NoError(t, err)
+	want := []string{"actions/checkout@v4.2.2"}
+	assert.Equal(t, want, file.Workflows[".github/workflows/a.yml"])
+	assert.Equal(t, want, file.Workflows[".github/workflows/b.yml"])
+}
