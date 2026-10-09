@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,9 +11,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
+	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/resolve"
 )
 
 const (
@@ -20,11 +24,42 @@ const (
 	runLogRetentionCount = 50
 )
 
+// runLog accumulates what runCheck learns; any field may be unset if the run
+// ended early.
+type runLog struct {
+	resolver *resolve.Resolver
+	store    *lockfile.State
+	report   *checks.Report
+	record   *pin.Record
+	valid    bool
+}
+
+// save writes the log for a run that returned runErr. A failed run is never
+// logged as valid.
+func (l *runLog) save(runErr error) string {
+	report := l.report
+	if report == nil {
+		report = &checks.Report{}
+	}
+	var lockfileVersion, homeHost, repo string
+	if l.store != nil {
+		lockfileVersion = l.store.File().Version
+	}
+	if l.resolver != nil {
+		homeHost = l.resolver.Hostname()
+	}
+	if cur, err := repository.Current(); err == nil {
+		repo = cur.Host + "/" + cur.Owner + "/" + cur.Name
+	}
+	return writeRunLog(runLogDir(), report, l.record, l.valid && runErr == nil, lockfileVersion, homeHost, repo, runErr)
+}
+
 // writeRunLog saves the full --json output for this run under the user
 // cache dir so a run that can't be reproduced later still leaves evidence
-// for a bug report. repo ("host/owner/name", empty if unknown) is added
-// only here, not to --json. Best effort: returns "" on any failure.
-func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost, repo string) string {
+// for a bug report. repo ("host/owner/name", empty if unknown), succeeded and
+// error are added only here, not to --json. Best effort: returns "" on any
+// failure.
+func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost, repo string, runErr error) string {
 	if dir == "" {
 		return ""
 	}
@@ -37,7 +72,7 @@ func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bo
 		return ""
 	}
 	path := f.Name()
-	werr := writeRunLogJSON(f, report, record, valid, lockfileVersion, homeHost, repo)
+	werr := writeRunLogJSON(f, report, record, valid, lockfileVersion, homeHost, repo, runErr)
 	if cerr := f.Close(); werr != nil || cerr != nil {
 		_ = os.Remove(path)
 		return ""
@@ -46,7 +81,7 @@ func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bo
 	return path
 }
 
-func writeRunLogJSON(w io.Writer, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost, repo string) error {
+func writeRunLogJSON(w io.Writer, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost, repo string, runErr error) error {
 	var buf bytes.Buffer
 	if err := format.WriteJSON(&buf, report, record, valid, format.AllJSONFields, cliVersion(), lockfileVersion, homeHost); err != nil {
 		return err
@@ -57,6 +92,11 @@ func writeRunLogJSON(w io.Writer, report *checks.Report, record *pin.Record, val
 	}
 	if repo != "" {
 		payload["repo"], _ = json.Marshal(repo)
+	}
+	payload["succeeded"], _ = json.Marshal(runErr == nil)
+	// errSilent means the reason was already rendered as findings.
+	if runErr != nil && !errors.Is(runErr, errSilent) {
+		payload["error"], _ = json.Marshal(runErr.Error())
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
