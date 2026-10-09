@@ -187,7 +187,9 @@ func categoryLabel(c checks.Category) string {
 	case checks.RepoRenamed:
 		return "Repository renamed"
 	case checks.RepoReplaced:
-		return "Repository missing or replaced"
+		return "Repository replaced"
+	case checks.RepoUnavailable:
+		return "Repository missing or inaccessible"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}
@@ -253,7 +255,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 
 	parts := []string{}
 	for _, cat := range []checks.Category{
-		checks.RepoReplaced, checks.RepoRenamed, checks.UnreachablePin,
+		checks.RepoReplaced, checks.RepoUnavailable, checks.RepoRenamed, checks.UnreachablePin,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction, checks.InvalidSelfRepositoryRef,
 		checks.Stale, checks.MisleadingSHA,
@@ -439,7 +441,7 @@ func renderRedirects(out *ui.UI, report *checks.Report) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoRenamed, checks.RepoReplaced:
+	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoRenamed, checks.RepoReplaced, checks.RepoUnavailable:
 		return true
 	}
 	return false

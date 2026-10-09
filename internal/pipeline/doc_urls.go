@@ -38,6 +38,7 @@ var docURLs = map[checks.Category]string{
 	checks.UnreachablePin:      securityHardeningBase + "#using-third-party-actions",
 	checks.RepoRenamed:         securityHardeningBase + "#using-third-party-actions",
 	checks.RepoReplaced:        securityHardeningBase + "#using-third-party-actions",
+	checks.RepoUnavailable:     securityHardeningBase + "#using-third-party-actions",
 	checks.OnboardingRequired:  securityHardeningBase + "#using-third-party-actions",
 	checks.AncestryUnknown:     securityHardeningBase + "#using-third-party-actions",
 	checks.ReachabilityUnknown: securityHardeningBase + "#using-third-party-actions",

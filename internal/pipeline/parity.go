@@ -27,7 +27,7 @@ import (
 //
 // Identity follows the runner: only the repo ID counts. A rename or
 // transfer redirect to the same repo ID is a warning; a different ID or
-// a name that no longer resolves blocks. Fresh pins fail closed: an
+// a name that doesn't resolve blocks. Fresh pins fail closed: an
 // inconclusive check keeps them out of the write.
 func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, resolved []dep.Dependency, parents map[string][]string, keep func(checks.Category) bool) {
 	gh := r.GHClient()
@@ -246,9 +246,14 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		f.Detail = fmt.Sprintf("could not verify locked %s@%s: %s", nwo, short, st.Err)
 		f.Remediation = "retry; the runner will re-check this pin at job start"
 	case st.RepoMissing:
-		f.Category = checks.RepoReplaced
-		f.Detail = fmt.Sprintf("%s no longer resolves%s; the runner rejects pins to deleted or inaccessible repositories", nwo, via)
-		f.Remediation = "find where the action moved, update `uses:`, then run `gh actions-lock --relock`"
+		f.Category = checks.RepoUnavailable
+		f.Detail = fmt.Sprintf("%s is missing or not visible to this token%s", nwo, via)
+		moved := "if the repository moved or was deleted, update `uses:` and run `gh actions-lock --relock`"
+		access := fmt.Sprintf("if it's private or internal, use a token that can read it or authorize SSO for %s", pc.Owner)
+		f.Remediation = moved + "; " + access
+		if st.ViaFallback {
+			f.Remediation = access + "; " + moved
+		}
 	case idChanged(lp.Action.RepoID, st.RepoID):
 		f.Category = checks.RepoReplaced
 		f.Detail = fmt.Sprintf("%s is a different repository than the one locked (repo ID %d, locked %d)%s", nwo, st.RepoID, lp.Action.RepoID, via)

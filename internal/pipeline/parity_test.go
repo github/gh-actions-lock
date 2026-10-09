@@ -33,6 +33,7 @@ func TestParityFinding(t *testing.T) {
 		want        checks.Category // empty means no finding
 		wantWarn    bool
 		wantRemedy  string
+		wantDetail  string
 		wantObserve string
 	}{
 		{name: "intact exact tag", ref: "v2.2.2", state: intact},
@@ -58,7 +59,15 @@ func TestParityFinding(t *testing.T) {
 		{name: "owner ID change alone is not identity", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 77, RepoID: 2, CommitFound: true}},
 		{name: "repo ID changed", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 1, RepoID: 99, CommitFound: true}, want: checks.RepoReplaced},
 		{name: "redirect to a different repo ID blocks", ref: "v2", state: ghapi.PinState{NameWithOwner: "mallory/github-actions-typing", RepoID: 99, CommitFound: true}, want: checks.RepoReplaced},
-		{name: "repository gone", ref: "v2", state: ghapi.PinState{RepoMissing: true}, want: checks.RepoReplaced},
+		{
+			name: "missing repository leads with relock", ref: "v2", state: ghapi.PinState{RepoMissing: true}, want: checks.RepoUnavailable,
+			wantDetail: "krzema12/github-actions-typing is missing or not visible to this token",
+			wantRemedy: "if the repository moved or was deleted, update `uses:` and run `gh actions-lock --relock`; if it's private or internal, use a token that can read it or authorize SSO for krzema12",
+		},
+		{
+			name: "missing repository on fallback leads with access", ref: "v2", state: ghapi.PinState{RepoMissing: true, ViaFallback: true}, want: checks.RepoUnavailable,
+			wantRemedy: "if it's private or internal, use a token that can read it or authorize SSO for krzema12; if the repository moved or was deleted, update `uses:` and run `gh actions-lock --relock`",
+		},
 		{name: "missing ID is not a change", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", CommitFound: true}},
 		{name: "commit gone", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing"}, want: checks.UnreachablePin},
 		{name: "exact tag moved", ref: "v2.2.2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", CommitFound: true, TagOID: other}, want: checks.UnreachablePin, wantObserve: other},
@@ -81,6 +90,9 @@ func TestParityFinding(t *testing.T) {
 			assert.True(t, ok)
 			assert.Equal(t, tt.want, f.Category)
 			assert.Equal(t, tt.wantWarn || tt.want == checks.ReachabilityUnknown, f.Severity == checks.SeverityWarning)
+			if tt.wantDetail != "" {
+				assert.Equal(t, tt.wantDetail, f.Detail)
+			}
 			if tt.wantRemedy != "" {
 				assert.Equal(t, tt.wantRemedy, f.Remediation)
 			}

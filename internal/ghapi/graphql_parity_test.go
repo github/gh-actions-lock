@@ -62,6 +62,7 @@ func TestCheckPins_GraphQLParsesEachState(t *testing.T) {
 	assert.Equal(t, parityMoved, states[3].TagOID)
 	assert.NoError(t, states[4].Err)
 	assert.True(t, states[4].RepoMissing, "a NOT_FOUND repository is a verdict the runner shares")
+	assert.False(t, states[4].ViaFallback)
 }
 
 func TestCheckPins_GraphQLBatchesFifty(t *testing.T) {
@@ -142,7 +143,7 @@ func TestCheckPins_RESTOnly(t *testing.T) {
 	assert.Equal(t, PinState{NameWithOwner: "octo/retag", CommitFound: true, TagOID: parityMoved}, states[1], "a moved tag is not a missing commit")
 	assert.Equal(t, PinState{NameWithOwner: "octo/retag", CommitFound: true, TagOID: paritySHA}, states[2])
 	assert.False(t, states[3].CommitFound)
-	assert.Equal(t, PinState{RepoMissing: true}, states[4])
+	assert.Equal(t, PinState{RepoMissing: true, ViaFallback: true}, states[4])
 	for _, req := range reg.Requests {
 		assert.False(t, strings.HasSuffix(req.URL.Path, "/graphql"), "REST-only must not call GraphQL")
 	}

@@ -37,10 +37,13 @@ const (
 	// transferred but kept its repo ID. The runner follows the redirect;
 	// fix mode rewrites `uses:` to the new name and keeps the locked commit.
 	RepoRenamed Category = "repo-renamed"
-	// RepoReplaced means a locked dependency's name no longer resolves, or
-	// resolves to a different repo ID. The runner rejects the pin, and
-	// re-locking under the old name cannot fix it.
+	// RepoReplaced means a locked dependency's name resolves to a different
+	// repo ID. The runner rejects the pin, and re-locking under the old name
+	// cannot fix it.
 	RepoReplaced Category = "repo-replaced"
+	// RepoUnavailable means a locked dependency's repository returned 404.
+	// That covers both deleted repositories and ones the token can't see.
+	RepoUnavailable Category = "repo-unavailable"
 	// Valid means the dependency is pinned and verified.
 	Valid Category = "valid"
 	// RunOnly means the workflow has no action refs (only run:

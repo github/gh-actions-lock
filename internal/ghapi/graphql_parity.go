@@ -28,8 +28,12 @@ type PinState struct {
 	NameWithOwner string
 	OwnerID       int64
 	RepoID        int64
-	// RepoMissing means the locked owner/repo no longer resolves at all.
+	// RepoMissing means the locked owner/repo did not resolve. A 404 can't
+	// tell a deleted repository from one this token can't see.
 	RepoMissing bool
+	// ViaFallback marks a verdict from the REST-only or SSO fallback path,
+	// where a missing token or SSO grant is the likelier cause.
+	ViaFallback bool
 	CommitFound bool
 	// TagOID is the commit Tag peels to; empty when the tag is gone.
 	TagOID string
@@ -251,7 +255,7 @@ func (c *Client) checkPinsREST(ctx context.Context, pins []PinCheck) []PinState 
 func (c *Client) checkPinREST(ctx context.Context, p PinCheck) PinState {
 	meta, err := c.repoMetadata(ctx, p.Owner, p.Repo)
 	if code, _ := StatusCode(err); code == http.StatusNotFound {
-		return PinState{RepoMissing: true}
+		return PinState{RepoMissing: true, ViaFallback: true}
 	}
 	if err != nil {
 		return PinState{Err: err}
