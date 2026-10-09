@@ -1,7 +1,5 @@
 package pin
 
-import "encoding/json"
-
 // Resolution describes the outcome for a single action reference.
 type Resolution string
 
@@ -16,18 +14,3 @@ const (
 
 // String returns the resolution as a string.
 func (r Resolution) String() string { return string(r) }
-
-// MarshalJSON emits the resolution string.
-func (r Resolution) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(r))
-}
-
-// UnmarshalJSON parses a resolution string.
-func (r *Resolution) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err != nil {
-		return err
-	}
-	*r = Resolution(s)
-	return nil
-}

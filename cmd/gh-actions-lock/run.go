@@ -388,7 +388,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Pool:        pool,
 		RepoOwner:   repoOwner,
 		RepoName:    repoName,
-		Version:     cliVersion(),
 		NoNarrow:    opts.noNarrow,
 		AcceptMoved: opts.acceptMoved,
 		Relock:      opts.relock,
@@ -406,12 +405,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 			}
 		}
 		if len(record.Unresolved()) > 0 {
-			record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: r.Hostname()}
 			if opts.jsonFields == "" {
 				renderUnresolvedWarnings(console, record.Unresolved())
-			}
-			if path, err := record.WriteJSON(); err == nil && opts.jsonFields == "" {
-				console.TermDetail("Resolution record: %s", path)
 			}
 			return errSilent
 		}
@@ -447,15 +442,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// action whose effective cooldown is 0.
 	if tagger != nil {
 		injectFreshTagFindings(ctx, report, record, tagger, cooldownCfg)
-	}
-
-	// Write the run log.
-	record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.hostname)}
-	if path, werr := record.WriteJSON(); werr == nil && opts.jsonFields == "" {
-		defer func() {
-			console.TermBlank()
-			console.TermDetail("Resolution record: %s", path)
-		}()
 	}
 
 	// JSON mode emits the (pre-fix) diagnosis now — after the commit

@@ -902,19 +902,6 @@ scenarios:
       exit: 1
       output_contains: ["could not be resolved"]
 
-  - name: resolution_record_shown
-    category: security
-    description: "Resolution record path is displayed after pin"
-    needs_stub: true
-    tags: [stub]
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["actions/checkout@v4"]
-    expect:
-      output_contains: ["Resolution record:"]
-
   - name: prefix_stripping
     category: security
     description: "Error reason prefix stripped — no 'resolution failed:' in output"
