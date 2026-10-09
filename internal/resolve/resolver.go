@@ -160,6 +160,12 @@ func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 	}
 }
 
+// Forget drops a seeded entry so the next resolution goes live.
+func (r *Resolver) Forget(owner, repo, path, ref string) {
+	r.cache.Delete(ghapi.ForActionRef(owner, repo, "", ref))
+	r.cache.Delete(ghapi.ForActionRef(owner, repo, path, ref))
+}
+
 // --- Accessors ---
 
 // Hostname returns the GitHub host the resolver is targeting.

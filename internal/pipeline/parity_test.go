@@ -42,7 +42,7 @@ func TestParityFinding(t *testing.T) {
 			name: "transferred repository names the new location", ref: "v2.2.2",
 			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true, TagOID: sha},
 			want:  checks.RepoMoved, wantWarn: true,
-			wantRemedy: "replace with `uses: typesafegithub/github-actions-typing@v2.2.2`, then run `gh actions-lock`",
+			wantRemedy: "run `gh actions-lock` to rewrite it as `uses: typesafegithub/github-actions-typing@v2.2.2`",
 		},
 		{
 			name: "transferred transitive dependency points at its parent", ref: "v2", parent: "octo/composite@v1",

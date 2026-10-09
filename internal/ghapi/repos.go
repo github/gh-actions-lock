@@ -62,7 +62,7 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 					}
 					return anon, anonErr
 				}
-				return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, err)
+				return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, c.ssoErr(owner, err))
 			}
 			for _, b := range resp {
 				all = append(all, BranchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: b.Protected})
@@ -117,7 +117,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 				c.tagListCache.Put(key, tags)
 				return result{tags: tags}, nil
 			}
-			return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)}, nil
+			return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, c.ssoErr(owner, err))}, nil
 		}
 		tags := make([]TagEntry, 0, len(resp))
 		for _, t := range resp {
@@ -174,13 +174,17 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			} `json:"owner"`
 		}
 		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
-		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		if c.restOnly {
+			if err := c.anonGet(ctx, path, &resp); err != nil {
+				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
+			}
+		} else if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
 				if anonErr := c.anonGet(ctx, path, &resp); anonErr != nil {
 					return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
 				}
 			} else {
-				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
+				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, c.ssoErr(owner, err))
 			}
 		}
 		m := repoMeta{
@@ -397,7 +401,7 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 				}
 				return false, anonErr
 			}
-			return false, err
+			return false, c.ssoErr(owner, err)
 		}
 		contains := strings.EqualFold(resp.MergeBaseCommit.SHA, sha)
 		c.compareCache.Put(key, contains)

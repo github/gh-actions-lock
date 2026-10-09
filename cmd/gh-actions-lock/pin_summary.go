@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -17,7 +19,8 @@ import (
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
 // don't count. LocalAction and UnreachablePin errors are unfixable --
-// the workflow or lockfile must be investigated.
+// the workflow or lockfile must be investigated. ReachabilityUnknown is
+// an error only when a fresh pin's identity couldn't be confirmed.
 func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
@@ -25,7 +28,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.InvalidSelfRepositoryRef, checks.RepoMoved:
+			case checks.LocalAction, checks.InvalidSelfRepositoryRef, checks.RepoMoved, checks.ReachabilityUnknown:
 				return true
 			case checks.NotPinned:
 				if !f.IsRemediableNotPinned() {
@@ -55,6 +58,7 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 			if f.Category == checks.LocalAction ||
 				f.Category == checks.InvalidSelfRepositoryRef ||
 				f.Category == checks.RepoMoved ||
+				f.Category == checks.ReachabilityUnknown ||
 				f.Category == checks.NotPinned && !f.IsRemediableNotPinned() {
 				return true
 			}
@@ -70,6 +74,12 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 	narrowed := record.Narrowed()
+
+	for _, wp := range record.Workflows {
+		for _, oldUse := range slices.Sorted(maps.Keys(wp.RequiredRewrites)) {
+			console.TermSuccess("Rewrote %s → %s in %s (repository renamed or transferred)", oldUse, wp.RequiredRewrites[oldUse], wp.Path)
+		}
+	}
 
 	if len(pinned) > 0 {
 		console.TermBlank()

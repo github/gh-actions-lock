@@ -26,15 +26,19 @@ func (r ActionFileRequest) NWO() string { return r.Owner + "/" + r.Repo }
 // ActionFileResult holds the resolved commit OID and action.yml content
 // for one ActionFileRequest. Err is non-nil when this specific ref could
 // not be resolved (e.g. not found, SSO required).
+//
+// Owner and Repo are the repository's canonical name. OriginalNWO is set
+// when the request followed a rename or transfer redirect.
 type ActionFileResult struct {
-	Hostname  string
-	Owner     string
-	Repo      string
-	Path      string
-	Ref       string
-	CommitOID string
-	ActionYML string
-	Err       error
+	Hostname    string
+	Owner       string
+	Repo        string
+	OriginalNWO string
+	Path        string
+	Ref         string
+	CommitOID   string
+	ActionYML   string
+	Err         error
 }
 
 // repoResponse is the raw GraphQL response shape for a single repository alias.
@@ -128,6 +132,7 @@ func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileReques
 			continue
 		}
 		if !c.repoFallbackEligible(ctx, refs[i].Owner, refs[i].Repo, r.Err) {
+			results[i].Err = c.ssoErr(refs[i].Owner, r.Err)
 			continue
 		}
 		results[i] = c.resolveAnonymous(ctx, refs[i])
@@ -298,6 +303,10 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 			results[idx].Err = fmt.Errorf("failed to parse: %w", err)
 			continue
 		}
+		if err := canonicalize(&results[idx], repo.NameWithOwner); err != nil {
+			results[idx].Err = err
+			continue
+		}
 
 		if repo.Object == nil || repo.Object.OID == "" {
 			n := len(ref.Ref)
@@ -382,4 +391,21 @@ func isHexString(s string) bool {
 		}
 	}
 	return true
+}
+
+// canonicalize moves a result to the repository's current name.
+func canonicalize(r *ActionFileResult, canonical string) error {
+	if canonical == "" {
+		return nil
+	}
+	owner, name, ok := strings.Cut(canonical, "/")
+	if !ok || owner == "" || name == "" {
+		return fmt.Errorf("invalid canonical repository name %q", canonical)
+	}
+	if strings.EqualFold(canonical, r.Owner+"/"+r.Repo) {
+		return nil
+	}
+	r.OriginalNWO = r.Owner + "/" + r.Repo
+	r.Owner, r.Repo = owner, name
+	return nil
 }

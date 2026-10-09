@@ -27,6 +27,9 @@ type CommitOptions struct {
 // fails, previously written files are not rolled back (best-effort),
 // but the error is returned immediately.
 func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *CommitOptions) error {
+	if err := validateRequiredRewrites(rec.Workflows); err != nil {
+		return err
+	}
 	progress := func(string) {}
 	if copts != nil && copts.OnProgress != nil {
 		progress = copts.OnProgress
@@ -245,4 +248,32 @@ func buildDirectKeys(rec *Record, wfPath string) map[string]bool {
 		}
 	}
 	return keys
+}
+
+func validateRequiredRewrites(plans []WorkflowPlan) error {
+	for _, wp := range plans {
+		if len(wp.RequiredRewrites) == 0 {
+			continue
+		}
+		found := make(map[string]int)
+		for _, path := range append([]string{wp.Path}, wp.SelfActionFiles...) {
+			wf, err := workflowfile.Load(path)
+			if err != nil {
+				return fmt.Errorf("validating required rewrites in %s: %w", path, err)
+			}
+			matches, err := wf.ValidateRequiredActionRefRewrites(wp.RequiredRewrites)
+			if err != nil {
+				return fmt.Errorf("validating required rewrites in %s: %w", path, err)
+			}
+			for oldUse, n := range matches {
+				found[oldUse] += n
+			}
+		}
+		for oldUse := range wp.RequiredRewrites {
+			if found[oldUse] == 0 {
+				return fmt.Errorf("required action rewrite for %s was not found in writable workflow sources", oldUse)
+			}
+		}
+	}
+	return nil
 }

@@ -52,6 +52,19 @@ func IsInvalidSelfRepositoryRef(err error) bool {
 	return errors.As(err, &target)
 }
 
+// TransferredRepositoryError reports a redirected action inside a remote
+// composite, which the consuming repository cannot rewrite.
+type TransferredRepositoryError struct {
+	Original  string
+	Canonical string
+	Parent    string
+}
+
+func (e *TransferredRepositoryError) Error() string {
+	return fmt.Sprintf("%s was renamed or transferred to %s; upstream composite %s must update its `uses:` reference",
+		e.Original, e.Canonical, e.Parent)
+}
+
 // selfRepositoryPrefix marks a `$/…` self repository action inside a composite's
 // nested uses. Kept local to avoid importing the workflowfile package into the
 // resolver; the sibling detection here is a plain prefix check.
@@ -389,6 +402,9 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 						Path:     res[j].Path,
 						Ref:      ref.Ref,
 						SHA:      res[j].CommitOID,
+					}
+					if res[j].OriginalNWO != "" {
+						d.OriginalRefs = []parserlock.ActionRef{ref}
 					}
 					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})
 					results[idx] = resolveResult{dep: d, yml: res[j].ActionYML, ok: true}

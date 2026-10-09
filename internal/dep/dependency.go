@@ -4,6 +4,7 @@ package dep
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -16,7 +17,10 @@ import (
 // and not part of any public API.
 type Dependency struct {
 	Hostname string // owning GitHub instance; empty means the invocation's home host
-	NWO      string // owner/repo (no path)
+	NWO      string // canonical owner/repo (no path)
+	// OriginalRefs are the refs as written when they followed a rename or
+	// transfer redirect to NWO.
+	OriginalRefs []parserlock.ActionRef
 	// Path is the optional sub-action subpath as written in `uses:`
 	// (e.g. "save" for actions/cache/save). It is preserved on the
 	// in-memory dep so resolver-time graph traversal can fetch the
@@ -79,14 +83,21 @@ func detectHashAlgo(hash string) string {
 }
 
 // Dedup returns a copy of deps with duplicates (by Key) removed,
-// preserving first-seen order.
+// preserving first-seen order and merging OriginalRefs.
 func Dedup(deps []Dependency) []Dependency {
-	seen := make(map[string]bool, len(deps))
+	seen := make(map[string]int, len(deps))
 	out := make([]Dependency, 0, len(deps))
 	for _, d := range deps {
-		if k := d.Key(); !seen[k] {
-			seen[k] = true
+		i, ok := seen[d.Key()]
+		if !ok {
+			seen[d.Key()] = len(out)
 			out = append(out, d)
+			continue
+		}
+		for _, ref := range d.OriginalRefs {
+			if !slices.Contains(out[i].OriginalRefs, ref) {
+				out[i].OriginalRefs = append(out[i].OriginalRefs, ref)
+			}
 		}
 	}
 	return out

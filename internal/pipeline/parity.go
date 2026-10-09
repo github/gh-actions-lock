@@ -27,7 +27,8 @@ import (
 //
 // Identity follows the runner: only the repo ID counts. A rename or
 // transfer redirect to the same repo ID is a warning; a different ID or
-// a name that no longer resolves blocks.
+// a name that no longer resolves blocks. Fresh pins fail closed: an
+// inconclusive check keeps them out of the write.
 func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, resolved []dep.Dependency, parents map[string][]string, keep func(checks.Category) bool) {
 	gh := r.GHClient()
 	if gh == nil || store == nil {
@@ -44,6 +45,9 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	add := func(o parityOwner) {
 		if o.fresh && o.lp.Action.RepoID == 0 {
 			o.lp.Action.RepoID = store.RecordedRepoID(o.lp.Pin.Owner, o.lp.Pin.Repo)
+			if o.lp.Action.RepoID == 0 {
+				o.lp.Action.RepoID = store.RecordedRepoID(o.ref.Owner, o.ref.Repo)
+			}
 		}
 		key := strings.ToLower(o.lp.Pin.String() + ":" + lockedSHA(o.lp.Action.Commit))
 		i, seen := pinIdx[key]
@@ -57,6 +61,9 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		}
 		if j, dup := owned[[2]int{o.report, i}]; dup {
 			owners[i][j].fresh = owners[i][j].fresh || o.fresh
+			if owners[i][j].transfer == nil {
+				owners[i][j].transfer = o.transfer
+			}
 			return
 		}
 		owned[[2]int{o.report, i}] = len(owners[i])
@@ -103,10 +110,19 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	for i, st := range states {
 		for _, o := range owners[i] {
 			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st)
-			if !ok || !keep(f.Category) {
+			switch {
+			case o.transfer != nil:
+				f, ok = transferFinding(o, pins[i]), true
+			case ok && o.fresh && st.Err != nil:
+				f.Severity = checks.SeverityError
+				f.Remediation = "retry; nothing is written until the repository identity is confirmed"
+			case !ok || !keep(f.Category):
 				continue
 			}
 			wr := &report.Workflows[o.report]
+			if f.Category == checks.RepoMoved && f.Severity == checks.SeverityWarning {
+				r.Forget(o.lp.Pin.Owner, o.lp.Pin.Repo, o.ref.Path, o.lp.Pin.Ref)
+			}
 			if f.Severity == checks.SeverityError {
 				wr.Findings = dropValid(wr.Findings)
 				wr.SkipCommit = true
@@ -122,6 +138,24 @@ type parityOwner struct {
 	lp     lockfile.LockedPin
 	ref    parserlock.ActionRef
 	fresh  bool
+	// transfer is set for a redirect inside a remote composite, which
+	// the consuming repository cannot rewrite.
+	transfer *resolve.TransferredRepositoryError
+}
+
+func transferFinding(o parityOwner, pc ghapi.PinCheck) checks.Finding {
+	return checks.Finding{
+		WorkflowPath: o.pw.Path,
+		ActionRef:    &o.ref,
+		Dependency:   &dep.Dependency{NWO: pc.Owner + "/" + pc.Repo, Path: o.ref.Path, Ref: o.lp.Pin.Ref, SHA: pc.SHA},
+		ParentNWO:    o.transfer.Parent,
+		Category:     checks.RepoMoved,
+		Severity:     checks.SeverityError,
+		Confidence:   checks.ConfidenceHigh,
+		Detail:       o.transfer.Error(),
+		Remediation:  fmt.Sprintf("upgrade %s to a version that uses %s", o.transfer.Parent, o.transfer.Canonical),
+		DocURL:       DocURLFor(checks.RepoMoved),
+	}
 }
 
 // freshClosure returns a function yielding the closure of a workflow's
@@ -134,9 +168,15 @@ func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(c
 		if d.SHA == "" {
 			continue
 		}
-		byKey[strings.ToLower(d.Key())] = append(byKey[strings.ToLower(d.Key())], d)
-		for _, p := range parents[d.Key()] {
-			children[strings.ToLower(p)] = append(children[strings.ToLower(p)], d)
+		keys := []string{d.Key()}
+		for _, ref := range d.OriginalRefs {
+			keys = append(keys, ref.NWO()+"@"+ref.Ref)
+		}
+		for _, k := range keys {
+			byKey[strings.ToLower(k)] = append(byKey[strings.ToLower(k)], d)
+			for _, p := range parents[k] {
+				children[strings.ToLower(p)] = append(children[strings.ToLower(p)], d)
+			}
 		}
 	}
 	return func(pw checks.ParsedWorkflow, recordedKeys map[string]bool) []parityOwner {
@@ -150,11 +190,17 @@ func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(c
 			}
 			seen[id] = true
 			owner, repo := d.OwnerRepo()
-			out = append(out, parityOwner{pw: pw, fresh: true, ref: ref, lp: lockfile.LockedPin{
+			o := parityOwner{pw: pw, fresh: true, ref: ref, lp: lockfile.LockedPin{
 				Pin:    parserlock.Pin{NWO: d.NWO, Owner: owner, Repo: repo, Ref: d.Ref},
 				Action: parserlock.Action{Commit: d.SHA},
 				Parent: parent,
-			}})
+			}}
+			for _, orig := range d.OriginalRefs {
+				if ps := parents[orig.NWO()+"@"+orig.Ref]; len(ps) > 0 {
+					o.transfer = &resolve.TransferredRepositoryError{Original: orig.NWO(), Canonical: d.NWO, Parent: ps[0]}
+				}
+			}
+			out = append(out, o)
 			for _, c := range children[strings.ToLower(d.Key())] {
 				co, cr := c.OwnerRepo()
 				walk(c, parserlock.ActionRef{Owner: co, Repo: cr, Path: c.Path, Ref: c.Ref}, d.Key())
@@ -228,7 +274,7 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		if ref.Path != "" {
 			uses += "/" + ref.Path
 		}
-		f.Remediation = fmt.Sprintf("replace with `uses: %s@%s`, then run `gh actions-lock`", uses, ref.Ref)
+		f.Remediation = fmt.Sprintf("run `gh actions-lock` to rewrite it as `uses: %s@%s`", uses, ref.Ref)
 		if f.ParentNWO != "" {
 			f.Remediation = fmt.Sprintf("upgrade %s to a version that uses %s", f.ParentNWO, st.NameWithOwner)
 		}

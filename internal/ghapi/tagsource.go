@@ -56,7 +56,7 @@ func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoReleas
 				return nil, fmt.Errorf("anonymous fallback fetching releases for %s/%s: %w", owner, repo, anonErr)
 			}
 		} else {
-			return nil, fmt.Errorf("fetching releases for %s/%s: %w", owner, repo, err)
+			return nil, fmt.Errorf("fetching releases for %s/%s: %w", owner, repo, c.ssoErr(owner, err))
 		}
 	}
 
@@ -109,7 +109,7 @@ func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string
 				return "", fmt.Errorf("anonymous fallback resolving %s/%s@%s: %w", owner, repo, ref, anonErr)
 			}
 		} else {
-			return "", fmt.Errorf("resolving %s/%s@%s: %w", owner, repo, ref, err)
+			return "", fmt.Errorf("resolving %s/%s@%s: %w", owner, repo, ref, c.ssoErr(owner, err))
 		}
 	}
 	return result.SHA, nil

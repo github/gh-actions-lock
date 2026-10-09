@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -252,6 +253,26 @@ func parityOK(req *http.Request) (*http.Response, error) {
 	return httpmock.JSONResponse(map[string]any{"data": data})(req)
 }
 
+// parityFallback answers parity queries the test did not stub as intact,
+// since fresh pins fail closed on an inconclusive check.
+type parityFallback struct{ rt http.RoundTripper }
+
+func (p parityFallback) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body == nil || !httpmock.GraphQL(`commit: object\(oid`)(req) {
+		return p.rt.RoundTrip(req)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	if resp, err := p.rt.RoundTrip(req); err == nil {
+		return resp, nil
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	return parityOK(req)
+}
+
 // writeTempWorkflow writes a workflow YAML body to a scratch repo at
 // .github/workflows/workflow.yml and (if pins are provided) materializes the
 // detached lockfile at .github/workflows/actions.lock. The fixture body must
@@ -342,7 +363,7 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 	require.NoError(t, err)
 
 	newResolver := func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
-		return resolve.New(hostname, pool, resolve.WithTransport(rt))
+		return resolve.New(hostname, pool, resolve.WithTransport(parityFallback{rt}))
 	}
 
 	cmd := newRootCmd(newResolver)

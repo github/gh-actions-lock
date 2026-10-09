@@ -290,14 +290,19 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
+	required, err := transferRewrites(deps, rootTracker, rewrites)
+	if err != nil {
+		return planResult{}, err
+	}
 	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
 		return planResult{}, err
 	}
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
-			Path:            wr.Path,
-			Rewrites:        rewrites,
-			SelfActionFiles: wr.SelfActionFiles,
+			Path:             wr.Path,
+			Rewrites:         rewrites,
+			RequiredRewrites: required,
+			SelfActionFiles:  wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
@@ -311,6 +316,31 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	entries = append(entries, informationalEntries(wr, opts)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
+}
+
+// transferRewrites moves each redirected root's `uses:` to the canonical
+// repository. A redirect below a remote composite is unwritable here; the
+// parity check normally blocks it before planning.
+func transferRewrites(deps []dep.Dependency, rootTracker lockfile.DirectTracker, rewrites map[string]string) (map[string]string, error) {
+	var required map[string]string
+	for i, d := range deps {
+		for _, ref := range d.OriginalRefs {
+			if !rootTracker.IsDirect(i) {
+				return nil, &resolve.TransferredRepositoryError{Original: ref.NWO(), Canonical: d.NWO, Parent: "a remote composite"}
+			}
+			newUse := d.NWO
+			if ref.Path != "" {
+				newUse += "/" + ref.Path
+			}
+			if required == nil {
+				required = map[string]string{}
+			}
+			oldUse := ref.FullName() + "@" + ref.Ref
+			rewrites[oldUse] = newUse + "@" + d.Ref
+			required[oldUse] = rewrites[oldUse]
+		}
+	}
+	return required, nil
 }
 
 func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlock.ActionRef, rewrites map[string]string) error {
@@ -561,7 +591,8 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 // the workflow no longer references), so a fix-mode re-pin converges.
 // acceptMoved additionally prunes ref-moved and unreachable-pin deps; relock
 // prunes ref-moved deps only, so a benign branch/version advance can be
-// re-pinned without accepting a possibly-tampered unreachable pin.
+// re-pinned without accepting a possibly-tampered unreachable pin. A
+// same-ID redirect is pruned so it re-resolves under the canonical name.
 func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved, relock bool) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {
@@ -570,7 +601,8 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 			continue
 		case f.Category == checks.Stale,
 			f.Category == checks.UnreachablePin && acceptMoved,
-			f.Category == checks.RefMoved && (acceptMoved || relock):
+			f.Category == checks.RefMoved && (acceptMoved || relock),
+			f.Category == checks.RepoMoved && f.Severity == checks.SeverityWarning:
 		default:
 			continue
 		}

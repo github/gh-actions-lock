@@ -297,7 +297,7 @@ func (c *Client) restCommit(ctx context.Context, owner, repo, ref string) (strin
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", false, c.ssoErr(owner, err)
 	}
 	return commit.SHA, true, nil
 }

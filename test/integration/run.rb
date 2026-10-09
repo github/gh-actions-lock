@@ -542,13 +542,29 @@ def checkout_repo_rest(srv)
   end
 end
 
+# Answer the runner-parity query: the repo resolves under its own name and
+# every requested commit/tag exists at the locked SHA.
+def checkout_parity(body)
+  vars = body["variables"] || {}
+  data = {}
+  vars.each_key do |k|
+    next unless (m = k.match(/\Aoid(\d+)\z/))
+    i = m[1]
+    data["a#{i}"] = { nameWithOwner: "actions/checkout", databaseId: 197_814_629,
+                      commit: { oid: vars[k] }, tag: { oid: vars[k] } }
+  end
+  [200, { "Content-Type" => "application/json" }, JSON.generate({ data: data })]
+end
+
 # Resolve actions/checkout to a moved ref's live SHA.
 def checkout_graphql_ref_move(srv, live_sha)
   srv.on(:POST, %r{/graphql$}) do |req|
     body = JSON.parse(req.body) rescue {}
     query = body["query"] || ""
 
-    if query.include?("expression")
+    if query.include?("commit: object(oid")
+      checkout_parity(body)
+    elsif query.include?("expression")
       [200, { "Content-Type" => "application/json" },
        JSON.generate({ data: { a0: {
          nameWithOwner: "actions/checkout",
@@ -571,7 +587,9 @@ def checkout_graphql_success(srv)
     body = JSON.parse(req.body) rescue {}
     query = body["query"] || ""
 
-    if query.include?("expression")
+    if query.include?("commit: object(oid")
+      checkout_parity(body)
+    elsif query.include?("expression")
       [200, { "Content-Type" => "application/json" },
        JSON.generate({ data: { a0: {
          nameWithOwner: "actions/checkout",
