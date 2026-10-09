@@ -1,6 +1,8 @@
 package lockfile
 
 import (
+	"strings"
+
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 )
@@ -29,13 +31,23 @@ type DirectTracker struct {
 func NewDirectTracker(refs []parserlock.ActionRef, deps []dep.Dependency) DirectTracker {
 	want := make(map[string]bool, len(refs))
 	for _, ref := range refs {
-		want[ref.NWO()+"@"+ref.Ref] = true
+		want[directKey(ref.NWO(), ref.Ref)] = true
 	}
 	direct := make([]bool, len(deps))
 	for i, d := range deps {
-		direct[i] = want[d.Key()]
+		direct[i] = want[directKey(d.NWO, d.Ref)]
 	}
 	return DirectTracker{direct: direct}
+}
+
+// directKey folds owner/repo case, and ref case only for full SHAs, so a
+// workflow's Actions/Checkout matches the resolver's case-folded
+// actions/checkout dep. Other refs stay case-sensitive like git.
+func directKey(nwo, ref string) string {
+	if parserlock.IsFullSha(ref) {
+		ref = strings.ToLower(ref)
+	}
+	return strings.ToLower(nwo) + "@" + ref
 }
 
 // IsDirect reports whether the dep at index i is a workflow-direct use.
