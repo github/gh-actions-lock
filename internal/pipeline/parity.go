@@ -173,9 +173,9 @@ func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(c
 			keys = append(keys, ref.NWO()+"@"+ref.Ref)
 		}
 		for _, k := range keys {
-			byKey[strings.ToLower(k)] = append(byKey[strings.ToLower(k)], d)
+			byKey[foldKey(k)] = append(byKey[foldKey(k)], d)
 			for _, p := range parents[k] {
-				children[strings.ToLower(p)] = append(children[strings.ToLower(p)], d)
+				children[foldKey(p)] = append(children[foldKey(p)], d)
 			}
 		}
 	}
@@ -184,7 +184,7 @@ func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(c
 		seen := map[string]bool{}
 		var walk func(d dep.Dependency, ref parserlock.ActionRef, parent string)
 		walk = func(d dep.Dependency, ref parserlock.ActionRef, parent string) {
-			id := strings.ToLower(d.Key() + "/" + d.Path)
+			id := foldKey(d.Key()) + "/" + d.Path
 			if seen[id] {
 				return
 			}
@@ -201,13 +201,13 @@ func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(c
 				}
 			}
 			out = append(out, o)
-			for _, c := range children[strings.ToLower(d.Key())] {
+			for _, c := range children[foldKey(d.Key())] {
 				co, cr := c.OwnerRepo()
 				walk(c, parserlock.ActionRef{Owner: co, Repo: cr, Path: c.Path, Ref: c.Ref}, d.Key())
 			}
 		}
 		for _, ref := range pw.Refs {
-			key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
+			key := foldKey(ref.Owner + "/" + ref.Repo + "@" + ref.Ref)
 			if recordedKeys[key] {
 				continue
 			}
@@ -288,6 +288,13 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 	}
 	f.DocURL = DocURLFor(f.Category)
 	return f, true
+}
+
+// foldKey lowercases the owner/repo of an NWO@ref key. Refs are
+// case-sensitive, so folding them would let a fresh ref miss its closure.
+func foldKey(k string) string {
+	nwo, ref, _ := strings.Cut(k, "@")
+	return strings.ToLower(nwo) + "@" + ref
 }
 
 func idChanged(locked, live int64) bool {

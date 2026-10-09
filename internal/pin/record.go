@@ -20,9 +20,9 @@ type Entry struct {
 	Workflows    []string
 	RequiredBy   []string
 	Direct       bool
-	// RenamedFrom is the lockfile key this pin had before a same-repository
-	// rename, so its recorded `uses:` carry over.
-	RenamedFrom string
+	// RenamedFrom lists the lockfile keys this pin had before a
+	// same-repository rename, so their recorded `uses:` carry over.
+	RenamedFrom []string
 	FullScan    bool
 }
 

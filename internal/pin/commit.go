@@ -27,9 +27,6 @@ type CommitOptions struct {
 // fails, previously written files are not rolled back (best-effort),
 // but the error is returned immediately.
 func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *CommitOptions) error {
-	if err := validateRequiredRewrites(rec.Workflows); err != nil {
-		return err
-	}
 	progress := func(string) {}
 	if copts != nil && copts.OnProgress != nil {
 		progress = copts.OnProgress
@@ -42,6 +39,9 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 			}
 		}
 		rec.Workflows = workflows
+	}
+	if err := validateRequiredRewrites(rec.Workflows); err != nil {
+		return err
 	}
 
 	// Phase 1: Rewrite workflow files (uses: line changes).
