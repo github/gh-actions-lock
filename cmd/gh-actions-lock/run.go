@@ -433,7 +433,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Commit: write all changes to disk atomically (fast local I/O, no
 	// spinner label — it finishes before the user could read one).
 	endCommit := prof.Phase("pin.Commit (disk writes)")
-	if err := pin.Commit(ctx, record, store, nil); err != nil {
+	if err := pin.Commit(ctx, record, store, &pin.CommitOptions{SkipNewWorkflowEntries: noOnboardFlag(cmd)}); err != nil {
 		console.StopProgress()
 		return fmt.Errorf("committing pins: %w", err)
 	}

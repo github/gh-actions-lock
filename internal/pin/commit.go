@@ -18,6 +18,8 @@ import (
 type CommitOptions struct {
 	// OnProgress is called at each phase boundary. Nil means no progress.
 	OnProgress func(phase string)
+	// SkipNewWorkflowEntries forces the Commit phase to skip workflows with no existing lockfile entry.
+	SkipNewWorkflowEntries bool
 }
 
 // Commit writes a planned Record to disk: rewrites workflow files and
@@ -28,6 +30,15 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 	progress := func(string) {}
 	if copts != nil && copts.OnProgress != nil {
 		progress = copts.OnProgress
+	}
+	if copts != nil && copts.SkipNewWorkflowEntries {
+		workflows := rec.Workflows[:0]
+		for _, wp := range rec.Workflows {
+			if store.HasWorkflow(workflowfile.KeyFromPath(wp.Path)) {
+				workflows = append(workflows, wp)
+			}
+		}
+		rec.Workflows = workflows
 	}
 
 	// Phase 1: Rewrite workflow files (uses: line changes).
@@ -67,9 +78,6 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		wfPath := wp.Path
 		wfKey := workflowfile.KeyFromPath(wfPath)
 		deps := pinnedByWorkflow[wfPath]
-		if len(deps) == 0 && !store.HasWorkflow(wfKey) {
-			continue
-		}
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
 		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
