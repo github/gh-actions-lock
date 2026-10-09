@@ -15,8 +15,6 @@ Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get start
 
 ## Requirements
 
-Supported targets are `github.com` and GitHub Enterprise Cloud with data
-residency (`*.ghe.com`), subject to the [availability note below](#github-enterprise-cloud-with-data-residency).
 GitHub Enterprise Server (GHES) is not supported.
 
 Requires the [`gh` CLI](https://cli.github.com/). Install it first, then install the extension:
@@ -54,13 +52,7 @@ those as well.
 
 ### GitHub Enterprise Cloud with data residency
 
-> [!IMPORTANT]
-> Hostname-aware tenant/public resolution is not yet released. It is being
-> developed in [#137](https://github.com/github/gh-actions-lock/pull/137);
-> neither v0.1.6 nor v0.1.7-rc.1 includes it. Installing or upgrading the
-> published extension does not install this draft implementation.
-
-With a build that includes this support, authenticate `gh` to your tenant, then
+Authenticate `gh` to your tenant, then
 run the extension from your tenant repository checkout:
 
 ```bash
