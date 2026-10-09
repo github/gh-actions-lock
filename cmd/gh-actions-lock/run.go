@@ -432,6 +432,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endCommit := prof.Phase("pin.Commit (disk writes)")
 	if err := pin.Commit(ctx, record, store, &pin.CommitOptions{SkipNewWorkflowEntries: noOnboardFlag(cmd)}); err != nil {
 		console.StopProgress()
+		defer saveRunLog(record, false)()
 		return fmt.Errorf("committing pins: %w", err)
 	}
 	endCommit()

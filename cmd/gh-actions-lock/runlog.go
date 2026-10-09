@@ -21,21 +21,24 @@ const (
 // cache dir so a run that can't be reproduced later still leaves evidence
 // for a bug report. Best effort: returns "" on any failure.
 func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost string) string {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if dir == "" {
 		return ""
 	}
-	gcLogs(dir)
-
-	path := filepath.Join(dir, fmt.Sprintf("run-%s.json", time.Now().Format("20060102-150405.000")))
-	f, err := os.Create(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	// CreateTemp opens with 0600: logs can name private repos.
+	f, err := os.CreateTemp(dir, fmt.Sprintf("run-%s-*.json", time.Now().Format("20060102-150405")))
 	if err != nil {
 		return ""
 	}
+	path := f.Name()
 	werr := format.WriteJSON(f, report, record, valid, format.AllJSONFields, cliVersion(), lockfileVersion, homeHost)
 	if cerr := f.Close(); werr != nil || cerr != nil {
 		_ = os.Remove(path)
 		return ""
 	}
+	gcLogs(dir)
 	return path
 }
 

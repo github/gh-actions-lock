@@ -27,11 +27,16 @@ func TestWriteRunLog(t *testing.T) {
 		}}}
 		record := &pin.Record{Entries: []pin.Entry{
 			{NWO: "o/r", Ref: "v1", Resolution: pin.Unresolved, Reason: "not found", Workflows: []string{"a.yml"}},
-			{NWO: "o/r", Ref: "v1", Resolution: pin.Unresolved, Reason: "not found", Workflows: []string{"b.yml"}},
+			{NWO: "O/R", Ref: "v1", Resolution: pin.Unresolved, Reason: "not found", Workflows: []string{"b.yml"}},
+			{Hostname: "tenant.ghe.com", NWO: "o/r", Ref: "v1", Resolution: pin.Pinned, SHA: "abc", Workflows: []string{"c.yml"}},
+			{NWO: "o/r", Ref: "V1", Resolution: pin.Pinned, SHA: "def", Workflows: []string{"d.yml"}},
 		}}
 
 		path := writeRunLog(dir, report, record, false, "v0.0.3", "github.com")
 		require.NotEmpty(t, path)
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
 		b, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -44,9 +49,29 @@ func TestWriteRunLog(t *testing.T) {
 		assert.False(t, payload.Valid)
 		require.Len(t, payload.Findings, 1)
 		assert.Equal(t, "local path cannot be resolved", payload.Findings[0]["detail"])
-		require.Len(t, payload.Pins, 1, "pins dedupe by NWO@Ref")
+		require.Len(t, payload.Pins, 3, "dedupe by host/NWO@Ref; host and NWO fold case, ref does not")
 		assert.Equal(t, "unresolved", payload.Pins[0]["outcome"])
 		assert.Equal(t, "not found", payload.Pins[0]["reason"])
+		assert.Equal(t, "tenant.ghe.com", payload.Pins[1]["hostname"])
+		assert.Equal(t, "V1", payload.Pins[2]["ref"])
+	})
+
+	t.Run("keeps the retention count including the new log", func(t *testing.T) {
+		dir := t.TempDir()
+		for i := 0; i < runLogRetentionCount; i++ {
+			name := filepath.Join(dir, fmt.Sprintf("old-%03d.json", i))
+			require.NoError(t, os.WriteFile(name, nil, 0o600))
+			mtime := time.Now().Add(-time.Duration(i+1) * time.Minute)
+			require.NoError(t, os.Chtimes(name, mtime, mtime))
+		}
+
+		path := writeRunLog(dir, &checks.Report{}, nil, true, "", "github.com")
+
+		require.NotEmpty(t, path)
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Len(t, entries, runLogRetentionCount)
+		assert.FileExists(t, path)
 	})
 
 	t.Run("returns empty path when dir is unusable", func(t *testing.T) {

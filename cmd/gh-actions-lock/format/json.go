@@ -97,6 +97,7 @@ type Workflow struct {
 // Pin is the post-fix outcome for one action from the pin plan. The other
 // fields describe the pre-fix diagnosis.
 type Pin struct {
+	Hostname     string `json:"hostname,omitempty"`
 	NWO          string `json:"nwo"`
 	Ref          string `json:"ref"`
 	SHA          string `json:"sha,omitempty"`
@@ -279,8 +280,9 @@ func WriteJSON(w io.Writer, report *checks.Report, record *pin.Record, valid boo
 	return enc.Encode(payload)
 }
 
-// pinsFromRecord lists one Pin per NWO@Ref; the record holds one entry per
-// workflow that uses the action.
+// pinsFromRecord lists one Pin per host/NWO@Ref; the record holds one entry
+// per workflow that uses the action. Host and NWO are case-insensitive, refs
+// are not (see ghapi.ForNWORef).
 func pinsFromRecord(record *pin.Record) []Pin {
 	pins := []Pin{}
 	if record == nil {
@@ -288,12 +290,13 @@ func pinsFromRecord(record *pin.Record) []Pin {
 	}
 	seen := map[string]bool{}
 	for _, e := range record.Entries {
-		key := e.NWO + "@" + e.Ref
+		key := strings.ToLower(e.Hostname+"/"+e.NWO) + "@" + e.Ref
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
 		pins = append(pins, Pin{
+			Hostname:     e.Hostname,
 			NWO:          e.NWO,
 			Ref:          e.Ref,
 			SHA:          e.SHA,
