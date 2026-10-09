@@ -288,7 +288,7 @@ func TestProximaPrunesBeforeVerifyingHosts(t *testing.T) {
 					if tt.mismatch {
 						id = 2
 					}
-					return httpmock.JSONResponse(map[string]any{"id": id, "owner": map[string]any{"id": 1}})(req)
+					return httpmock.JSONResponse(map[string]any{"full_name": "actions/checkout", "id": id, "owner": map[string]any{"id": 1}})(req)
 				case "/repos/actions/setup-go":
 					staleCalls++
 					return httpmock.StatusResponse(http.StatusNotFound)(req)
@@ -308,7 +308,7 @@ func TestProximaPrunesBeforeVerifyingHosts(t *testing.T) {
 				require.NoError(t, readErr)
 				assert.Equal(t, before, string(after))
 				if tt.mismatch {
-					assert.ErrorContains(t, err, "does not match its tenant.ghe.com repository IDs")
+					assert.ErrorContains(t, err, "does not match its tenant.ghe.com repository ID")
 					assert.Zero(t, staleCalls)
 				} else {
 					assert.ErrorContains(t, err, "verifying repository identity")

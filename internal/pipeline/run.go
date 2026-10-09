@@ -73,11 +73,26 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	if r != nil {
 		homeHostname = r.Hostname()
 	}
+	lockDeps := make(map[string]dep.Dependency)
+	if opts.Store != nil {
+		for _, d := range opts.Store.AllDeps() {
+			lockDeps[strings.ToLower(d.NWO)+"@"+d.Ref] = d
+		}
+	}
 	for i := range parsed {
 		if len(parsed[i].LocalPaths) == 0 &&
 			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
 			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
 			fastPlans[i] = planFastPath(parsed[i])
+			// A renamed workflow has no entry under its new key, but its
+			// pins survive pruning. Carry those mutable pins over through the
+			// same identity check instead of silently re-resolving them.
+			_, unrecorded := parsed[i].PartitionRefs()
+			for _, ref := range unrecorded {
+				if _, ok := lockDeps[lockDepKey(ref)]; ok && !checks.IsImmutableRef(ref.Ref) {
+					fastPlans[i].mutableRefs = append(fastPlans[i].mutableRefs, ref)
+				}
+			}
 			identityRefs[i] = repositoryIdentityRefs(parsed[i], lockSnapshot, homeHostname)
 		}
 	}
@@ -127,10 +142,11 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		// Seed only the mutable recorded deps so they resolve from
 		// the lockfile (trusted); immutable and unrecorded refs are
 		// left to resolve live from the network.
-		rd := parsed[i].RecordedDeps(plan.mutableRefs)
-		seedDeps = append(seedDeps, rd...)
 		for _, rr := range plan.mutableRefs {
-			recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
+			if d, ok := lockDeps[lockDepKey(rr)]; ok {
+				seedDeps = append(seedDeps, d)
+			}
+			recordedKeys[lockDepKey(rr)] = true
 		}
 	}
 
@@ -259,6 +275,19 @@ func repositoryIdentityRefs(pw checks.ParsedWorkflow, file parserlock.File, home
 		}
 		walk(root, "")
 	}
+	// Pins carried over from a renamed workflow are not listed under the
+	// current key; verify them too.
+	pins := make(map[ghapi.NWORef]string, len(file.Dependencies))
+	for raw := range file.Dependencies {
+		if pin, ok := parserlock.ParsePin(raw); ok {
+			pins[ghapi.ForNWORef(pin.Owner, pin.Repo, pin.Ref)] = raw
+		}
+	}
+	for _, ref := range pw.Refs {
+		if raw, ok := pins[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)]; ok {
+			walk(raw, "")
+		}
+	}
 	return refs
 }
 
@@ -281,6 +310,10 @@ func lockedRepositoryIdentity(refs []repositoryIdentityRef, ref parserlock.Actio
 		}
 	}
 	return repositoryIdentityRef{Ref: ref}
+}
+
+func lockDepKey(ref parserlock.ActionRef) string {
+	return strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
 }
 
 func repositoryIdentityKey(hostname string, ref parserlock.ActionRef) string {

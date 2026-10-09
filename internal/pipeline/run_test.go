@@ -126,6 +126,30 @@ func TestRepositoryIdentityRefsIncludesLockedClosure(t *testing.T) {
 	assert.Empty(t, got[2].Parent)
 }
 
+func TestRepositoryIdentityRefsIncludesRenamedWorkflowPins(t *testing.T) {
+	file := parserlock.File{
+		Workflows: map[string][]string{
+			".github/workflows/old.yml": {"root/composite@v1"},
+		},
+		Dependencies: map[string]parserlock.Action{
+			"root/composite@v1": {RepoID: 10, Uses: []string{"old/action@v1"}},
+			"old/action@v1":     {RepoID: 20},
+		},
+	}
+	pw := checks.ParsedWorkflow{
+		Path: ".github/workflows/new.yml",
+		Refs: []parserlock.ActionRef{ref("root", "composite", "", "v1")},
+	}
+	got := repositoryIdentityRefs(pw, file, "")
+
+	assert.Len(t, got, 2)
+	assert.Equal(t, "root/composite", got[0].Ref.NWO())
+	assert.EqualValues(t, 10, got[0].RepoID)
+	assert.Empty(t, got[0].Parent)
+	assert.Equal(t, "old/action", got[1].Ref.NWO())
+	assert.Equal(t, "root/composite@v1", got[1].Parent)
+}
+
 func TestPartitionRefs(t *testing.T) {
 	tests := []struct {
 		name             string
