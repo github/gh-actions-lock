@@ -42,7 +42,7 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 	// sees them. Runs by default on fix runs even in this otherwise read-only
 	// mode; opt out with --no-migrate-local-actions, and never under --no-fix.
 	if !opts.noMigrateLocalActions && !opts.noFix {
-		migrated, mErr := migrateLocalActions(paths)
+		migrated, _, mErr := migrateLocalActions(paths)
 		if mErr != nil {
 			return mErr
 		}
