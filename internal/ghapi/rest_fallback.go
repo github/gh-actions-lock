@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
 
 // anonProbeCache caches per-owner results of unauthenticated access probes.
@@ -20,6 +22,9 @@ var anonProbeCache sync.Map // map[string]bool
 // call for an owner, it probes the GitHub API with an unauthenticated
 // request to determine accessibility, then caches the result.
 func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
+	if IsProxima(c.Hostname) {
+		return false
+	}
 	key := c.anonBase() + "/" + owner
 	if v, ok := anonProbeCache.Load(key); ok {
 		return v.(bool)
@@ -48,6 +53,9 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 }
 
 func (c *Client) repoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
+	if IsProxima(c.Hostname) {
+		return false
+	}
 	code, _ := StatusCode(err)
 	if !IsSAMLEnforcement(err) && code != http.StatusUnauthorized {
 		return false
@@ -246,10 +254,11 @@ func (c *Client) anonCompareCommits(ctx context.Context, owner, repo, sha, branc
 // repos and is used as a fallback when SSO blocks the authenticated path.
 func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) ActionFileResult {
 	result := ActionFileResult{
-		Owner: ref.Owner,
-		Repo:  ref.Repo,
-		Path:  ref.Path,
-		Ref:   ref.Ref,
+		Hostname: c.Hostname,
+		Owner:    ref.Owner,
+		Repo:     ref.Repo,
+		Path:     ref.Path,
+		Ref:      ref.Ref,
 	}
 
 	base := c.anonBase()
@@ -278,10 +287,18 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 
 	content, err := c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, ymlPath)
 	if err != nil {
+		if code, _ := StatusCode(err); code != http.StatusNotFound {
+			result.Err = err
+			return result
+		}
 		// Try .yaml extension.
 		content, err = c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, yamlPath)
 		if err != nil {
-			// Not fatal — some actions don't have action.yml (reusable workflows).
+			// Reusable workflows have no action metadata; other failures
+			// must not silently truncate a composite's dependency graph.
+			if code, _ := StatusCode(err); code != http.StatusNotFound {
+				result.Err = err
+			}
 			return result
 		}
 	}
@@ -344,7 +361,7 @@ func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, path)
+		return "", &api.HTTPError{StatusCode: resp.StatusCode, Message: fmt.Sprintf("fetching %s", path)}
 	}
 
 	body, err := io.ReadAll(resp.Body)

@@ -14,7 +14,7 @@ import (
 
 type fakeMetadataResolver struct{}
 
-func (fakeMetadataResolver) RepoIDs(_ context.Context, owner, repo string) (int64, int64, error) {
+func (fakeMetadataResolver) RepoIDs(_ context.Context, _, owner, repo string) (int64, int64, error) {
 	return 1, 2, nil
 }
 

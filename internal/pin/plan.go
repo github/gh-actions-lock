@@ -105,7 +105,7 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		planErr = poolErr
 	}
 
-	targetSHAs := make(map[string]string)
+	targets := make(map[string]string)
 	for _, pr := range results {
 		for _, entry := range pr.entries {
 			if planErr != nil || entry.SHA == "" ||
@@ -113,11 +113,12 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 				continue
 			}
 			key := strings.ToLower(entry.NWO) + "@" + entry.Ref
-			if sha, ok := targetSHAs[key]; ok && !strings.EqualFold(sha, entry.SHA) {
-				planErr = fmt.Errorf("conflicting planned target %s resolves to both %s and %s", key, sha, entry.SHA)
+			target := entry.Hostname + "/" + entry.SHA
+			if previous, ok := targets[key]; ok && !strings.EqualFold(previous, target) {
+				planErr = fmt.Errorf("conflicting planned target %s resolves to both %s and %s", key, previous, target)
 				continue
 			}
-			targetSHAs[key] = entry.SHA
+			targets[key] = target
 		}
 		rec.Entries = append(rec.Entries, pr.entries...)
 		rec.Workflows = append(rec.Workflows, pr.wplans...)
@@ -202,12 +203,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
 	if resolveErr != nil {
-		entries = append(entries, unresolvedEntries(wr, unrecordedRefs, deps, resolveErr)...)
-		if len(deps) == 0 {
-			wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles, ResolveErr: resolveErr})
-			return planResult{entries: entries, wplans: wplans}, nil
+		// A resolved root is not pinnable when its transitive graph is incomplete.
+		for _, ref := range unrecordedRefs {
+			entries = append(entries, Entry{
+				NWO: ref.NWO(), Ref: ref.Ref, Resolution: Unresolved,
+				Reason: "resolution failed: " + resolveErr.Error(), Workflows: []string{wr.Path},
+			})
 		}
-		// Fall through with partial deps to pin what we can.
+		return planResult{entries: entries}, nil
 	}
 
 	// Root refs are recorded directly under the workflow in the lockfile.
@@ -295,11 +298,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			Path:            wr.Path,
 			Rewrites:        rewrites,
 			SelfActionFiles: wr.SelfActionFiles,
-			ResolveErr:      resolveErr,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles, ResolveErr: resolveErr})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
@@ -327,39 +329,6 @@ func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlo
 		}
 	}
 	return nil
-}
-
-// unresolvedEntries flags findings whose refs were attempted but failed to
-// resolve. On a partial failure deps holds the refs that did resolve, so only
-// the genuine misses (attempted and not in deps) are marked Unresolved.
-func unresolvedEntries(wr checks.WorkflowReport, unrecordedRefs []parserlock.ActionRef, deps []dep.Dependency, resolveErr error) []Entry {
-	resolved := make(map[string]bool, len(deps))
-	for _, d := range deps {
-		resolved[strings.ToLower(d.NWO+"@"+d.Ref)] = true
-	}
-	attempted := make(map[string]bool, len(unrecordedRefs))
-	for _, ref := range unrecordedRefs {
-		attempted[strings.ToLower(ref.Owner+"/"+ref.Repo+"@"+ref.Ref)] = true
-	}
-	var out []Entry
-	for _, f := range wr.Findings {
-		if f.ActionRef == nil {
-			continue
-		}
-		key := strings.ToLower(f.ActionRef.Owner + "/" + f.ActionRef.Repo + "@" + f.ActionRef.Ref)
-		if !attempted[key] || resolved[key] {
-			continue
-		}
-		out = append(out, Entry{
-			NWO:        f.ActionRef.Owner + "/" + f.ActionRef.Repo,
-			Ref:        f.ActionRef.Ref,
-			Resolution: Unresolved,
-			Issue:      string(f.Category),
-			Reason:     fmt.Sprintf("resolution failed: %s", resolveErr),
-			Workflows:  []string{wr.Path},
-		})
-	}
-	return out
 }
 
 // narrowDirectDeps rewrites direct partial semver refs to exact patch tags,
@@ -509,6 +478,7 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 			res = Verified
 		}
 		entry := Entry{
+			Hostname:   dep.Hostname,
 			NWO:        dep.NWO,
 			Ref:        dep.Ref,
 			SHA:        dep.SHA,
@@ -547,11 +517,16 @@ func informationalEntries(wr checks.WorkflowReport, opts PlanOptions) []Entry {
 func informationalEntry(f checks.Finding, path string) Entry {
 	nwo := ""
 	ref := ""
+	hostname := ""
 	if f.ActionRef != nil {
 		nwo = f.ActionRef.Owner + "/" + f.ActionRef.Repo
 		ref = f.ActionRef.Ref
 	}
+	if f.Dependency != nil {
+		hostname = f.Dependency.Hostname
+	}
 	return Entry{
+		Hostname:    hostname,
 		NWO:         nwo,
 		Ref:         ref,
 		ObservedSHA: f.ObservedSHA,
@@ -629,6 +604,7 @@ func verifiedEntries(inventory []checks.InventoryEntry, path string) []Entry {
 			NWO:        inv.Dep.NWO,
 			Ref:        inv.Dep.Ref,
 			SHA:        inv.Dep.SHA,
+			Hostname:   inv.Dep.Hostname,
 			Resolution: Verified,
 			OnBranch:   inv.Dep.Branch,
 			Tag:        inv.Dep.Tag,

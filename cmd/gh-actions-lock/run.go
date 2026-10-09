@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -176,6 +177,48 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if err != nil {
 		return err
 	}
+	var staleWorkflows []string
+	if fullScan {
+		keepWorkflows := make(map[string]bool, len(paths))
+		for _, p := range paths {
+			keepWorkflows[workflowfile.KeyFromPath(p)] = true
+		}
+		for _, k := range store.WorkflowKeys() {
+			if !keepWorkflows[k] {
+				staleWorkflows = append(staleWorkflows, k)
+			}
+		}
+		sort.Strings(staleWorkflows)
+		if !opts.noFix && len(staleWorkflows) > 0 {
+			var refs []parserlock.ActionRef
+			for _, pw := range pipeline.ParseAll(paths, nil) {
+				if pw.LoadErr != nil {
+					return fmt.Errorf("scanning %s: %w", pw.Path, pw.LoadErr)
+				}
+				scanErrors := append(pw.SelfRepositoryRefErrs, pw.SelfRepositoryResolutionErrs...)
+				localRefs, warnings := workflowfile.ExtractLocalCompositeRefs(pw.Path, pw.LocalPaths)
+				scanErrors = append(scanErrors, warnings...)
+				if len(scanErrors) > 0 {
+					return fmt.Errorf("scanning %s: %s", pw.Path, strings.Join(scanErrors, "; "))
+				}
+				refs = append(refs, pw.Refs...)
+				refs = append(refs, localRefs...)
+			}
+			// Drop obsolete pins before binding hosts or verifying identities.
+			// This is in-memory only; a failed run leaves the file untouched.
+			store.PruneWorkflows(keepWorkflows, refs...)
+		}
+	}
+	if err := store.SetHostname(r.Hostname()); err != nil {
+		return err
+	}
+	if err := r.SeedHosts(store.AllDeps()); err != nil {
+		return err
+	}
+	if err := store.VerifyHosts(ctx); err != nil {
+		return err
+	}
+	r.SeedBranchHints(store.AllDeps())
 	// Pre-warm resolver caches from the lockfile so repeat runs skip
 	// redundant GraphQL and REST calls. Skipped when --rescan is set:
 	// a full re-verification must hit the network to detect ref movement.
@@ -204,25 +247,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if migrated > 0 && opts.jsonFields == "" {
 			console.TermSuccess("Migrated %d local %s to `$/…`", migrated, ui.Pluralize(migrated, "action", "actions"))
 		}
-	}
-
-	// Reconcile the lockfile's recorded workflow set against what's on disk.
-	// Only a full-directory scan can prove a workflow was deleted; a partial
-	// invocation (explicit paths) has no authority to prune out-of-scope
-	// entries. keep is authoritative only when fullScan is true.
-	var keepWorkflows map[string]bool
-	var staleWorkflows []string
-	if fullScan {
-		keepWorkflows = make(map[string]bool, len(paths))
-		for _, p := range paths {
-			keepWorkflows[workflowfile.KeyFromPath(p)] = true
-		}
-		for _, k := range store.WorkflowKeys() {
-			if !keepWorkflows[k] {
-				staleWorkflows = append(staleWorkflows, k)
-			}
-		}
-		sort.Strings(staleWorkflows)
 	}
 
 	// Detailed narration is suppressed from the terminal during the run so the
@@ -289,8 +313,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	skippedRescan := result.SkippedRescan
 
 	// Read-only modes never touch the lockfile, so surface stale entries as
-	// non-blocking info findings instead of pruning them. Fix mode prunes
-	// them below (before the lockfile is saved) and reports that instead.
+	// non-blocking info findings instead of pruning them. Fix mode reports
+	// the prune only after the updated lockfile is saved.
 	if opts.noFix && len(staleWorkflows) > 0 {
 		appendStaleWorkflowFindings(report, staleWorkflows, false)
 	}
@@ -333,7 +357,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if opts.noFix {
 		console.StopProgress()
 		if opts.jsonFields != "" {
-			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 				return err
 			}
 		}
@@ -383,17 +407,27 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		PartialScan: !fullScan,
 	})
 	endPlan()
+	if planErr == nil && len(record.Unresolved()) > 0 {
+		planErr = fmt.Errorf("cannot write an incomplete lockfile: %d unresolved dependencies", len(record.Unresolved()))
+	}
 	if planErr != nil {
 		console.StopProgress()
+		if opts.jsonFields != "" {
+			if err := format.WriteJSON(out, report, false, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
+				return err
+			}
+		}
+		if len(record.Unresolved()) > 0 {
+			record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: r.Hostname()}
+			if opts.jsonFields == "" {
+				renderUnresolvedWarnings(console, record.Unresolved())
+			}
+			if path, err := record.WriteJSON(); err == nil && opts.jsonFields == "" {
+				console.TermDetail("Resolution record: %s", path)
+			}
+			return errSilent
+		}
 		return fmt.Errorf("planning pins: %w", planErr)
-	}
-
-	// Prune stale workflow entries before the commit persists the lockfile.
-	// Removing the keys orphans their pins, which Save's existing GC then
-	// drops. Only reached in fix mode (--no-fix returns earlier) and only on
-	// a full scan (staleWorkflows is empty otherwise).
-	if len(staleWorkflows) > 0 {
-		store.PruneWorkflows(keepWorkflows)
 	}
 
 	// Commit: write all changes to disk atomically (fast local I/O, no
@@ -442,7 +476,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// non-zero exit only when findings remain that can't be auto-fixed
 	// (lockfile forgery).
 	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 			return err
 		}
 		if reportHasUnfixableErrors(report, opts.acceptMoved) || len(record.Investigated()) > 0 {

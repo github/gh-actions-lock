@@ -30,6 +30,10 @@ type TagEntry struct {
 // Paginates up to 3 pages (300 branches). Results are cached per owner/repo
 // and coalesced via singleflight.
 func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]BranchHead, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
 	key := ForRepo(owner, repo)
 	if cached, ok := c.branchListCache.Get(key); ok {
 		return cached, nil
@@ -79,6 +83,10 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 // ListTags returns all tags with their commit SHAs for a repo (first page,
 // up to 100). Results are cached per owner/repo and coalesced via singleflight.
 func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
 	key := ForRepo(owner, repo)
 	if cached, ok := c.tagListCache.Get(key); ok {
 		return cached, nil
@@ -141,6 +149,10 @@ type repoMeta struct {
 // match/error, and a coalesced caller's cancellation must not abort the shared
 // fetch for the others waiting on it.
 func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return repoMeta{}, err
+	}
 	key := ForRepo(owner, repo)
 	if m, ok := c.repoMetaCache.Get(key); ok {
 		return m, nil
@@ -199,6 +211,10 @@ func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) strin
 // 300-branch cap. Results (including 404s) are cached and concurrent lookups
 // are coalesced via singleflight. Returns ok=false on any error.
 func (c *Client) GetBranchHead(ctx context.Context, owner, repo, name string) (BranchHead, bool) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return BranchHead{}, false
+	}
 	if name == "" {
 		return BranchHead{}, false
 	}
@@ -243,6 +259,10 @@ func (c *Client) GetBranchHead(ctx context.Context, owner, repo, name string) (B
 // any error yields whatever was collected so far (possibly empty). Results
 // are cached per owner/repo and coalesced via singleflight.
 func (c *Client) ListProtectedBranches(ctx context.Context, owner, repo string) []BranchHead {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil
+	}
 	key := ForRepo(owner, repo)
 	if cached, ok := c.protectedBranchCache.Get(key); ok {
 		return cached
@@ -284,6 +304,10 @@ func (c *Client) ListProtectedBranches(ctx context.Context, owner, repo string) 
 // MatchingHeadRefs returns branches whose names start with prefix via the
 // git/matching-refs endpoint. Best-effort: any error yields nil.
 func (c *Client) MatchingHeadRefs(ctx context.Context, owner, repo, prefix string) []BranchHead {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil
+	}
 	path := fmt.Sprintf("repos/%s/%s/git/matching-refs/heads/%s",
 		url.PathEscape(owner), url.PathEscape(repo), escapeBranchPath(prefix))
 	var resp []struct {
@@ -335,6 +359,10 @@ type compareResponse struct {
 // reachability scan cancels siblings on first match) cannot abort the shared
 // comparison the others are waiting on.
 func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHeadSHA string) (bool, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return false, err
+	}
 	if strings.EqualFold(sha, branchHeadSHA) {
 		return true, nil
 	}
@@ -383,6 +411,10 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 // ancestry, forgery, and inconclusive results. Not cached: ancestry checks
 // key on distinct base/head pairs that rarely repeat within a run.
 func (c *Client) CompareRefs(ctx context.Context, owner, repo, base, head string) (status, mergeBaseSHA string, err error) {
+	c, err = c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return "", "", err
+	}
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s",
 		url.PathEscape(owner), url.PathEscape(repo),
 		url.PathEscape(base), url.PathEscape(head))

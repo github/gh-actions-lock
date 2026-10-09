@@ -112,13 +112,11 @@ func TestBuildDirectKeys(t *testing.T) {
 func TestCommitDependencyFreeWorkflow(t *testing.T) {
 	tests := []struct {
 		name                   string
-		resolveErr             error
 		skipNewWorkflowEntries bool
 		wantEntry              bool
 	}{
-		{"records empty entry", nil, false, true},
-		{"skips unresolved workflow", assert.AnError, false, false},
-		{"skips onboarding", nil, true, false},
+		{"records empty entry", false, true},
+		{"skips onboarding", true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,7 +128,7 @@ func TestCommitDependencyFreeWorkflow(t *testing.T) {
 
 			store, err := lockfile.LoadState(dir, fakeMeta{})
 			require.NoError(t, err)
-			rec := &Record{Workflows: []WorkflowPlan{{Path: workflowPath, ResolveErr: tt.resolveErr}}}
+			rec := &Record{Workflows: []WorkflowPlan{{Path: workflowPath}}}
 
 			require.NoError(t, Commit(context.Background(), rec, store, &CommitOptions{SkipNewWorkflowEntries: tt.skipNewWorkflowEntries}))
 			assert.Equal(t, tt.wantEntry, store.HasWorkflow(workflowPath))
@@ -152,7 +150,7 @@ func TestCommitPartialResolution(t *testing.T) {
 			NWO: "actions/checkout", Ref: "v4", SHA: strings.Repeat("a", 40),
 			Resolution: Pinned, Workflows: []string{workflowPath}, Direct: true,
 		}},
-		Workflows: []WorkflowPlan{{Path: workflowPath, ResolveErr: assert.AnError}},
+		Workflows: []WorkflowPlan{{Path: workflowPath}},
 	}
 
 	require.NoError(t, Commit(context.Background(), rec, store, nil))

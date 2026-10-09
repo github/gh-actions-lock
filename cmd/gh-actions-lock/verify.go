@@ -62,13 +62,17 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 	if err != nil {
 		return fmt.Errorf("opening lockfile: %w", err)
 	}
+	hostname := resolveHostname(opts.hostname)
+	if err := store.SetHostname(hostname); err != nil {
+		return err
+	}
 
 	parsed := pipeline.ParseAll(paths, store)
 	report := pipeline.VerifyLocalCoverage(parsed, store)
 	valid := report.IsValid()
 
 	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version); err != nil {
+		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, hostname); err != nil {
 			return err
 		}
 	} else {

@@ -78,9 +78,6 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 		wfPath := wp.Path
 		wfKey := workflowfile.KeyFromPath(wfPath)
 		deps := pinnedByWorkflow[wfPath]
-		if len(deps) == 0 && !store.HasWorkflow(wfKey) && wp.ResolveErr != nil {
-			continue
-		}
 		parentMap := buildParentMap(rec, wfPath)
 		directKeys := buildDirectKeys(rec, wfPath)
 		deps = retainUnresolvablePins(rec, store, wfPath, deps, directKeys)
@@ -165,6 +162,7 @@ func groupPinnedByWorkflow(rec *Record) map[string][]dep.Dependency {
 		}
 		for _, wf := range e.Workflows {
 			result[wf] = append(result[wf], dep.Dependency{
+				Hostname:    e.Hostname,
 				NWO:         e.NWO,
 				Ref:         e.Ref,
 				SHA:         e.SHA,

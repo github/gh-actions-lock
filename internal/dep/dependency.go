@@ -15,7 +15,8 @@ import (
 // resolver traversal, and lockfile serialization — never persisted on disk
 // and not part of any public API.
 type Dependency struct {
-	NWO string // owner/repo (no path)
+	Hostname string // owning GitHub instance; empty means the invocation's home host
+	NWO      string // owner/repo (no path)
 	// Path is the optional sub-action subpath as written in `uses:`
 	// (e.g. "save" for actions/cache/save). It is preserved on the
 	// in-memory dep so resolver-time graph traversal can fetch the

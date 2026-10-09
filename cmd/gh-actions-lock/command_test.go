@@ -18,6 +18,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCheckCommand_HelpExplainsHostAndAuthOverrides(t *testing.T) {
+	cmd := newRootCmd(nil)
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	require.NoError(t, cmd.Execute())
+	for _, text := range []string{
+		"Host selection: --hostname, then GH_HOST",
+		"GH_REPO or a remote on a host known to gh",
+		"GH_TOKEN takes precedence over GITHUB_TOKEN",
+		"GitHub Enterprise Server (GHES) is not supported.",
+		"--hostname selects the host; it does not override token variables.",
+		"env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname TENANT.ghe.com",
+	} {
+		assert.Contains(t, out.String(), text)
+	}
+}
+
 func TestCheckCommand_JSONWithHTTPMocks(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -1030,6 +1048,7 @@ jobs:
 	for _, f := range payload.Findings {
 		if f.Category == "ref-moved" {
 			hasRefMoved = true
+			assert.Equal(t, "run `gh actions-lock --relock` to refresh the lock entry", f.Remediation)
 		}
 	}
 	assert.True(t, hasRefMoved,

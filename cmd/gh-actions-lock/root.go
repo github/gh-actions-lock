@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/MakeNowJust/heredoc"
@@ -83,6 +84,27 @@ Scans all workflows under .github/workflows/ by default and fixes
 what it can — pinning every resolvable action and updating the
 lockfile. Pass --no-fix for a read-only check that writes nothing.
 
+HOST AND AUTHENTICATION
+
+Supported targets are github.com and GitHub Enterprise Cloud with data
+residency (*.ghe.com). GitHub Enterprise Server (GHES) is not supported.
+
+In a tenant repository checkout, authenticate with
+gh auth login --hostname TENANT.ghe.com, then run gh actions-lock.
+
+Host selection: --hostname, then GH_HOST, then the current repository
+(GH_REPO or a remote on a host known to gh), then github.com.
+For github.com and *.ghe.com, GH_TOKEN takes precedence over GITHUB_TOKEN
+and stored per-host credentials.
+--hostname selects the host; it does not override token variables.
+
+If an unintended token override causes authentication to fail, check
+stored tenant credentials without exposing tokens:
+  env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname TENANT.ghe.com
+
+For setup and troubleshooting:
+  https://github.com/github/gh-actions-lock#github-enterprise-cloud-with-data-residency
+
 REF NARROWING
 
 When a new workflow is first pinned and uses a partial version ref
@@ -117,6 +139,7 @@ $ gh actions-lock --no-fix --json=valid,findings
 # All fields as JSON
 $ gh actions-lock --json
 `),
+		Version: cliVersion(),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.workflowPaths = args
@@ -141,9 +164,8 @@ $ gh actions-lock --json
 
 // newRun performs the per-invocation wiring shared by every command: expand the
 // requested workflow paths (or discover them), build a resolver for the
-// resolved hostname, open the lockfile store against it, and seed branch hints
-// from the existing lockfile so repeat scans short-circuit the per-branch
-// Compare walk. newResolver is the DI seam; pass nil for production wiring.
+// resolved hostname, and open the lockfile store against it.
+// newResolver is the DI seam; pass nil for production wiring.
 func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc, onCorrupt lockRecovery) ([]string, *resolve.Resolver, *lockfile.State, error) {
 	workflowsDir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR")
 	// A full-directory scan (no explicit paths) may legitimately find zero
@@ -205,10 +227,7 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 		return nil, nil, nil, err
 	}
 
-	// Now that the resolver is available, set it as the metadata resolver
-	// for the store and re-seed branch hints.
 	store.SetMetadataResolver(r)
-	r.SeedBranchHints(store.AllDeps())
 
 	return paths, r, store, nil
 }
@@ -281,14 +300,14 @@ func expandWorkflowPaths(paths []string) ([]string, error) {
 
 func resolveHostname(override string) string {
 	if override != "" {
-		return override
+		return strings.ToLower(override)
 	}
 	if host := os.Getenv("GH_HOST"); host != "" {
-		return host
+		return strings.ToLower(host)
 	}
 	repo, err := repository.Current()
 	if err == nil && repo.Host != "" {
-		return repo.Host
+		return strings.ToLower(repo.Host)
 	}
 	return "github.com"
 }

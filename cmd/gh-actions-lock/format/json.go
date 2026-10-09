@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 )
 
@@ -74,6 +75,7 @@ type Finding struct {
 // Dependency is the JSON-safe view of a resolved dependency, deduplicated
 // across workflows in the JSON output.
 type Dependency struct {
+	Hostname   string   `json:"hostname,omitempty"`
 	NWO        string   `json:"nwo"`
 	Ref        string   `json:"ref"`
 	SHA        string   `json:"sha"`
@@ -117,8 +119,14 @@ func findingFromReport(f checks.Finding) Finding {
 // the comma-separated user selection (e.g. "valid,findings,workflows").
 // cliVersion and lockfileVersion are emitted as top-level fields so consumers
 // can pin behavior to a known schema.
-func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVersion, lockfileVersion string) error {
+func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVersion, lockfileVersion, homeHost string) error {
 	fields := strings.Split(fieldsCSV, ",")
+	outputHostname := func(host string) string {
+		if ghapi.IsProxima(homeHost) && host == "github.com" {
+			return host
+		}
+		return ""
+	}
 
 	// Build all data lazily.
 	var allFindings []Finding
@@ -176,6 +184,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 					continue
 				}
 				d := Dependency{
+					Hostname:   outputHostname(inv.Dep.Hostname),
 					NWO:        inv.Dep.NWO,
 					Ref:        inv.Dep.Ref,
 					SHA:        inv.Dep.SHA,
@@ -212,6 +221,7 @@ func WriteJSON(w io.Writer, report *checks.Report, valid bool, fieldsCSV, cliVer
 			}
 			for _, inv := range wr.Inventory {
 				wf.Dependencies = append(wf.Dependencies, Dependency{
+					Hostname:   outputHostname(inv.Dep.Hostname),
 					NWO:        inv.Dep.NWO,
 					Ref:        inv.Dep.Ref,
 					SHA:        inv.Dep.SHA,
