@@ -29,7 +29,7 @@ func TestJSONHostnameOnlyForProximaDotcomDependencies(t *testing.T) {
 				}},
 			}}}
 			var out bytes.Buffer
-			require.NoError(t, WriteJSON(&out, report, true, "dependencies,workflows", "dev", "v0.0.3", tt.homeHost))
+			require.NoError(t, WriteJSON(&out, report, nil, true, "dependencies,workflows", "dev", "v0.0.3", tt.homeHost))
 			var payload struct {
 				Dependencies []map[string]any `json:"dependencies"`
 				Workflows    []struct {

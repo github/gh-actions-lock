@@ -902,6 +902,19 @@ scenarios:
       exit: 1
       output_contains: ["could not be resolved"]
 
+  - name: run_log_shown
+    category: security
+    description: "Run log path is displayed after pin"
+    needs_stub: true
+    tags: [stub]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@v4"]
+    expect:
+      output_contains: ["Run log:"]
+
   - name: prefix_stripping
     category: security
     description: "Error reason prefix stripped — no 'resolution failed:' in output"
