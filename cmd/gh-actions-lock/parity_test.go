@@ -506,6 +506,29 @@ jobs:
 	assert.NoFileExists(t, ".github/workflows/actions.lock")
 }
 
+// TestParity_VerifyHintNamesVerify: a fixable --verify failure points at
+// the flag the user actually passed.
+func TestParity_VerifyHintNamesVerify(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQLForRepo("actions", "checkout"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("actions/checkout", parityTestSHA, nodeActionYAML)},
+	}))
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), parityOK)
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--verify", path)
+	require.ErrorIs(t, err, errSilent)
+	assert.Contains(t, stderr, "Re-run without --verify to apply fixes.")
+}
+
 // parityDown fails every parity query with a server error.
 type parityDown struct{ inner http.RoundTripper }
 

@@ -93,7 +93,11 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 
 	for _, wp := range record.Workflows {
 		for _, oldUse := range slices.Sorted(maps.Keys(wp.RequiredRewrites)) {
-			console.TermSuccess("Rewrote %s → %s in %s (repository renamed or transferred)", oldUse, wp.RequiredRewrites[oldUse], wp.Path)
+			where := strings.Join(wp.RewrittenIn[oldUse], ", ")
+			if !slices.Equal(wp.RewrittenIn[oldUse], []string{wp.Path}) {
+				where += " (via " + wp.Path + ")"
+			}
+			console.TermSuccess("Rewrote %s → %s in %s (repository renamed or transferred)", oldUse, wp.RequiredRewrites[oldUse], where)
 		}
 	}
 
