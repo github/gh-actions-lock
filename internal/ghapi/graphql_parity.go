@@ -28,7 +28,9 @@ type PinState struct {
 	NameWithOwner string
 	OwnerID       int64
 	RepoID        int64
-	CommitFound   bool
+	// RepoMissing means the locked owner/repo no longer resolves at all.
+	RepoMissing bool
+	CommitFound bool
 	// TagOID is the commit Tag peels to; empty when the tag is gone.
 	TagOID string
 	Err    error
@@ -163,8 +165,15 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 		case !ok && batchErr != nil:
 			states[i].Err = batchErr
 			continue
-		case !ok || string(raw) == "null":
-			states[i].Err = fmt.Errorf("repository %s/%s not found or not accessible", p.Owner, p.Repo)
+		case !ok:
+			states[i].Err = fmt.Errorf("repository %s/%s missing from response", p.Owner, p.Repo)
+			continue
+		case string(raw) == "null":
+			states[i].Err = aliasError(gqlErr, alias)
+			states[i].RepoMissing = states[i].Err == nil || repoNotFound(gqlErr, alias)
+			if states[i].RepoMissing {
+				states[i].Err = nil
+			}
 			continue
 		}
 		if err := aliasError(gqlErr, alias); err != nil {
@@ -203,6 +212,15 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 
 // aliasError returns the first per-alias error, ignoring NOT_FOUND on the
 // commit or tag lookups: those mean "missing", which the caller classifies.
+func repoNotFound(gqlErr *api.GraphQLError, alias string) bool {
+	for _, item := range gqlErr.Errors {
+		if len(item.Path) == 1 && item.Path[0] == alias && item.Type == "NOT_FOUND" {
+			return true
+		}
+	}
+	return false
+}
+
 func aliasError(gqlErr *api.GraphQLError, alias string) error {
 	if gqlErr == nil {
 		return nil
@@ -232,6 +250,9 @@ func (c *Client) checkPinsREST(ctx context.Context, pins []PinCheck) []PinState 
 
 func (c *Client) checkPinREST(ctx context.Context, p PinCheck) PinState {
 	meta, err := c.repoMetadata(ctx, p.Owner, p.Repo)
+	if code, _ := StatusCode(err); code == http.StatusNotFound {
+		return PinState{RepoMissing: true}
+	}
 	if err != nil {
 		return PinState{Err: err}
 	}

@@ -326,8 +326,9 @@ type LockedPin struct {
 }
 
 // Closure returns the workflow's recorded pins, direct and transitive, by
-// walking each direct pin's `uses:` list. Each pin appears once.
-func (s *State) Closure(workflowKey string) []LockedPin {
+// walking the `uses:` list of each direct pin that live accepts. Stale roots
+// are skipped so their children are not reported. Each pin appears once.
+func (s *State) Closure(workflowKey string, live func(parserlock.Pin) bool) []LockedPin {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []LockedPin
@@ -349,9 +350,19 @@ func (s *State) Closure(workflowKey string) []LockedPin {
 		}
 	}
 	for _, key := range s.file.Workflows[workflowKey] {
-		walk(key, "")
+		if pin, ok := parserlock.ParsePin(key); ok && live(pin) {
+			walk(key, "")
+		}
 	}
 	return out
+}
+
+// RecordedRepoID returns the repo ID recorded for owner/repo, or 0. It never
+// hits the network.
+func (s *State) RecordedRepoID(owner, repo string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.idCache[repoIDKey(s.hostname, owner, repo)][1]
 }
 
 // AllDeps returns every action entry in the lockfile as a Dependency,

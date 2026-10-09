@@ -88,6 +88,8 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		}
 	}
 	refs, _ := CollectUnrecordedResolvable(unresolved, recordedKeys)
+	var resolved []dep.Dependency
+	var parents map[string][]string
 
 	// Phase 2: Resolve.
 	if r != nil {
@@ -97,7 +99,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 		if len(refs) > 0 {
 			endResolve := prof.Phase("  resolve refs")
-			_, _, _ = r.ResolveAllRecursive(ctx, refs)
+			resolved, parents, _ = r.ResolveAllRecursive(ctx, refs)
 			endResolve()
 		}
 
@@ -122,7 +124,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			keep = func(c checks.Category) bool { return c == checks.RepoMoved }
 		}
 		endParity := prof.Phase("  parity check")
-		checkParity(ctx, r, parsed, opts.Store, report, recordedKeys, keep)
+		checkParity(ctx, r, parsed, opts.Store, report, recordedKeys, resolved, parents, keep)
 		endParity()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

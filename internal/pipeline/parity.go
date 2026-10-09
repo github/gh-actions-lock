@@ -22,9 +22,13 @@ import (
 // A pinned commit fixes the dependencies it declares, so the flattened
 // closure in the lockfile is checked in one batch with no recursion.
 // Pins resolved in this run (refs absent from recordedKeys, and their
-// transitive closure from the resolver cache) join the same batch; a
-// blocking finding on one keeps its workflow out of the write.
-func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, keep func(checks.Category) bool) {
+// transitive closure from this run's resolve) join the same batch. Any
+// blocking finding keeps its workflow out of the write.
+//
+// Identity follows the runner: only the repo ID counts. A rename or
+// transfer redirect to the same repo ID is a warning; a different ID or
+// a name that no longer resolves blocks.
+func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, resolved []dep.Dependency, parents map[string][]string, keep func(checks.Category) bool) {
 	gh := r.GHClient()
 	if gh == nil || store == nil {
 		return
@@ -36,25 +40,29 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	var pins []ghapi.PinCheck
 	pinIdx := map[string]int{}
 	owners := map[int][]parityOwner{}
-	owned := map[[2]int]bool{}
+	owned := map[[2]int]int{}
 	add := func(o parityOwner) {
-		key := o.lp.Pin.String() + ":" + o.lp.Action.Commit
+		if o.fresh && o.lp.Action.RepoID == 0 {
+			o.lp.Action.RepoID = store.RecordedRepoID(o.lp.Pin.Owner, o.lp.Pin.Repo)
+		}
+		key := strings.ToLower(o.lp.Pin.String() + ":" + lockedSHA(o.lp.Action.Commit))
 		i, seen := pinIdx[key]
 		if !seen {
 			i = len(pins)
 			pinIdx[key] = i
-			pc := ghapi.PinCheck{Owner: o.lp.Pin.Owner, Repo: o.lp.Pin.Repo, SHA: lockedSHA(o.lp.Action.Commit)}
-			if !o.fresh && checks.IsImmutableRef(o.lp.Pin.Ref) {
-				pc.Tag = o.lp.Pin.Ref
-			}
-			pins = append(pins, pc)
+			pins = append(pins, ghapi.PinCheck{Owner: o.lp.Pin.Owner, Repo: o.lp.Pin.Repo, SHA: lockedSHA(o.lp.Action.Commit)})
 		}
-		if owned[[2]int{o.report, i}] {
+		if !o.fresh && checks.IsImmutableRef(o.lp.Pin.Ref) {
+			pins[i].Tag = o.lp.Pin.Ref
+		}
+		if j, dup := owned[[2]int{o.report, i}]; dup {
+			owners[i][j].fresh = owners[i][j].fresh || o.fresh
 			return
 		}
-		owned[[2]int{o.report, i}] = true
+		owned[[2]int{o.report, i}] = len(owners[i])
 		owners[i] = append(owners[i], o)
 	}
+	fresh := freshClosure(resolved, parents)
 	for _, pw := range parsed {
 		ri, ok := reportIdx[pw.Path]
 		if !ok || isBlocked(pw) {
@@ -65,12 +73,13 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		for _, r := range recorded {
 			direct[strings.ToLower(r.Owner+"/"+r.Repo)+"@"+r.Ref] = r
 		}
-		for _, lp := range store.Closure(workflowfile.KeyFromPath(pw.Path)) {
-			ref, isDirect := direct[strings.ToLower(lp.Pin.Owner+"/"+lp.Pin.Repo)+"@"+lp.Pin.Ref]
-			if lp.Parent == "" && !isDirect {
-				continue // stale workflow entry; pruned on write
-			}
-			if !isDirect {
+		live := func(p parserlock.Pin) bool {
+			_, ok := direct[strings.ToLower(p.Owner+"/"+p.Repo)+"@"+p.Ref]
+			return ok
+		}
+		for _, lp := range store.Closure(workflowfile.KeyFromPath(pw.Path), live) {
+			ref := direct[strings.ToLower(lp.Pin.Owner+"/"+lp.Pin.Repo)+"@"+lp.Pin.Ref]
+			if lp.Parent != "" {
 				ref = parserlock.ActionRef{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, Ref: lp.Pin.Ref}
 			}
 			add(parityOwner{report: ri, pw: pw, lp: lp, ref: ref})
@@ -78,7 +87,7 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		if pw.Resolved {
 			continue
 		}
-		for _, o := range freshPins(ctx, r, pw, recordedKeys) {
+		for _, o := range fresh(pw, recordedKeys) {
 			o.report = ri
 			add(o)
 		}
@@ -100,7 +109,7 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 			wr := &report.Workflows[o.report]
 			if f.Severity == checks.SeverityError {
 				wr.Findings = dropValid(wr.Findings)
-				wr.SkipCommit = wr.SkipCommit || o.fresh
+				wr.SkipCommit = true
 			}
 			wr.Findings = append(wr.Findings, f)
 		}
@@ -115,43 +124,53 @@ type parityOwner struct {
 	fresh  bool
 }
 
-// freshPins returns the closure of pw's unrecorded refs as resolved earlier
-// in this run. The resolver serves it from cache.
-func freshPins(ctx context.Context, r *resolve.Resolver, pw checks.ParsedWorkflow, recordedKeys map[string]bool) []parityOwner {
-	var roots []parserlock.ActionRef
-	direct := map[string]parserlock.ActionRef{}
-	for _, ref := range pw.Refs {
-		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
-		if !recordedKeys[key] {
-			roots = append(roots, ref)
-			direct[key] = ref
-		}
-	}
-	if len(roots) == 0 {
-		return nil
-	}
-	deps, parents, _ := r.ResolveAllRecursive(ctx, roots)
-	var out []parityOwner
-	for _, d := range deps {
+// freshClosure returns a function yielding the closure of a workflow's
+// unrecorded refs from this run's single resolve, so no further requests
+// are made per workflow.
+func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(checks.ParsedWorkflow, map[string]bool) []parityOwner {
+	children := map[string][]dep.Dependency{}
+	byKey := map[string][]dep.Dependency{}
+	for _, d := range resolved {
 		if d.SHA == "" {
 			continue
 		}
-		owner, repo := d.OwnerRepo()
-		o := parityOwner{pw: pw, fresh: true, lp: lockfile.LockedPin{
-			Pin:    parserlock.Pin{NWO: d.NWO, Owner: owner, Repo: repo, Ref: d.Ref},
-			Action: parserlock.Action{Commit: d.SHA},
-		}}
-		ref, isDirect := direct[strings.ToLower(d.NWO)+"@"+d.Ref]
-		if !isDirect {
-			ref = parserlock.ActionRef{Owner: owner, Repo: repo, Path: d.Path, Ref: d.Ref}
-			if ps := parents[d.Key()]; len(ps) > 0 {
-				o.lp.Parent = ps[0]
+		byKey[strings.ToLower(d.Key())] = append(byKey[strings.ToLower(d.Key())], d)
+		for _, p := range parents[d.Key()] {
+			children[strings.ToLower(p)] = append(children[strings.ToLower(p)], d)
+		}
+	}
+	return func(pw checks.ParsedWorkflow, recordedKeys map[string]bool) []parityOwner {
+		var out []parityOwner
+		seen := map[string]bool{}
+		var walk func(d dep.Dependency, ref parserlock.ActionRef, parent string)
+		walk = func(d dep.Dependency, ref parserlock.ActionRef, parent string) {
+			id := strings.ToLower(d.Key() + "/" + d.Path)
+			if seen[id] {
+				return
+			}
+			seen[id] = true
+			owner, repo := d.OwnerRepo()
+			out = append(out, parityOwner{pw: pw, fresh: true, ref: ref, lp: lockfile.LockedPin{
+				Pin:    parserlock.Pin{NWO: d.NWO, Owner: owner, Repo: repo, Ref: d.Ref},
+				Action: parserlock.Action{Commit: d.SHA},
+				Parent: parent,
+			}})
+			for _, c := range children[strings.ToLower(d.Key())] {
+				co, cr := c.OwnerRepo()
+				walk(c, parserlock.ActionRef{Owner: co, Repo: cr, Path: c.Path, Ref: c.Ref}, d.Key())
 			}
 		}
-		o.ref = ref
-		out = append(out, o)
+		for _, ref := range pw.Refs {
+			key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
+			if recordedKeys[key] {
+				continue
+			}
+			for _, d := range byKey[key] {
+				walk(d, ref, "")
+			}
+		}
+		return out
 	}
-	return out
 }
 
 func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfile.LockedPin, pc ghapi.PinCheck, st ghapi.PinState) (checks.Finding, bool) {
@@ -180,16 +199,13 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		f.Confidence = checks.ConfidenceLow
 		f.Detail = fmt.Sprintf("could not verify locked %s@%s: %s", nwo, short, st.Err)
 		f.Remediation = "retry; the runner will re-check this pin at job start"
-	case st.NameWithOwner != "" && !strings.EqualFold(st.NameWithOwner, nwo):
+	case st.RepoMissing:
 		f.Category = checks.RepoMoved
-		f.Detail = fmt.Sprintf("%s now resolves to %s%s; the runner rejects pins to renamed or transferred repositories", nwo, st.NameWithOwner, via)
-		f.Remediation = fmt.Sprintf("update `uses:` to %s@%s and run `gh actions-lock`", st.NameWithOwner, lp.Pin.Ref)
-		if f.ParentNWO != "" {
-			f.Remediation = fmt.Sprintf("upgrade %s to a version that uses %s, then run `gh actions-lock --relock`", f.ParentNWO, st.NameWithOwner)
-		}
-	case idChanged(lp.Action.OwnerID, st.OwnerID) || idChanged(lp.Action.RepoID, st.RepoID):
+		f.Detail = fmt.Sprintf("%s no longer resolves%s; the runner rejects pins to deleted or inaccessible repositories", nwo, via)
+		f.Remediation = "find where the action moved, update `uses:`, then run `gh actions-lock --relock`"
+	case idChanged(lp.Action.RepoID, st.RepoID):
 		f.Category = checks.RepoMoved
-		f.Detail = fmt.Sprintf("%s is a different repository than the one locked (owner or repo ID changed)%s", nwo, via)
+		f.Detail = fmt.Sprintf("%s is a different repository than the one locked (repo ID %d, locked %d)%s", nwo, st.RepoID, lp.Action.RepoID, via)
 		f.Remediation = "investigate immediately — the original repository was deleted or its name was taken over"
 	case !st.CommitFound:
 		f.Category = checks.UnreachablePin
@@ -204,6 +220,18 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			f.Detail = fmt.Sprintf("tag %s now points at %s, lockfile pins %s%s", pc.Tag, parserlock.ShortSHA(st.TagOID), short, via)
 		}
 		f.Remediation = "investigate immediately — release tags should not move; run `gh actions-lock --relock` once verified"
+	case st.NameWithOwner != "" && !strings.EqualFold(st.NameWithOwner, nwo):
+		f.Category = checks.RepoMoved
+		f.Severity = checks.SeverityWarning
+		f.Detail = fmt.Sprintf("%s was renamed or transferred to %s%s; the runner follows the redirect while the repo ID matches", nwo, st.NameWithOwner, via)
+		uses := st.NameWithOwner
+		if ref.Path != "" {
+			uses += "/" + ref.Path
+		}
+		f.Remediation = fmt.Sprintf("replace with `uses: %s@%s`, then run `gh actions-lock`", uses, ref.Ref)
+		if f.ParentNWO != "" {
+			f.Remediation = fmt.Sprintf("upgrade %s to a version that uses %s", f.ParentNWO, st.NameWithOwner)
+		}
 	default:
 		return checks.Finding{}, false
 	}

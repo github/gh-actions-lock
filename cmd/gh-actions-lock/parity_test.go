@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
@@ -31,22 +29,7 @@ func runParity(t *testing.T, rt http.RoundTripper, args ...string) (parityPayloa
 	return p, err
 }
 
-// TestParity_TransferredRepoBlocks is the #110 case: the locked repository
-// was transferred, so GraphQL follows the rename and reports a different
-// nameWithOwner. The runner rejects the pin, so the CLI must too.
-func TestParity_TransferredRepoBlocks(t *testing.T) {
-	for name, mode := range map[string][]string{"default": nil, "verify": {"--verify"}} {
-		t.Run(name, func(t *testing.T) {
-			reg := &httpmock.Registry{}
-			defer reg.Verify(t)
-			reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.JSONResponse(map[string]any{
-				"data": map[string]any{"a0": map[string]any{
-					"nameWithOwner": "typesafegithub/github-actions-typing",
-					"commit":        map[string]any{"oid": parityTestSHA},
-					"tag":           map[string]any{"oid": parityTestSHA},
-				}},
-			}))
-			path := writeTempWorkflow(t, `
+const transferWorkflow = `
 name: ci
 on: push
 jobs:
@@ -54,16 +37,78 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: krzema12/github-actions-typing@v2.2.2
-`, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+`
 
-			p, err := runParity(t, reg, append(mode, path)...)
-			require.ErrorIs(t, err, errSilent)
-			assert.False(t, p.Valid)
-			require.Len(t, p.Findings, 1)
-			assert.Equal(t, "repo-moved", p.Findings[0].Category)
-			assert.Contains(t, p.Findings[0].Remediation, "typesafegithub/github-actions-typing@v2.2.2")
+func transferParity(repoID int) httpmock.Responder {
+	return httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": map[string]any{
+			"nameWithOwner": "typesafegithub/github-actions-typing",
+			"databaseId":    repoID,
+			"owner":         map[string]any{"databaseId": 42},
+			"commit":        map[string]any{"oid": parityTestSHA},
+			"tag":           map[string]any{"oid": parityTestSHA},
+		}},
+	})
+}
+
+// TestParity_TransferredRepoWarns is the #110 case: the locked repository
+// was transferred and kept its repo ID, so the runner follows the redirect.
+// The CLI warns with the replacement `uses:` line instead of blocking.
+func TestParity_TransferredRepoWarns(t *testing.T) {
+	for name, mode := range map[string][]string{"default": nil, "verify": {"--verify"}} {
+		t.Run(name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(1))
+			path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+
+			_, stderr, err := runCommandWithHTTP(t, reg, append(mode, path)...)
+			require.NoError(t, err, stderr)
+			assert.Contains(t, stderr, "replace with `uses: typesafegithub/github-actions-typing@v2.2.2`")
+			assert.Contains(t, stderr, path)
 		})
 	}
+}
+
+// TestParity_ReclaimedNameBlocks: the name now resolves to a different repo
+// ID, so someone else owns it. Both modes block and say why on the terminal.
+func TestParity_ReclaimedNameBlocks(t *testing.T) {
+	for name, mode := range map[string][]string{"default": nil, "verify": {"--verify"}} {
+		t.Run(name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(99))
+			path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+
+			_, stderr, err := runCommandWithHTTP(t, reg, append(mode, path)...)
+			require.ErrorIs(t, err, errSilent)
+			assert.Contains(t, stderr, "different repository than the one locked")
+		})
+	}
+}
+
+// TestParity_RelockReclaimedNameKeepsLock: re-resolving a reclaimed name
+// yields an attacker's commit. The recorded repo ID must catch it before
+// the new commit reaches the lockfile.
+func TestParity_RelockReclaimedNameKeepsLock(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(99))
+	reg.Register(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("krzema12/github-actions-typing", parityTestMoved, nodeActionYAML)},
+	}))
+	path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+
+	// The tag fast-forwarded, so only the repo ID gives the takeover away.
+	reg.Register(httpmock.REST("GET", `/compare/`), httpmock.JSONResponse(map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": parityTestSHA}}))
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestMoved)))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--relock", path)
+	require.ErrorIs(t, err, errSilent)
+	assert.Contains(t, stderr, "different repository than the one locked")
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, parityTestSHA)
+	assert.NotContains(t, lock, parityTestMoved, "the reclaimed repo's commit must not be written")
 }
 
 func TestParity_MovedExactTagBlocks(t *testing.T) {
@@ -90,6 +135,33 @@ jobs:
 	require.ErrorIs(t, err, errSilent)
 	require.Len(t, p.Findings, 1)
 	assert.Equal(t, "unreachable-pin", p.Findings[0].Category)
+}
+
+// TestParity_DefaultRunPrintsParityFinding: parity findings have no pin
+// record entry, so the fix-mode summary must still print them.
+func TestParity_DefaultRunPrintsParityFinding(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": map[string]any{
+			"nameWithOwner": "actions/checkout",
+			"commit":        map[string]any{"oid": parityTestSHA},
+			"tag":           map[string]any{"oid": parityTestMoved},
+		}},
+	}))
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.1
+`, "actions/checkout@v4.2.1=sha1-"+parityTestSHA)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, path)
+	require.ErrorIs(t, err, errSilent)
+	assert.Contains(t, stderr, "tag v4.2.1 now points at bbbbbbb")
 }
 
 // TestParity_UnchangedRerunRequestCount guards API kindness: an unchanged
@@ -172,48 +244,35 @@ jobs:
 	)
 }
 
-// TestParity_FirstRunTransferBlocks is #110 on first generation: resolution
-// follows the rename, so the parity check on the freshly resolved pin must
-// catch it before the pin reaches the lockfile.
-func TestParity_FirstRunTransferBlocks(t *testing.T) {
+// TestParity_FirstRunTransferWarns is #110 on first generation: resolution
+// follows the rename, and the same-run parity check names the new location
+// while the pin is still written, as the runner would accept it.
+func TestParity_FirstRunTransferWarns(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
-	reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.JSONResponse(map[string]any{
-		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestSHA, nodeActionYAML)},
-	}))
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(502427408))
 	reg.Register(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
 		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestSHA, nodeActionYAML)},
 	}))
-	path := writeTempWorkflow(t, `
-name: ci
-on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: krzema12/github-actions-typing@v2.2.2
-`)
-	before, err := os.ReadFile(path)
-	require.NoError(t, err)
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "typesafegithub/github-actions-typing", "id": 502427408, "owner": map[string]any{"id": 42},
+	}))
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+	path := writeTempWorkflow(t, transferWorkflow)
 
 	ct := &countingTransport{inner: reg}
-	p, err := runParity(t, ct, path)
-	require.ErrorIs(t, err, errSilent)
-	assert.False(t, p.Valid)
-	var cats []string
-	for _, f := range p.Findings {
-		cats = append(cats, f.Category)
+	_, stderr, err := runCommandWithHTTP(t, ct, path)
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "replace with `uses: typesafegithub/github-actions-typing@v2.2.2`")
+	graphql := 0
+	for _, u := range ct.urls {
+		if u == "/graphql" {
+			graphql++
+		}
 	}
-	assert.Contains(t, cats, "repo-moved")
-	assert.Equal(t, 2, ct.n, "one resolve + one parity request: %v", ct.urls)
-
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, string(before), string(after))
-	lock, err := os.ReadFile(filepath.Join(".github", "workflows", "actions.lock"))
-	if err == nil {
-		assert.NotContains(t, string(lock), "krzema12")
-	}
+	assert.Equal(t, 2, graphql, "one resolve + one parity request: %v", ct.urls)
+	assert.Contains(t, readTempLockfilePins(t), "repo_id: 502427408")
 }
 
 // TestParity_FirstRunRequestCount: generation adds exactly one GraphQL

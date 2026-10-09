@@ -31,6 +31,7 @@ func TestParityFinding(t *testing.T) {
 		parent      string
 		state       ghapi.PinState
 		want        checks.Category // empty means no finding
+		wantWarn    bool
 		wantRemedy  string
 		wantObserve string
 	}{
@@ -39,17 +40,25 @@ func TestParityFinding(t *testing.T) {
 		{name: "case-only name difference is not a move", ref: "v2", state: ghapi.PinState{NameWithOwner: "Krzema12/GitHub-Actions-Typing", CommitFound: true}},
 		{
 			name: "transferred repository names the new location", ref: "v2.2.2",
-			state:      ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true, TagOID: sha},
-			want:       checks.RepoMoved,
-			wantRemedy: "update `uses:` to typesafegithub/github-actions-typing@v2.2.2 and run `gh actions-lock`",
+			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true, TagOID: sha},
+			want:  checks.RepoMoved, wantWarn: true,
+			wantRemedy: "replace with `uses: typesafegithub/github-actions-typing@v2.2.2`, then run `gh actions-lock`",
 		},
 		{
 			name: "transferred transitive dependency points at its parent", ref: "v2", parent: "octo/composite@v1",
-			state:      ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true},
-			want:       checks.RepoMoved,
-			wantRemedy: "upgrade octo/composite@v1 to a version that uses typesafegithub/github-actions-typing, then run `gh actions-lock --relock`",
+			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true},
+			want:  checks.RepoMoved, wantWarn: true,
+			wantRemedy: "upgrade octo/composite@v1 to a version that uses typesafegithub/github-actions-typing",
 		},
+		{
+			name: "transfer keeps the repo ID and is a warning", ref: "v2.2.2",
+			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", OwnerID: 77, RepoID: 2, CommitFound: true, TagOID: sha},
+			want:  checks.RepoMoved, wantWarn: true,
+		},
+		{name: "owner ID change alone is not identity", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 77, RepoID: 2, CommitFound: true}},
 		{name: "repo ID changed", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 1, RepoID: 99, CommitFound: true}, want: checks.RepoMoved},
+		{name: "redirect to a different repo ID blocks", ref: "v2", state: ghapi.PinState{NameWithOwner: "mallory/github-actions-typing", RepoID: 99, CommitFound: true}, want: checks.RepoMoved},
+		{name: "repository gone", ref: "v2", state: ghapi.PinState{RepoMissing: true}, want: checks.RepoMoved},
 		{name: "missing ID is not a change", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", CommitFound: true}},
 		{name: "commit gone", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing"}, want: checks.UnreachablePin},
 		{name: "exact tag moved", ref: "v2.2.2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", CommitFound: true, TagOID: other}, want: checks.UnreachablePin, wantObserve: other},
@@ -71,7 +80,7 @@ func TestParityFinding(t *testing.T) {
 			}
 			assert.True(t, ok)
 			assert.Equal(t, tt.want, f.Category)
-			assert.Equal(t, tt.want == checks.ReachabilityUnknown, f.Severity == checks.SeverityWarning, "only inconclusive results are non-blocking")
+			assert.Equal(t, tt.wantWarn || tt.want == checks.ReachabilityUnknown, f.Severity == checks.SeverityWarning)
 			if tt.wantRemedy != "" {
 				assert.Equal(t, tt.wantRemedy, f.Remediation)
 			}

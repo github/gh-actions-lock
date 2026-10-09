@@ -60,7 +60,8 @@ func TestCheckPins_GraphQLParsesEachState(t *testing.T) {
 	assert.False(t, states[2].CommitFound)
 	assert.True(t, states[3].CommitFound)
 	assert.Equal(t, parityMoved, states[3].TagOID)
-	assert.Error(t, states[4].Err, "null repository is inconclusive, not a verdict")
+	assert.NoError(t, states[4].Err)
+	assert.True(t, states[4].RepoMissing, "a NOT_FOUND repository is a verdict the runner shares")
 }
 
 func TestCheckPins_GraphQLBatchesFifty(t *testing.T) {
@@ -123,6 +124,7 @@ func TestCheckPins_RESTOnly(t *testing.T) {
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/`+paritySHA+`$`), httpmock.JSONResponse(map[string]any{"sha": paritySHA}))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/v2.0.0$`), httpmock.JSONResponse(map[string]any{"sha": paritySHA}))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/`+parityMoved+`$`), httpmock.StatusResponse(http.StatusUnprocessableEntity))
+	reg.Register(httpmock.REST("GET", `^/repos/octo/deleted$`), httpmock.StatusResponse(http.StatusNotFound))
 
 	c := newTestClient(t, reg)
 	c.anonHTTP = &http.Client{Transport: reg}
@@ -131,6 +133,7 @@ func TestCheckPins_RESTOnly(t *testing.T) {
 		{Owner: "octo", Repo: "retag", SHA: paritySHA, Tag: "v1.0.0"},
 		{Owner: "octo", Repo: "retag", SHA: paritySHA, Tag: "v2.0.0"},
 		{Owner: "octo", Repo: "retag", SHA: parityMoved},
+		{Owner: "octo", Repo: "deleted", SHA: paritySHA},
 	})
 	for _, s := range states {
 		require.NoError(t, s.Err)
@@ -139,6 +142,7 @@ func TestCheckPins_RESTOnly(t *testing.T) {
 	assert.Equal(t, PinState{NameWithOwner: "octo/retag", CommitFound: true, TagOID: parityMoved}, states[1], "a moved tag is not a missing commit")
 	assert.Equal(t, PinState{NameWithOwner: "octo/retag", CommitFound: true, TagOID: paritySHA}, states[2])
 	assert.False(t, states[3].CommitFound)
+	assert.Equal(t, PinState{RepoMissing: true}, states[4])
 	for _, req := range reg.Requests {
 		assert.False(t, strings.HasSuffix(req.URL.Path, "/graphql"), "REST-only must not call GraphQL")
 	}

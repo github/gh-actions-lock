@@ -85,6 +85,8 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 
 	renderFullScanWarnings(console, pinned)
 	renderCooldownFindings(console, report)
+	presentErrors := reportHasNonInvestigatedUnfixableErrors(report) ||
+		len(investigated) == 0 && reportHasUnfixableErrors(report, acceptMoved)
 	if !noNarrow {
 		renderVersionRefNudge(ctx, console, record, r)
 	}
@@ -142,10 +144,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	//
 	// Exclude findings already handled elsewhere and pre-fix not-pinned
 	// findings that may have been committed for other workflows.
-	if reportHasNonInvestigatedUnfixableErrors(report) {
+	if presentErrors {
+		excluded := []checks.Category{checks.NotPinned}
+		if len(investigated) > 0 {
+			excluded = append(excluded, checks.UnreachablePin)
+		}
 		console.SetLog(nil)
-		format.PresentResults(console, report, false, false,
-			checks.UnreachablePin, checks.NotPinned)
+		format.PresentResults(console, report, false, false, excluded...)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {

@@ -415,6 +415,21 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			}
 		}
 	}
+	renderRedirects(out, report)
+}
+
+// renderRedirects lists pins whose repository was renamed or transferred
+// but kept its repo ID. The runner follows the redirect, so it's a warning
+// with the replacement `uses:` line.
+func renderRedirects(out *ui.UI, report *checks.Report) {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Category == checks.RepoMoved && f.IsWarning() {
+				out.TermWarn("%s: %s", f.WorkflowPath, f.Detail)
+				out.TermDetail("↳ %s", f.Remediation)
+			}
+		}
+	}
 }
 
 // IsAlertedCategory reports whether a finding category has no auto-fix and

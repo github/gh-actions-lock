@@ -965,8 +965,9 @@ func TestStateClosureIncludesTransitivePins(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	all := func(parserlock.Pin) bool { return true }
 	got := map[string]string{}
-	for _, lp := range store.Closure(".github/workflows/ci.yml") {
+	for _, lp := range store.Closure(".github/workflows/ci.yml", all) {
 		got[lp.Pin.String()] = lp.Parent
 	}
 	want := map[string]string{
@@ -976,7 +977,11 @@ func TestStateClosureIncludesTransitivePins(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Closure() = %v, want %v", got, want)
 	}
-	if c := store.Closure(".github/workflows/missing.yml"); len(c) != 0 {
+	if c := store.Closure(".github/workflows/missing.yml", all); len(c) != 0 {
 		t.Errorf("Closure(missing) = %v, want empty", c)
+	}
+	none := func(parserlock.Pin) bool { return false }
+	if c := store.Closure(".github/workflows/ci.yml", none); len(c) != 0 {
+		t.Errorf("Closure(stale roots) = %v, want empty: children of removed roots must not be walked", c)
 	}
 }
