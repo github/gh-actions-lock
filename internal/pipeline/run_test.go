@@ -94,15 +94,25 @@ func TestPlanFastPath(t *testing.T) {
 func TestRepositoryIdentityRefsIncludesLockedClosure(t *testing.T) {
 	file := parserlock.File{
 		Workflows: map[string][]string{
-			".github/workflows/ci.yml": {"root/composite@v1", "other/action@v1"},
+			".github/workflows/ci.yml": {"root/composite@v1", "other/action@v1", "deleted/action@v1"},
 		},
 		Dependencies: map[string]parserlock.Action{
 			"root/composite@v1": {RepoID: 10, Uses: []string{"old/action@v1"}},
 			"old/action@v1":     {RepoID: 20},
 			"other/action@v1":   {RepoID: 30},
+			"deleted/action@v1": {RepoID: 40},
 		},
 	}
-	got := repositoryIdentityRefs(".github/workflows/ci.yml", file, "")
+	// deleted/action is a stale lockfile root the workflow no longer uses; it
+	// must not be looked up, or a deleted repository would block its pruning.
+	pw := checks.ParsedWorkflow{
+		Path: ".github/workflows/ci.yml",
+		Refs: []parserlock.ActionRef{
+			ref("root", "composite", "", "v1"),
+			ref("other", "action", "", "v1"),
+		},
+	}
+	got := repositoryIdentityRefs(pw, file, "")
 
 	assert.Len(t, got, 3)
 	assert.Equal(t, "root/composite", got[0].Ref.NWO())

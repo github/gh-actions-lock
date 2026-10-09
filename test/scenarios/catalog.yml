@@ -708,7 +708,7 @@ scenarios:
 
   - name: verify_pinned_stub
     category: output_modes
-    description: "--verify with stub server — pinned lockfile passes (inconclusive is non-blocking in read-only mode)"
+    description: "--verify with stub server — pinned lockfile passes when identity verifies (inconclusive ancestry is non-blocking in read-only mode)"
     needs_stub: true
     tags: [stub]
     flags: ["--verify"]
@@ -1958,7 +1958,7 @@ scenarios:
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
-    description: "SSO 403 on a previously-pinned action — pin retained with an inconclusive warning"
+    description: "SSO 403 on a previously-pinned action — identity can't be verified, so the run fails closed and the lockfile is left untouched"
     needs_stub: true
     tags: [stub]
     flags: ["--no-onboard", "--no-narrow", "--no-interactive", "--json=valid,findings"]
@@ -1969,16 +1969,14 @@ scenarios:
           actions: ["actions/checkout@v4"]
       lockfile_template: pinned_checkout
     expect:
-      exit: 0
+      exit: 2
       lockfile_deps_cover_direct: true
       stdout_is_json: true
       jq:
         - expr: '.valid'
-          equals: "true"
-        - expr: '.findings | length'
+          equals: "false"
+        - expr: '[.findings[] | select(.category == "repository-identity-unknown")] | length'
           equals: "1"
-        - expr: '.findings[0].category'
-          equals: "reachability-unknown"
 
       lockfile_contains:
         - "version: 'v0.0.2'"

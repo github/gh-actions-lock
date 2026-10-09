@@ -78,7 +78,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			len(parsed[i].SelfRepositoryRefErrs) == 0 &&
 			len(parsed[i].SelfRepositoryResolutionErrs) == 0 {
 			fastPlans[i] = planFastPath(parsed[i])
-			identityRefs[i] = repositoryIdentityRefs(parsed[i].Path, lockSnapshot, homeHostname)
+			identityRefs[i] = repositoryIdentityRefs(parsed[i], lockSnapshot, homeHostname)
 		}
 	}
 	repositoryIdentities := lookupRepositoryIdentities(ctx, r, opts.Pool, identityRefs)
@@ -206,7 +206,13 @@ type repositoryIdentityRef struct {
 	RepoID   int64
 }
 
-func repositoryIdentityRefs(path string, file parserlock.File, homeHostname string) []repositoryIdentityRef {
+func repositoryIdentityRefs(pw checks.ParsedWorkflow, file parserlock.File, homeHostname string) []repositoryIdentityRef {
+	// Only verify roots the workflow still uses. A stale root (for example
+	// one whose repository was deleted) must not block the run that prunes it.
+	current := make(map[ghapi.NWORef]bool, len(pw.Refs))
+	for _, ref := range pw.Refs {
+		current[ghapi.ForNWORef(ref.Owner, ref.Repo, ref.Ref)] = true
+	}
 	var refs []repositoryIdentityRef
 	index := make(map[ghapi.NWORef]int)
 	add := func(ref parserlock.ActionRef, hostname, parent string, repoID int64) {
@@ -247,7 +253,10 @@ func repositoryIdentityRefs(path string, file parserlock.File, homeHostname stri
 			walk(child, pinKey)
 		}
 	}
-	for _, root := range file.Workflows[workflowfile.KeyFromPath(path)] {
+	for _, root := range file.Workflows[workflowfile.KeyFromPath(pw.Path)] {
+		if pin, ok := parserlock.ParsePin(root); !ok || !current[ghapi.ForNWORef(pin.Owner, pin.Repo, pin.Ref)] {
+			continue
+		}
 		walk(root, "")
 	}
 	return refs
@@ -256,6 +265,7 @@ func repositoryIdentityRefs(path string, file parserlock.File, homeHostname stri
 type repositoryIdentity struct {
 	canonical string
 	repoID    int64
+	err       error
 }
 
 func (i repositoryIdentity) matches(nwo string, repoID int64) bool {
@@ -302,14 +312,23 @@ func lookupRepositoryIdentities(ctx context.Context, r *resolve.Resolver, pool *
 			func(indexedRef) string { return "" },
 			func(ctx context.Context, _ int, item indexedRef) error {
 				ref := item.ref.Ref
-				canonical, err := r.CanonicalNWO(ctx, ref.Owner, ref.Repo)
-				if err == nil {
-					results[item.idx].canonical = canonical
-					_, repoID, idErr := r.RepoIDs(ctx, item.ref.Hostname, ref.Owner, ref.Repo)
-					if idErr == nil {
-						results[item.idx].repoID = repoID
-					}
+				// RepoIDs rejects a client routed to a host other than the
+				// one the lockfile records; CanonicalNWO then reads the same
+				// cached metadata from that client.
+				_, repoID, err := r.RepoIDs(ctx, item.ref.Hostname, ref.Owner, ref.Repo)
+				if err != nil {
+					results[item.idx].err = err
+					return nil
 				}
+				canonical, err := r.CanonicalNWO(ctx, ref.Owner, ref.Repo)
+				if err == nil && canonical == "" {
+					err = fmt.Errorf("repos/%s returned no canonical name", ref.NWO())
+				}
+				if err != nil {
+					results[item.idx].err = err
+					return nil
+				}
+				results[item.idx] = repositoryIdentity{canonical: canonical, repoID: repoID}
 				return nil
 			},
 		)
@@ -327,21 +346,34 @@ func appendKnownRepositoryIdentityFindings(report *checks.Report, workflows [][]
 		for _, item := range workflows[i] {
 			ref := item.Ref
 			identity := identities[repositoryIdentityKey(item.Hostname, ref)]
+			if identity.err != nil {
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: wr.Path,
+					Category:     checks.RepositoryIdentityUnknown,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					ActionRef:    &ref,
+					Detail:       fmt.Sprintf("couldn't verify the repository identity for %s: %v", ref.NWO(), identity.err),
+					Remediation:  fmt.Sprintf("check that %s is reachable with your credentials, then run `gh actions-lock` again", ref.NWO()),
+				})
+				continue
+			}
 			if identity.canonical == "" {
 				continue
 			}
+			if item.RepoID != 0 && identity.repoID != item.RepoID {
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: wr.Path,
+					Category:     checks.RepositoryChanged,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					ActionRef:    &ref,
+					Detail:       fmt.Sprintf("repository identity changed for %s: the lockfile records repository ID %d, but the current repository ID is %d. This may indicate a namespace takeover", ref.NWO(), item.RepoID, identity.repoID),
+					Remediation:  fmt.Sprintf("review %s before trusting it. If the replacement is expected, remove its lockfile entry and run `gh actions-lock` again", ref.NWO()),
+				})
+				continue
+			}
 			if strings.EqualFold(identity.canonical, ref.NWO()) {
-				if item.RepoID != 0 && identity.repoID != 0 && identity.repoID != item.RepoID {
-					wr.Findings = append(wr.Findings, checks.Finding{
-						WorkflowPath: wr.Path,
-						Category:     checks.RepositoryChanged,
-						Severity:     checks.SeverityError,
-						Confidence:   checks.ConfidenceHigh,
-						ActionRef:    &ref,
-						Detail:       fmt.Sprintf("repository identity changed for %s: the lockfile records repository ID %d, but the current repository ID is %d. This may indicate a namespace takeover", ref.NWO(), item.RepoID, identity.repoID),
-						Remediation:  fmt.Sprintf("review %s before trusting it. If the replacement is expected, remove its lockfile entry and run `gh actions-lock` again", ref.NWO()),
-					})
-				}
 				continue
 			}
 			if resolvedTransfer(wr.ResolvedDeps, ref) {

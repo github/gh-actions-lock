@@ -90,6 +90,17 @@ def sso_403_all(srv)
   end
 end
 
+# SSO 403 for everything except the actions/checkout identity lookup, so
+# scenarios can exercise inconclusive resolution without failing closed on
+# repository identity.
+def sso_403_with_checkout_identity(srv)
+  srv.on(:GET, %r{/repos/actions/checkout$}) do |_req|
+    [200, { "Content-Type" => "application/json" },
+     JSON.generate({ full_name: "actions/checkout", id: 197_814_629, owner: { id: 44_036_562 } })]
+  end
+  sso_403_all(srv)
+end
+
 # Register a catch-all that returns the given status with a JSON body.
 def error_all(srv, status, body)
   [:GET, :POST].each do |method|
@@ -501,6 +512,7 @@ def checkout_repo_rest(srv)
   srv.on(:GET, %r{/repos/actions/checkout$}) do |_req|
     [200, { "Content-Type" => "application/json" },
      JSON.generate({
+       full_name: "actions/checkout",
        default_branch: "main",
        visibility: "public",
        pushed_at: "2024-01-01T00:00:00Z",
@@ -705,6 +717,14 @@ STUB_WIRING = {
       end
     end
     s.env("GH_TOKEN" => "gho_fake_dependabot_proxy_token")
+  },
+  verify_pinned_stub: ->(s) {
+    s.stub_server { |srv| sso_403_with_checkout_identity(srv) }
+    s.env("GH_TOKEN" => "gho_fake_verify_token")
+  },
+  verify_json_combined: ->(s) {
+    s.stub_server { |srv| sso_403_with_checkout_identity(srv) }
+    s.env("GH_TOKEN" => "gho_fake_verify_json_token")
   },
   sso_dedup: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -128,7 +129,7 @@ func TestCheckCommand_RewritesMovedRepository(t *testing.T) {
 					},
 				}),
 			)
-			if tt.name == "existing mutable lockfile" {
+			if len(tt.pins) > 0 {
 				reg.Register(
 					httpmock.REST("GET", `repos/krzema12/github-actions-typing$`),
 					httpmock.JSONResponse(map[string]any{
@@ -155,6 +156,13 @@ jobs:
     steps:
       - uses: `+oldNWO+`@`+tt.ref+`
 `, tt.pins...)
+			if len(tt.pins) > 0 {
+				lockPath := filepath.Join(".github", "workflows", "actions.lock")
+				lock, readErr := os.ReadFile(lockPath)
+				require.NoError(t, readErr)
+				lock = []byte(strings.ReplaceAll(string(lock), "repo_id: 1\n", "repo_id: 502427408\n"))
+				require.NoError(t, os.WriteFile(lockPath, lock, 0o600))
+			}
 			args := append(tt.args, "--no-narrow", workflowPath)
 			stdout, stderr, err := runCommandWithHTTP(t, reg, args...)
 
@@ -374,7 +382,7 @@ func TestCheckCommand_VerifyRejectsKnownMoveWhenResolutionFails(t *testing.T) {
 	defer reg.Verify(t)
 	reg.Register(
 		httpmock.REST("GET", `repos/old/action$`),
-		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO, "id": 1, "owner": map[string]any{"id": 1}}),
 	)
 	reg.Register(
 		httpmock.GraphQLForRepo("old", "action"),
@@ -405,6 +413,101 @@ jobs:
 	assert.Contains(t, payload.Findings[1].Detail, oldNWO+" has been renamed or transferred to "+newNWO)
 }
 
+func TestCheckCommand_RejectsUnverifiableRepositoryIdentity(t *testing.T) {
+	const (
+		nwo = "owner/action"
+		ref = "v1"
+		sha = "1111111111111111111111111111111111111111"
+	)
+	tests := []struct {
+		name     string
+		args     []string
+		response map[string]any
+		status   int
+		category string
+		detail   string
+	}{
+		{
+			name:     "verify fails closed when lookup errors",
+			args:     []string{"--verify"},
+			status:   http.StatusForbidden,
+			category: "repository-identity-unknown",
+			detail:   "couldn't verify the repository identity for " + nwo,
+		},
+		{
+			name:     "default run fails closed when lookup errors",
+			status:   http.StatusForbidden,
+			category: "repository-identity-unknown",
+			detail:   "couldn't verify the repository identity for " + nwo,
+		},
+		{
+			name:     "rescan fails closed when lookup errors",
+			args:     []string{"--rescan"},
+			status:   http.StatusForbidden,
+			category: "repository-identity-unknown",
+			detail:   "couldn't verify the repository identity for " + nwo,
+		},
+		{
+			name:     "transfer to a different repository ID is blocked",
+			response: map[string]any{"full_name": "other/action", "id": 2, "owner": map[string]any{"id": 2}},
+			category: "repository-changed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			responder := httpmock.StatusResponse(tt.status)
+			if tt.response != nil {
+				responder = httpmock.JSONResponse(tt.response)
+			}
+			for range 4 {
+				reg.Register(httpmock.REST("GET", `repos/owner/action$`), responder)
+			}
+			workflow := `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ` + nwo + `@` + ref + `
+`
+			workflowPath := writeTempWorkflow(t, workflow, nwo+"@"+ref+"=sha1-"+sha)
+			workflowBefore, err := os.ReadFile(workflowPath)
+			require.NoError(t, err)
+			lockPath := filepath.Join(filepath.Dir(workflowPath), "actions.lock")
+			lockBefore, err := os.ReadFile(lockPath)
+			require.NoError(t, err)
+
+			args := append(append([]string{}, tt.args...), "--no-interactive", "--json=valid,findings", workflowPath)
+			stdout, _, err := runCommandWithHTTP(t, reg, args...)
+
+			require.Error(t, err)
+			var payload struct {
+				Valid    bool             `json:"valid"`
+				Findings []format.Finding `json:"findings"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(stdout), &payload), stdout)
+			assert.False(t, payload.Valid)
+			var found *format.Finding
+			for i := range payload.Findings {
+				if payload.Findings[i].Category == tt.category {
+					found = &payload.Findings[i]
+				}
+			}
+			require.NotNil(t, found, "findings: %+v", payload.Findings)
+			assert.Contains(t, found.Detail, tt.detail)
+
+			gotWorkflow, err := os.ReadFile(workflowPath)
+			require.NoError(t, err)
+			assert.Equal(t, string(workflowBefore), string(gotWorkflow))
+			lockAfter, err := os.ReadFile(lockPath)
+			require.NoError(t, err)
+			assert.Equal(t, string(lockBefore), string(lockAfter))
+		})
+	}
+}
+
 func TestCheckCommand_FixRejectsKnownMoveWhenResolutionFails(t *testing.T) {
 	const (
 		oldNWO = "old/action"
@@ -416,7 +519,7 @@ func TestCheckCommand_FixRejectsKnownMoveWhenResolutionFails(t *testing.T) {
 	defer reg.Verify(t)
 	reg.Register(
 		httpmock.REST("GET", `repos/old/action$`),
-		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO, "id": 1, "owner": map[string]any{"id": 1}}),
 	)
 	for range 2 {
 		reg.Register(
@@ -545,11 +648,11 @@ func TestCheckCommand_RejectsTransferredRecordedRemoteCompositeRef(t *testing.T)
 	defer reg.Verify(t)
 	reg.Register(
 		httpmock.REST("GET", `repos/root/composite$`),
-		httpmock.JSONResponse(map[string]any{"full_name": parentNWO}),
+		httpmock.JSONResponse(map[string]any{"full_name": parentNWO, "id": 1, "owner": map[string]any{"id": 1}}),
 	)
 	reg.Register(
 		httpmock.REST("GET", `repos/old/action$`),
-		httpmock.JSONResponse(map[string]any{"full_name": newNWO}),
+		httpmock.JSONResponse(map[string]any{"full_name": newNWO, "id": 2, "owner": map[string]any{"id": 2}}),
 	)
 	reg.Register(
 		httpmock.GraphQLForRepo("root", "composite"),
@@ -815,6 +918,32 @@ func readTempLockfilePins(t *testing.T) string {
 	return string(b)
 }
 
+// lockfileIdentityTransport serves repository metadata matching the
+// owner_id/repo_id 1 that writeTempLockfile records, so every pin/update can
+// verify locked repository identity. Stubs registered by a test take
+// precedence.
+type lockfileIdentityTransport struct {
+	next http.RoundTripper
+}
+
+func (t lockfileIdentityTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if err == nil || !strings.Contains(err.Error(), "no registered HTTP stubs matched") {
+		return resp, err
+	}
+	parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+	if req.Method != http.MethodGet || len(parts) != 3 || parts[0] != "repos" {
+		return resp, err
+	}
+	body := fmt.Sprintf(`{"id":1,"full_name":%q,"default_branch":"main","owner":{"id":1}}`, parts[1]+"/"+parts[2])
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
 func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (string, string, error) {
 	t.Helper()
 
@@ -824,7 +953,7 @@ func runCommandWithHTTP(t *testing.T, rt http.RoundTripper, args ...string) (str
 	require.NoError(t, err)
 
 	newResolver := func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
-		return resolve.New(hostname, pool, resolve.WithTransport(rt))
+		return resolve.New(hostname, pool, resolve.WithTransport(lockfileIdentityTransport{rt}))
 	}
 
 	cmd := newRootCmd(newResolver)

@@ -82,6 +82,14 @@ func TestCheckCommand_JSONGolden(t *testing.T) {
 		}),
 	)
 
+	// Locked repository identities. checkout uses the helper default (1).
+	for nwo, id := range map[string]int{"actions/setup-go": 2, "actions/cache": 3, "helper/only-transitive": 5} {
+		reg.Register(
+			httpmock.REST("GET", "^/repos/"+nwo+"$"),
+			httpmock.JSONResponse(map[string]any{"id": id, "full_name": nwo, "owner": map[string]any{"id": id}}),
+		)
+	}
+
 	// Resolve the fixture path against the package directory BEFORE
 	// chdir'ing into the tempdir — UPDATE_GOLDEN rewrites the source
 	// expected.json, not a copy under the tempdir.

@@ -36,6 +36,11 @@ const (
 	// RepositoryChanged means the repository at a locked name has a different
 	// numeric repository ID and is therefore not the repository that was pinned.
 	RepositoryChanged Category = "repository-changed"
+	// RepositoryIdentityUnknown means the current identity of a locked
+	// repository could not be fetched. Unlike the other unknown categories it
+	// blocks: the lockfile cannot be trusted or updated without proving the
+	// repository is still the one that was pinned.
+	RepositoryIdentityUnknown Category = "repository-identity-unknown"
 	// Valid means the dependency is pinned and verified.
 	Valid Category = "valid"
 	// RunOnly means the workflow has no action refs (only run:

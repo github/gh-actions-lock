@@ -186,6 +186,8 @@ func categoryLabel(c checks.Category) string {
 		return "Unreachable pin"
 	case checks.RepositoryChanged:
 		return "Repository identity changed"
+	case checks.RepositoryIdentityUnknown:
+		return "Repository identity unverified"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}
@@ -252,7 +254,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 	parts := []string{}
 	for _, cat := range []checks.Category{
 		checks.UnreachablePin,
-		checks.RepositoryChanged,
+		checks.RepositoryChanged, checks.RepositoryIdentityUnknown,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction, checks.InvalidSelfRepositoryRef,
 		checks.Stale, checks.MisleadingSHA,
@@ -427,7 +429,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.UnreachablePin, checks.MisleadingSHA, checks.RepositoryChanged, checks.OnboardingRequired:
+	case checks.UnreachablePin, checks.MisleadingSHA, checks.RepositoryChanged, checks.RepositoryIdentityUnknown, checks.OnboardingRequired:
 		return true
 	}
 	return false

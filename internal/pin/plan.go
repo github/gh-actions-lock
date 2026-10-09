@@ -143,7 +143,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		if finding.Category == checks.InvalidSelfRepositoryRef {
 			return planResult{}, nil
 		}
-		if finding.Category == checks.RepositoryChanged {
+		if finding.Category == checks.RepositoryChanged || finding.Category == checks.RepositoryIdentityUnknown {
 			return planResult{}, fmt.Errorf("%s; %s", finding.Detail, finding.Remediation)
 		}
 	}

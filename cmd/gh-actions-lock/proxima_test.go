@@ -37,7 +37,7 @@ func proximaFixture(t *testing.T, publicStatus int) http.RoundTripper {
 		switch {
 		case tenant && path == "/repos/tenant/internal":
 			return httpmock.JSONResponse(map[string]any{
-				"visibility": "internal", "id": 111, "owner": map[string]any{"id": 11},
+				"full_name": "tenant/internal", "visibility": "internal", "id": 111, "owner": map[string]any{"id": 11},
 			})(req)
 		case path == "/repos/actions/public":
 			if tenant {
@@ -47,7 +47,7 @@ func proximaFixture(t *testing.T, publicStatus int) http.RoundTripper {
 				return httpmock.StatusResponse(publicStatus)(req)
 			}
 			return httpmock.JSONResponse(map[string]any{
-				"visibility": "public", "id": 222, "owner": map[string]any{"id": 22},
+				"full_name": "actions/public", "visibility": "public", "id": 222, "owner": map[string]any{"id": 22},
 			})(req)
 		case tenant && path == "/graphql":
 			var body struct {

@@ -5,8 +5,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,10 +17,16 @@ import (
 
 type requestCountingTransport struct {
 	calls atomic.Int64
+	// repoIDs serves repository metadata for these owner/name values.
+	repoIDs map[string]int64
 }
 
-func (t *requestCountingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+func (t *requestCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.calls.Add(1)
+	nwo := strings.TrimPrefix(req.URL.Path, "/repos/")
+	if id, ok := t.repoIDs[nwo]; ok {
+		return httpmock.JSONResponse(map[string]any{"full_name": nwo, "id": id, "owner": map[string]any{"id": 44036562}})(req)
+	}
 	return nil, errors.New("unexpected HTTP request")
 }
 
@@ -97,7 +106,11 @@ jobs:
 
 func TestExistingSHARefRewritesSelfRepositoryAction(t *testing.T) {
 	const sha = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
-	transport := &requestCountingTransport{}
+	transport := &requestCountingTransport{repoIDs: map[string]int64{
+		"actions/create-github-app-token": 642580244,
+		"actions/checkout":                197814629,
+		"actions/setup-go":                485264523,
+	}}
 
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
