@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
@@ -142,10 +144,12 @@ func TestParity_UnchangedRerunRequestCountRESTOnly(t *testing.T) {
 type countingTransport struct {
 	inner http.RoundTripper
 	n     int
+	urls  []string
 }
 
 func (c *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	c.n++
+	c.urls = append(c.urls, req.URL.Path)
 	return c.inner.RoundTrip(req)
 }
 
@@ -166,4 +170,85 @@ jobs:
 		"actions/checkout@v4.2.1=sha1-"+parityTestSHA,
 		"actions/setup-go@v5=sha1-"+parityTestSHA,
 	)
+}
+
+// TestParity_FirstRunTransferBlocks is #110 on first generation: resolution
+// follows the rename, so the parity check on the freshly resolved pin must
+// catch it before the pin reaches the lockfile.
+func TestParity_FirstRunTransferBlocks(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestSHA, nodeActionYAML)},
+	}))
+	reg.Register(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestSHA, nodeActionYAML)},
+	}))
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: krzema12/github-actions-typing@v2.2.2
+`)
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	ct := &countingTransport{inner: reg}
+	p, err := runParity(t, ct, path)
+	require.ErrorIs(t, err, errSilent)
+	assert.False(t, p.Valid)
+	var cats []string
+	for _, f := range p.Findings {
+		cats = append(cats, f.Category)
+	}
+	assert.Contains(t, cats, "repo-moved")
+	assert.Equal(t, 2, ct.n, "one resolve + one parity request: %v", ct.urls)
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+	lock, err := os.ReadFile(filepath.Join(".github", "workflows", "actions.lock"))
+	if err == nil {
+		assert.NotContains(t, string(lock), "krzema12")
+	}
+}
+
+// TestParity_FirstRunRequestCount: generation adds exactly one GraphQL
+// parity request on top of resolution, and the pin is written.
+func TestParity_FirstRunRequestCount(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	registerParity(reg)
+	reg.Register(httpmock.GraphQLForRepo("actions", "checkout"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("actions/checkout", parityTestSHA, nodeActionYAML)},
+	}))
+	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "actions/checkout", "id": 1, "owner": map[string]any{"id": 1},
+	}))
+	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", parityTestSHA)))
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.1
+`)
+
+	ct := &countingTransport{inner: reg}
+	_, _, err := runCommandWithHTTP(t, ct, path)
+	require.NoError(t, err)
+	graphql := 0
+	for _, u := range ct.urls {
+		if u == "/graphql" {
+			graphql++
+		}
+	}
+	assert.Equal(t, 2, graphql, "resolve + parity: %v", ct.urls)
+	assert.Contains(t, readTempLockfilePins(t), "actions/checkout@v4.2.1")
 }

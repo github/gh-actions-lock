@@ -122,7 +122,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			keep = func(c checks.Category) bool { return c == checks.RepoMoved }
 		}
 		endParity := prof.Phase("  parity check")
-		checkParity(ctx, r.GHClient(), parsed, opts.Store, report, keep)
+		checkParity(ctx, r, parsed, opts.Store, report, recordedKeys, keep)
 		endParity()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
