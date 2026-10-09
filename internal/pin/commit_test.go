@@ -179,6 +179,8 @@ func TestCommitSkipNewWorkflowEntriesPreventsRewrites(t *testing.T) {
 		Path:            workflowPath,
 		Rewrites:        map[string]string{oldUses: newUses},
 		SelfActionFiles: []string{actionPath},
+		// A skipped workflow's required rewrites must not fail the run.
+		RequiredRewrites: map[string]string{"gone/action@v1": "new/action@v1"},
 	}}}
 
 	require.NoError(t, Commit(context.Background(), rec, store, &CommitOptions{SkipNewWorkflowEntries: true}))

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -983,5 +984,28 @@ func TestStateClosureIncludesTransitivePins(t *testing.T) {
 	none := func(parserlock.Pin) bool { return false }
 	if c := store.Closure(".github/workflows/ci.yml", none); len(c) != 0 {
 		t.Errorf("Closure(stale roots) = %v, want empty: children of removed roots must not be walked", c)
+	}
+}
+
+// TestState_SetUnionsUsesAcrossRenames: two old names can dedup to one
+// canonical pin, and every old entry's recorded children must carry over.
+func TestState_SetUnionsUsesAcrossRenames(t *testing.T) {
+	store, err := LoadState(t.TempDir(), fakeMetadataResolver{})
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	sha := "abc123abc123abc123abc123abc123abc123abc1"
+	store.file.Dependencies["old/a@v1"] = parserlock.Action{Ref: "v1", Commit: "sha1-" + sha, Uses: []string{"actions/cache@v4"}}
+	store.file.Dependencies["older/a@v1"] = parserlock.Action{Ref: "v1", Commit: "sha1-" + sha, Uses: []string{"actions/setup-go@v5"}}
+	store.file.Dependencies["stale/a@v1"] = parserlock.Action{Ref: "v1", Commit: "sha1-" + strings.Repeat("f", 40), Uses: []string{"evil/x@v1"}}
+
+	d := dep.Dependency{NWO: "new/a", Ref: "v1", Tag: "v1", SHA: sha, HashAlgo: "sha1", RenamedFrom: []string{"old/a@v1", "older/a@v1", "stale/a@v1"}}
+	if err := store.Set(context.Background(), ".github/workflows/ci.yml", []dep.Dependency{d}, nil, nil); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got := store.file.Dependencies["new/a@v1"].Uses
+	want := []string{"actions/cache@v4", "actions/setup-go@v5"}
+	if !slices.Equal(got, want) {
+		t.Errorf("uses = %v, want %v", got, want)
 	}
 }

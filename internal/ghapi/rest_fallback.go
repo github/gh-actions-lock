@@ -66,9 +66,9 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	}
 	resp.Body.Close()
 
+	anonRateLimited.Delete(key)
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		anonRateLimited.Delete(key)
 		anonProbeCache.Store(key, true)
 		return true
 	case isRateLimited(resp):
@@ -172,9 +172,13 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	}
 	defer resp.Body.Close()
 
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) > 1 && !isRateLimited(resp) {
+		anonRateLimited.Delete(c.anonBase() + "/" + parts[1])
+	}
 	if resp.StatusCode != http.StatusOK {
 		herr := &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
-		if parts := strings.SplitN(path, "/", 3); isRateLimited(resp) && !c.restOnly && len(parts) > 1 {
+		if isRateLimited(resp) && !c.restOnly && len(parts) > 1 {
 			anonRateLimited.Store(c.anonBase()+"/"+parts[1], struct{}{})
 			return &SSORateLimitedError{Host: c.Hostname, Owner: parts[1], Err: herr}
 		}

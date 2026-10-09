@@ -514,8 +514,8 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 			RequiredBy: parents,
 			Direct:     directKeys[depKey],
 		}
-		if len(dep.OriginalRefs) > 0 {
-			entry.RenamedFrom = dep.OriginalRefs[0].NWO() + "@" + dep.OriginalRefs[0].Ref
+		for _, orig := range dep.OriginalRefs {
+			entry.RenamedFrom = append(entry.RenamedFrom, orig.NWO()+"@"+orig.Ref)
 		}
 		out = append(out, entry)
 	}
