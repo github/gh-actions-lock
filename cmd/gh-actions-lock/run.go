@@ -328,7 +328,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// saveRunLog writes the run log now and returns a func that prints its
 	// path; defer the result so the path is the last line of terminal output.
 	saveRunLog := func(record *pin.Record, valid bool) func() {
-		path := writeRunLog(runLogDir(), report, record, valid, store.File().Version, r.Hostname())
+		var repo string
+		if cur, err := repository.Current(); err == nil {
+			repo = cur.Host + "/" + cur.Owner + "/" + cur.Name
+		}
+		path := writeRunLog(runLogDir(), report, record, valid, store.File().Version, r.Hostname(), repo)
 		return func() {
 			if path != "" && opts.jsonFields == "" {
 				console.TermBlank()

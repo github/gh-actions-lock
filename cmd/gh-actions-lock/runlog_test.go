@@ -32,7 +32,7 @@ func TestWriteRunLog(t *testing.T) {
 			{NWO: "o/r", Ref: "V1", Resolution: pin.Pinned, SHA: "def", Workflows: []string{"d.yml"}},
 		}}
 
-		path := writeRunLog(dir, report, record, false, "v0.0.3", "github.com")
+		path := writeRunLog(dir, report, record, false, "v0.0.3", "github.com", "github.com/o/r")
 		require.NotEmpty(t, path)
 		info, err := os.Stat(path)
 		require.NoError(t, err)
@@ -41,11 +41,13 @@ func TestWriteRunLog(t *testing.T) {
 		b, err := os.ReadFile(path)
 		require.NoError(t, err)
 		var payload struct {
+			Repo     string           `json:"repo"`
 			Valid    bool             `json:"valid"`
 			Findings []map[string]any `json:"findings"`
 			Pins     []map[string]any `json:"pins"`
 		}
 		require.NoError(t, json.Unmarshal(b, &payload))
+		assert.Equal(t, "github.com/o/r", payload.Repo)
 		assert.False(t, payload.Valid)
 		require.Len(t, payload.Findings, 1)
 		assert.Equal(t, "local path cannot be resolved", payload.Findings[0]["detail"])
@@ -65,7 +67,7 @@ func TestWriteRunLog(t *testing.T) {
 			require.NoError(t, os.Chtimes(name, mtime, mtime))
 		}
 
-		path := writeRunLog(dir, &checks.Report{}, nil, true, "", "github.com")
+		path := writeRunLog(dir, &checks.Report{}, nil, true, "", "github.com", "")
 
 		require.NotEmpty(t, path)
 		entries, err := os.ReadDir(dir)
@@ -75,7 +77,7 @@ func TestWriteRunLog(t *testing.T) {
 	})
 
 	t.Run("returns empty path when dir is unusable", func(t *testing.T) {
-		assert.Empty(t, writeRunLog("", &checks.Report{}, nil, true, "", "github.com"))
+		assert.Empty(t, writeRunLog("", &checks.Report{}, nil, true, "", "github.com", ""))
 	})
 }
 

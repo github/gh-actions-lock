@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,8 +22,9 @@ const (
 
 // writeRunLog saves the full --json output for this run under the user
 // cache dir so a run that can't be reproduced later still leaves evidence
-// for a bug report. Best effort: returns "" on any failure.
-func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost string) string {
+// for a bug report. repo ("host/owner/name", empty if unknown) is added
+// only here, not to --json. Best effort: returns "" on any failure.
+func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost, repo string) string {
 	if dir == "" {
 		return ""
 	}
@@ -33,13 +37,30 @@ func writeRunLog(dir string, report *checks.Report, record *pin.Record, valid bo
 		return ""
 	}
 	path := f.Name()
-	werr := format.WriteJSON(f, report, record, valid, format.AllJSONFields, cliVersion(), lockfileVersion, homeHost)
+	werr := writeRunLogJSON(f, report, record, valid, lockfileVersion, homeHost, repo)
 	if cerr := f.Close(); werr != nil || cerr != nil {
 		_ = os.Remove(path)
 		return ""
 	}
 	gcLogs(dir)
 	return path
+}
+
+func writeRunLogJSON(w io.Writer, report *checks.Report, record *pin.Record, valid bool, lockfileVersion, homeHost, repo string) error {
+	var buf bytes.Buffer
+	if err := format.WriteJSON(&buf, report, record, valid, format.AllJSONFields, cliVersion(), lockfileVersion, homeHost); err != nil {
+		return err
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
+		return err
+	}
+	if repo != "" {
+		payload["repo"], _ = json.Marshal(repo)
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(payload)
 }
 
 func runLogDir() string {
