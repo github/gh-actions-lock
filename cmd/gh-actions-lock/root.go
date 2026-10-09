@@ -125,6 +125,13 @@ Pass --no-narrow to disable this behavior entirely.
 structured results go to stdout and progress to stderr:
 
   gh actions-lock --no-fix --json 2>/dev/null | jq .valid
+
+RUN LOGS
+
+Every run saves its full --json output, plus the repository, to
+<user cache dir>/gh-actions-lock/logs/ (on macOS,
+~/Library/Caches/gh-actions-lock/logs). Failed runs print the path.
+Logs are kept for 14 days, up to 50. Attach the log to bug reports.
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows and fix what's fixable

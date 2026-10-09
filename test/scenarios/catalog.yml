@@ -256,6 +256,7 @@ scenarios:
       output_contains:
         - "could not be resolved"
         - "nonexistent-org/nonexistent-action"
+        - "Run log:"
 
   - name: api_rate_limit_429
     category: api_errors
@@ -901,19 +902,6 @@ scenarios:
     expect:
       exit: 1
       output_contains: ["could not be resolved"]
-
-  - name: run_log_shown
-    category: security
-    description: "Run log path is displayed after pin"
-    needs_stub: true
-    tags: [stub]
-    fixtures:
-      workflows:
-        ci.yml:
-          name: CI
-          actions: ["actions/checkout@v4"]
-    expect:
-      output_contains: ["Run log:"]
 
   - name: prefix_stripping
     category: security
@@ -2123,6 +2111,8 @@ scenarios:
       exit: 0
       output_contains:
         - "pinned to a very recent tag with no Dependabot cooldown configured"
+      # A successful run saves a run log but doesn't print its path.
+      output_excludes: ["Run log:"]
 
   - name: fresh_tag_suppressed_by_cooldown
     category: cooldown

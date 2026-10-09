@@ -111,7 +111,7 @@ func (opts *checkOptions) validateOutputFlags() error {
 	return nil
 }
 
-func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) error {
+func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) (runErr error) {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -326,7 +326,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	appendCooldownConfigFindings(report, cooldownWarnings)
 
 	// saveRunLog writes the run log now and returns a func that prints its
-	// path; defer the result so the path is the last line of terminal output.
+	// path if runCheck returns an error; defer the result so the path is the
+	// last line of terminal output.
 	saveRunLog := func(record *pin.Record, valid bool) func() {
 		var repo string
 		if cur, err := repository.Current(); err == nil {
@@ -334,7 +335,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		}
 		path := writeRunLog(runLogDir(), report, record, valid, store.File().Version, r.Hostname(), repo)
 		return func() {
-			if path != "" && opts.jsonFields == "" {
+			if path != "" && runErr != nil && opts.jsonFields == "" {
 				console.TermBlank()
 				console.TermDetail("Run log: %s", path)
 			}
