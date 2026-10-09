@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,4 +220,119 @@ func TestCheck_EmptyRepo_NoLockfile_Errors(t *testing.T) {
 	_, _, err := runCommandWithHTTP(t, reg, "--json=valid,workflows")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no workflow files found")
+}
+
+func TestProximaPrunesBeforeVerifyingHosts(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		args       []string
+		last       bool
+		renamed    bool
+		transitive bool
+		foreign    bool
+		namesake   bool
+		public     bool
+		mismatch   bool
+		wantError  bool
+	}{
+		{name: "inaccessible stale pin is removed"},
+		{name: "last deleted workflow is removed", last: true},
+		{name: "renamed workflow preserves its historical pin", renamed: true},
+		{name: "stale foreign host does not bind the resolver", foreign: true},
+		{name: "stale namesake cannot seed identity caches", namesake: true},
+		{name: "stale namesake cannot bind a conflicting host", namesake: true, public: true},
+		{name: "partial scan retains out of scope pins", args: []string{".github/workflows/workflow.yml"}, wantError: true},
+		{name: "readonly retains stale pins", args: []string{"--no-fix"}, wantError: true},
+		{name: "retained transitive pin is still verified", transitive: true, wantError: true},
+		{name: "retained identity mismatch leaves disk untouched", mismatch: true, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var path string
+			if tt.last {
+				path = writeLastWorkflowDeletedRepo(t)
+			} else {
+				path = writeStaleLockfileRepo(t)
+			}
+			raw, err := os.ReadFile(path)
+			require.NoError(t, err)
+			before := string(raw)
+			if tt.renamed {
+				before = strings.Replace(before, ".github/workflows/workflow.yml", ".github/workflows/old.yml", 1)
+			}
+			if tt.transitive {
+				before = strings.Replace(before, "  'actions/checkout@v6':\n",
+					"  'actions/checkout@v6':\n    uses: ['actions/setup-go@v6']\n", 1)
+			}
+			if tt.foreign {
+				before = strings.Replace(before, "  'actions/setup-go@v6':\n",
+					"  'actions/setup-go@v6':\n    hostname: 'other.ghe.com'\n", 1)
+			}
+			if tt.namesake {
+				before = strings.ReplaceAll(before, "actions/setup-go@v6", "actions/checkout@v5")
+				before = strings.Replace(before, "  'actions/checkout@v5':\n    ref: 'v6'",
+					"  'actions/checkout@v5':\n    ref: 'v5'", 1)
+				if tt.public {
+					before = strings.Replace(before, "  'actions/checkout@v5':\n",
+						"  'actions/checkout@v5':\n    hostname: 'github.com'\n", 1)
+				}
+				before = strings.Replace(before, "sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c'\n    owner_id: 1\n    repo_id: 1",
+					"sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c'\n    owner_id: 2\n    repo_id: 2", 1)
+			}
+			require.NoError(t, os.WriteFile(path, []byte(before), 0o600))
+			staleCalls := 0
+			transport := proximaTransport(func(req *http.Request) (*http.Response, error) {
+				assert.Equal(t, "api.tenant.ghe.com", req.URL.Host)
+				switch req.URL.Path {
+				case "/repos/actions/checkout":
+					id := 1
+					if tt.mismatch {
+						id = 2
+					}
+					return httpmock.JSONResponse(map[string]any{"id": id, "owner": map[string]any{"id": 1}})(req)
+				case "/repos/actions/setup-go":
+					staleCalls++
+					return httpmock.StatusResponse(http.StatusNotFound)(req)
+				case "/repos/actions/checkout/tags", "/repos/actions/checkout/releases":
+					return httpmock.JSONResponse([]any{})(req)
+				default:
+					t.Errorf("unexpected request: %s", req.URL)
+					return httpmock.StatusResponse(http.StatusInternalServerError)(req)
+				}
+			})
+			args := append([]string{"--hostname", "tenant.ghe.com", "--no-interactive", "--no-narrow",
+				"--no-migrate-local-actions", "--json=valid,findings"}, tt.args...)
+			stdout, _, err := runCommandWithHTTP(t, transport, args...)
+			if tt.wantError {
+				require.Error(t, err)
+				after, readErr := os.ReadFile(path)
+				require.NoError(t, readErr)
+				assert.Equal(t, before, string(after))
+				if tt.mismatch {
+					assert.ErrorContains(t, err, "does not match its tenant.ghe.com repository IDs")
+					assert.Zero(t, staleCalls)
+				} else {
+					assert.ErrorContains(t, err, "verifying repository identity")
+					assert.Positive(t, staleCalls)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Zero(t, staleCalls)
+			assert.Contains(t, stdout, "stale-workflow")
+			after, err := os.ReadFile(path)
+			if tt.last {
+				assert.ErrorIs(t, err, os.ErrNotExist)
+				return
+			}
+			require.NoError(t, err)
+			assert.Contains(t, string(after), "actions/checkout@v6")
+			assert.Contains(t, string(after), "repo_id: 1")
+			assert.Contains(t, string(after), "sha1-de0fac2e4500dabe0009e67214ff5f5447ce83dd")
+			assert.NotContains(t, string(after), "deleted.yml")
+			assert.NotContains(t, string(after), "old.yml")
+			assert.NotContains(t, string(after), "actions/setup-go")
+			assert.NotContains(t, string(after), "actions/checkout@v5")
+			assert.NotContains(t, string(after), "repo_id: 2")
+		})
+	}
 }

@@ -162,9 +162,8 @@ $ gh actions-lock --json
 
 // newRun performs the per-invocation wiring shared by every command: expand the
 // requested workflow paths (or discover them), build a resolver for the
-// resolved hostname, open the lockfile store against it, and seed branch hints
-// from the existing lockfile so repeat scans short-circuit the per-branch
-// Compare walk. newResolver is the DI seam; pass nil for production wiring.
+// resolved hostname, and open the lockfile store against it.
+// newResolver is the DI seam; pass nil for production wiring.
 func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newResolver resolverFunc, onCorrupt lockRecovery) ([]string, *resolve.Resolver, *lockfile.State, error) {
 	workflowsDir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR")
 	// A full-directory scan (no explicit paths) may legitimately find zero
@@ -226,16 +225,7 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 		return nil, nil, nil, err
 	}
 
-	// Now that the resolver is available, set it as the metadata resolver
-	// for the store and re-seed branch hints.
 	store.SetMetadataResolver(r)
-	if err := store.SetHostname(r.Hostname()); err != nil {
-		return nil, nil, nil, err
-	}
-	if err := r.SeedHosts(store.AllDeps()); err != nil {
-		return nil, nil, nil, err
-	}
-	r.SeedBranchHints(store.AllDeps())
 
 	return paths, r, store, nil
 }

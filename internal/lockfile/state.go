@@ -263,14 +263,14 @@ func (s *State) WorkflowKeys() []string {
 }
 
 // PruneWorkflows removes every workflow entry whose key is not in keep and
-// returns the removed keys in sorted order. Dependency entries left orphaned
-// by the removal are not deleted here: Save's existing orphan GC drops any pin
-// no surviving workflow references.
+// returns the removed keys in sorted order. Orphaned dependencies are removed
+// from memory too, so they cannot seed caches or block identity verification.
+// refs preserves pins still used by newly added or renamed workflows.
 //
 // Callers must only pass a keep set derived from a full-directory scan. A
 // partial invocation (an explicit subset of workflow paths) has no authority to
 // decide a workflow is deleted and must not call this.
-func (s *State) PruneWorkflows(keep map[string]bool) []string {
+func (s *State) PruneWorkflows(keep map[string]bool, refs ...parserlock.ActionRef) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var removed []string
@@ -281,6 +281,9 @@ func (s *State) PruneWorkflows(keep map[string]bool) []string {
 		}
 	}
 	sort.Strings(removed)
+	if len(removed) > 0 {
+		s.pruneOrphans(refs...)
+	}
 	return removed
 }
 
@@ -540,32 +543,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 func (s *State) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Mark transitive closure reachable from any workflow as used. Walk the
-	// per-action `uses:` graph so deduplicated transitive entries don't get
-	// GC'd as orphans.
-	used := map[string]bool{}
-	var walk func(key string)
-	walk = func(key string) {
-		if used[key] {
-			return
-		}
-		used[key] = true
-		if a, ok := s.file.Dependencies[key]; ok {
-			for _, child := range a.Uses {
-				walk(child)
-			}
-		}
-	}
-	for _, deps := range s.file.Workflows {
-		for _, dep := range deps {
-			walk(dep)
-		}
-	}
-	for key := range s.file.Dependencies {
-		if !used[key] {
-			delete(s.file.Dependencies, key)
-		}
-	}
+	s.pruneOrphans()
 
 	full := s.lockPath
 
@@ -589,6 +567,40 @@ func (s *State) Save() error {
 		return err
 	}
 	return os.Rename(tmp, full)
+}
+
+// pruneOrphans requires s.mu to be held.
+func (s *State) pruneOrphans(refs ...parserlock.ActionRef) {
+	// Mark transitive closure reachable from any workflow as used. Walk the
+	// per-action `uses:` graph so deduplicated transitive entries don't get
+	// GC'd as orphans.
+	used := map[string]bool{}
+	var walk func(key string)
+	walk = func(key string) {
+		if used[key] {
+			return
+		}
+		used[key] = true
+		if a, ok := s.file.Dependencies[key]; ok {
+			for _, child := range a.Uses {
+				walk(child)
+			}
+		}
+	}
+	for _, deps := range s.file.Workflows {
+		for _, dep := range deps {
+			walk(dep)
+		}
+	}
+	for _, ref := range refs {
+		pin := parserlock.Pin{Owner: ref.Owner, Repo: ref.Repo, Ref: ref.Ref}
+		walk(pin.Canonical().String())
+	}
+	for key := range s.file.Dependencies {
+		if !used[key] {
+			delete(s.file.Dependencies, key)
+		}
+	}
 }
 
 // lookupIDs resolves the (owner, repo) numeric IDs, caching the result.
