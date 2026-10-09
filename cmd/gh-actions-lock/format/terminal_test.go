@@ -363,7 +363,7 @@ func TestPresentResults_ExcludeCategoriesSkipsImpostor(t *testing.T) {
 	PresentResults(u, report, false, false, checks.UnreachablePin)
 	got := buf.String()
 
-	if strings.Contains(got, "UNREACHABLE-PIN") {
+	if strings.Contains(got, "Unreachable pin") {
 		t.Errorf("excluded unreachable-pin should not appear:\n%s", got)
 	}
 	if strings.Contains(got, "lockfile entry was not a prior state") {
@@ -419,10 +419,10 @@ func TestPresentResults_ExcludeKeepsOtherFindings(t *testing.T) {
 	PresentResults(u, report, false, false, checks.UnreachablePin, checks.NotPinned)
 	got := buf.String()
 
-	if strings.Contains(got, "UNREACHABLE-PIN") {
+	if strings.Contains(got, "Unreachable pin") {
 		t.Errorf("excluded unreachable-pin should not appear:\n%s", got)
 	}
-	if !strings.Contains(got, "LOCAL-ACTION") {
+	if !strings.Contains(got, "! local action") {
 		t.Errorf("non-excluded local-action should still appear:\n%s", got)
 	}
 	if !strings.Contains(got, "1 of 2 workflows failed: 1 local-action") {
@@ -554,7 +554,7 @@ func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
 	// Prove the pre-fix behavior: PresentResults leaves the error block in
 	// the discarded log, so nothing surfaces.
 	PresentResults(u, report, false, false)
-	if strings.Contains(buf.String(), "UNREACHABLE-PIN") {
+	if strings.Contains(buf.String(), "Unreachable pin") {
 		t.Fatalf("guard invalid: PresentResults unexpectedly surfaced the error block:\n%s", buf.String())
 	}
 

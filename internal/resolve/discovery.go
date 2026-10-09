@@ -52,19 +52,6 @@ func IsInvalidSelfRepositoryRef(err error) bool {
 	return errors.As(err, &target)
 }
 
-// TransferredRepositoryError reports a redirected action inside a remote
-// composite, which the consuming repository cannot rewrite.
-type TransferredRepositoryError struct {
-	Original  string
-	Canonical string
-	Parent    string
-}
-
-func (e *TransferredRepositoryError) Error() string {
-	return fmt.Sprintf("%s was renamed or transferred to %s; upstream composite %s must update its `uses:` reference",
-		e.Original, e.Canonical, e.Parent)
-}
-
 // selfRepositoryPrefix marks a `$/…` self repository action inside a composite's
 // nested uses. Kept local to avoid importing the workflowfile package into the
 // resolver; the sibling detection here is a plain prefix check.
@@ -183,6 +170,16 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		var actionYMLs []string
 		var err error
 		deps, actionYMLs, err = r.resolveWithActionYMLParallel(ctx, toResolve, depth, &resolveDone, &resolveTotal)
+		if depth > 0 {
+			// A remote composite's `uses:` can't be rewritten here, and the
+			// runner looks it up as written, so keep the name it uses.
+			for i := range deps {
+				if len(deps[i].OriginalRefs) > 0 {
+					deps[i].NWO = deps[i].OriginalRefs[0].NWO()
+					deps[i].OriginalRefs = nil
+				}
+			}
+		}
 		// Keep partial results: per-ref failures are surfaced via err, but
 		// successful resolutions in `deps` should not be discarded — downstream
 		// renderers degrade gracefully per-ref instead of marking everything

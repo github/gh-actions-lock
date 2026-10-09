@@ -26,8 +26,8 @@ import (
 // blocking finding keeps its workflow out of the write.
 //
 // Identity follows the runner: only the repo ID counts. A rename or
-// transfer redirect to the same repo ID is a warning; a different ID or
-// a name that doesn't resolve blocks. Fresh pins fail closed: an
+// transfer redirect to the same repo ID is a warning, also inside a
+// remote composite; a different ID or a name that doesn't resolve blocks. Fresh pins fail closed: an
 // inconclusive check keeps them out of the write.
 func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, resolved []dep.Dependency, parents map[string][]string, keep func(checks.Category) bool) {
 	gh := r.GHClient()
@@ -61,9 +61,6 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		}
 		if j, dup := owned[[2]int{o.report, i}]; dup {
 			owners[i][j].fresh = owners[i][j].fresh || o.fresh
-			if owners[i][j].transfer == nil {
-				owners[i][j].transfer = o.transfer
-			}
 			return
 		}
 		owned[[2]int{o.report, i}] = len(owners[i])
@@ -111,8 +108,6 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		for _, o := range owners[i] {
 			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st)
 			switch {
-			case o.transfer != nil:
-				f, ok = transferFinding(o, pins[i]), true
 			case ok && o.fresh && st.Err != nil:
 				f.Severity = checks.SeverityError
 				f.Remediation = "retry; nothing is written until the repository identity is confirmed"
@@ -120,8 +115,8 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 				continue
 			}
 			wr := &report.Workflows[o.report]
-			if f.Category == checks.RepoRenamed && f.Severity == checks.SeverityWarning {
-				r.Redirect(o.lp.Pin.Owner, o.lp.Pin.Repo, o.ref.Path, o.lp.Pin.Ref, st.NameWithOwner)
+			if f.Category == checks.RepoRenamed && f.Severity == checks.SeverityWarning && o.lp.Parent == "" {
+				r.Redirect(o.lp.Pin.Owner, o.lp.Pin.Repo, o.ref, st.NameWithOwner)
 			}
 			if f.Severity == checks.SeverityError {
 				wr.Findings = dropValid(wr.Findings)
@@ -138,24 +133,6 @@ type parityOwner struct {
 	lp     lockfile.LockedPin
 	ref    parserlock.ActionRef
 	fresh  bool
-	// transfer is set for a redirect inside a remote composite, which
-	// the consuming repository cannot rewrite.
-	transfer *resolve.TransferredRepositoryError
-}
-
-func transferFinding(o parityOwner, pc ghapi.PinCheck) checks.Finding {
-	return checks.Finding{
-		WorkflowPath: o.pw.Path,
-		ActionRef:    &o.ref,
-		Dependency:   &dep.Dependency{NWO: pc.Owner + "/" + pc.Repo, Path: o.ref.Path, Ref: o.lp.Pin.Ref, SHA: pc.SHA},
-		ParentNWO:    o.transfer.Parent,
-		Category:     checks.RepoRenamed,
-		Severity:     checks.SeverityError,
-		Confidence:   checks.ConfidenceHigh,
-		Detail:       o.transfer.Error(),
-		Remediation:  fmt.Sprintf("upgrade %s to a version that uses %s", o.transfer.Parent, o.transfer.Canonical),
-		DocURL:       DocURLFor(checks.RepoRenamed),
-	}
 }
 
 // freshClosure returns a function yielding the closure of a workflow's
@@ -195,11 +172,6 @@ func freshClosure(resolved []dep.Dependency, parents map[string][]string) func(c
 				Action: parserlock.Action{Commit: d.SHA},
 				Parent: parent,
 			}}
-			for _, orig := range d.OriginalRefs {
-				if ps := parents[orig.NWO()+"@"+orig.Ref]; len(ps) > 0 {
-					o.transfer = &resolve.TransferredRepositoryError{Original: orig.NWO(), Canonical: d.NWO, Parent: ps[0]}
-				}
-			}
 			out = append(out, o)
 			for _, c := range children[foldKey(d.Key())] {
 				co, cr := c.OwnerRepo()
@@ -248,20 +220,20 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable
 		f.Detail = fmt.Sprintf("%s is missing or not visible to this token%s", nwo, via)
-		moved := "if the repository moved or was deleted, update `uses:` and run `gh actions-lock --relock`"
+		moved := "if the repository moved or was deleted, update `uses:` and run `gh actions-lock`"
 		access := fmt.Sprintf("if it's private or internal, use a token that can read it or authorize SSO for %s", pc.Owner)
 		f.Remediation = moved + "; " + access
 		if st.ViaFallback {
 			f.Remediation = access + "; " + moved
 		}
 	case idChanged(lp.Action.RepoID, st.RepoID):
-		f.Category = checks.RepoReplaced
-		f.Detail = fmt.Sprintf("%s is a different repository than the one locked (repo ID %d, locked %d)%s", nwo, st.RepoID, lp.Action.RepoID, via)
-		f.Remediation = "investigate immediately — the original repository was deleted or its name was taken over"
+		f.Category = checks.RepoHijacked
+		f.Detail = fmt.Sprintf("%s now resolves to a different repository than the one locked (repo ID %d, locked %d)%s", nwo, st.RepoID, lp.Action.RepoID, via)
+		f.Remediation = "do not trust it: the locked repository was deleted and its name taken over, possibly by an attacker. Point `uses:` at a repository you have verified"
 	case !st.CommitFound:
 		f.Category = checks.UnreachablePin
 		f.Detail = fmt.Sprintf("locked commit %s no longer exists in %s%s", short, nwo, via)
-		f.Remediation = "investigate immediately, then run `gh actions-lock --relock` to re-resolve"
+		f.Remediation = "investigate immediately (a force-push or deleted branch can drop a commit), then run `gh actions-lock --accept-moved` to re-pin"
 	case pc.Tag != "" && !strings.EqualFold(st.TagOID, pc.SHA):
 		f.Category = checks.UnreachablePin
 		f.ObservedSHA = st.TagOID

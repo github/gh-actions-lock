@@ -122,7 +122,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		keep := func(checks.Category) bool { return true }
 		if opts.Relock {
 			keep = func(c checks.Category) bool {
-				return c == checks.RepoRenamed || c == checks.RepoReplaced || c == checks.RepoUnavailable
+				return c == checks.RepoRenamed || c == checks.RepoHijacked || c == checks.RepoUnavailable
 			}
 		}
 		endParity := prof.Phase("  parity check")

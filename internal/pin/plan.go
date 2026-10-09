@@ -290,10 +290,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
-	required, err := transferRewrites(deps, rootTracker, rewrites)
-	if err != nil {
-		return planResult{}, err
-	}
+	required := transferRewrites(deps, rootTracker, wr.RewriteRefs, rewrites)
 	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
 		return planResult{}, err
 	}
@@ -318,15 +315,22 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	return planResult{entries: entries, wplans: wplans}, nil
 }
 
-// transferRewrites moves each redirected root's `uses:` to the canonical
-// repository. A redirect below a remote composite is unwritable here; the
-// parity check normally blocks it before planning.
-func transferRewrites(deps []dep.Dependency, rootTracker lockfile.DirectTracker, rewrites map[string]string) (map[string]string, error) {
+// transferRewrites moves each redirected root's `uses:` in this workflow
+// to the canonical repository.
+func transferRewrites(deps []dep.Dependency, rootTracker lockfile.DirectTracker, sources []parserlock.ActionRef, rewrites map[string]string) map[string]string {
+	written := make(map[string]bool, len(sources))
+	for _, ref := range sources {
+		written[ref.FullName()+"@"+ref.Ref] = true
+	}
 	var required map[string]string
 	for i, d := range deps {
+		if !rootTracker.IsDirect(i) {
+			continue
+		}
 		for _, ref := range d.OriginalRefs {
-			if !rootTracker.IsDirect(i) {
-				return nil, &resolve.TransferredRepositoryError{Original: ref.NWO(), Canonical: d.NWO, Parent: "a remote composite"}
+			oldUse := ref.FullName() + "@" + ref.Ref
+			if !written[oldUse] {
+				continue
 			}
 			newUse := d.NWO
 			if ref.Path != "" {
@@ -335,12 +339,11 @@ func transferRewrites(deps []dep.Dependency, rootTracker lockfile.DirectTracker,
 			if required == nil {
 				required = map[string]string{}
 			}
-			oldUse := ref.FullName() + "@" + ref.Ref
 			rewrites[oldUse] = newUse + "@" + d.Ref
 			required[oldUse] = rewrites[oldUse]
 		}
 	}
-	return required, nil
+	return required
 }
 
 func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlock.ActionRef, rewrites map[string]string) error {
