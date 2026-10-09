@@ -57,6 +57,8 @@ type WorkflowPlan struct {
 	// RequiredRewrites move redirected `uses:` to the canonical repository;
 	// Commit fails rather than skip one.
 	RequiredRewrites map[string]string
+	// RewrittenIn lists, per RequiredRewrites key, the files Commit found it in.
+	RewrittenIn map[string][]string
 	// SelfActionFiles are in-repo action definition files reached from this
 	// workflow through `$/…`. The same rewrites apply to their `uses:` lines.
 	SelfActionFiles []string
