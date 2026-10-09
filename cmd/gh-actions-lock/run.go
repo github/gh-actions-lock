@@ -133,6 +133,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// the log can never call a failed run valid.
 	rl := &runLog{}
 	defer func() {
+		if p := recover(); p != nil {
+			rl.save(fmt.Errorf("panic: %v", p))
+			panic(p)
+		}
 		if path := rl.save(runErr); path != "" && runErr != nil && opts.jsonFields == "" {
 			console.TermBlank()
 			console.TermDetail("Run log: %s", path)

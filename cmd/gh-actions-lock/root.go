@@ -128,8 +128,8 @@ structured results go to stdout and progress to stderr:
 
 RUN LOGS
 
-Every run saves its full --json output, plus the repository and whether
-the run succeeded (with its error, if any), to
+Every run except --verify-local saves its full --json output, plus the
+repository and whether the run succeeded (with its error, if any), to
 <user cache dir>/gh-actions-lock/logs/ (on macOS,
 ~/Library/Caches/gh-actions-lock/logs). Failed runs print the path.
 Logs are kept for 14 days, up to 50. Attach the log to bug reports.

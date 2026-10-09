@@ -11,7 +11,9 @@ import (
 
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pin"
+	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -237,6 +239,23 @@ jobs:
 		assert.True(t, payload.Succeeded)
 		assert.Nil(t, payload.Error)
 	})
+}
+
+func TestCheck_PanickedRunLogsFailure(t *testing.T) {
+	logDir := isolateRunLogs(t)
+	writeTempWorkflow(t, "name: ci\non: push\njobs: {}\n")
+	cmd := newRootCmd(func(string, *pinpool.Pool) (*resolve.Resolver, error) { panic("boom") })
+	cmd.SetArgs(nil)
+
+	assert.PanicsWithValue(t, "boom", func() { _ = cmd.Execute() })
+
+	var payload struct {
+		Succeeded bool   `json:"succeeded"`
+		Error     string `json:"error"`
+	}
+	readOnlyRunLog(t, logDir, &payload)
+	assert.False(t, payload.Succeeded)
+	assert.Equal(t, "panic: boom", payload.Error)
 }
 
 // isolateRunLogs points the user cache dir at a temp dir and returns the
