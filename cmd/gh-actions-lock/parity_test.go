@@ -444,6 +444,32 @@ jobs:
 	assert.NoFileExists(t, ".github/workflows/actions.lock")
 }
 
+// TestParity_FirstRunMixedCaseRefChecked: refs are case-sensitive, so a
+// fresh `@Release` must still reach the parity check and fail closed.
+func TestParity_FirstRunMixedCaseRefChecked(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQLForRepo("actions", "checkout"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("actions/checkout", parityTestSHA, nodeActionYAML)},
+	}))
+	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "actions/checkout", "id": 1, "owner": map[string]any{"id": 2},
+	}))
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@Release
+`)
+
+	_, stderr, err := runCommandWithHTTP(t, parityDown{reg}, "--no-narrow", path)
+	require.ErrorIs(t, err, errSilent)
+	assert.Contains(t, stderr, "could not verify locked")
+	assert.NoFileExists(t, ".github/workflows/actions.lock")
+}
+
 // parityDown fails every parity query with a server error.
 type parityDown struct{ inner http.RoundTripper }
 
