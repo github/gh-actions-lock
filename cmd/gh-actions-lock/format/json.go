@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/ghapi"
@@ -103,6 +104,7 @@ type Pin struct {
 	SHA          string `json:"sha,omitempty"`
 	Outcome      string `json:"outcome"`
 	NarrowedFrom string `json:"narrowed_from,omitempty"`
+	RenamedFrom  string `json:"renamed_from,omitempty"`
 	ObservedSHA  string `json:"observed_sha,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 }
@@ -269,7 +271,7 @@ func WriteJSON(w io.Writer, report *checks.Report, record *pin.Record, valid boo
 		case "workflows":
 			payload[field] = buildWorkflows()
 		case "pins":
-			payload[field] = pinsFromRecord(record)
+			payload[field] = pinsFromRecord(record, report)
 		default:
 			return fmt.Errorf("unknown JSON field %q (expected valid, findings, workflows, dependencies, pins)", field)
 		}
@@ -283,10 +285,40 @@ func WriteJSON(w io.Writer, report *checks.Report, record *pin.Record, valid boo
 // pinsFromRecord lists one Pin per host/NWO@Ref; the record holds one entry
 // per workflow that uses the action. Host and NWO are case-insensitive, refs
 // are not (see ghapi.ForNWORef).
-func pinsFromRecord(record *pin.Record) []Pin {
+//
+// Plan carries a blocked workflow's lock entries forward as Verified so Commit
+// leaves them alone. Here they are reported as skipped, or blocked when an
+// error finding names the pin, so a log never calls an unchecked pin verified.
+func pinsFromRecord(record *pin.Record, report *checks.Report) []Pin {
 	pins := []Pin{}
 	if record == nil {
 		return pins
+	}
+	blockedWF := map[string]bool{}
+	blockedDep := map[string]checks.Finding{}
+	if report != nil {
+		for _, wr := range report.Workflows {
+			if !wr.SkipCommit && !wr.BlockingResolverError {
+				continue
+			}
+			blockedWF[wr.Path] = true
+			for _, f := range wr.Findings {
+				if f.Severity == checks.SeverityError && f.Dependency != nil {
+					k := strings.ToLower(f.Dependency.NWO) + "@" + f.Dependency.Ref
+					if _, ok := blockedDep[k]; !ok {
+						blockedDep[k] = f
+					}
+				}
+			}
+		}
+	}
+	healthy := map[string]bool{}
+	for _, e := range record.Entries {
+		for _, w := range e.Workflows {
+			if !blockedWF[w] {
+				healthy[strings.ToLower(e.Hostname+"/"+e.NWO)+"@"+e.Ref] = true
+			}
+		}
 	}
 	seen := map[string]bool{}
 	for _, e := range record.Entries {
@@ -295,16 +327,41 @@ func pinsFromRecord(record *pin.Record) []Pin {
 			continue
 		}
 		seen[key] = true
-		pins = append(pins, Pin{
+		p := Pin{
 			Hostname:     e.Hostname,
 			NWO:          e.NWO,
 			Ref:          e.Ref,
 			SHA:          e.SHA,
 			Outcome:      e.Resolution.String(),
 			NarrowedFrom: e.AutoFixedRef,
+			RenamedFrom:  e.RenamedFrom,
 			ObservedSHA:  e.ObservedSHA,
 			Reason:       e.Reason,
+		}
+		depKey := strings.ToLower(e.NWO) + "@" + e.Ref
+		if f, ok := blockedDep[depKey]; ok {
+			p.Outcome, p.Reason = "blocked", f.Detail
+			delete(blockedDep, depKey)
+		} else if !healthy[key] && e.Resolution == pin.Verified {
+			p.Outcome, p.Reason = pin.Skipped.String(), "workflow blocked; lock entry left unchanged"
+		}
+		pins = append(pins, p)
+	}
+	// Blocked pins the lockfile never had (a first run) have no entry.
+	var fresh []Pin
+	for _, f := range blockedDep {
+		fresh = append(fresh, Pin{
+			Hostname:    f.Dependency.Hostname,
+			NWO:         f.Dependency.NWO,
+			Ref:         f.Dependency.Ref,
+			Outcome:     "blocked",
+			ObservedSHA: f.Dependency.SHA,
+			Reason:      f.Detail,
 		})
 	}
+	sort.Slice(fresh, func(i, j int) bool {
+		return strings.ToLower(fresh[i].NWO+"@"+fresh[i].Ref) < strings.ToLower(fresh[j].NWO+"@"+fresh[j].Ref)
+	})
+	pins = append(pins, fresh...)
 	return pins
 }
