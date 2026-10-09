@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
@@ -122,4 +123,67 @@ func TestGcLogs(t *testing.T) {
 
 		assert.DirExists(t, subdir)
 	})
+}
+
+// Regression for github-early-access/actions-locked-dependencies#59: a fix
+// run rejected because a remote composite uses a local path left a record
+// claiming valid with no workflows.
+func TestCheck_FailedRunLogsRejectedWorkflow(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("HOME", cache)
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("LocalAppData", cache)
+	logDir := runLogDir()
+	require.NotEmpty(t, logDir)
+
+	reg := &httpmock.Registry{}
+	compositeYAML := "name: Publish\nruns:\n  using: composite\n  steps:\n    - uses: ./.github/.tmp/run-in-docker\n"
+	reg.Register(
+		httpmock.GraphQLForRepo("pypa", "gh-action-pypi-publish"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("pypa/gh-action-pypi-publish", "76f52bc884231f62b9a034ebfe128415bbaabdfc", compositeYAML),
+			},
+		}),
+	)
+
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pypa/gh-action-pypi-publish@release/v1
+`)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-interactive", "--no-narrow", workflowPath)
+	require.Error(t, err)
+	assert.Contains(t, stderr, "Run log:")
+
+	entries, err := os.ReadDir(logDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	b, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	require.NoError(t, err)
+
+	var payload struct {
+		Valid     bool `json:"valid"`
+		Workflows []struct {
+			Path  string `json:"path"`
+			Valid bool   `json:"valid"`
+		} `json:"workflows"`
+		Findings []struct {
+			Category string `json:"category"`
+			Detail   string `json:"detail"`
+		} `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(b, &payload))
+	assert.False(t, payload.Valid)
+	require.Len(t, payload.Workflows, 1)
+	assert.Equal(t, workflowPath, payload.Workflows[0].Path)
+	assert.False(t, payload.Workflows[0].Valid)
+	require.NotEmpty(t, payload.Findings)
+	assert.Equal(t, "local-action", payload.Findings[0].Category)
+	assert.Contains(t, payload.Findings[0].Detail, "./.github/.tmp/run-in-docker")
 }
