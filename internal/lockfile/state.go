@@ -227,12 +227,14 @@ func (s *State) VerifyHosts(ctx context.Context) error {
 			return fmt.Errorf("invalid dependency %q", key)
 		}
 		hostname := s.hostOrHome(action.Hostname)
-		ownerID, repoID, err := s.meta.RepoIDs(ctx, hostname, pin.Owner, pin.Repo)
+		// owner_id is compatibility metadata: a transfer changes it while the
+		// repository keeps its identity.
+		_, repoID, err := s.meta.RepoIDs(ctx, hostname, pin.Owner, pin.Repo)
 		if err != nil {
 			return fmt.Errorf("verifying repository identity for %s on %s: %w", key, hostname, err)
 		}
-		if ownerID != action.OwnerID || repoID != action.RepoID {
-			return fmt.Errorf("dependency %s does not match its %s repository IDs; restore a lockfile for this host or regenerate the lockfile after reviewing the dependency", key, hostname)
+		if repoID != action.RepoID {
+			return fmt.Errorf("dependency %s does not match its %s repository ID; restore a lockfile for this host or regenerate the lockfile after reviewing the dependency", key, hostname)
 		}
 	}
 	return nil

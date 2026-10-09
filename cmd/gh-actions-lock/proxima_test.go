@@ -159,7 +159,7 @@ jobs:
 				"--hostname", "tenant.ghe.com", "--no-narrow", "--no-migrate-local-actions", "--json", path)
 			require.Error(t, err)
 			if status == 200 {
-				assert.ErrorContains(t, err, "does not match its tenant.ghe.com repository IDs")
+				assert.ErrorContains(t, err, "does not match its tenant.ghe.com repository ID")
 			} else {
 				assert.ErrorContains(t, err, "verifying repository identity")
 			}

@@ -134,18 +134,18 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 				assert.Contains(t, string(raw), "hostname: 'github.com'")
 			}
 			action := store.file.Dependencies["o/r@v1"]
-			for _, field := range []string{"owner", "repo"} {
-				t.Run("rejects changed "+field+" ID", func(t *testing.T) {
-					changed := action
-					if field == "owner" {
-						changed.OwnerID = 200
-					} else {
-						changed.RepoID = 200
-					}
-					store.file.Dependencies["o/r@v1"] = changed
-					require.ErrorContains(t, store.VerifyHosts(context.Background()), "regenerate the lockfile")
-				})
-			}
+			t.Run("accepts changed owner ID", func(t *testing.T) {
+				changed := action
+				changed.OwnerID = 200
+				store.file.Dependencies["o/r@v1"] = changed
+				require.NoError(t, store.VerifyHosts(context.Background()))
+			})
+			t.Run("rejects changed repo ID", func(t *testing.T) {
+				changed := action
+				changed.RepoID = 200
+				store.file.Dependencies["o/r@v1"] = changed
+				require.ErrorContains(t, store.VerifyHosts(context.Background()), "regenerate the lockfile")
+			})
 		})
 	}
 }
