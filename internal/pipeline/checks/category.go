@@ -33,10 +33,14 @@ const (
 	// entry was tampered with. The check can't distinguish those, so it
 	// fails closed without asserting an attack.
 	UnreachablePin Category = "unreachable-pin"
-	// RepoMoved means a locked dependency's repository was renamed,
-	// transferred, or replaced since it was locked. The runner rejects the
-	// pin, and re-locking under the old name cannot fix it.
-	RepoMoved Category = "repo-moved"
+	// RepoRenamed means a locked dependency's repository was renamed or
+	// transferred but kept its repo ID. The runner follows the redirect;
+	// fix mode rewrites `uses:` to the new name and keeps the locked commit.
+	RepoRenamed Category = "repo-renamed"
+	// RepoReplaced means a locked dependency's name no longer resolves, or
+	// resolves to a different repo ID. The runner rejects the pin, and
+	// re-locking under the old name cannot fix it.
+	RepoReplaced Category = "repo-replaced"
 	// Valid means the dependency is pinned and verified.
 	Valid Category = "valid"
 	// RunOnly means the workflow has no action refs (only run:

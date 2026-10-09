@@ -18,7 +18,8 @@ func TestCategoryStringsAreFrozen(t *testing.T) {
 		{Stale, "stale"},
 		{MisleadingSHA, "misleading-sha"},
 		{UnreachablePin, "unreachable-pin"},
-		{RepoMoved, "repo-moved"},
+		{RepoRenamed, "repo-renamed"},
+		{RepoReplaced, "repo-replaced"},
 		{Valid, "valid"},
 		{RunOnly, "run-only"},
 		{AncestryUnknown, "ancestry-unknown"},
@@ -51,7 +52,7 @@ func TestCategoryIsInconclusive(t *testing.T) {
 	}
 	blocking := []Category{
 		NotPinned, ShaAsRef, RefChanged, RefMoved, Stale,
-		MisleadingSHA, UnreachablePin, RepoMoved,
+		MisleadingSHA, UnreachablePin, RepoRenamed, RepoReplaced,
 		Valid, RunOnly, OnboardingRequired, VersionRef, LocalAction,
 		StaleWorkflow,
 		SelfRepositoryAction, InvalidSelfRepositoryRef,

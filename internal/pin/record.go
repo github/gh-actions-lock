@@ -43,7 +43,10 @@ type Entry struct {
 	Workflows    []string   `json:"workflows"`
 	RequiredBy   []string   `json:"required_by,omitempty"`
 	Direct       bool       `json:"direct"`
-	FullScan     bool       `json:"full_scan,omitempty"`
+	// RenamedFrom is the lockfile key this pin had before a same-repository
+	// rename, so its recorded `uses:` carry over.
+	RenamedFrom string `json:"renamed_from,omitempty"`
+	FullScan    bool   `json:"full_scan,omitempty"`
 }
 
 // WorkflowPlan records what Commit must write for one workflow file.

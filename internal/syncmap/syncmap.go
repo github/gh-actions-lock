@@ -29,13 +29,6 @@ func (c *Map[K, V]) Put(k K, v V) {
 	c.m[k] = v
 }
 
-// Delete removes k.
-func (c *Map[K, V]) Delete(k K) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.m, k)
-}
-
 // Len returns the number of entries currently stored.
 func (c *Map[K, V]) Len() int {
 	c.mu.Lock()

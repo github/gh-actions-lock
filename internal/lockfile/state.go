@@ -551,6 +551,11 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 				usesSet[u] = true
 			}
 		}
+		if renamed, found := s.file.Dependencies[d.RenamedFrom]; !ok && found && strings.HasSuffix(renamed.Commit, "-"+d.SHA) {
+			for _, u := range renamed.Uses {
+				usesSet[u] = true
+			}
+		}
 		oldRef := d.OriginalRef
 		if !isSHARef(d.Ref) && isSHARef(oldRef) {
 			shaPin := pin

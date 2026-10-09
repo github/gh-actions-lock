@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -160,10 +161,19 @@ func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 	}
 }
 
-// Forget drops a seeded entry so the next resolution goes live.
-func (r *Resolver) Forget(owner, repo, path, ref string) {
-	r.cache.Delete(ghapi.ForActionRef(owner, repo, "", ref))
-	r.cache.Delete(ghapi.ForActionRef(owner, repo, path, ref))
+// Redirect re-labels a seeded entry under its canonical name, keeping the
+// locked commit: a rename of the same repository is no reason to advance.
+// Unseeded refs are left to live resolution.
+func (r *Resolver) Redirect(owner, repo, path, ref, canonical string) {
+	for _, key := range []ghapi.ActionRef{ghapi.ForActionRef(owner, repo, "", ref), ghapi.ForActionRef(owner, repo, path, ref)} {
+		e, ok := r.cache.Get(key)
+		if !ok {
+			continue
+		}
+		e.dep.NWO = canonical
+		e.dep.OriginalRefs = []parserlock.ActionRef{{Owner: owner, Repo: repo, Path: path, Ref: ref}}
+		r.cache.Put(key, e)
+	}
 }
 
 // --- Accessors ---

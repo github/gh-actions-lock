@@ -121,7 +121,7 @@ func (f *Finding) IsValid() bool {
 		return true
 	}
 	switch f.Category {
-	case Valid, RunOnly, LocalAction, RepoMoved, ShaAsRef, RefMoved, VersionRef, OnboardingRequired, StaleWorkflow, SelfRepositoryAction, FreshTag, CooldownConfigIgnored:
+	case Valid, RunOnly, LocalAction, RepoRenamed, ShaAsRef, RefMoved, VersionRef, OnboardingRequired, StaleWorkflow, SelfRepositoryAction, FreshTag, CooldownConfigIgnored:
 		return true
 	case NotPinned:
 		return f.ActionRef == nil // workflow-level is a warning
@@ -137,7 +137,7 @@ func (f *Finding) IsWarning() bool {
 		return true
 	case f.Category == RefMoved:
 		return true
-	case f.Category == LocalAction, f.Category == RepoMoved:
+	case f.Category == LocalAction, f.Category == RepoRenamed:
 		return f.Severity != SeverityError
 	case f.Category.IsInconclusive():
 		return true

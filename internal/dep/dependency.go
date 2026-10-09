@@ -34,6 +34,8 @@ type Dependency struct {
 	HashAlgo string // "sha1" or "sha256"
 	// OriginalRef is the lockfile key ref before an in-memory rewrite.
 	OriginalRef string
+	// RenamedFrom is the lockfile key before a same-repository rename.
+	RenamedFrom string
 	// Tag is the discovered release/tag pointing at SHA, if any. Optional.
 	// Populated by the pin-time discovery pass; not read from `uses:`.
 	Tag string

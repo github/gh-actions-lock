@@ -519,6 +519,9 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 			RequiredBy: parents,
 			Direct:     directKeys[depKey],
 		}
+		if len(dep.OriginalRefs) > 0 {
+			entry.RenamedFrom = dep.OriginalRefs[0].NWO() + "@" + dep.OriginalRefs[0].Ref
+		}
 		out = append(out, entry)
 	}
 	return out
@@ -602,7 +605,7 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 		case f.Category == checks.Stale,
 			f.Category == checks.UnreachablePin && acceptMoved,
 			f.Category == checks.RefMoved && (acceptMoved || relock),
-			f.Category == checks.RepoMoved && f.Severity == checks.SeverityWarning:
+			f.Category == checks.RepoRenamed && f.Severity == checks.SeverityWarning:
 		default:
 			continue
 		}

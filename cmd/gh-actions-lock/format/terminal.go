@@ -184,8 +184,10 @@ func categoryLabel(c checks.Category) string {
 		return "Misleading SHA"
 	case checks.UnreachablePin:
 		return "Unreachable pin"
-	case checks.RepoMoved:
-		return "Repository moved"
+	case checks.RepoRenamed:
+		return "Repository renamed"
+	case checks.RepoReplaced:
+		return "Repository missing or replaced"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}
@@ -251,7 +253,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 
 	parts := []string{}
 	for _, cat := range []checks.Category{
-		checks.RepoMoved, checks.UnreachablePin,
+		checks.RepoReplaced, checks.RepoRenamed, checks.UnreachablePin,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction, checks.InvalidSelfRepositoryRef,
 		checks.Stale, checks.MisleadingSHA,
@@ -424,7 +426,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 func renderRedirects(out *ui.UI, report *checks.Report) {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
-			if f.Category == checks.RepoMoved && f.IsWarning() {
+			if f.Category == checks.RepoRenamed && f.IsWarning() {
 				out.TermWarn("%s: %s", f.WorkflowPath, f.Detail)
 				out.TermDetail("↳ %s", f.Remediation)
 			}
@@ -437,7 +439,7 @@ func renderRedirects(out *ui.UI, report *checks.Report) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoMoved:
+	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoRenamed, checks.RepoReplaced:
 		return true
 	}
 	return false

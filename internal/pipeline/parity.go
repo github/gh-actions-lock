@@ -120,8 +120,8 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 				continue
 			}
 			wr := &report.Workflows[o.report]
-			if f.Category == checks.RepoMoved && f.Severity == checks.SeverityWarning {
-				r.Forget(o.lp.Pin.Owner, o.lp.Pin.Repo, o.ref.Path, o.lp.Pin.Ref)
+			if f.Category == checks.RepoRenamed && f.Severity == checks.SeverityWarning {
+				r.Redirect(o.lp.Pin.Owner, o.lp.Pin.Repo, o.ref.Path, o.lp.Pin.Ref, st.NameWithOwner)
 			}
 			if f.Severity == checks.SeverityError {
 				wr.Findings = dropValid(wr.Findings)
@@ -149,12 +149,12 @@ func transferFinding(o parityOwner, pc ghapi.PinCheck) checks.Finding {
 		ActionRef:    &o.ref,
 		Dependency:   &dep.Dependency{NWO: pc.Owner + "/" + pc.Repo, Path: o.ref.Path, Ref: o.lp.Pin.Ref, SHA: pc.SHA},
 		ParentNWO:    o.transfer.Parent,
-		Category:     checks.RepoMoved,
+		Category:     checks.RepoRenamed,
 		Severity:     checks.SeverityError,
 		Confidence:   checks.ConfidenceHigh,
 		Detail:       o.transfer.Error(),
 		Remediation:  fmt.Sprintf("upgrade %s to a version that uses %s", o.transfer.Parent, o.transfer.Canonical),
-		DocURL:       DocURLFor(checks.RepoMoved),
+		DocURL:       DocURLFor(checks.RepoRenamed),
 	}
 }
 
@@ -246,11 +246,11 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		f.Detail = fmt.Sprintf("could not verify locked %s@%s: %s", nwo, short, st.Err)
 		f.Remediation = "retry; the runner will re-check this pin at job start"
 	case st.RepoMissing:
-		f.Category = checks.RepoMoved
+		f.Category = checks.RepoReplaced
 		f.Detail = fmt.Sprintf("%s no longer resolves%s; the runner rejects pins to deleted or inaccessible repositories", nwo, via)
 		f.Remediation = "find where the action moved, update `uses:`, then run `gh actions-lock --relock`"
 	case idChanged(lp.Action.RepoID, st.RepoID):
-		f.Category = checks.RepoMoved
+		f.Category = checks.RepoReplaced
 		f.Detail = fmt.Sprintf("%s is a different repository than the one locked (repo ID %d, locked %d)%s", nwo, st.RepoID, lp.Action.RepoID, via)
 		f.Remediation = "investigate immediately — the original repository was deleted or its name was taken over"
 	case !st.CommitFound:
@@ -267,7 +267,7 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		}
 		f.Remediation = "investigate immediately — release tags should not move; run `gh actions-lock --relock` once verified"
 	case st.NameWithOwner != "" && !strings.EqualFold(st.NameWithOwner, nwo):
-		f.Category = checks.RepoMoved
+		f.Category = checks.RepoRenamed
 		f.Severity = checks.SeverityWarning
 		f.Detail = fmt.Sprintf("%s was renamed or transferred to %s%s; the runner follows the redirect while the repo ID matches", nwo, st.NameWithOwner, via)
 		uses := st.NameWithOwner

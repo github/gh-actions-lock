@@ -170,6 +170,7 @@ func groupPinnedByWorkflow(rec *Record) map[string][]dep.Dependency {
 				Ref:         e.Ref,
 				SHA:         e.SHA,
 				OriginalRef: e.AutoFixedRef,
+				RenamedFrom: e.RenamedFrom,
 				Branch:      e.OnBranch,
 				Tag:         e.Tag,
 			})

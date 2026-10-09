@@ -666,6 +666,17 @@ STUB_WIRING = {
     wire_checkout_success(s, "gho_fake_self_repository_token")
   },
 
+  # Parity sees actions/checkout redirect to a new name with the same repo ID.
+  dbot_renamed_repo_warns: ->(s) {
+    s.stub_server do |srv|
+      srv.on(:POST, %r{/graphql$}) do |req|
+        status, headers, body = checkout_parity(JSON.parse(req.body))
+        [status, headers, body.gsub('"actions/checkout"', '"actions/checkout-renamed"')]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_renamed_token")
+  },
+
   # SSO scenarios: catch-all 403 with X-GitHub-SSO header
   sso_auth_failure: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }

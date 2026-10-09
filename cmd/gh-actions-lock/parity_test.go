@@ -2,10 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -73,12 +77,72 @@ func TestParity_TransferredRepoRewrites(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 	reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(1))
-	registerTransferResolve(reg, 1)
+	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "typesafegithub/github-actions-typing", "id": 1, "owner": map[string]any{"id": 42},
+	}))
 	path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
 
 	_, stderr, err := runCommandWithHTTP(t, reg, path)
 	require.NoError(t, err, stderr)
 	assertTransferRewritten(t, path, stderr)
+}
+
+// TestParity_RenameKeepsLockedCommit: a rename is the same repository, so
+// the rewrite keeps the recorded commit and its `uses:` even when the
+// mutable ref has since moved.
+func TestParity_RenameKeepsLockedCommit(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), func(req *http.Request) (*http.Response, error) {
+		resp, err := parityOK(req)
+		if err != nil {
+			return nil, err
+		}
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		body := strings.Replace(string(b), `"krzema12/github-actions-typing"`, `"typesafegithub/github-actions-typing","databaseId":1`, 1)
+		resp.Body = io.NopCloser(strings.NewReader(body))
+		return resp, nil
+	})
+	reg.Register(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestMoved, nodeActionYAML)},
+	}))
+	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "typesafegithub/github-actions-typing", "id": 1, "owner": map[string]any{"id": 42},
+	}))
+	path := writeTempWorkflow(t, strings.Replace(transferWorkflow, "@v2.2.2", "@main", 1))
+	lock := "version: '" + parserlock.Version + "'\n" + `dependencies:
+  'krzema12/github-actions-typing@main':
+    ref: 'main'
+    commit: 'sha1-` + parityTestSHA + `'
+    owner_id: 1
+    repo_id: 1
+    uses:
+      - 'actions/setup-node@v4'
+  'actions/setup-node@v4':
+    ref: 'v4'
+    commit: 'sha1-` + parityTestMoved + `'
+    owner_id: 2
+    repo_id: 2
+workflows:
+  '.github/workflows/workflow.yml':
+    - 'krzema12/github-actions-typing@main'
+`
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, path)
+	require.NoError(t, err, stderr)
+	wf, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(wf), "uses: typesafegithub/github-actions-typing@main")
+	got := readTempLockfilePins(t)
+	assert.NotContains(t, got, "krzema12")
+	assert.Contains(t, got, `'typesafegithub/github-actions-typing@main':
+        ref: 'main'
+        commit: 'sha1-`+parityTestSHA+`'`)
+	assert.Contains(t, got, `uses:
+            - 'actions/setup-node@v4'`)
 }
 
 func registerTransferResolve(reg *httpmock.Registry, repoID int) {
