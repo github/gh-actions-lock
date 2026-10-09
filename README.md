@@ -15,6 +15,8 @@ Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get start
 
 ## Requirements
 
+GitHub Enterprise Server (GHES) is not supported.
+
 Requires the [`gh` CLI](https://cli.github.com/). Install it first, then install the extension:
 
 ```bash
@@ -47,6 +49,22 @@ gh actions-lock --relock
 lockfile to the new SHA. Suspicious pins whose recorded commit is no longer
 reachable upstream are left as errors — use `--accept-moved` to re-resolve
 those as well.
+
+### GitHub Enterprise Cloud with data residency
+
+Authenticate `gh` to your tenant, then
+run the extension from your tenant repository checkout:
+
+```bash
+gh auth login --hostname octocorp.ghe.com
+# From the repository checkout:
+gh actions-lock
+```
+
+With no conflicting environment overrides, the CLI infers the host from the
+repository remote and uses the credentials stored by `gh` for that host. You do
+not need to export a token or pass `--hostname` on every run. The account must
+have read access to the tenant repositories used by your workflows.
 
 ### Self repository actions (`$/…`)
 

@@ -4,6 +4,7 @@ package resolve
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -107,10 +108,22 @@ func New(hostname string, pool *pinpool.Pool, opts ...Option) (*Resolver, error)
 		return nil, err
 	}
 	r.gh = c
+	r.hostname = c.Hostname
 	return r, nil
 }
 
 // --- Seeding (post-construction, deps come from lockfile loaded after resolver) ---
+
+// SeedHosts binds recorded repositories before caches or network work begin.
+func (r *Resolver) SeedHosts(deps []dep.Dependency) error {
+	for _, d := range deps {
+		owner, repo := d.OwnerRepo()
+		if err := r.gh.PinHost(owner, repo, d.Hostname); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // SeedBranchHints records a branch-of-record for each dep so subsequent
 // containing-branch scans try that branch first. Hints from a previous
@@ -156,8 +169,15 @@ func (r *Resolver) Hostname() string { return r.hostname }
 func (r *Resolver) GHClient() *ghapi.Client { return r.gh }
 
 // RepoIDs returns the numeric owner ID and repo ID for a NWO.
-func (r *Resolver) RepoIDs(ctx context.Context, owner, repo string) (int64, int64, error) {
-	return r.gh.RepoIDs(ctx, owner, repo)
+func (r *Resolver) RepoIDs(ctx context.Context, hostname, owner, repo string) (int64, int64, error) {
+	client, err := r.gh.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return 0, 0, err
+	}
+	if hostname != client.Hostname {
+		return 0, 0, fmt.Errorf("%s/%s resolved on %s but metadata requested from %s", owner, repo, client.Hostname, hostname)
+	}
+	return client.RepoIDs(ctx, owner, repo)
 }
 
 // branchHint returns the branch previously recorded as containing sha in

@@ -33,6 +33,10 @@ type PeelTagObjectResult struct {
 // (not an error) when the OID or repo is not accessible — callers decide
 // how to interpret the negative.
 func (c *Client) PeelTagObject(ctx context.Context, owner, repo, sha string) (PeelTagObjectResult, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return PeelTagObjectResult{}, err
+	}
 	if c.restOnly {
 		return c.anonPeelTagObject(ctx, owner, repo, sha)
 	}

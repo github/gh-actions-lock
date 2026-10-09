@@ -24,6 +24,10 @@ const batchReachabilitySize = 50
 //   - anyChecked: true if at least one branch was successfully checked
 //   - err: non-nil only on transport/auth failures (not per-branch misses)
 func (c *Client) BatchBranchContains(ctx context.Context, owner, repo, sha string, branches []BranchHead) (matchedBranch string, anyChecked bool, err error) {
+	c, err = c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return "", false, err
+	}
 	if len(branches) == 0 {
 		return "", false, nil
 	}

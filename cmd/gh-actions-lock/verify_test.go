@@ -1,10 +1,52 @@
 package main
 
 import (
+	"os"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestVerifyLocalNormalizesHostname(t *testing.T) {
+	for _, source := range []string{"flag", "environment", "repository"} {
+		t.Run(source, func(t *testing.T) {
+			path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tenant/internal@v1
+`, "tenant/internal@v1=sha1-"+tenantSHA)
+			t.Setenv("GH_HOST", "")
+			t.Setenv("GH_REPO", "")
+			args := []string{"--verify-local", "--no-interactive", "--json", path}
+			switch source {
+			case "flag":
+				args = append(args, "--hostname", "Tenant.GHE.com")
+			case "environment":
+				t.Setenv("GH_HOST", "Tenant.GHE.com")
+			case "repository":
+				t.Setenv("GH_REPO", "Tenant.GHE.com/tenant/repo")
+			}
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			lockBefore := readTempLockfilePins(t)
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			stdout, _, err := runCommandWithHTTP(t, reg, args...)
+			require.NoError(t, err)
+			assert.Contains(t, stdout, `"valid": true`)
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.Equal(t, lockBefore, readTempLockfilePins(t))
+		})
+	}
+}
 
 func TestApplyVerifyFlags(t *testing.T) {
 	tests := []struct {

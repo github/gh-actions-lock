@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildActionFileQuery(t *testing.T) {
@@ -77,6 +79,85 @@ func TestParseActionFileResponse(t *testing.T) {
 	}
 }
 
+func TestParseActionFileResponse_FileErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    string
+		errors  []api.GraphQLErrorItem
+		wantErr bool
+	}{
+		{
+			name: "yml exists and yaml is absent", file: "file",
+			errors: []api.GraphQLErrorItem{{Type: "NOT_FOUND", Path: []any{"a0", "object", "fileYaml"}}},
+		},
+		{
+			name: "yaml exists and yml is absent", file: "fileYaml",
+			errors: []api.GraphQLErrorItem{{Type: "NOT_FOUND", Path: []any{"a0", "object", "file"}}},
+		},
+		{
+			name: "reusable workflow has neither metadata file",
+			errors: []api.GraphQLErrorItem{
+				{Type: "NOT_FOUND", Path: []any{"a0", "object", "file"}},
+				{Type: "NOT_FOUND", Path: []any{"a0", "object", "fileYaml"}},
+			},
+		},
+		{
+			name: "forbidden alternate remains fatal", file: "file", wantErr: true,
+			errors: []api.GraphQLErrorItem{{Type: "FORBIDDEN", Path: []any{"a0", "object", "fileYaml"}}},
+		},
+		{
+			name: "unknown metadata failure remains fatal", wantErr: true,
+			errors: []api.GraphQLErrorItem{{Path: []any{"a0", "object", "file"}}},
+		},
+		{
+			name: "missing commit remains fatal", wantErr: true,
+			errors: []api.GraphQLErrorItem{{Type: "NOT_FOUND", Path: []any{"a0", "object"}}},
+		},
+		{
+			name: "nested object failure remains fatal", wantErr: true,
+			errors: []api.GraphQLErrorItem{{Type: "NOT_FOUND", Path: []any{"a0", "object", "file", "object"}}},
+		},
+		{
+			name: "missing file does not hide later denial", wantErr: true,
+			errors: []api.GraphQLErrorItem{
+				{Type: "NOT_FOUND", Path: []any{"a0", "object", "file"}},
+				{Type: "FORBIDDEN", Path: []any{"a0", "object", "fileYaml"}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			object := map[string]any{"oid": sha}
+			if tt.file != "" {
+				object[tt.file] = map[string]any{"object": map[string]any{"text": "runs:\n  using: node20\n"}}
+			}
+			raw, err := json.Marshal(map[string]any{"object": object})
+			require.NoError(t, err)
+			for i := range tt.errors {
+				tt.errors[i].Message = "file lookup failed"
+			}
+			results := parseActionFileResponse(
+				map[string]json.RawMessage{"a0": raw},
+				[]ActionFileRequest{{Owner: "o", Repo: "r", Ref: "v1"}},
+				map[string]int{"a0": 0},
+				&api.GraphQLError{Errors: tt.errors}, "github.com")
+			require.Len(t, results, 1)
+			if tt.wantErr {
+				require.ErrorContains(t, results[0].Err, "file lookup failed")
+				return
+			}
+			require.NoError(t, results[0].Err)
+			assert.Equal(t, sha, results[0].CommitOID)
+			assert.Equal(t, "github.com", results[0].Hostname)
+			if tt.file == "" {
+				assert.Empty(t, results[0].ActionYML)
+			} else {
+				assert.Equal(t, "runs:\n  using: node20\n", results[0].ActionYML)
+			}
+		})
+	}
+}
 func TestParseActionFileResponse_AnnotatedTagPeeled(t *testing.T) {
 	refs := []ActionFileRequest{
 		{Owner: "nodeselector", Repo: "actions-test-fixtures", Ref: "annotated-v1"},

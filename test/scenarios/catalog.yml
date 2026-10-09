@@ -884,10 +884,11 @@ scenarios:
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    flags: [".github/workflows/happy-path.yml", ".github/workflows/deep-self-ref.yml", ".github/workflows/reusable-build.yml"]
     fixtures:
       delete_lockfile: true
     expect:
-      exit: 1
+      exit: 0
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
       lockfile_contains:
@@ -902,10 +903,11 @@ scenarios:
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    flags: [".github/workflows/deep-self-ref.yml"]
     fixtures:
       delete_lockfile: true
     expect:
-      exit: 1
+      exit: 0
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
       lockfile_contains:
@@ -1726,7 +1728,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - dependencies:
@@ -1774,7 +1776,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - findings:
@@ -1821,7 +1823,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - dependencies:
@@ -1899,7 +1901,7 @@ scenarios:
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
         workflows:
           - dependencies:
@@ -1952,7 +1954,7 @@ scenarios:
       golden_json:
         cli_version: (devel)
         findings: []
-        lockfile_version: v0.0.2
+        lockfile_version: v0.0.3
         valid: true
   - name: dbot_transient_403_drops_pin
     category: dependabot
@@ -2092,25 +2094,27 @@ scenarios:
         - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
       lockfile_comment_excludes: "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 
-  - name: onboard_roundtrip_v002
+  - name: onboard_roundtrip_v003
     category: onboarding
-    description: "Fresh onboard writes a v0.0.2 lockfile with correct key format, ref field, and commit field"
+    description: "Real-binary dotcom onboarding emits v0.0.3 without hostnames and a complete live transitive dependency graph"
     needs_token: true
     tags: [real_repo]
     live_repo: nodeselector/actions-test-fixtures
+    flags: [".github/workflows/happy-path.yml"]
     fixtures:
       delete_lockfile: true
     expect:
-      exit: 1
+      exit: 0
       lockfile_exists: true
       lockfile_deps_cover_direct: true
       lockfile_deps_cover_indirect: true
       lockfile_contains:
-        - "version: 'v0.0.2'"
+        - "version: 'v0.0.3'"
         - "ref:"
         - "commit: 'sha1-"
         - "owner_id:"
         - "repo_id:"
+      lockfile_excludes: ["hostname:"]
       lockfile_comment_excludes: '^\s+tag:'
       lockfile_comment_matches: "ref: '"
 

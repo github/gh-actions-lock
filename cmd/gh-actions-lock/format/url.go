@@ -17,17 +17,20 @@ type TagObjectCheck func(owner, repo, sha string) bool
 // /commit/<tagobject-sha> returns 404 because the tag object is not a
 // commit. Non-SHA refs link to /releases/tag/<ref>. A nil isTagObject
 // (or one that returns false) falls back to the plain /commit/<sha> path.
-func DepReleaseURL(dep string, isTagObject TagObjectCheck) string {
+func DepReleaseURL(hostname, dep string, isTagObject TagObjectCheck) string {
+	if hostname == "" {
+		hostname = "github.com"
+	}
 	ar := parserlock.ParseActionRef(dep)
 	if ar == nil {
 		// ParseActionRef rejects refless inputs; fall back to splitting
 		// the bare NWO so links to dep keys without a ref still render.
 		if owner, repo, ok := parserlock.SplitNWO(dep); ok {
-			return "https://github.com/" + owner + "/" + repo + "/releases"
+			return "https://" + hostname + "/" + owner + "/" + repo + "/releases"
 		}
 		return ""
 	}
-	base := "https://github.com/" + ar.Owner + "/" + ar.Repo
+	base := "https://" + hostname + "/" + ar.Owner + "/" + ar.Repo
 	ref := ar.Ref
 	if isHexSHA(ref) {
 		if isTagObject != nil && isTagObject(ar.Owner, ar.Repo, ref) {

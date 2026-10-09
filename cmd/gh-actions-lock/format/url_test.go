@@ -22,10 +22,17 @@ func TestDepReleaseURL(t *testing.T) {
 
 	tests := []struct {
 		name        string
+		hostname    string
 		dep         string
 		isTagObject TagObjectCheck
 		want        string
 	}{
+		{
+			name:     "tenant release stays on its host",
+			hostname: "tenant.ghe.com",
+			dep:      "o/r@v1",
+			want:     "https://tenant.ghe.com/o/r/releases/tag/v1",
+		},
 		{
 			name: "commit-sha pin → /commit/",
 			dep:  "actions/checkout@" + commitSHA,
@@ -83,7 +90,7 @@ func TestDepReleaseURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, DepReleaseURL(tt.dep, tt.isTagObject))
+			assert.Equal(t, tt.want, DepReleaseURL(tt.hostname, tt.dep, tt.isTagObject))
 		})
 	}
 }
