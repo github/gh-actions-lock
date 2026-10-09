@@ -69,6 +69,7 @@ func TestParity_TransferredRepoWarns(t *testing.T) {
 	require.NoError(t, err, stderr)
 	assert.Contains(t, stderr, "rewrite it as `uses: typesafegithub/github-actions-typing@v2.2.2`")
 	assert.Contains(t, stderr, path)
+	assert.Contains(t, stderr, "All 1 workflow valid")
 }
 
 // TestParity_TransferredRepoRewrites: in fix mode a recorded same-ID
@@ -85,6 +86,26 @@ func TestParity_TransferredRepoRewrites(t *testing.T) {
 	_, stderr, err := runCommandWithHTTP(t, reg, path)
 	require.NoError(t, err, stderr)
 	assertTransferRewritten(t, path, stderr)
+	assert.NotContains(t, stderr, "rewrite it as", "the run already rewrote it")
+}
+
+// TestParity_MixedCaseRenameRewrites: the lockfile key is lowercase but
+// `uses:` isn't; the rewrite must match the workflow's own text.
+func TestParity_MixedCaseRenameRewrites(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(1))
+	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "typesafegithub/github-actions-typing", "id": 1, "owner": map[string]any{"id": 42},
+	}))
+	path := writeTempWorkflow(t, strings.Replace(transferWorkflow, "krzema12/github-actions-typing", "Krzema12/GitHub-Actions-Typing", 1),
+		"krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, path)
+	require.NoError(t, err, stderr)
+	wf, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(wf), "uses: typesafegithub/github-actions-typing@v2.2.2")
+	assert.NotContains(t, readTempLockfilePins(t), "krzema12")
 }
 
 // TestParity_RenameKeepsLockedCommit: a rename is the same repository, so
@@ -92,19 +113,7 @@ func TestParity_TransferredRepoRewrites(t *testing.T) {
 // mutable ref has since moved.
 func TestParity_RenameKeepsLockedCommit(t *testing.T) {
 	reg := &httpmock.Registry{}
-	reg.Register(httpmock.GraphQL(`commit: object\(oid`), func(req *http.Request) (*http.Response, error) {
-		resp, err := parityOK(req)
-		if err != nil {
-			return nil, err
-		}
-		b, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		body := strings.Replace(string(b), `"krzema12/github-actions-typing"`, `"typesafegithub/github-actions-typing","databaseId":1`, 1)
-		resp.Body = io.NopCloser(strings.NewReader(body))
-		return resp, nil
-	})
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
 	reg.Register(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
 		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestMoved, nodeActionYAML)},
 	}))
@@ -143,6 +152,22 @@ workflows:
         commit: 'sha1-`+parityTestSHA+`'`)
 	assert.Contains(t, got, `uses:
             - 'actions/setup-node@v4'`)
+}
+
+// renamedParity answers like parityOK, with krzema12/github-actions-typing
+// redirected to typesafegithub under the same repo ID.
+func renamedParity(req *http.Request) (*http.Response, error) {
+	resp, err := parityOK(req)
+	if err != nil {
+		return nil, err
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	body := strings.Replace(string(b), `"krzema12/github-actions-typing"`, `"typesafegithub/github-actions-typing","databaseId":1`, 1)
+	resp.Body = io.NopCloser(strings.NewReader(body))
+	return resp, nil
 }
 
 func registerTransferResolve(reg *httpmock.Registry, repoID int) {
@@ -393,8 +418,10 @@ func TestParity_FirstRunTransferRewrites(t *testing.T) {
 }
 
 // TestParity_RemoteCompositeTransferBlocks: a redirect inside a composite
-// we don't own can't be rewritten here, so nothing is written.
-func TestParity_RemoteCompositeTransferBlocks(t *testing.T) {
+// TestParity_RemoteCompositeRenameKeepsName: a redirect inside a remote
+// composite can't be rewritten and the runner follows it while the repo ID
+// matches, so the child stays keyed as written and the run warns.
+func TestParity_RemoteCompositeRenameKeepsName(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(httpmock.GraphQLForRepo("acme", "comp"), httpmock.JSONResponse(map[string]any{
 		"data": map[string]any{"a0": testRepoResponse("acme/comp", parityTestMoved,
@@ -402,6 +429,13 @@ func TestParity_RemoteCompositeTransferBlocks(t *testing.T) {
 	}))
 	reg.Register(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
 		"data": map[string]any{"a0": testRepoResponse("typesafegithub/github-actions-typing", parityTestSHA, nodeActionYAML)},
+	}))
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+	reg.Register(httpmock.REST("GET", `^/repos/acme/comp$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "acme/comp", "id": 3, "owner": map[string]any{"id": 4},
+	}))
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing$`), httpmock.JSONResponse(map[string]any{
+		"full_name": "typesafegithub/github-actions-typing", "id": 1, "owner": map[string]any{"id": 42},
 	}))
 	path := writeTempWorkflow(t, `
 name: ci
@@ -414,9 +448,11 @@ jobs:
 `)
 
 	_, stderr, err := runCommandWithHTTP(t, reg, path)
-	require.ErrorIs(t, err, errSilent)
-	assert.Contains(t, stderr, "krzema12/github-actions-typing was renamed or transferred to typesafegithub/github-actions-typing; upstream composite acme/comp@v1.0.0 must update")
-	assert.NoFileExists(t, ".github/workflows/actions.lock")
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "upgrade acme/comp@v1.0.0")
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "'krzema12/github-actions-typing@v2.2.2':")
+	assert.NotContains(t, lock, "typesafegithub")
 }
 
 // TestParity_FirstRunInconclusiveNotWritten: a fresh pin whose identity

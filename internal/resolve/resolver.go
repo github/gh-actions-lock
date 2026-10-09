@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -161,17 +162,20 @@ func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 	}
 }
 
-// Redirect re-labels a seeded entry under its canonical name, keeping the
-// locked commit: a rename of the same repository is no reason to advance.
-// Unseeded refs are left to live resolution.
-func (r *Resolver) Redirect(owner, repo, path, ref, canonical string) {
-	for _, key := range []ghapi.ActionRef{ghapi.ForActionRef(owner, repo, "", ref), ghapi.ForActionRef(owner, repo, path, ref)} {
+// Redirect re-labels the entry seeded for owner/repo under its canonical
+// name, keeping the locked commit: a rename of the same repository is no
+// reason to advance. orig is the ref as written, which the rewrite must
+// match exactly. Unseeded refs are left to live resolution.
+func (r *Resolver) Redirect(owner, repo string, orig parserlock.ActionRef, canonical string) {
+	for _, key := range []ghapi.ActionRef{ghapi.ForActionRef(owner, repo, "", orig.Ref), ghapi.ForActionRef(owner, repo, orig.Path, orig.Ref)} {
 		e, ok := r.cache.Get(key)
 		if !ok {
 			continue
 		}
 		e.dep.NWO = canonical
-		e.dep.OriginalRefs = []parserlock.ActionRef{{Owner: owner, Repo: repo, Path: path, Ref: ref}}
+		if !slices.Contains(e.dep.OriginalRefs, orig) {
+			e.dep.OriginalRefs = append(e.dep.OriginalRefs, orig)
+		}
 		r.cache.Put(key, e)
 	}
 }

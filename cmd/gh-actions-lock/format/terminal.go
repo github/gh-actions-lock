@@ -186,8 +186,8 @@ func categoryLabel(c checks.Category) string {
 		return "Unreachable pin"
 	case checks.RepoRenamed:
 		return "Repository renamed"
-	case checks.RepoReplaced:
-		return "Repository replaced"
+	case checks.RepoHijacked:
+		return "Repository identity changed (possible hijack)"
 	case checks.RepoUnavailable:
 		return "Repository missing or inaccessible"
 	case checks.Stale:
@@ -255,7 +255,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 
 	parts := []string{}
 	for _, cat := range []checks.Category{
-		checks.RepoReplaced, checks.RepoUnavailable, checks.RepoRenamed, checks.UnreachablePin,
+		checks.RepoHijacked, checks.RepoUnavailable, checks.RepoRenamed, checks.UnreachablePin,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction, checks.InvalidSelfRepositoryRef,
 		checks.Stale, checks.MisleadingSHA,
@@ -274,7 +274,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 // renderFindingDetail prints a single non-valid finding with its category
 // icon, detail text, remediation, and doc links.
 func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
-	label := strings.ToUpper(string(f.Category))
+	label := categoryLabel(f.Category)
 	icon := "!"
 	if IsAlertedCategory(f.Category) {
 		icon = "✗"
@@ -419,16 +419,17 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			}
 		}
 	}
-	renderRedirects(out, report)
+	renderRedirects(out, report, willRemediate)
 }
 
 // renderRedirects lists pins whose repository was renamed or transferred
 // but kept its repo ID. The runner follows the redirect, so it's a warning
-// with the replacement `uses:` line.
-func renderRedirects(out *ui.UI, report *checks.Report) {
+// with the replacement `uses:` line. A fix run rewrites workflow refs and
+// reports that instead.
+func renderRedirects(out *ui.UI, report *checks.Report, willRemediate bool) {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
-			if f.Category == checks.RepoRenamed && f.IsWarning() {
+			if f.Category == checks.RepoRenamed && f.IsWarning() && (!willRemediate || f.ParentNWO != "") {
 				out.TermWarn("%s: %s", f.WorkflowPath, f.Detail)
 				out.TermDetail("↳ %s", f.Remediation)
 			}
@@ -441,7 +442,7 @@ func renderRedirects(out *ui.UI, report *checks.Report) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoRenamed, checks.RepoReplaced, checks.RepoUnavailable:
+	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoRenamed, checks.RepoHijacked, checks.RepoUnavailable:
 		return true
 	}
 	return false

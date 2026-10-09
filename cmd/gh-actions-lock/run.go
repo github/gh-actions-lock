@@ -356,7 +356,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if showSpinner {
 			console.PauseProgress()
 		}
-		format.PresentResults(console, report, valid, true)
+		format.PresentResults(console, report, valid, !opts.noFix)
 		if showSpinner {
 			console.ResumeProgress()
 		}
@@ -387,6 +387,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 				}
 			}
 			return errSilent
+		}
+		if opts.jsonFields == "" {
+			n := len(report.Workflows)
+			console.TermSuccess("All %d %s valid", n, ui.Pluralize(n, "workflow", "workflows"))
 		}
 		return nil
 	}
