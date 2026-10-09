@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/MakeNowJust/heredoc"
@@ -298,14 +299,14 @@ func expandWorkflowPaths(paths []string) ([]string, error) {
 
 func resolveHostname(override string) string {
 	if override != "" {
-		return override
+		return strings.ToLower(override)
 	}
 	if host := os.Getenv("GH_HOST"); host != "" {
-		return host
+		return strings.ToLower(host)
 	}
 	repo, err := repository.Current()
 	if err == nil && repo.Host != "" {
-		return repo.Host
+		return strings.ToLower(repo.Host)
 	}
 	return "github.com"
 }
