@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,4 +78,26 @@ func TestValidateJSONFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPinsFromRecordBlockedWorkflow(t *testing.T) {
+	report := &checks.Report{Workflows: []checks.WorkflowReport{
+		{Path: "blocked.yml", SkipCommit: true},
+		{Path: "ok.yml"},
+	}}
+	record := &pin.Record{Entries: []pin.Entry{
+		{NWO: "o/only-blocked", Ref: "v1", SHA: "a", Resolution: pin.Verified, Workflows: []string{"blocked.yml"}},
+		{NWO: "o/shared", Ref: "v1", SHA: "b", Resolution: pin.Verified, Workflows: []string{"blocked.yml"}},
+		{NWO: "o/shared", Ref: "v1", SHA: "b", Resolution: pin.Verified, Workflows: []string{"ok.yml"}},
+		{NWO: "o/fresh", Ref: "v1", SHA: "c", Resolution: pin.Pinned, Workflows: []string{"ok.yml"}},
+	}}
+
+	got := map[string]string{}
+	for _, p := range pinsFromRecord(record, report) {
+		got[p.NWO] = p.Outcome
+	}
+
+	assert.Equal(t, "skipped", got["o/only-blocked"], "pin used only by a blocked workflow was not checked")
+	assert.Equal(t, "verified", got["o/shared"], "pin also used by a healthy workflow was checked")
+	assert.Equal(t, "pinned", got["o/fresh"])
 }

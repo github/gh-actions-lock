@@ -269,7 +269,7 @@ func WriteJSON(w io.Writer, report *checks.Report, record *pin.Record, valid boo
 		case "workflows":
 			payload[field] = buildWorkflows()
 		case "pins":
-			payload[field] = pinsFromRecord(record)
+			payload[field] = pinsFromRecord(record, report)
 		default:
 			return fmt.Errorf("unknown JSON field %q (expected valid, findings, workflows, dependencies, pins)", field)
 		}
@@ -283,18 +283,36 @@ func WriteJSON(w io.Writer, report *checks.Report, record *pin.Record, valid boo
 // pinsFromRecord lists one Pin per host/NWO@Ref; the record holds one entry
 // per workflow that uses the action. Host and NWO are case-insensitive, refs
 // are not (see ghapi.ForNWORef).
-func pinsFromRecord(record *pin.Record) []Pin {
+//
+// Plan carries a blocked workflow's lock entries forward as Verified so Commit
+// keeps them. A pin used only by blocked workflows was not checked this run,
+// so it is reported as skipped.
+func pinsFromRecord(record *pin.Record, report *checks.Report) []Pin {
 	pins := []Pin{}
 	if record == nil {
 		return pins
 	}
-	seen := map[string]bool{}
+	blocked := map[string]bool{}
+	if report != nil {
+		for _, wr := range report.Workflows {
+			if wr.SkipCommit || wr.BlockingResolverError {
+				blocked[wr.Path] = true
+			}
+		}
+	}
+	index := map[string]int{}
+	checked := map[string]bool{}
 	for _, e := range record.Entries {
 		key := strings.ToLower(e.Hostname+"/"+e.NWO) + "@" + e.Ref
-		if seen[key] {
+		for _, w := range e.Workflows {
+			if !blocked[w] {
+				checked[key] = true
+			}
+		}
+		if _, ok := index[key]; ok {
 			continue
 		}
-		seen[key] = true
+		index[key] = len(pins)
 		pins = append(pins, Pin{
 			Hostname:     e.Hostname,
 			NWO:          e.NWO,
@@ -305,6 +323,12 @@ func pinsFromRecord(record *pin.Record) []Pin {
 			ObservedSHA:  e.ObservedSHA,
 			Reason:       e.Reason,
 		})
+	}
+	for key, i := range index {
+		if !checked[key] && pins[i].Outcome == pin.Verified.String() {
+			pins[i].Outcome = pin.Skipped.String()
+			pins[i].Reason = "workflow blocked; lock entry left unchanged"
+		}
 	}
 	return pins
 }
