@@ -420,7 +420,7 @@ func TestParity_FirstRunTransferRewrites(t *testing.T) {
 // TestParity_RemoteCompositeTransferBlocks: a redirect inside a composite
 // TestParity_RemoteCompositeRenameKeepsName: a redirect inside a remote
 // composite can't be rewritten and the runner follows it while the repo ID
-// matches, so the child stays keyed as written and the run warns.
+// matches, so the child stays keyed as written and only --verify warns.
 func TestParity_RemoteCompositeRenameKeepsName(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(httpmock.GraphQLForRepo("acme", "comp"), httpmock.JSONResponse(map[string]any{
@@ -449,10 +449,15 @@ jobs:
 
 	_, stderr, err := runCommandWithHTTP(t, reg, path)
 	require.NoError(t, err, stderr)
-	assert.Contains(t, stderr, "upgrade acme/comp@v1.0.0")
+	assert.NotContains(t, stderr, "upgrade acme/comp@v1.0.0", "fix runs stay quiet; --verify reports it")
 	lock := readTempLockfilePins(t)
 	assert.Contains(t, lock, "'krzema12/github-actions-typing@v2.2.2':")
 	assert.NotContains(t, lock, "typesafegithub")
+
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "upgrade acme/comp@v1.0.0")
 }
 
 // TestParity_FirstRunInconclusiveNotWritten: a fresh pin whose identity
