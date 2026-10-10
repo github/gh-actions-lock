@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -24,7 +23,6 @@ type PlanOptions struct {
 	Pool      *pinpool.Pool
 	RepoOwner string // for same-owner narrowing skip
 	RepoName  string
-	Version   string // CLI version for the record
 	// NoNarrow disables tag narrowing: mutable version refs (v4, v3.1)
 	// are kept as the lock comment instead of being resolved to full
 	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
@@ -61,10 +59,7 @@ type PlanOptions struct {
 // every pin action to take. It does network reads (resolve, reverse
 // lookup, reachability) but no disk writes.
 func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record, error) {
-	rec := &Record{
-		Version: opts.Version,
-		Created: time.Now(),
-	}
+	rec := &Record{}
 
 	type indexedWR struct {
 		idx int

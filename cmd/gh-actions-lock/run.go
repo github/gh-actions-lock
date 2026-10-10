@@ -73,7 +73,7 @@ type checkOptions struct {
 
 // bindCheckFlags registers the run flags on the root command.
 func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
-	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
+	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies,pins)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
@@ -111,7 +111,7 @@ func (opts *checkOptions) validateOutputFlags() error {
 	return nil
 }
 
-func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) error {
+func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) (runErr error) {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -128,6 +128,16 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if opts.verifyLocal {
 		return runVerifyLocal(opts, out, console)
 	}
+
+	// Every exit path below writes exactly one run log, judged by runErr, so
+	// the log can never call a failed run valid.
+	rl := &runLog{}
+	defer func() {
+		if path := rl.save(runErr); path != "" && runErr != nil && opts.jsonFields == "" {
+			console.TermBlank()
+			console.TermDetail("Run log: %s", path)
+		}
+	}()
 
 	// Profiling: when --profile is set, start trace + CPU profile + HTTP log.
 	var prof *profile.Session
@@ -172,6 +182,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if err != nil {
 		return err
 	}
+	rl.resolver, rl.store = r, store
 	var staleWorkflows []string
 	if fullScan {
 		keepWorkflows := make(map[string]bool, len(paths))
@@ -325,6 +336,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// they reach both read-only (--no-fix/--verify) and fix runs. Non-blocking.
 	appendCooldownConfigFindings(report, cooldownWarnings)
 
+	rl.report, rl.valid = report, valid
+
 	// Render the read-only diagnosis. --json selects the renderer; it does
 	// not decide whether fixes are applied. Terminal output is shown up front
 	// (the human narrative). JSON is emitted later, after any fixes land, so
@@ -345,7 +358,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	if opts.noFix {
 		console.StopProgress()
 		if opts.jsonFields != "" {
-			if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
+			if err := format.WriteJSON(out, report, nil, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 				return err
 			}
 		}
@@ -396,30 +409,26 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Pool:        pool,
 		RepoOwner:   repoOwner,
 		RepoName:    repoName,
-		Version:     cliVersion(),
 		NoNarrow:    opts.noNarrow,
 		AcceptMoved: opts.acceptMoved,
 		Relock:      opts.relock,
 		PartialScan: !fullScan,
 	})
 	endPlan()
+	rl.record = record
 	if planErr == nil && len(record.Unresolved()) > 0 {
 		planErr = fmt.Errorf("cannot write an incomplete lockfile: %d unresolved dependencies", len(record.Unresolved()))
 	}
 	if planErr != nil {
 		console.StopProgress()
 		if opts.jsonFields != "" {
-			if err := format.WriteJSON(out, report, false, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
+			if err := format.WriteJSON(out, report, record, false, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 				return err
 			}
 		}
 		if len(record.Unresolved()) > 0 {
-			record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: r.Hostname()}
 			if opts.jsonFields == "" {
 				renderUnresolvedWarnings(console, record.Unresolved())
-			}
-			if path, err := record.WriteJSON(); err == nil && opts.jsonFields == "" {
-				console.TermDetail("Resolution record: %s", path)
 			}
 			return errSilent
 		}
@@ -457,22 +466,13 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		injectFreshTagFindings(ctx, report, record, tagger, cooldownCfg)
 	}
 
-	// Write the run log.
-	record.Repo = &pin.RepoInfo{Owner: repoOwner, Name: repoName, Host: resolveHostname(opts.hostname)}
-	if path, werr := record.WriteJSON(); werr == nil && opts.jsonFields == "" {
-		defer func() {
-			console.TermBlank()
-			console.TermDetail("Resolution record: %s", path)
-		}()
-	}
-
 	// JSON mode emits the (pre-fix) diagnosis now — after the commit
 	// succeeded — so machine consumers never see findings for a run that
 	// then failed to write. Exit code mirrors the terminal autofix path: a
 	// non-zero exit only when findings remain that can't be auto-fixed
 	// (lockfile forgery).
 	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
+		if err := format.WriteJSON(out, report, record, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 			return err
 		}
 		if reportHasUnfixableErrors(report, opts.acceptMoved) || len(record.Investigated()) > 0 {

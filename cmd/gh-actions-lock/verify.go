@@ -71,7 +71,7 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 	valid := report.IsValid()
 
 	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, valid, opts.jsonFields, cliVersion(), store.File().Version, hostname); err != nil {
+		if err := format.WriteJSON(out, report, nil, valid, opts.jsonFields, cliVersion(), store.File().Version, hostname); err != nil {
 			return err
 		}
 	} else {
