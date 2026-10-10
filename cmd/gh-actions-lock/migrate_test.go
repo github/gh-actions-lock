@@ -36,7 +36,7 @@ func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 
 	t.Chdir(dir)
 
-	total, err := migrateLocalActions([]string{filepath.Join(".github", "workflows", "ci.yml")})
+	total, _, err := migrateLocalActions([]string{filepath.Join(".github", "workflows", "ci.yml")})
 	require.NoError(t, err)
 
 	// workflow ./my-action, composite ./helper, composite ./nested/deep = 3.
@@ -71,7 +71,7 @@ func TestMigrateLocalActions_StructuralErrorPreventsAllWrites(t *testing.T) {
 	firstBefore, err := os.ReadFile(firstPath)
 	require.NoError(t, err)
 
-	total, err := migrateLocalActions([]string{firstPath, secondPath})
+	total, _, err := migrateLocalActions([]string{firstPath, secondPath})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid self repository reference")
@@ -98,7 +98,7 @@ func TestMigrateLocalActions_RejectsActionFileSymlinkEscape(t *testing.T) {
 		t.Skipf("creating symlink: %v", err)
 	}
 
-	total, err := migrateLocalActions([]string{workflowPath})
+	total, _, err := migrateLocalActions([]string{workflowPath})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outside repository root")

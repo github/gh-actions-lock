@@ -235,12 +235,21 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	opts.workflowPaths = paths
 
+	// committed guards the all-or-nothing rule: until pin.Commit succeeds,
+	// every disk write this run made is rolled back.
+	committed := false
+
 	// Rewrite same-repo `./…` action refs to the inherently-pinned `$/…` form
 	// before scanning, so the diagnosis sees compliant refs. Runs by default on
 	// fix runs; opt out with --no-migrate-local-actions. Read-only runs
 	// (--no-fix) never touch disk.
 	if !opts.noMigrateLocalActions && !opts.noFix {
-		migrated, err := migrateLocalActions(opts.workflowPaths)
+		migrated, undo, err := migrateLocalActions(opts.workflowPaths)
+		defer func() {
+			if !committed {
+				undo()
+			}
+		}()
 		if err != nil {
 			return err
 		}
@@ -435,6 +444,24 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return fmt.Errorf("planning pins: %w", planErr)
 	}
 
+	// All or nothing: a run with errors it cannot fix writes nothing.
+	if runHasBlockingErrors(report, record, opts.acceptMoved) {
+		console.StopProgress()
+		if opts.jsonFields != "" {
+			if err := format.WriteJSON(out, report, record, false, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
+				return err
+			}
+			return errSilent
+		}
+		if investigated := record.Investigated(); len(investigated) > 0 {
+			renderInvestigationAlerts(console, investigated, r)
+		}
+		format.PresentReadOnlyFailures(console, report)
+		console.TermBlank()
+		console.TermError("Nothing was written: fix the errors above and re-run")
+		return errSilent
+	}
+
 	// Commit: write all changes to disk atomically (fast local I/O, no
 	// spinner label — it finishes before the user could read one).
 	endCommit := prof.Phase("pin.Commit (disk writes)")
@@ -442,6 +469,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		console.StopProgress()
 		return fmt.Errorf("committing pins: %w", err)
 	}
+	committed = true
 	endCommit()
 
 	console.StopProgress()
@@ -468,17 +496,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// JSON mode emits the (pre-fix) diagnosis now — after the commit
 	// succeeded — so machine consumers never see findings for a run that
-	// then failed to write. Exit code mirrors the terminal autofix path: a
-	// non-zero exit only when findings remain that can't be auto-fixed
-	// (lockfile forgery).
+	// then failed to write.
 	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, record, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
-			return err
-		}
-		if reportHasUnfixableErrors(report, opts.acceptMoved) || len(record.Investigated()) > 0 {
-			return errSilent
-		}
-		return nil
+		return format.WriteJSON(out, report, record, valid, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname())
 	}
 
 	// Terminal summary.
@@ -584,8 +604,15 @@ func cliVersion() string {
 // and every in-repo composite action definition file (action.yml/action.yaml)
 // found under the repository root. The latter is why a composite action that
 // internally uses `uses: ./helper` gets fixed too, not just the workflow that
-// calls it. Returns the total number of `uses:` lines rewritten.
-func migrateLocalActions(paths []string) (int, error) {
+// calls it. Returns the total number of `uses:` lines rewritten and an undo
+// func that restores the original contents; undo is never nil.
+func migrateLocalActions(paths []string) (int, func(), error) {
+	var written []plannedMigration
+	undo := func() {
+		for _, m := range written {
+			_ = os.WriteFile(m.path, m.original, 0o644)
+		}
+	}
 	files := append([]string(nil), paths...)
 
 	// Also sweep in-repo composite action files. The repo root is derived from
@@ -595,23 +622,18 @@ func migrateLocalActions(paths []string) (int, error) {
 		if root := workflowfile.FindRepoRoot(paths[0]); root != "" {
 			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
 			if err != nil {
-				return 0, err
+				return 0, undo, err
 			}
 			files = append(files, actionFiles...)
 		}
 	}
 
-	type plannedMigration struct {
-		path    string
-		content []byte
-		changed int
-	}
 	var migrations []plannedMigration
 	seen := make(map[string]bool)
 	for _, path := range files {
 		absPath, err := filepath.Abs(path)
 		if err != nil {
-			return 0, fmt.Errorf("resolving migration path %s: %w", path, err)
+			return 0, undo, fmt.Errorf("resolving migration path %s: %w", path, err)
 		}
 		if seen[absPath] {
 			continue
@@ -620,31 +642,43 @@ func migrateLocalActions(paths []string) (int, error) {
 
 		if root := workflowfile.FindRepoRoot(path); root != "" {
 			if err := workflowfile.ValidatePathWithinRoot(root, path); err != nil {
-				return 0, fmt.Errorf("refusing to migrate %s: %w", path, err)
+				return 0, undo, fmt.Errorf("refusing to migrate %s: %w", path, err)
 			}
+		}
+		original, err := os.ReadFile(path)
+		if err != nil {
+			return 0, undo, fmt.Errorf("loading %s: %w", path, err)
 		}
 		wf, err := workflowfile.Load(path)
 		if err != nil {
-			return 0, fmt.Errorf("loading %s: %w", path, err)
+			return 0, undo, fmt.Errorf("loading %s: %w", path, err)
 		}
 		content, changed, err := wf.MigrateLocalActionsToSelfRepository()
 		if err != nil {
-			return 0, fmt.Errorf("refusing to migrate %s: %w", path, err)
+			return 0, undo, fmt.Errorf("refusing to migrate %s: %w", path, err)
 		}
 		if changed == 0 {
 			continue
 		}
-		migrations = append(migrations, plannedMigration{path: path, content: content, changed: changed})
+		migrations = append(migrations, plannedMigration{path: path, original: original, content: content, changed: changed})
 	}
 
 	// Do not write anything until every candidate has passed structural and
 	// repository-boundary validation.
-	written := 0
+	total := 0
 	for _, plan := range migrations {
+		written = append(written, plan)
 		if err := os.WriteFile(plan.path, plan.content, 0o644); err != nil {
-			return written, fmt.Errorf("writing %s: %w", plan.path, err)
+			return total, undo, fmt.Errorf("writing %s: %w", plan.path, err)
 		}
-		written += plan.changed
+		total += plan.changed
 	}
-	return written, nil
+	return total, undo, nil
+}
+
+type plannedMigration struct {
+	path     string
+	original []byte
+	content  []byte
+	changed  int
 }

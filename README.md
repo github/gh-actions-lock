@@ -43,6 +43,10 @@ way the runner checks it at job start: the repository was not renamed or
 transferred, the pinned commit still exists, and full-version tags (e.g.
 `v4.2.1`) still point at it. A failed check blocks the run.
 
+Writes are all or nothing: if a run finds any error it cannot fix itself, it
+changes no workflow and no lockfile entry, not even for workflows that are
+otherwise fine.
+
 To check without writing anything, for example in CI, run:
 
 ```bash
