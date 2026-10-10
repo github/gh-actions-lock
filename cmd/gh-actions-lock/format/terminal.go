@@ -166,7 +166,7 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 			nwo, f.RecommendedTag, sha)
 	}
 	if f.DocURL != "" {
-		out.TermDetail("  see: %s", out.TermDim(out.TermLink("how to fix this", f.DocURL)))
+		out.TermDetail("  see: %s", out.DocLink(f.DocURL))
 	}
 }
 
@@ -429,7 +429,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 func renderRedirects(out *ui.UI, report *checks.Report, willRemediate bool) {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
-			if f.Category == checks.RepoRenamed && f.IsWarning() && (!willRemediate || f.ParentNWO != "") {
+			if f.Category == checks.RepoRenamed && f.IsWarning() && !willRemediate {
 				out.TermWarn("%s: %s", f.WorkflowPath, f.Detail)
 				out.TermDetail("↳ %s", f.Remediation)
 			}
