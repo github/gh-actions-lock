@@ -3,6 +3,7 @@ package ghapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -181,6 +182,8 @@ func TestResolveActionFiles_RESTOnlyUsesPrivateRepo(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"sha": "abc123def456abc123def456abc123def456abc1"})
 		case strings.Contains(r.URL.Path, "/contents/"):
 			fmt.Fprint(w, "name: public action")
+		case strings.Count(r.URL.Path, "/") == 3:
+			json.NewEncoder(w).Encode(map[string]string{"full_name": strings.TrimPrefix(r.URL.Path, "/repos/")})
 		default:
 			http.NotFound(w, r)
 		}
@@ -346,4 +349,125 @@ func statusResponse(req *http.Request, status int) (*http.Response, error) {
 	resp.Status = fmt.Sprintf("%d %s", status, http.StatusText(status))
 	resp.Request = req
 	return resp, err
+}
+
+func TestSSOFallbackEligible_CachesOnlyDefinitiveAnswers(t *testing.T) {
+	rateLimited := func(w http.ResponseWriter) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+	}
+	tests := []struct {
+		name       string
+		first      func(http.ResponseWriter)
+		wantProbes int
+		wantSecond bool
+	}{
+		{"rate limit is retried", rateLimited, 2, true},
+		{"429 is retried", func(w http.ResponseWriter) { w.WriteHeader(http.StatusTooManyRequests) }, 2, true},
+		{"5xx is retried", func(w http.ResponseWriter) { w.WriteHeader(http.StatusBadGateway) }, 2, true},
+		{"404 is cached", func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) }, 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			anonProbeCache = sync.Map{}
+			anonRateLimited = sync.Map{}
+			probes := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				probes++
+				if probes == 1 {
+					tt.first(w)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
+
+			if c.SSOFallbackEligible(context.Background(), "acme") {
+				t.Fatal("first probe: want ineligible")
+			}
+			if got := c.SSOFallbackEligible(context.Background(), "acme"); got != tt.wantSecond {
+				t.Errorf("second probe eligible = %v, want %v", got, tt.wantSecond)
+			}
+			if probes != tt.wantProbes {
+				t.Errorf("probes = %d, want %d", probes, tt.wantProbes)
+			}
+		})
+	}
+}
+
+// TestSSOFallbackEligible_ClearsStaleRateLimit: a later definitive or 5xx
+// answer must drop the rate-limit marker so errors stop blaming it.
+func TestSSOFallbackEligible_ClearsStaleRateLimit(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			anonProbeCache = sync.Map{}
+			anonRateLimited = sync.Map{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+			c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
+			anonRateLimited.Store(c.anonBase()+"/acme", struct{}{})
+
+			c.SSOFallbackEligible(context.Background(), "acme")
+			if _, ok := anonRateLimited.Load(c.anonBase() + "/acme"); ok {
+				t.Error("stale rate-limit marker survived a later response")
+			}
+		})
+	}
+}
+
+func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
+	tests := []struct {
+		name string
+		anon func(w http.ResponseWriter, r *http.Request)
+	}{
+		{"probe rate-limited", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.WriteHeader(http.StatusForbidden)
+		}},
+		{"anonymous request rate-limited", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			anonProbeCache = sync.Map{}
+			anonRateLimited = sync.Map{}
+			srv := httptest.NewServer(http.HandlerFunc(tt.anon))
+			defer srv.Close()
+			saml := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				resp, _ := jsonHTTP(map[string]any{"message": "Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."})
+				resp.StatusCode = http.StatusForbidden
+				resp.Request = req
+				return resp, nil
+			})
+			c, err := New("github.com", WithClientTransport(saml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.anonBaseURL = srv.URL
+			c.anonHTTP = srv.Client()
+
+			_, err = c.CommitSHA(context.Background(), "acme", "widget", "v1")
+			var rl *SSORateLimitedError
+			if !errors.As(err, &rl) {
+				t.Fatalf("err = %v, want SSORateLimitedError", err)
+			}
+			for _, want := range []string{
+				`SSO authorization required: your token is not authorized for the "acme" organization`,
+				"https://github.com/orgs/acme/sso",
+				"anonymous fallback for public repositories was rate-limited",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err, want)
+				}
+			}
+		})
+	}
 }

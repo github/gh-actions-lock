@@ -170,6 +170,16 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		var actionYMLs []string
 		var err error
 		deps, actionYMLs, err = r.resolveWithActionYMLParallel(ctx, toResolve, depth, &resolveDone, &resolveTotal)
+		if depth > 0 {
+			// A remote composite's `uses:` can't be rewritten here, and the
+			// runner looks it up as written, so keep the name it uses.
+			for i := range deps {
+				if len(deps[i].OriginalRefs) > 0 {
+					deps[i].NWO = deps[i].OriginalRefs[0].NWO()
+					deps[i].OriginalRefs = nil
+				}
+			}
+		}
 		// Keep partial results: per-ref failures are surfaced via err, but
 		// successful resolutions in `deps` should not be discarded — downstream
 		// renderers degrade gracefully per-ref instead of marking everything
@@ -389,6 +399,9 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 						Path:     res[j].Path,
 						Ref:      ref.Ref,
 						SHA:      res[j].CommitOID,
+					}
+					if res[j].OriginalNWO != "" {
+						d.OriginalRefs = []parserlock.ActionRef{ref}
 					}
 					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})
 					results[idx] = resolveResult{dep: d, yml: res[j].ActionYML, ok: true}

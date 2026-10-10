@@ -311,7 +311,7 @@ workflows:
 			require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
 
 			transport := &requestCountingTransport{}
-			_, _, err := runCommandWithHTTP(t, transport, "--rescan", "--no-migrate-local-actions")
+			_, _, err := runCommandWithHTTP(t, transport, "--relock", "--no-migrate-local-actions")
 			require.Error(t, err)
 			got, readErr := os.ReadFile(lockPath)
 			require.NoError(t, readErr)

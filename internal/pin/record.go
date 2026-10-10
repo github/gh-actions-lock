@@ -43,7 +43,10 @@ type Entry struct {
 	Workflows    []string   `json:"workflows"`
 	RequiredBy   []string   `json:"required_by,omitempty"`
 	Direct       bool       `json:"direct"`
-	FullScan     bool       `json:"full_scan,omitempty"`
+	// RenamedFrom lists the lockfile keys this pin had before a
+	// same-repository rename, so their recorded `uses:` carry over.
+	RenamedFrom []string `json:"renamed_from,omitempty"`
+	FullScan    bool     `json:"full_scan,omitempty"`
 }
 
 // WorkflowPlan records what Commit must write for one workflow file.
@@ -51,6 +54,11 @@ type Entry struct {
 type WorkflowPlan struct {
 	Path     string
 	Rewrites map[string]string
+	// RequiredRewrites move redirected `uses:` to the canonical repository;
+	// Commit fails rather than skip one.
+	RequiredRewrites map[string]string
+	// RewrittenIn lists, per RequiredRewrites key, the files Commit found it in.
+	RewrittenIn map[string][]string
 	// SelfActionFiles are in-repo action definition files reached from this
 	// workflow through `$/…`. The same rewrites apply to their `uses:` lines.
 	SelfActionFiles []string

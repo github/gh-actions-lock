@@ -32,10 +32,6 @@ type checkOptions struct {
 	workflowPaths []string
 	jsonFields    string
 	hostname      string
-	// rescan forces a full reachability re-verification of every recorded
-	// pin, bypassing the fast path that trusts the lockfile. Useful for
-	// audits or when a CI policy requires re-attestation on every run.
-	rescan bool
 	// profileDir, when non-empty, enables profiling: execution trace,
 	// CPU profile, and HTTP request log are written to files in this dir.
 	profileDir string
@@ -62,8 +58,8 @@ type checkOptions struct {
 	// Unlike acceptMoved it does NOT accept unreachable-pin findings
 	// (possible tampering), which stay hard errors.
 	relock bool
-	// verify is a convenience alias for --rescan --no-fix: full
-	// re-verification of every pin with a non-zero exit on any finding.
+	// verify is the frozen mode: the default checks with --no-fix and a
+	// non-zero exit on any blocking finding.
 	verify bool
 	// verifyLocal performs a zero-network static check: every action ref
 	// in scanned workflows must have a corresponding lockfile entry.
@@ -80,7 +76,6 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
-	cmd.Flags().BoolVar(&opts.rescan, "rescan", false, "Re-verify reachability for every recorded pin (bypasses the lockfile fast path)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false,
 		"Keep mutable version refs (e.g. v4) instead of narrowing to full semver (e.g. v4.2.1).\n"+
@@ -90,8 +85,8 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
-	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Bump moved branch/version refs (e.g. main, v4) to their current upstream SHA; leaves unreachable pins as errors")
-	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Full re-verification of every pin (equivalent to --rescan --no-fix)")
+	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Re-resolve every ref and advance moved ones (e.g. main, v4) to their current upstream SHA; leaves unreachable pins as errors")
+	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Frozen check: run the same checks as the default without writing; fails if the lockfile is incomplete or the runner would reject a pin")
 	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication required — ideal for pre-commit hooks.")
@@ -110,8 +105,8 @@ func (opts *checkOptions) validateOutputFlags() error {
 	if opts.verify && opts.verifyLocal {
 		return fmt.Errorf("--verify and --verify-local are mutually exclusive")
 	}
-	if opts.verifyLocal && (opts.rescan || opts.acceptMoved || opts.relock) {
-		return fmt.Errorf("--verify-local cannot be combined with --rescan, --accept-moved, or --relock because it runs offline")
+	if opts.verifyLocal && (opts.acceptMoved || opts.relock) {
+		return fmt.Errorf("--verify-local cannot be combined with --accept-moved or --relock because it runs offline")
 	}
 	return nil
 }
@@ -219,16 +214,10 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return err
 	}
 	r.SeedBranchHints(store.AllDeps())
-	// Pre-warm resolver caches from the lockfile so repeat runs skip
-	// redundant GraphQL and REST calls. Skipped when --rescan is set:
-	// a full re-verification must hit the network to detect ref movement.
-	// --accept-moved and --relock both imply --rescan (must detect what
-	// moved before re-pinning).
-	if opts.acceptMoved || opts.relock {
-		opts.rescan = true
-	}
-	trustLockfileCaches := !opts.rescan
-	if trustLockfileCaches {
+	// Locked refs are sticky: resolve them from the lockfile. --accept-moved
+	// and --relock must see what moved, so they resolve everything live.
+	relock := opts.acceptMoved || opts.relock
+	if !relock {
 		r.SeedFromLockfile(store.AllDeps())
 	}
 	endSetup()
@@ -281,7 +270,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Resolver:      r,
 		Store:         store,
 		Pool:          pool,
-		Rescan:        opts.rescan,
+		Relock:        relock,
 		Profile:       prof,
 	}
 	// Defer spinner start until actual network work begins. The fast path
@@ -310,7 +299,6 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	report := result.Report
 	valid := result.Valid
-	skippedRescan := result.SkippedRescan
 
 	// Read-only modes never touch the lockfile, so surface stale entries as
 	// non-blocking info findings instead of pruning them. Fix mode reports
@@ -346,7 +334,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if showSpinner {
 			console.PauseProgress()
 		}
-		format.PresentResults(console, report, valid, true)
+		format.PresentResults(console, report, valid, !opts.noFix)
 		if showSpinner {
 			console.ResumeProgress()
 		}
@@ -373,10 +361,18 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 			if opts.jsonFields == "" {
 				hasFixable := format.PresentReadOnlyFailures(console, report)
 				if hasFixable {
-					console.TermDetail("Re-run without --no-fix to apply fixes.")
+					flag := "--no-fix"
+					if opts.verify {
+						flag = "--verify"
+					}
+					console.TermDetail("Re-run without %s to apply fixes.", flag)
 				}
 			}
 			return errSilent
+		}
+		if opts.jsonFields == "" {
+			n := len(report.Workflows)
+			console.TermSuccess("All %d %s valid", n, ui.Pluralize(n, "workflow", "workflows"))
 		}
 		return nil
 	}
@@ -486,21 +482,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	// Terminal summary.
-	hasInconclusive := opts.rescan && report.HasInconclusive()
-	summaryErr := renderPinSummary(ctx, console, record, report, r, skippedRescan, hasInconclusive, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
-
-	if summaryErr != nil {
-		return summaryErr
-	}
-
-	// --rescan strict gate: inconclusive reachability is a hard failure when
-	// the user explicitly requested a full re-verification. Without this,
-	// inconclusive findings (e.g. SAML-blocked branch listing) silently pass
-	// and the "✓ All N workflows valid" message is misleading.
-	if hasInconclusive {
-		return errSilent
-	}
-	return nil
+	return renderPinSummary(ctx, console, record, report, r, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
 }
 
 // injectVersionRefFindings appends info-severity findings for entries pinned

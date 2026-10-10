@@ -8,15 +8,21 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type requestCountingTransport struct {
 	calls atomic.Int64
+	// parity answers parity queries without counting them.
+	parity bool
 }
 
-func (t *requestCountingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+func (t *requestCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.parity && httpmock.GraphQL(`commit: object\(oid`)(req) {
+		return parityOK(req)
+	}
 	t.calls.Add(1)
 	return nil, errors.New("unexpected HTTP request")
 }
@@ -97,7 +103,7 @@ jobs:
 
 func TestExistingSHARefRewritesSelfRepositoryAction(t *testing.T) {
 	const sha = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
-	transport := &requestCountingTransport{}
+	transport := &requestCountingTransport{parity: true}
 
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))

@@ -79,9 +79,8 @@ func (pw ParsedWorkflow) IsFullyRecorded() bool {
 
 // IsImmutableRef reports whether ref is a full semver tag (e.g. v4.2.1),
 // which resolves to exactly one commit for its entire lifetime. Full semver
-// pins are re-verified against upstream on the default path; mutable refs
-// (v4, v4.2, branches) are trusted until --rescan because they legitimately
-// move.
+// pins have their tag re-checked on every run; mutable refs (v4, v4.2,
+// branches) stay locked until --relock because they legitimately move.
 func IsImmutableRef(ref string) bool {
 	sv, ok := parserlock.ParseSemVer(ref)
 	return ok && sv.IsFull()

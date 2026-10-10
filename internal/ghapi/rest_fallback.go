@@ -15,12 +15,31 @@ import (
 
 // anonProbeCache caches per-owner results of unauthenticated access probes.
 // true = anonymous access confirmed working, false = not accessible.
+// Only definitive answers are cached; rate limits and 5xx are retried.
 var anonProbeCache sync.Map // map[string]bool
+
+// anonRateLimited marks owners whose anonymous fallback was last skipped
+// because the unauthenticated rate limit was exhausted.
+var anonRateLimited sync.Map // map[string]struct{}
+
+// SSORateLimitedError reports a SAML-blocked token whose anonymous fallback
+// was rate-limited. The message reuses the SSO guidance so callers render
+// the same authorization hint.
+type SSORateLimitedError struct {
+	Host, Owner string
+	Err         error
+}
+
+func (e *SSORateLimitedError) Error() string {
+	return ssoRequiredMessage(e.Host, e.Owner) + " (the anonymous fallback for public repositories was rate-limited)"
+}
+
+func (e *SSORateLimitedError) Unwrap() error { return e.Err }
 
 // SSOFallbackEligible reports whether the given owner's repos can be
 // accessed anonymously when SSO blocks authenticated access. On first
 // call for an owner, it probes the GitHub API with an unauthenticated
-// request to determine accessibility, then caches the result.
+// request to determine accessibility, then caches a definitive result.
 func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	if IsProxima(c.Hostname) {
 		return false
@@ -47,9 +66,38 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	}
 	resp.Body.Close()
 
-	eligible := resp.StatusCode == http.StatusOK
-	anonProbeCache.Store(key, eligible)
-	return eligible
+	anonRateLimited.Delete(key)
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		anonProbeCache.Store(key, true)
+		return true
+	case isRateLimited(resp):
+		anonRateLimited.Store(key, struct{}{})
+		return false
+	case resp.StatusCode >= 500:
+		return false
+	}
+	anonProbeCache.Store(key, false)
+	return false
+}
+
+func isRateLimited(resp *http.Response) bool {
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden:
+		return resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != ""
+	}
+	return false
+}
+
+// ssoErr upgrades a SAML block to SSORateLimitedError when the anonymous
+// fallback for owner was skipped because of a rate limit.
+func (c *Client) ssoErr(owner string, err error) error {
+	if _, limited := anonRateLimited.Load(c.anonBase() + "/" + owner); limited && IsSAMLEnforcement(err) {
+		return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: err}
+	}
+	return err
 }
 
 func (c *Client) repoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
@@ -124,8 +172,17 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	}
 	defer resp.Body.Close()
 
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) > 1 && !isRateLimited(resp) {
+		anonRateLimited.Delete(c.anonBase() + "/" + parts[1])
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
+		herr := &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
+		if isRateLimited(resp) && !c.restOnly && len(parts) > 1 {
+			anonRateLimited.Store(c.anonBase()+"/"+parts[1], struct{}{})
+			return &SSORateLimitedError{Host: c.Hostname, Owner: parts[1], Err: herr}
+		}
+		return herr
 	}
 	return json.NewDecoder(resp.Body).Decode(dest)
 }
@@ -261,13 +318,22 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		Ref:      ref.Ref,
 	}
 
+	meta, err := c.repoMetadata(ctx, ref.Owner, ref.Repo)
+	if err == nil {
+		err = canonicalize(&result, meta.FullName)
+	}
+	if err != nil {
+		result.Err = fmt.Errorf("anonymous fallback: %w", err)
+		return result
+	}
+
 	base := c.anonBase()
 
 	// Resolve ref → commit SHA via the commits endpoint.
 	commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s",
 		base,
-		url.PathEscape(ref.Owner),
-		url.PathEscape(ref.Repo),
+		url.PathEscape(result.Owner),
+		url.PathEscape(result.Repo),
 		url.PathEscape(ref.Ref),
 	)
 	sha, err := c.anonGetCommitSHA(ctx, commitURL)
@@ -285,14 +351,14 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		yamlPath = ref.Path + "/action.yaml"
 	}
 
-	content, err := c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, ymlPath)
+	content, err := c.anonGetFileContent(ctx, base, result.Owner, result.Repo, sha, ymlPath)
 	if err != nil {
 		if code, _ := StatusCode(err); code != http.StatusNotFound {
 			result.Err = err
 			return result
 		}
 		// Try .yaml extension.
-		content, err = c.anonGetFileContent(ctx, base, ref.Owner, ref.Repo, sha, yamlPath)
+		content, err = c.anonGetFileContent(ctx, base, result.Owner, result.Repo, sha, yamlPath)
 		if err != nil {
 			// Reusable workflows have no action metadata; other failures
 			// must not silently truncate a composite's dependency graph.

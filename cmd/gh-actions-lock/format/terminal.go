@@ -166,7 +166,7 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 			nwo, f.RecommendedTag, sha)
 	}
 	if f.DocURL != "" {
-		out.TermDetail("  see: %s", out.TermDim(out.TermLink("how to fix this", f.DocURL)))
+		out.TermDetail("  see: %s", out.DocLink(f.DocURL))
 	}
 }
 
@@ -184,6 +184,12 @@ func categoryLabel(c checks.Category) string {
 		return "Misleading SHA"
 	case checks.UnreachablePin:
 		return "Unreachable pin"
+	case checks.RepoRenamed:
+		return "Repository renamed"
+	case checks.RepoHijacked:
+		return "Repository identity changed (possible hijack)"
+	case checks.RepoUnavailable:
+		return "Repository missing or inaccessible"
 	case checks.Stale:
 		return "Unused lockfile entry"
 	}
@@ -249,7 +255,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 
 	parts := []string{}
 	for _, cat := range []checks.Category{
-		checks.UnreachablePin,
+		checks.RepoHijacked, checks.RepoUnavailable, checks.RepoRenamed, checks.UnreachablePin,
 		checks.RefChanged, checks.NotPinned, checks.OnboardingRequired,
 		checks.LocalAction, checks.InvalidSelfRepositoryRef,
 		checks.Stale, checks.MisleadingSHA,
@@ -268,7 +274,7 @@ func renderErrorFindings(out *ui.UI, report *checks.Report, failedCount, checked
 // renderFindingDetail prints a single non-valid finding with its category
 // icon, detail text, remediation, and doc links.
 func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
-	label := strings.ToUpper(string(f.Category))
+	label := categoryLabel(f.Category)
 	icon := "!"
 	if IsAlertedCategory(f.Category) {
 		icon = "✗"
@@ -361,12 +367,8 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 				bareSHADeps = append(bareSHADeps, key)
 			}
 		case f.Category == checks.RefMoved:
-			// TODO: surface ref-moved warnings once the `gh actions-lock
-			// update` path exists. Today the guidance ("run gh actions-lock
-			// to update") is wrong — a plain re-run trusts the lockfile and
-			// repins nothing; only --rescan even detects the movement. Until
-			// there's a command that actually advances a moved ref, swallow
-			// these rather than print misleading instructions.
+			// Moved mutable refs are sticky; --relock advances them, so
+			// there is nothing actionable to print here.
 		case f.Category.IsInconclusive() &&
 			strings.Contains(f.Remediation, "transitive dependency"):
 			// transitive reachability unknown: silently swallowed
@@ -417,6 +419,22 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 			}
 		}
 	}
+	renderRedirects(out, report, willRemediate)
+}
+
+// renderRedirects lists pins whose repository was renamed or transferred
+// but kept its repo ID. The runner follows the redirect, so it's a warning
+// with the replacement `uses:` line. A fix run rewrites workflow refs and
+// reports that instead.
+func renderRedirects(out *ui.UI, report *checks.Report, willRemediate bool) {
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Category == checks.RepoRenamed && f.IsWarning() && !willRemediate {
+				out.TermWarn("%s: %s", f.WorkflowPath, f.Detail)
+				out.TermDetail("↳ %s", f.Remediation)
+			}
+		}
+	}
 }
 
 // IsAlertedCategory reports whether a finding category has no auto-fix and
@@ -424,7 +442,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 // remediator should not re-print it in non-interactive mode).
 func IsAlertedCategory(c checks.Category) bool {
 	switch c {
-	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired:
+	case checks.UnreachablePin, checks.MisleadingSHA, checks.OnboardingRequired, checks.RepoRenamed, checks.RepoHijacked, checks.RepoUnavailable:
 		return true
 	}
 	return false

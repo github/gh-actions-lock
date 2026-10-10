@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -142,7 +144,7 @@ func (r *Resolver) SeedBranchHints(deps []dep.Dependency) {
 }
 
 // SeedFromLockfile pre-warms the resolution cache so repeat runs skip
-// redundant API calls. Do NOT call with --rescan: seeding would hide
+// redundant API calls. Do NOT call with --relock: seeding would hide
 // ref movement.
 func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 	for _, d := range deps {
@@ -157,6 +159,24 @@ func (r *Resolver) SeedFromLockfile(deps []dep.Dependency) {
 			ghapi.ForActionRef(owner, repo, d.Path, d.Ref),
 			resolvedEntry{dep: d},
 		)
+	}
+}
+
+// Redirect re-labels the entry seeded for owner/repo under its canonical
+// name, keeping the locked commit: a rename of the same repository is no
+// reason to advance. orig is the ref as written, which the rewrite must
+// match exactly. Unseeded refs are left to live resolution.
+func (r *Resolver) Redirect(owner, repo string, orig parserlock.ActionRef, canonical string) {
+	for _, key := range []ghapi.ActionRef{ghapi.ForActionRef(owner, repo, "", orig.Ref), ghapi.ForActionRef(owner, repo, orig.Path, orig.Ref)} {
+		e, ok := r.cache.Get(key)
+		if !ok {
+			continue
+		}
+		e.dep.NWO = canonical
+		if !slices.Contains(e.dep.OriginalRefs, orig) {
+			e.dep.OriginalRefs = append(e.dep.OriginalRefs, orig)
+		}
+		r.cache.Put(key, e)
 	}
 }
 

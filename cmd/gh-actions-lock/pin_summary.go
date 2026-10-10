@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -17,7 +19,8 @@ import (
 // severity findings that the autofix cannot resolve. Pinning resolves
 // not-pinned findings, so those are expected in the pre-fix report and
 // don't count. LocalAction and UnreachablePin errors are unfixable --
-// the workflow or lockfile must be investigated.
+// the workflow or lockfile must be investigated. ReachabilityUnknown is
+// an error only when a fresh pin's identity couldn't be confirmed.
 func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
@@ -25,7 +28,7 @@ func reportHasUnfixableErrors(report *checks.Report, acceptMoved bool) bool {
 				continue
 			}
 			switch f.Category {
-			case checks.LocalAction, checks.InvalidSelfRepositoryRef:
+			case checks.LocalAction, checks.InvalidSelfRepositoryRef, checks.RepoRenamed, checks.RepoHijacked, checks.RepoUnavailable, checks.ReachabilityUnknown:
 				return true
 			case checks.NotPinned:
 				if !f.IsRemediableNotPinned() {
@@ -54,6 +57,10 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 			}
 			if f.Category == checks.LocalAction ||
 				f.Category == checks.InvalidSelfRepositoryRef ||
+				f.Category == checks.RepoRenamed ||
+				f.Category == checks.RepoHijacked ||
+				f.Category == checks.RepoUnavailable ||
+				f.Category == checks.ReachabilityUnknown ||
 				f.Category == checks.NotPinned && !f.IsRemediableNotPinned() {
 				return true
 			}
@@ -65,10 +72,20 @@ func reportHasNonInvestigatedUnfixableErrors(report *checks.Report) bool {
 // renderPinSummary prints the terminal summary after pin.Plan + pin.Commit.
 // It groups pinned entries by NWO@Ref, shows investigation alerts, unresolved
 // warnings, and the all-valid message when nothing changed.
-func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, skippedRescan int, hasInconclusive bool, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string, prunedWorkflows []string) error {
+func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, report *checks.Report, r *resolve.Resolver, refusedLabels []string, noNarrow bool, acceptMoved bool, originalVersion string, prunedWorkflows []string) error {
 	pinned := record.Pinned()
 	investigated := record.Investigated()
 	narrowed := record.Narrowed()
+
+	for _, wp := range record.Workflows {
+		for _, oldUse := range slices.Sorted(maps.Keys(wp.RequiredRewrites)) {
+			where := strings.Join(wp.RewrittenIn[oldUse], ", ")
+			if !slices.Equal(wp.RewrittenIn[oldUse], []string{wp.Path}) {
+				where += " (via " + wp.Path + ")"
+			}
+			console.TermSuccess("Rewrote %s → %s in %s (repository renamed or transferred)", oldUse, wp.RequiredRewrites[oldUse], where)
+		}
+	}
 
 	if len(pinned) > 0 {
 		console.TermBlank()
@@ -84,6 +101,8 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 
 	renderFullScanWarnings(console, pinned)
 	renderCooldownFindings(console, report)
+	presentErrors := reportHasNonInvestigatedUnfixableErrors(report) ||
+		len(investigated) == 0 && reportHasUnfixableErrors(report, acceptMoved)
 	if !noNarrow {
 		renderVersionRefNudge(ctx, console, record, r)
 	}
@@ -116,20 +135,9 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	onboardingRefused := len(refusedLabels)
 	allClean := len(pinned) == 0 && len(investigated) == 0 && len(unresolvedEntries) == 0
 	hasUnfixable := reportHasUnfixableErrors(report, acceptMoved)
-	if allClean && !hasUnfixable && onboardingRefused == 0 && !hasInconclusive {
+	if allClean && !hasUnfixable && onboardingRefused == 0 {
 		console.TermBlank()
 		console.TermSuccess("All %d %s valid", total, ui.Pluralize(total, "workflow", "workflows"))
-		if noNarrow && skippedRescan > 0 {
-			// Mutable refs (v4, main) were trusted without a live check.
-			// With narrowing on, the version-ref nudge above already tells
-			// the user to pin precisely — which also buys live
-			// re-verification — so we don't add a competing --rescan line.
-			// Under --no-narrow that nudge is suppressed, so this is the
-			// only place the trust gap and its escape hatch surface.
-			console.TermDetail("%d mutable %s trusted without a live check — branch or partial-version pins (e.g. v4, main) that can move; run `gh actions-lock --rescan` to re-verify %s.",
-				skippedRescan, ui.Pluralize(skippedRescan, "ref", "refs"),
-				ui.Pluralize(skippedRescan, "it", "them"))
-		}
 		return nil
 	}
 
@@ -152,10 +160,13 @@ func renderPinSummary(ctx context.Context, console *ui.UI, record *pin.Record, r
 	//
 	// Exclude findings already handled elsewhere and pre-fix not-pinned
 	// findings that may have been committed for other workflows.
-	if reportHasNonInvestigatedUnfixableErrors(report) {
+	if presentErrors {
+		excluded := []checks.Category{checks.NotPinned}
+		if len(investigated) > 0 {
+			excluded = append(excluded, checks.UnreachablePin)
+		}
 		console.SetLog(nil)
-		format.PresentResults(console, report, false, false,
-			checks.UnreachablePin, checks.NotPinned)
+		format.PresentResults(console, report, false, false, excluded...)
 	}
 
 	if len(investigated) > 0 || len(unresolvedEntries) > 0 || hasUnfixable {

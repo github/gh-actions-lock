@@ -343,6 +343,8 @@ end
 # ── Fixture data ────────────────────────────────────────────────────────
 
 CHECKOUT_SHA      = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+# Real actions/checkout v4.2.0 commit; exact tags are peeled on every run.
+CHECKOUT_V420_SHA = "d632683dd7b4114ad314bca15554477dd762a938"
 SETUP_GO_SHA      = "4a3601121dd01d1626a1e23e37211e3254c1c06c"
 CACHE_SHA         = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
 MAIN_BRANCH_SHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -437,7 +439,7 @@ LOCKFILE_TEMPLATES = {
       dependencies: {
         "actions/checkout@v4.2.0" => {
           "ref" => "v4.2.0",
-          "commit" => "sha1-#{CHECKOUT_SHA}",
+          "commit" => "sha1-#{CHECKOUT_V420_SHA}",
           "owner_id" => 44036562,
           "repo_id" => 197814629
         }
@@ -542,13 +544,29 @@ def checkout_repo_rest(srv)
   end
 end
 
+# Answer the runner-parity query: the repo resolves under its own name and
+# every requested commit/tag exists at the locked SHA.
+def checkout_parity(body)
+  vars = body["variables"] || {}
+  data = {}
+  vars.each_key do |k|
+    next unless (m = k.match(/\Aoid(\d+)\z/))
+    i = m[1]
+    data["a#{i}"] = { nameWithOwner: "actions/checkout", databaseId: 197_814_629,
+                      commit: { oid: vars[k] }, tag: { oid: vars[k] } }
+  end
+  [200, { "Content-Type" => "application/json" }, JSON.generate({ data: data })]
+end
+
 # Resolve actions/checkout to a moved ref's live SHA.
 def checkout_graphql_ref_move(srv, live_sha)
   srv.on(:POST, %r{/graphql$}) do |req|
     body = JSON.parse(req.body) rescue {}
     query = body["query"] || ""
 
-    if query.include?("expression")
+    if query.include?("commit: object(oid")
+      checkout_parity(body)
+    elsif query.include?("expression")
       [200, { "Content-Type" => "application/json" },
        JSON.generate({ data: { a0: {
          nameWithOwner: "actions/checkout",
@@ -571,7 +589,9 @@ def checkout_graphql_success(srv)
     body = JSON.parse(req.body) rescue {}
     query = body["query"] || ""
 
-    if query.include?("expression")
+    if query.include?("commit: object(oid")
+      checkout_parity(body)
+    elsif query.include?("expression")
       [200, { "Content-Type" => "application/json" },
        JSON.generate({ data: { a0: {
          nameWithOwner: "actions/checkout",
@@ -648,6 +668,17 @@ STUB_WIRING = {
     wire_checkout_success(s, "gho_fake_self_repository_token")
   },
 
+  # Parity sees actions/checkout redirect to a new name with the same repo ID.
+  dbot_renamed_repo_warns: ->(s) {
+    s.stub_server do |srv|
+      srv.on(:POST, %r{/graphql$}) do |req|
+        status, headers, body = checkout_parity(JSON.parse(req.body))
+        [status, headers, body.gsub('"actions/checkout"', '"actions/checkout-renamed"')]
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_renamed_token")
+  },
+
   # SSO scenarios: catch-all 403 with X-GitHub-SSO header
   sso_auth_failure: ->(s) {
     s.stub_server { |srv| sso_403_all(srv) }
@@ -704,10 +735,6 @@ STUB_WIRING = {
       end
     end
     s.env("GH_TOKEN" => "gho_fake_mixed_test_token")
-  },
-  rescan_inconclusive_fails: ->(s) {
-    s.stub_server { |srv| sso_403_all(srv) }
-    s.env("GH_TOKEN" => "gho_fake_rescan_token")
   },
 
   # Error icon / record / prefix scenarios: SSO 403 as a reliable failure trigger
