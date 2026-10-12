@@ -46,3 +46,23 @@ jobs:
 	assert.ElementsMatch(t, []string{"$/actions/root", "$/.github/workflows/reusable.yml"}, pw.SelfRepositoryRefs)
 	assert.Empty(t, pw.SelfRepositoryResolutionErrs)
 }
+
+func TestParseAllIncludesReusableWorkflowCalls(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(workflowPath), 0o755))
+	require.NoError(t, os.WriteFile(workflowPath, []byte(`on: push
+jobs:
+  call:
+    uses: owner/repo/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+`), 0o644))
+
+	parsed := ParseAll([]string{workflowPath}, nil)
+	require.Len(t, parsed, 1)
+	require.Len(t, parsed[0].Refs, 1)
+	assert.Equal(t, "owner/repo", parsed[0].Refs[0].NWO())
+	assert.Empty(t, parsed[0].Refs[0].Path)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", parsed[0].Refs[0].Ref)
+}
