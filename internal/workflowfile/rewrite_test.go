@@ -207,3 +207,31 @@ func TestRewriteActionRefs_SubPathActions(t *testing.T) {
 	assert.Contains(t, out, "actions/cache@v5.0.5")
 	assert.Contains(t, out, "actions/checkout@v3")
 }
+
+func TestValidateRequiredActionRefRewrites_ReusableWorkflowRepositoryTransfer(t *testing.T) {
+	const workflow = `name: ci
+on: push
+jobs:
+  build:
+    uses: old/repo/.github/workflows/build.yml@v1
+`
+	const oldUse = "old/repo/.github/workflows/build.yml@v1"
+	const replacement = "new/repo@0123456789abcdef0123456789abcdef01234567"
+
+	f, err := Parse(".github/workflows/ci.yml", []byte(workflow))
+	require.NoError(t, err)
+
+	matches, err := f.ValidateRequiredActionRefRewrites(map[string]string{
+		"old/repo@v1": replacement,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{oldUse: 1}, matches)
+
+	output, changed, err := f.RewriteActionRefs(map[string]string{
+		"old/repo@v1": replacement,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed)
+	assert.Contains(t, string(output), "uses: new/repo/.github/workflows/build.yml@0123456789abcdef0123456789abcdef01234567")
+	assert.NotContains(t, string(output), "uses: old/repo/.github/workflows/build.yml@v1")
+}

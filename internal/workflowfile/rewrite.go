@@ -104,7 +104,11 @@ func (f *File) ValidateRequiredActionRefRewrites(replacements map[string]string)
 					}
 					if target.Kind == yaml.ScalarNode {
 						oldValue := strings.TrimSpace(target.Value)
-						if _, ok := replacements[oldValue]; ok {
+						_, ok := replacements[oldValue]
+						if !ok {
+							_, ok = subpathRewriteLookup(oldValue, replacements)
+						}
+						if ok {
 							matches[oldValue]++
 							if anchored || valueNode.Kind == yaml.AliasNode || target.Anchor != "" {
 								blocked = oldValue
@@ -203,7 +207,8 @@ func localActionExists(repoRoot, localPath string) bool {
 	return false
 }
 
-// subpathRewriteLookup handles sub-path actions like actions/cache/restore@ref.
+// subpathRewriteLookup applies a repository-level rewrite to a sub-path use,
+// preserving the path while updating both the repository and ref.
 func subpathRewriteLookup(usesValue string, replacements map[string]string) (string, bool) {
 	atIdx := strings.LastIndex(usesValue, "@")
 	if atIdx < 0 {
@@ -229,8 +234,9 @@ func subpathRewriteLookup(usesValue string, replacements map[string]string) (str
 	if newAtIdx < 0 {
 		return "", false
 	}
+	newNWO := newNWOValue[:newAtIdx]
 	newRef := newNWOValue[newAtIdx+1:]
-	return nwo + "/" + subPath + "@" + newRef, true
+	return newNWO + "/" + subPath + "@" + newRef, true
 }
 
 // stripTrailingComment removes a trailing YAML comment (# ...) from the
