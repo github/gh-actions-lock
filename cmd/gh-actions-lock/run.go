@@ -634,6 +634,7 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 		}
 	}
 	files := append([]string(nil), paths...)
+	var repoRoot string
 
 	// Also sweep in-repo composite action files. The repo root is derived from
 	// a workflow path (they live under .github/workflows/); onboarding only
@@ -644,6 +645,7 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 			return 0, undo, err
 		}
 		if root != "" {
+			repoRoot = root
 			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
 			if err != nil {
 				return 0, undo, err
@@ -691,8 +693,27 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 		migrations = append(migrations, plannedMigration{path: path, original: original, content: content, changed: changed})
 	}
 
-	// Do not write anything until every candidate has passed structural and
-	// repository-boundary validation.
+	// Composite definitions are shared even when the command names only one
+	// workflow. Check all callers before writing changes to those definitions.
+	var migrationPaths []string
+	compositeChanged := false
+	for _, plan := range migrations {
+		migrationPaths = append(migrationPaths, plan.path)
+		name := filepath.Base(plan.path)
+		compositeChanged = compositeChanged || name == "action.yml" || name == "action.yaml"
+	}
+	if compositeChanged && repoRoot != "" {
+		workflowPaths, err := workflowfile.DiscoverWorkflowsIn(filepath.Join(repoRoot, ".github", "workflows"))
+		if err != nil {
+			return 0, undo, err
+		}
+		if err := workflowfile.ValidateLocalActionMigrations(workflowPaths, migrationPaths); err != nil {
+			return 0, undo, err
+		}
+	}
+
+	// Do not write anything until every candidate and its callers have passed
+	// validation.
 	total := 0
 	for _, plan := range migrations {
 		written = append(written, plan)

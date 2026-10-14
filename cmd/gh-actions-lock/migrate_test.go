@@ -12,7 +12,7 @@ import (
 )
 
 func TestMigrateLocalActions_CustomCheckoutRefWritesNothing(t *testing.T) {
-	for _, args := range [][]string{nil, {"--json"}} {
+	for _, args := range [][]string{nil, {"--json"}, {".github/workflows/first.yml"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			require.NoError(t, os.Mkdir(".git", 0o755))
@@ -25,7 +25,7 @@ func TestMigrateLocalActions_CustomCheckoutRefWritesNothing(t *testing.T) {
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
-      - uses: ./.github/actions/local
+      - uses: $/.github/actions/local
 `,
 				".github/actions/local/action.yml":  "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/helper\n",
 				".github/actions/helper/action.yml": "runs:\n  using: composite\n  steps:\n    - run: echo hello\n      shell: bash\n",

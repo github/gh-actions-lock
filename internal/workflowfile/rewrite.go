@@ -145,24 +145,11 @@ func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	if err := f.validateSelfRepositoryMigration(scan); err != nil {
 		return append([]byte(nil), f.Content...), 0, err
 	}
-	if len(scan.LocalPaths) == 0 {
-		return append([]byte(nil), f.Content...), 0, nil
-	}
-
 	repoRoot, err := findRepoRoot(f.Path)
 	if err != nil {
 		return append([]byte(nil), f.Content...), 0, err
 	}
-	replacements := make(map[string]string, len(scan.LocalPaths))
-	for _, localPath := range scan.LocalPaths {
-		if !localActionExists(repoRoot, localPath) {
-			continue
-		}
-		replacements[localPath] = selfRepositoryPrefix + strings.TrimPrefix(localPath, "./")
-	}
-	if len(replacements) == 0 {
-		return append([]byte(nil), f.Content...), 0, nil
-	}
+	replacements := f.localActionReplacements(repoRoot)
 	if err := f.validateCheckoutRefsForMigration(replacements); err != nil {
 		return append([]byte(nil), f.Content...), 0, err
 	}
@@ -170,53 +157,14 @@ func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	return f.RewriteActionRefs(replacements)
 }
 
-func (f *File) validateCheckoutRefsForMigration(replacements map[string]string) error {
-	root := resolveAlias(documentRoot(&f.root))
-	if err := validateStepCheckoutRefs(mapValue(root, "runs"), replacements); err != nil {
-		return err
-	}
-	jobs := mapValue(root, "jobs")
-	if jobs == nil || jobs.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 1; i < len(jobs.Content); i += 2 {
-		if err := validateStepCheckoutRefs(resolveAlias(jobs.Content[i]), replacements); err != nil {
-			return err
+func (f *File) localActionReplacements(repoRoot string) map[string]string {
+	replacements := make(map[string]string)
+	for _, localPath := range f.ExtractActionRefs().LocalPaths {
+		if localActionExists(repoRoot, localPath) {
+			replacements[localPath] = selfRepositoryPrefix + strings.TrimPrefix(localPath, "./")
 		}
 	}
-	return nil
-}
-
-func validateStepCheckoutRefs(owner *yaml.Node, replacements map[string]string) error {
-	steps := mapValue(owner, "steps")
-	if steps == nil || steps.Kind != yaml.SequenceNode {
-		return nil
-	}
-	var customRef *yaml.Node
-	for _, stepNode := range steps.Content {
-		step := resolveAlias(stepNode)
-		uses := strings.TrimSpace(scalarValue(mapValue(step, "uses")))
-		action, _, hasRef := strings.Cut(uses, "@")
-		if hasRef && strings.EqualFold(action, "actions/checkout") {
-			ref := mapValue(mapValue(step, "with"), "ref")
-			value := strings.TrimSpace(scalarValue(ref))
-			if value != "" && !isRunningCommitRef(value) {
-				customRef = ref
-			}
-			// Keep earlier custom refs: a later checkout can be conditional.
-		}
-		if replacement, ok := replacements[uses]; ok && customRef != nil {
-			return fmt.Errorf("cannot migrate %s to %s: preceding actions/checkout uses ref %q at line %d; $/ resolves to the running commit, not the checked-out ref; use --no-migrate-local-actions to keep local references", uses, replacement, customRef.Value, customRef.Line)
-		}
-	}
-	return nil
-}
-
-func isRunningCommitRef(value string) bool {
-	if !strings.HasPrefix(value, "${{") || !strings.HasSuffix(value, "}}") {
-		return false
-	}
-	return strings.TrimSpace(value[3:len(value)-2]) == "github.sha"
+	return replacements
 }
 
 func (f *File) validateSelfRepositoryMigration(scan RefScan) error {

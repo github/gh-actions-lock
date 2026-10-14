@@ -119,12 +119,16 @@ gh actions-lock --no-migrate-local-actions
 
 Migration stops before writing files if a local action follows an
 `actions/checkout` step with a non-empty `ref` other than `${{ github.sha }}`
-in the same job or composite action. A custom ref can make `./…` load different
-code from `$/…`. The error identifies the checkout ref and its line. Review
-the checkout and action references together, or use `--no-migrate-local-actions`
+in the same job, including checkouts and local references reached through
+in-repo composite actions. Checkout state follows nested `./…` and `$/…`
+calls and carries back to subsequent caller steps. Since composite definitions
+are migrated repository-wide, their callers are checked even in workflows
+outside a scoped run. A custom ref can make `./…` load different code from
+`$/…`. The error identifies the action file and the checkout's file and line.
+Review the checkout and action references together, or use `--no-migrate-local-actions`
 to preserve the local references; workflows that keep `./…` remain ineligible
-for onboarding. This check covers explicit checkout steps, not workspace
-changes made by scripts or other actions.
+for onboarding. This check covers explicit checkout steps in workflows and
+in-repo composite actions, not workspace changes made by scripts or remote actions.
 
 ## How it works
 
