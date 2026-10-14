@@ -222,6 +222,56 @@ func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
 	assert.Equal(t, content, out)
 }
 
+func TestMigrateLocalActionsToSelfRepository_CheckoutRef(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local-action"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "local-action", "action.yml"),
+		[]byte("runs:\n  using: composite\n"), 0o644))
+
+	for _, tt := range []struct {
+		name    string
+		ref     string
+		blocked bool
+	}{
+		{name: "default ref"},
+		{name: "empty ref", ref: "''"},
+		{name: "running commit", ref: "${{ github.sha }}"},
+		{name: "running commit without spaces", ref: "${{github.sha}}"},
+		{name: "branch", ref: "develop2", blocked: true},
+		{name: "tag", ref: "v1.0.0", blocked: true},
+		{name: "literal commit", ref: "0123456789012345678901234567890123456789", blocked: true},
+		{name: "workflow input", ref: "${{ inputs.ref || github.ref }}", blocked: true},
+		{name: "environment variable", ref: "${{ env.TARGET_BRANCH }}", blocked: true},
+		{name: "pull request head", ref: "${{ github.event.pull_request.head.sha }}", blocked: true},
+		{name: "running branch can move", ref: "${{ github.ref }}", blocked: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			content := "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n"
+			if tt.ref != "" {
+				content += "        with:\n          ref: " + tt.ref + "\n"
+			}
+			content += "      - uses: ./local-action\n"
+			f, err := Parse(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"), []byte(content))
+			require.NoError(t, err)
+
+			out, changed, err := f.MigrateLocalActionsToSelfRepository()
+			if tt.blocked {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "actions/checkout")
+				assert.Contains(t, err.Error(), tt.ref)
+				assert.Contains(t, err.Error(), "--no-migrate-local-actions")
+				assert.Zero(t, changed)
+				assert.Equal(t, content, string(out))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 1, changed)
+			assert.Contains(t, string(out), "uses: $/local-action")
+		})
+	}
+}
+
 func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))

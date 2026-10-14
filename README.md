@@ -117,6 +117,15 @@ leave `./…` refs untouched on fix runs, opt out with
 gh actions-lock --no-migrate-local-actions
 ```
 
+Migration stops before writing files if a local action follows an
+`actions/checkout` step with a non-empty `ref` other than `${{ github.sha }}`
+in the same job or composite action. A custom ref can make `./…` load different
+code from `$/…`. The error identifies the checkout ref and its line. Review
+the checkout and action references together, or use `--no-migrate-local-actions`
+to preserve the local references; workflows that keep `./…` remain ineligible
+for onboarding. This check covers explicit checkout steps, not workspace
+changes made by scripts or other actions.
+
 ## How it works
 
 A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/actions.lock)) and workflows are onboarded to the lockfile on a per-workflow basis. 
