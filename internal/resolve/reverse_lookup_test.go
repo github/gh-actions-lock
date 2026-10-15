@@ -8,7 +8,61 @@ import (
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestReverseLookup_ContainingBranchDoesNotIdentifyHistoricalCommit(t *testing.T) {
+	const (
+		oldSHA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		headSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	for _, tt := range []struct {
+		name    string
+		sha     string
+		tag     string
+		wantRef string
+	}{
+		{name: "historical SHA stays distinct", sha: oldSHA, wantRef: oldSHA},
+		{name: "branch head can use branch name", sha: headSHA, wantRef: "main"},
+		{name: "exact tag identifies historical commit", sha: oldSHA, tag: "v1.0.0", wantRef: "v1.0.0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.REST("GET", `repos/owner/action$`),
+				httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
+			reg.Register(httpmock.REST("GET", `repos/owner/action/git/ref/heads/main`),
+				httpmock.JSONResponse(map[string]any{
+					"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
+				}))
+			if tt.sha != headSHA {
+				reg.Register(httpmock.REST("GET", `repos/owner/action/compare/`+oldSHA+`\.\.\.`+headSHA),
+					httpmock.JSONResponse(httpmock.CompareAncestorResponse(oldSHA)))
+			}
+			tags := httpmock.TagListResponse()
+			if tt.tag != "" {
+				tags = httpmock.TagListResponse(tt.tag, tt.sha)
+			}
+			reg.Register(httpmock.REST("GET", `repos/owner/action/tags`), httpmock.JSONResponse(tags))
+			resolver, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
+			require.NoError(t, err)
+			deps := []dep.Dependency{{NWO: "owner/action", Ref: tt.sha, SHA: tt.sha}}
+
+			rewrites, issues, err := resolver.ReverseLookup(context.Background(), deps)
+			require.NoError(t, err)
+			assert.Empty(t, issues)
+			assert.Equal(t, tt.wantRef, deps[0].Ref)
+			assert.Equal(t, "main", deps[0].Branch)
+			assert.Equal(t, tt.tag, deps[0].Tag)
+			if tt.wantRef == tt.sha {
+				assert.Empty(t, rewrites)
+			} else {
+				assert.Equal(t, map[string]string{"owner/action@" + tt.sha: "owner/action@" + tt.wantRef}, rewrites)
+			}
+		})
+	}
+}
 
 func TestFindContainingBranch_ExactHeadMatch(t *testing.T) {
 	reg := &httpmock.Registry{}

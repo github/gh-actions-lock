@@ -668,8 +668,12 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		}
 		if parserlock.IsFullSha(e.Ref) {
 			newRef := e.Tag
-			if newRef == "" {
-				newRef = e.OnBranch
+			if newRef == "" && e.OnBranch != "" && opts.Resolver != nil {
+				// A containing branch cannot identify an older pinned commit.
+				owner, repo := splitNWO(e.NWO)
+				if head, ok := opts.Resolver.GetBranchHead(ctx, owner, repo, e.OnBranch); ok && strings.EqualFold(head.SHA, e.SHA) {
+					newRef = e.OnBranch
+				}
 			}
 			if newRef == "" {
 				continue
