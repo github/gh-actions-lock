@@ -29,7 +29,7 @@ jobs:
       - name: Verify tag
         run: script/verify-release-tag "$GITHUB_REF_NAME" v
 
-      - uses: cli/gh-extension-precompile@v2.1.0
+      - uses: cli/gh-extension-precompile@v2.2.0
         with:
           generate_attestations: true
           go_version_file: go.mod
