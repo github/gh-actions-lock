@@ -10,6 +10,6 @@ jobs:
   dependency-review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Dependency Review
         uses: actions/dependency-review-action@v5.0.0
