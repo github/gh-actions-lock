@@ -50,6 +50,10 @@ type PlanOptions struct {
 	// creating duplicate dep entries at different ref granularities.
 	prevImpreciseNWO map[string]bool
 
+	// retainedLockTargets excludes pins orphaned by this run's stale-ref
+	// pruning, while retaining pins needed by unscanned or skipped workflows.
+	retainedLockTargets map[string]bool
+
 	// OnProgress is called at each phase boundary with a human-readable
 	// label (e.g. "Resolving actions/checkout"). Nil means no progress.
 	OnProgress func(phase string)
@@ -79,6 +83,7 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 	if opts.prevImpreciseNWO == nil && opts.Store != nil {
 		opts.prevImpreciseNWO = impreciseDirectNWOs(opts.Store)
 	}
+	opts.retainedLockTargets = retainedLockTargets(report, opts)
 	results := make([]planResult, len(report.Workflows))
 	var planErr error
 	poolErr := pinpool.RunTyped(opts.Pool, ctx, "Planning pins",
@@ -417,64 +422,29 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 	}
 }
 
-// reverseLookupRewrites canonicalizes dep refs via ReverseLookup (SHA -> tag/
-// branch), restoring refs that narrowing or a transitive dep already fixed.
-// Returns the rewrites map, indices of unresolvable deps, and any hard error.
+// reverseLookupRewrites canonicalizes refs via ReverseLookup, preserving
+// narrowed refs, transitive declarations, and existing locked targets.
+// It returns rewrites, indices of unresolvable deps, and any hard error.
 func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, directTracker lockfile.DirectTracker, preservedDeps map[int]bool) (map[string]string, []resolve.LookupIssue, error) {
-	// Save narrowed refs before ReverseLookup - it may overwrite dep.Ref
-	// with a branch name, but we want to keep the semver tag narrowing chose.
-	preservedRefs := make(map[int]string)
-	preservedKeys := make(map[string]bool)
+	originalRefs := make([]string, len(deps))
 	for i := range deps {
-		if preservedDeps[i] {
-			preservedRefs[i] = deps[i].Ref
-			preservedKeys[deps[i].Key()] = true
-		}
+		originalRefs[i] = deps[i].Ref
 	}
 
-	// Snapshot transitive deps' declared refs before ReverseLookup mutates
-	// them. We restore symbolic refs (tags/branches) afterward but let
-	// ReverseLookup's discovered ref stick when the original is a bare SHA.
-	transitiveOrigRefs := make(map[int]string)
-	for i := range deps {
-		if !directTracker.IsDirect(i) {
-			transitiveOrigRefs[i] = deps[i].Ref
-		}
-	}
-
-	// ReverseLookup: SHA -> containing tag/branch. Rewrites refs to canonical form.
 	normRewrites, lookupIssues, err := opts.Resolver.ReverseLookup(ctx, deps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reverse lookup: %w", err)
 	}
-	// Restore narrowed refs that ReverseLookup may have overwritten.
-	for i, ref := range preservedRefs {
-		deps[i].Ref = ref
-	}
-	// Restore transitive deps' declared refs — we don't own the composite's
-	// action.yml so the lockfile key must match what it declares. The
-	// discovered tag/branch is preserved in dep.Tag/dep.Branch and used by
-	// state.Set for the lockfile ref: field.
-	transitiveRewriteKeys := make(map[string]bool)
+	// Composite refs must match their action.yml. A direct rewrite must not
+	// reuse a ref locked to a different commit. Keep the discovered metadata.
 	for i := range deps {
-		if directTracker.IsDirect(i) {
-			continue
+		if preservedDeps[i] || !directTracker.IsDirect(i) ||
+			hasConflictingLockTarget(opts, deps[i].NWO, deps[i].Ref, deps[i].SHA) {
+			deps[i].Ref = originalRefs[i]
+			delete(normRewrites, deps[i].Key())
 		}
-		origRef := transitiveOrigRefs[i]
-		deps[i].Ref = origRef
-		transitiveRewriteKeys[deps[i].NWO+"@"+origRef] = true
 	}
-	rewrites := make(map[string]string)
-	for k, v := range normRewrites {
-		if transitiveRewriteKeys[k] {
-			continue
-		}
-		if preservedKeys[k] {
-			continue
-		}
-		rewrites[k] = v
-	}
-	return rewrites, lookupIssues, nil
+	return normRewrites, lookupIssues, nil
 }
 
 // buildPinnedEntries emits an entry for every resolved dep, marking it Verified
@@ -674,7 +644,7 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 			if newRef == "" {
 				continue
 			}
-			if parserlock.IsFullSha(newRef) || hasConflictingLockTarget(opts.Store, e.NWO, newRef, e.SHA) {
+			if parserlock.IsFullSha(newRef) || hasConflictingLockTarget(opts, e.NWO, newRef, e.SHA) {
 				continue
 			}
 			oldRef := e.Ref
@@ -726,11 +696,50 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 	return rewrites
 }
 
-func hasConflictingLockTarget(store *lockfile.State, nwo, ref, sha string) bool {
-	if store == nil {
+func retainedLockTargets(report *checks.Report, opts PlanOptions) map[string]bool {
+	if opts.Store == nil {
+		return nil
+	}
+	staleByWorkflow := make(map[string]map[string]bool)
+	for _, wr := range report.Workflows {
+		if wr.SkipCommit || wr.BlockingResolverError || wr.CountByCategory(checks.InvalidSelfRepositoryRef) > 0 {
+			continue
+		}
+		if opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0 && wr.CountByCategory(checks.RefMoved) > 0 {
+			continue
+		}
+		stale := make(map[string]bool)
+		for _, f := range wr.Findings {
+			if f.Category == checks.Stale && f.Dependency != nil {
+				stale[strings.ToLower(f.Dependency.NWO)+"@"+f.Dependency.Ref] = true
+			}
+		}
+		staleByWorkflow[workflowfile.KeyFromPath(wr.Path)] = stale
+	}
+
+	// A stale direct pin can still be required by another workflow or by a
+	// surviving composite. Only ignore targets absent from every closure.
+	retained := make(map[string]bool)
+	for _, wfKey := range opts.Store.WorkflowKeys() {
+		live := func(p parserlock.Pin) bool {
+			return !staleByWorkflow[wfKey][p.String()]
+		}
+		for _, locked := range opts.Store.Closure(wfKey, live) {
+			retained[locked.Pin.String()] = true
+		}
+	}
+	return retained
+}
+
+func hasConflictingLockTarget(opts PlanOptions, nwo, ref, sha string) bool {
+	if opts.Store == nil {
 		return false
 	}
-	action, ok := store.File().Dependencies[nwo+"@"+ref]
+	key := strings.ToLower(nwo) + "@" + ref
+	if opts.retainedLockTargets != nil && !opts.retainedLockTargets[key] {
+		return false
+	}
+	action, ok := opts.Store.File().Dependencies[key]
 	if !ok {
 		return false
 	}
