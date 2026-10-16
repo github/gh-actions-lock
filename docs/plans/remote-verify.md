@@ -12,13 +12,28 @@ workflows and composite actions are followed remotely through the API.
   `https://github.com/OWNER/REPO` and `https://HOST/OWNER/REPO`.
 - `--ref <branch|tag|sha>`: ref to read. Defaults to the repo's default branch.
   `gh` has no `owner/repo@ref` form for `-R`, so we don't add one.
+- **Positional form**, like `gh repo clone`'s repository argument:
+  `gh actions-lock --verify OWNER/REPO[@REF]`, `HOST/OWNER/REPO[@REF]`, or a
+  full URL (`https://github.com/OWNER/REPO`, `https://HOST/OWNER/REPO`).
+  `@REF` is an extension beyond `gh repo clone` (which has no ref syntax) and
+  is equivalent to `--ref`. Specifying both `@REF` and `--ref`, or both a
+  positional repo and `-R`, is an error unless the values are identical.
+- **Disambiguation** from today's positional `<workflow-path>` args (a bare
+  `owner/repo` looks like a relative path). Under `--verify`, an argument is a
+  remote repo when it is a URL, or it matches `[HOST/]OWNER/REPO[@REF]`, has
+  no `.yml`/`.yaml` extension, and does not exist on disk. Anything else is a
+  workflow path. Mixing a repo with workflow paths, or giving more than one
+  repo, is an error. Without `--verify`, a repo-shaped argument gets a
+  targeted error ("remote repositories are only supported with --verify").
+  Parsing lives in `internal/repospec` and is shared by `-R` and the positional form.
 - Host comes from the repo argument; otherwise `--hostname` / `GH_HOST` /
   default, as today. A host in `-R` that conflicts with `--hostname` is an error.
 - Only valid with `--verify`. Rejected in `validateOutputFlags` (run.go) when combined with:
   - no `--verify` (plain runs, `--verify-local`),
   - `--accept-moved`, `--relock`, `--no-migrate-local-actions`,
-  - positional `<workflow-path>` args (remote mode verifies everything the
-    lockfile lists; optional follow-up: treat them as repo-relative paths).
+  - positional `<workflow-path>` args alongside a remote repo (remote mode
+    verifies everything the lockfile lists; optional follow-up: treat them as
+    repo-relative paths).
 - Output (`--json`, findings, exit codes) is unchanged; the JSON schema stays
   additive-only. Add `repo`/`ref` only as new optional fields.
 
@@ -67,8 +82,9 @@ workflows and composite actions are followed remotely through the API.
 
 ## Tests
 
-- **Go unit** (`internal/**`): repo spec parsing (all forms, bad input, host
-  conflict); flag validation matrix; remote `FileSource` with httpmock (404
+- **Go unit** (`internal/**`): repo spec parsing (all forms incl. `@REF`, bad
+  input, host conflict); positional disambiguation (existing local path wins,
+  `.yml` suffix, URL, mixed args, non-`--verify`); flag validation matrix; remote `FileSource` with httpmock (404
   lockfile, dir listing, SHA pinning); `./`/`$/` resolution against the target repo.
 - **Go command test** (`cmd/**`, httpmock, blocking CI): `-R owner/repo --verify`
   happy path, tampered lock entry fails, missing lockfile fails, `--ref`
