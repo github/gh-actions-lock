@@ -448,6 +448,55 @@ jobs:
 	assert.Len(t, f.ExtractActionRefs().Refs, 1)
 }
 
+func TestExtractActionRefs_ParallelStepGroups(t *testing.T) {
+	f, err := Parse("wf.yml", []byte(`
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - parallel:
+          - uses: actions/setup-java@v4
+          - uses: actions/setup-node@v4
+          - parallel:
+              - uses: actions/setup-go@v4
+`))
+	require.NoError(t, err)
+	var names []string
+	for _, r := range f.ExtractActionRefs().Refs {
+		names = append(names, r.FullName())
+	}
+	assert.ElementsMatch(t, []string{"actions/checkout", "actions/setup-java", "actions/setup-node"}, names, "parallel groups are one level deep")
+}
+
+func TestParseRejectsUsesExpressionInParallel(t *testing.T) {
+	_, err := Parse("wf.yml", []byte(`
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - parallel:
+          - uses: ${{ matrix.action }}
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "`uses:` can't contain an expression")
+}
+
+func TestParseActionYAMLForUses_IgnoresParallel(t *testing.T) {
+	uses, err := parseActionYAMLForUses([]byte(`
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+    - parallel:
+        - uses: actions/setup-node@v4
+`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"actions/checkout@v4"}, uses)
+}
+
 func TestParseRejectsAliasedUsesExpression(t *testing.T) {
 	_, err := Parse("wf.yml", []byte(`
 on: push
