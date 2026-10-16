@@ -23,8 +23,9 @@ workflows and composite actions are followed remotely through the API.
   remote repo when it is a URL, or it matches `[HOST/]OWNER/REPO[@REF]`, has
   no `.yml`/`.yaml` extension, and does not exist on disk. Anything else is a
   workflow path. Mixing a repo with workflow paths, or giving more than one
-  repo, is an error. Without `--verify`, a repo-shaped argument gets a
-  targeted error ("remote repositories are only supported with --verify").
+  repo, is an error. Without `--verify`, positional args are always workflow
+  paths and repo detection never runs, so the remote form can't leak into
+  other modes.
   Parsing lives in `internal/repospec` and is shared by `-R` and the positional form.
 - Host comes from the repo argument; otherwise `--hostname` / `GH_HOST` /
   default, as today. A host in `-R` that conflicts with `--hostname` is an error.
@@ -84,7 +85,7 @@ workflows and composite actions are followed remotely through the API.
 
 - **Go unit** (`internal/**`): repo spec parsing (all forms incl. `@REF`, bad
   input, host conflict); positional disambiguation (existing local path wins,
-  `.yml` suffix, URL, mixed args, non-`--verify`); flag validation matrix; remote `FileSource` with httpmock (404
+  `.yml` suffix, URL, mixed args, non-`--verify` args stay workflow paths); flag validation matrix; remote `FileSource` with httpmock (404
   lockfile, dir listing, SHA pinning); `./`/`$/` resolution against the target repo.
 - **Go command test** (`cmd/**`, httpmock, blocking CI): `-R owner/repo --verify`
   happy path, tampered lock entry fails, missing lockfile fails, `--ref`
