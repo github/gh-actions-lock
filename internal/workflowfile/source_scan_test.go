@@ -2,6 +2,7 @@ package workflowfile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"testing"
@@ -85,4 +86,68 @@ func TestScanSelfRepositoryActionsFrom(t *testing.T) {
 		require.Len(t, scan.Errors, 1)
 		assert.Contains(t, scan.Errors[0], "parsing action.yml")
 	})
+
+	t.Run("action.yaml is not read when action.yml fails for another reason", func(t *testing.T) {
+		src := errSource{
+			mapSource: mapSource{"actions/x/action.yaml": "runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n"},
+			failPath:  "actions/x/action.yml",
+			err:       errors.New("HTTP 403: forbidden"),
+		}
+		scan := ScanSelfRepositoryActionsFrom(ctx, src, []string{"$/actions/x"})
+
+		require.Len(t, scan.Errors, 1)
+		assert.Contains(t, scan.Errors[0], "403")
+		assert.Empty(t, scan.Refs, "the fallback manifest must not be used")
+	})
+
+	t.Run("a failing action.yaml is reported when action.yml is absent", func(t *testing.T) {
+		src := errSource{
+			mapSource: mapSource{},
+			failPath:  "actions/x/action.yaml",
+			err:       errors.New("HTTP 500"),
+		}
+		scan := ScanSelfRepositoryActionsFrom(ctx, src, []string{"$/actions/x"})
+
+		require.Len(t, scan.Errors, 1)
+		assert.Contains(t, scan.Errors[0], "500")
+	})
+}
+
+// errSource fails reads of failPath with err.
+type errSource struct {
+	mapSource
+	failPath string
+	err      error
+}
+
+func (s errSource) ReadFile(ctx context.Context, name string) ([]byte, error) {
+	if name == s.failPath {
+		return nil, s.err
+	}
+	return s.mapSource.ReadFile(ctx, name)
+}
+
+func TestReusableWorkflowPaths(t *testing.T) {
+	f, err := Parse(".github/workflows/ci.yml", []byte(`on: push
+jobs:
+  a:
+    uses: ./.github/workflows/build.yml
+  b:
+    uses: $/.github/workflows/lint.yaml
+  c:
+    uses: ./.github/workflows/build.yml
+  d:
+    uses: owner/repo/.github/workflows/x.yml@v1
+  e:
+    uses: $/.github/workflows/bad.yml@v1
+  g:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./actions/local
+      - uses: $/actions/self
+`))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{".github/workflows/build.yml", ".github/workflows/lint.yaml"}, f.ReusableWorkflowPaths(),
+		"job-level same-repo calls only, deduplicated; remote, versioned and step-level refs are excluded")
 }

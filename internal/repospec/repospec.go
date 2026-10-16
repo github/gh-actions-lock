@@ -102,13 +102,12 @@ func (s Spec) Equal(o Spec) bool {
 }
 
 // LooksLikeRepo reports whether a positional argument has the shape of a
-// remote repository: a URL, or [HOST/]OWNER/REPO[@REF] with no .yml/.yaml
-// extension. Callers must still check that the argument is not an existing
-// path on disk.
+// remote repository: a URL (even an unsupported one, so Parse can explain
+// why), or [HOST/]OWNER/REPO[@REF] with no .yml/.yaml extension. Callers must
+// still check that the argument is not an existing path on disk.
 func LooksLikeRepo(arg string) bool {
 	if isURL(arg) {
-		_, err := Parse(arg)
-		return err == nil
+		return true
 	}
 	nwo, _, _ := strings.Cut(arg, "@")
 	lower := strings.ToLower(nwo)

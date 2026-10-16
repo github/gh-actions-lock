@@ -85,7 +85,11 @@ func (c *Client) contents(ctx context.Context, owner, repo, ref, path string) (j
 		url.PathEscape(owner), url.PathEscape(repo), strings.Join(segs, "/"), url.QueryEscape(ref))
 
 	var raw json.RawMessage
-	if err := c.rest.DoWithContext(ctx, http.MethodGet, endpoint, nil, &raw); err != nil {
+	err = c.rest.DoWithContext(ctx, http.MethodGet, endpoint, nil, &raw)
+	if err != nil && IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+		err = c.anonGet(ctx, endpoint, &raw)
+	}
+	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("%s/%s@%s:%s: %w", owner, repo, ref, path, fs.ErrNotExist)

@@ -228,9 +228,11 @@ func ScanSelfRepositoryActionsFrom(ctx context.Context, src filesource.Source, a
 // errOutsideRepo marks an action path that resolves outside the repository.
 var errOutsideRepo = errors.New("path resolves outside repository")
 
-// readActionUsesFrom is readActionUses over a Source.
+// readActionUsesFrom is readActionUses over a Source. action.yaml is read
+// only when action.yml does not exist; any other failure is returned so the
+// scan cannot silently fall through to a manifest the runner would not use.
 func readActionUsesFrom(ctx context.Context, src filesource.Source, actionDir string) ([]string, string, error) {
-	var lastErr error
+	var notFound error
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := path.Join(actionDir, name)
 		content, err := src.ReadFile(ctx, actionPath)
@@ -238,7 +240,10 @@ func readActionUsesFrom(ctx context.Context, src filesource.Source, actionDir st
 			if errors.Is(err, filesource.ErrEscapesRoot) {
 				return nil, "", errOutsideRepo
 			}
-			lastErr = err
+			if !filesource.IsNotExist(err) {
+				return nil, "", fmt.Errorf("reading %s: %w", name, err)
+			}
+			notFound = err
 			continue
 		}
 		uses, err := parseActionYAMLForUses(content)
@@ -247,7 +252,36 @@ func readActionUsesFrom(ctx context.Context, src filesource.Source, actionDir st
 		}
 		return uses, actionPath, nil
 	}
-	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
+	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", notFound)
+}
+
+// ReusableWorkflowPaths returns the repo-relative paths of same-repository
+// reusable workflows called by jobs (`./.github/workflows/x.yml` and
+// `$/.github/workflows/x.yml`), in first-seen order.
+func (f *File) ReusableWorkflowPaths() []string {
+	var paths []string
+	seen := make(map[string]bool)
+	walkUses(&f.root, func(value string, stepLevel bool) {
+		if stepLevel {
+			return
+		}
+		value = strings.TrimSpace(value)
+		var p string
+		switch {
+		case IsSelfRepositoryAction(value) && !SelfRepositoryRefHasVersion(value):
+			p = strings.TrimPrefix(value, "$/")
+		case parserlock.IsLocalReusableWorkflow(value):
+			p = strings.TrimPrefix(value, "./")
+		default:
+			return
+		}
+		p = path.Clean(p)
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	})
+	return paths
 }
 
 // scanSelfRepositoryActions walks `$/…` references breadth-first. read

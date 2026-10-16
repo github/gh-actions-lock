@@ -36,15 +36,7 @@ func (opts *checkOptions) resolveTarget(args []string) error {
 		}
 		spec = &s
 		if len(args) > 0 && repospec.LooksLikeRepo(args[0]) {
-			p, err := repospec.Parse(args[0])
-			if err != nil {
-				return err
-			}
-			if !sameRepository(s, p) {
-				return fmt.Errorf("conflicting repositories: --repo %s and argument %s", opts.repo, args[0])
-			}
-			spec.Ref = p.Ref
-			paths = args[1:]
+			return fmt.Errorf("repository given twice: --repo %s and argument %s; use one or the other", opts.repo, args[0])
 		}
 	case len(args) > 0 && repospec.LooksLikeRepo(args[0]) && !pathExists(args[0]):
 		s, err := repospec.Parse(args[0])
@@ -78,12 +70,4 @@ func (opts *checkOptions) resolveTarget(args []string) error {
 	opts.remote = spec
 	opts.workflowPaths = paths
 	return nil
-}
-
-// sameRepository compares host (when both name one), owner and repo.
-func sameRepository(a, b repospec.Spec) bool {
-	if a.Host != "" && b.Host != "" && !strings.EqualFold(a.Host, b.Host) {
-		return false
-	}
-	return strings.EqualFold(a.Owner, b.Owner) && strings.EqualFold(a.Repo, b.Repo)
 }

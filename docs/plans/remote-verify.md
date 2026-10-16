@@ -115,6 +115,18 @@ workflows and composite actions are followed remotely through the API.
     (every workflow is `not-pinned`); there is no separate "require lockfile" flag.
 13. **Write-mode flags** (`--accept-moved`, `--relock`, ...) are rejected with
     `-R`; `--accept-moved` has nothing to accept for the target.
+14. **Exclusive target forms**: `-R`/`--repo` or a positional `OWNER/REPO[@REF]`,
+    never both; they are not merged. Any http(s) URL positional is treated as a
+    repo and surfaces the URL parse error.
+15. **Host pinning**: the target is pinned to its host before the metadata
+    lookup, so a `*.ghe.com` 404 never falls back to a github.com namesake.
+16. **Missing lockfile** adds an explicit blocking `not-pinned` repository
+    finding, so workflows with only local actions cannot pass.
+17. **Explicit workflow paths** expand through same-repo reusable workflow calls
+    (`./.github/workflows/x.yml`, `$/...`), deduplicated for cycles; a missing
+    callee is an error.
+18. `action.yaml` is read only when `action.yml` is absent; other errors propagate.
+19. Contents reads use the SAML/SSO anonymous fallback like other API calls.
 
 ## Tests
 

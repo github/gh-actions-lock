@@ -116,7 +116,7 @@ func assertEmptyDir(t *testing.T, dir string) {
 func TestVerifyRemote_DefaultBranchPasses(t *testing.T) {
 	reg := &httpmock.Registry{}
 	files := map[string]string{
-		".github/workflows/ci.yml":      remoteWorkflow,
+		".github/workflows/ci.yml":       remoteWorkflow,
 		".github/workflows/actions.lock": remoteLock("actions/checkout@v6"),
 	}
 	rr := newRemoteRepo(files, reg)
@@ -141,7 +141,7 @@ func TestVerifyRemote_DefaultBranchPasses(t *testing.T) {
 func TestVerifyRemote_ExplicitRefSkipsDefaultBranchLookup(t *testing.T) {
 	reg := &httpmock.Registry{}
 	files := map[string]string{
-		".github/workflows/ci.yml":      remoteWorkflow,
+		".github/workflows/ci.yml":       remoteWorkflow,
 		".github/workflows/actions.lock": remoteLock("actions/checkout@v6"),
 	}
 	rr := newRemoteRepo(files, reg)
@@ -185,7 +185,7 @@ func TestVerifyRemote_RenamedTarget(t *testing.T) {
 			registerParity(reg)
 			chdirEmpty(t)
 
-			stdout, _, err := runCommandWithHTTP(t, rr, 			"--verify", "--json=valid,findings", "octo/api")
+			stdout, _, err := runCommandWithHTTP(t, rr, "--verify", "--json=valid,findings", "octo/api")
 
 			require.NoError(t, err, "a rename never blocks")
 			var payload struct {
@@ -266,6 +266,145 @@ func TestVerifyRemote_MissingLockfileBlocks(t *testing.T) {
 	require.NotEmpty(t, payload.Findings)
 	assert.Equal(t, "not-pinned", payload.Findings[0].Category)
 	assertEmptyDir(t, cwd)
+}
+
+func TestVerifyRemote_MissingLockfileBlocksLocalActionOnlyWorkflow(t *testing.T) {
+	reg := &httpmock.Registry{}
+	rr := newRemoteRepo(map[string]string{".github/workflows/ci.yml": `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./actions/build
+`}, reg)
+	cwd := chdirEmpty(t)
+
+	stdout, _, err := runCommandWithHTTP(t, rr, "--verify", "--json=valid,findings", "octo/api")
+
+	require.ErrorIs(t, err, errSilent, "a missing lockfile must fail even when per-workflow checks only warn")
+	var payload struct {
+		Valid    bool `json:"valid"`
+		Findings []struct {
+			Category string `json:"category"`
+			Severity string `json:"severity"`
+			Detail   string `json:"detail"`
+		} `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.False(t, payload.Valid)
+	var found bool
+	for _, f := range payload.Findings {
+		if f.Category == "not-pinned" && f.Severity == "error" && strings.Contains(f.Detail, "has no") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a blocking repository finding for the missing lockfile: %s", stdout)
+	assertEmptyDir(t, cwd)
+}
+
+func TestVerifyRemote_FollowsReusableWorkflows(t *testing.T) {
+	const reusable = `
+on: workflow_call
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+`
+	caller := func(uses string) string {
+		return "name: ci\non: push\njobs:\n  call:\n    uses: " + uses + "\n"
+	}
+	lock := remoteLock("actions/checkout@v6")
+
+	tests := []struct {
+		name      string
+		files     map[string]string
+		wantErr   string
+		wantValid bool
+	}{
+		{
+			name: "callee with no lockfile entry blocks the selected caller",
+			files: map[string]string{
+				".github/workflows/ci.yml":       caller("./.github/workflows/reuse.yml"),
+				".github/workflows/reuse.yml":    reusable,
+				".github/workflows/actions.lock": lock,
+			},
+		},
+		{
+			name: "self repository reference is followed too",
+			files: map[string]string{
+				".github/workflows/ci.yml":       caller("$/.github/workflows/reuse.yml"),
+				".github/workflows/reuse.yml":    reusable,
+				".github/workflows/actions.lock": lock,
+			},
+		},
+		{
+			name: "missing callee is an error naming the caller",
+			files: map[string]string{
+				".github/workflows/ci.yml":       caller("./.github/workflows/gone.yml"),
+				".github/workflows/actions.lock": lock,
+			},
+			wantErr: "gone.yml called by .github/workflows/ci.yml",
+		},
+		{
+			name: "call cycle terminates",
+			files: map[string]string{
+				".github/workflows/ci.yml":       caller("./.github/workflows/ci.yml"),
+				".github/workflows/actions.lock": "version: '" + parserlock.Version + "'\nworkflows:\n  '.github/workflows/ci.yml': []\n",
+			},
+			wantValid: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			rr := newRemoteRepo(tt.files, reg)
+			registerParity(reg)
+			reg.Register(
+				httpmock.GraphQLForRepo("actions", "checkout"),
+				httpmock.JSONResponse(map[string]any{"data": map[string]any{
+					"a0": testRepoResponse("actions/checkout", remoteCheckout, nodeActionYAML),
+				}}),
+			)
+			chdirEmpty(t)
+
+			stdout, _, err := runCommandWithHTTP(t, rr, "--verify", "--json=valid,findings", "octo/api", ".github/workflows/ci.yml")
+
+			switch {
+			case tt.wantErr != "":
+				require.ErrorContains(t, err, tt.wantErr)
+			case tt.wantValid:
+				require.NoError(t, err)
+			default:
+				require.ErrorIs(t, err, errSilent, "unlocked callee must fail verification of the caller: %s", stdout)
+				assert.Contains(t, stdout, "reuse.yml")
+			}
+		})
+	}
+}
+
+func TestVerifyRemote_TenantTargetIsNotReplacedByPublicNamesake(t *testing.T) {
+	var hosts []string
+	var mu sync.Mutex
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		hosts = append(hosts, req.URL.Host)
+		mu.Unlock()
+		if req.URL.Host == "api.tenant.ghe.com" {
+			return httpmock.StatusResponse(http.StatusNotFound)(req)
+		}
+		return httpmock.JSONResponse(map[string]any{"full_name": "octo/api", "default_branch": "main", "visibility": "public"})(req)
+	})
+	chdirEmpty(t)
+
+	_, _, err := runCommandWithHTTP(t, rt, "--verify", "tenant.ghe.com/octo/api")
+
+	require.Error(t, err)
+	for _, h := range hosts {
+		assert.Equal(t, "api.tenant.ghe.com", h, "a tenant target must never be looked up on github.com")
+	}
 }
 
 func TestVerifyRemote_NarrowedWorkflowPath(t *testing.T) {
