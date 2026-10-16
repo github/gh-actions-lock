@@ -32,9 +32,21 @@ workflows and composite actions are followed remotely through the API.
    SHA so verification is a consistent snapshot, and report the SHA.
 3. **Remote content source**: add a `FileSource` interface
    (`ReadFile(ctx, path)`, `ListDir(ctx, path)`) with a local-filesystem
-   implementation (current behavior) and a remote one using the contents API
-   at the pinned SHA. Reuse `ResolveActionFiles` / graphql action-file fetching
-   where it already batches. Anonymous fallback (`anonGetFileContent`) covers public repos.
+   implementation (current behavior) and a remote one pinned to the SHA.
+   Reuse the existing fetch pattern in `internal/ghapi/graphql_action_files.go`:
+   - `Client.ResolveActionFiles` already takes `ActionFileRequest{Owner, Repo, Path, Ref}`
+     and returns the commit OID plus `action.yml`/`action.yaml` text in one
+     batched GraphQL query. It splits and retries failed batches, falls back to
+     REST (`retryWithAnonymous`, `resolveAnonymous`, `anonGetFileContent`), and
+     handles renames and SSO. Target-repo `./…` and `$/…` composites become
+     `ActionFileRequest{target owner, repo, path, ref=pinned SHA}` with no new fetcher.
+   - Gap: that query reads only `action.yml`/`action.yaml`. Add a sibling
+     generic reader, `ReadFiles(ctx, []FileRequest{Owner, Repo, Path, Ref})`,
+     using `object(expression: "<sha>:<path>")`, batched, split-on-failure and
+     REST-fallback in the same way (share the batching/split helpers). It
+     fetches `actions.lock`, workflow files and reusable-workflow files.
+   - Gap: directory listing of `.github/workflows/` via a tree/`object` entries
+     query (REST contents fallback).
 4. **Lockfile**: fetch `.github/workflows/actions.lock` from the source and
    parse from bytes (add `lockfile.Parse([]byte)` if missing; today
    `LoadStateAt` reads a path). A missing lockfile is a blocking finding, not a crash.
