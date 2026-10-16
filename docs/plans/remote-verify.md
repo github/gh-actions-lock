@@ -101,6 +101,20 @@ workflows and composite actions are followed remotely through the API.
      dependency classification above.
    - `ghapi` contents reads must expose the canonical name so this is observable.
    - Pin exactly with a `/commit/<sha>` URL or `--ref <sha>`; unaffected by renames.
+10. **Reuse first**: before adding anything, check gh-actions-lock and gh-cli/go-gh.
+    Repo specs use `repository.ParseWithHost`; the host is the spec host, then
+    `--hostname`, then `auth.DefaultHost()`. Unlike local runs it never consults
+    the cwd repo or `GH_HOST` discovery in `resolveHostname`.
+11. **Structure**: `--verify` dispatches through a `verifier` interface
+    (`selectVerifier`) with `localVerifier` and `remoteVerifier`; `pipeline`
+    reads workflows through a `workflowReader` (`localReader`, `sourceReader`)
+    and `workflowfile` shares one scan core. Remote verify never calls
+    `repository.Current()`, the cooldown lookup, local composite extraction or
+    the run log.
+12. **Coverage rule**: a remote repo with no lockfile fails like a local one
+    (every workflow is `not-pinned`); there is no separate "require lockfile" flag.
+13. **Write-mode flags** (`--accept-moved`, `--relock`, ...) are rejected with
+    `-R`; `--accept-moved` has nothing to accept for the target.
 
 ## Tests
 
