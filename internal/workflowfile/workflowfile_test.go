@@ -484,8 +484,8 @@ jobs:
 	assert.Contains(t, err.Error(), "`uses:` can't contain an expression")
 }
 
-func TestParseActionYAMLForUses_IgnoresParallel(t *testing.T) {
-	uses, err := parseActionYAMLForUses([]byte(`
+func TestExtractActionRefs_CompositeIgnoresParallel(t *testing.T) {
+	f, err := Parse("action.yml", []byte(`
 runs:
   using: composite
   steps:
@@ -494,7 +494,11 @@ runs:
         - uses: actions/setup-node@v4
 `))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"actions/checkout@v4"}, uses)
+	var names []string
+	for _, r := range f.ExtractActionRefs().Refs {
+		names = append(names, r.FullName())
+	}
+	assert.Equal(t, []string{"actions/checkout"}, names)
 }
 
 func TestParseRejectsAliasedUsesExpression(t *testing.T) {
