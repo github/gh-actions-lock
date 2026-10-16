@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -38,7 +39,9 @@ func TestWriteRunLog(t *testing.T) {
 		require.NotEmpty(t, path)
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		if runtime.GOOS != "windows" { // Windows does not report POSIX permission bits
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		}
 
 		b, err := os.ReadFile(path)
 		require.NoError(t, err)
