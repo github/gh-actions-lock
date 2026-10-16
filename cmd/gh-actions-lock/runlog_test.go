@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -36,9 +37,8 @@ func TestWriteRunLog(t *testing.T) {
 
 		path := writeRunLog(dir, report, record, false, "v0.0.3", "github.com", "github.com/o/r", errors.New("planning pins: boom"))
 		require.NotEmpty(t, path)
-		info, err := os.Stat(path)
+		_, err := os.Stat(path)
 		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
 		b, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -85,6 +85,30 @@ func TestWriteRunLog(t *testing.T) {
 	t.Run("returns empty path when dir is unusable", func(t *testing.T) {
 		assert.Empty(t, writeRunLog("", &checks.Report{}, nil, true, "", "github.com", "", nil))
 	})
+}
+
+func TestWriteRunLog_FileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX permission bits")
+	}
+	path := writeRunLog(t.TempDir(), &checks.Report{}, &pin.Record{}, true, "v0.0.3", "github.com", "github.com/o/r", nil)
+	require.NotEmpty(t, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestWriteRunLog_FileModeWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("covered by TestWriteRunLog_FileMode on POSIX systems")
+	}
+	path := writeRunLog(t.TempDir(), &checks.Report{}, &pin.Record{}, true, "v0.0.3", "github.com", "github.com/o/r", nil)
+	require.NotEmpty(t, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular())
+	// Windows only reports 0666 (writable) or 0444 (read-only); 0600 is not representable.
+	assert.Equal(t, os.FileMode(0o666), info.Mode().Perm(), "log must not be read-only")
 }
 
 func TestGcLogs(t *testing.T) {

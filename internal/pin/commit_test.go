@@ -9,6 +9,7 @@ import (
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/lockfile"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,7 +132,7 @@ func TestCommitDependencyFreeWorkflow(t *testing.T) {
 			rec := &Record{Workflows: []WorkflowPlan{{Path: workflowPath}}}
 
 			require.NoError(t, Commit(context.Background(), rec, store, &CommitOptions{SkipNewWorkflowEntries: tt.skipNewWorkflowEntries}))
-			assert.Equal(t, tt.wantEntry, store.HasWorkflow(workflowPath))
+			assert.Equal(t, tt.wantEntry, store.HasWorkflow(workflowfile.KeyFromPath(workflowPath)))
 		})
 	}
 }
@@ -154,7 +155,7 @@ func TestCommitPartialResolution(t *testing.T) {
 	}
 
 	require.NoError(t, Commit(context.Background(), rec, store, nil))
-	deps, err := store.Get(workflowPath)
+	deps, err := store.Get(workflowfile.KeyFromPath(workflowPath))
 	require.NoError(t, err)
 	assert.Len(t, deps, 1)
 }
@@ -190,7 +191,7 @@ func TestCommitSkipNewWorkflowEntriesPreventsRewrites(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, workflowContent, workflowAfter)
 	assert.Equal(t, actionContent, actionAfter)
-	assert.False(t, store.HasWorkflow(workflowPath))
+	assert.False(t, store.HasWorkflow(workflowfile.KeyFromPath(workflowPath)))
 }
 
 func TestValidateRequiredRewritesRecordsFiles(t *testing.T) {
@@ -233,7 +234,7 @@ jobs:
 	oldParent := dep.Dependency{NWO: "owner/action", Ref: "main", SHA: strings.Repeat("1", 40), HashAlgo: "sha1"}
 	oldChild := dep.Dependency{NWO: "actions/setup-go", Ref: "v5", SHA: strings.Repeat("2", 40), HashAlgo: "sha1"}
 	keep := dep.Dependency{NWO: "actions/checkout", Ref: "v7", SHA: strings.Repeat("3", 40), HashAlgo: "sha1"}
-	require.NoError(t, store.Set(context.Background(), workflowPath,
+	require.NoError(t, store.Set(context.Background(), workflowfile.KeyFromPath(workflowPath),
 		[]dep.Dependency{oldParent, oldChild, keep},
 		map[string][]string{oldChild.Key(): {oldParent.Key()}},
 		map[string]bool{oldParent.Key(): true, keep.Key(): true}))
@@ -289,7 +290,7 @@ jobs:
 		NWO: "actions/checkout", Ref: "v4", SHA: strings.Repeat("3", 40),
 		HashAlgo: "sha1",
 	}
-	require.NoError(t, store.Set(context.Background(), workflowPath,
+	require.NoError(t, store.Set(context.Background(), workflowfile.KeyFromPath(workflowPath),
 		[]dep.Dependency{parent, child},
 		map[string][]string{child.Key(): {parent.Key()}},
 		map[string]bool{parent.Key(): true}))
