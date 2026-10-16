@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
 )
 
 // Source reads files relative to a repository root. Paths use forward

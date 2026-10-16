@@ -67,7 +67,9 @@ func TestLooksLikeRepo(t *testing.T) {
 		{"./octo/api", false},
 		{`octo\api`, false},
 		{"ci", false},
-		{"https://github.com/octo", false},
+		{"https://github.com/octo", true},
+		{"https://github.com/octo/api/blob/main/README.md", true},
+		{"http://example.com/octo/api/tree/main", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.arg, func(t *testing.T) {
