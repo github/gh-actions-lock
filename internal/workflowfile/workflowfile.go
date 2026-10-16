@@ -5,16 +5,19 @@
 package workflowfile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dockerimage"
+	"github.com/github/gh-actions-lock/internal/filesource"
 	"gopkg.in/yaml.v3"
 )
 
@@ -189,20 +192,69 @@ type SelfRepositoryActionScan struct {
 // inherently pinned; only remote dependencies found inside them are returned
 // in Refs.
 func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRepositoryActionScan {
-	var scan SelfRepositoryActionScan
 	if len(actionRefs) == 0 {
-		return scan
+		return SelfRepositoryActionScan{}
 	}
 
 	repoRoot, err := findRepoRoot(workflowPath)
 	if err != nil {
-		scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository actions: %v", err))
-		return scan
+		return SelfRepositoryActionScan{Errors: []string{fmt.Sprintf("can't inspect self repository actions: %v", err)}}
 	}
 	if repoRoot == "" {
-		scan.Errors = append(scan.Errors, "can't inspect self repository actions: not in a git repository (set "+RepoRootEnv+" to override)")
-		return scan
+		return SelfRepositoryActionScan{Errors: []string{"can't inspect self repository actions: not in a git repository (set " + RepoRootEnv + " to override)"}}
 	}
+
+	return scanSelfRepositoryActions(actionRefs, func(relPath string) ([]string, string, error) {
+		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
+		if !isWithinRoot(repoRoot, actionDir) {
+			return nil, "", errOutsideRepo
+		}
+		return readActionUses(repoRoot, actionDir)
+	})
+}
+
+// ScanSelfRepositoryActionsFrom is ScanSelfRepositoryActions over a Source,
+// for repositories that are not checked out (remote verification). Visited
+// action files are reported as repo-relative paths.
+func ScanSelfRepositoryActionsFrom(ctx context.Context, src filesource.Source, actionRefs []string) SelfRepositoryActionScan {
+	if len(actionRefs) == 0 {
+		return SelfRepositoryActionScan{}
+	}
+	return scanSelfRepositoryActions(actionRefs, func(relPath string) ([]string, string, error) {
+		return readActionUsesFrom(ctx, src, relPath)
+	})
+}
+
+// errOutsideRepo marks an action path that resolves outside the repository.
+var errOutsideRepo = errors.New("path resolves outside repository")
+
+// readActionUsesFrom is readActionUses over a Source.
+func readActionUsesFrom(ctx context.Context, src filesource.Source, actionDir string) ([]string, string, error) {
+	var lastErr error
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		actionPath := path.Join(actionDir, name)
+		content, err := src.ReadFile(ctx, actionPath)
+		if err != nil {
+			if errors.Is(err, filesource.ErrEscapesRoot) {
+				return nil, "", errOutsideRepo
+			}
+			lastErr = err
+			continue
+		}
+		uses, err := parseActionYAMLForUses(content)
+		if err != nil {
+			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
+		}
+		return uses, actionPath, nil
+	}
+	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
+}
+
+// scanSelfRepositoryActions walks `$/…` references breadth-first. read
+// returns the `uses:` values and file path of the action at a repo-relative
+// directory, or errOutsideRepo when the directory leaves the repository.
+func scanSelfRepositoryActions(actionRefs []string, read func(relPath string) ([]string, string, error)) SelfRepositoryActionScan {
+	var scan SelfRepositoryActionScan
 
 	type pendingAction struct {
 		ref   string
@@ -241,13 +293,11 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 		}
 
 		relPath := strings.TrimPrefix(current.ref, selfRepositoryPrefix)
-		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
-		if !isWithinRoot(repoRoot, actionDir) {
+		uses, actionPath, err := read(relPath)
+		if errors.Is(err, errOutsideRepo) {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("refusing to read self repository action outside repo root: %s", current.ref))
 			continue
 		}
-
-		uses, actionPath, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue

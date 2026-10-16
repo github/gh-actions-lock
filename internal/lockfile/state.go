@@ -69,7 +69,22 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 // lives outside the standard .github/workflows/ location.
 func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	contents, err := os.ReadFile(lockfilePath)
+	return buildState(lockfilePath, contents, err, meta)
+}
 
+// ParseState builds an in-memory State from lockfile bytes that were read
+// elsewhere (for example from a remote repository). The state has no path on
+// disk, so Save must not be called on it. A nil contents slice with a nil
+// error is an empty lockfile; callers that need to treat "missing" specially
+// check before calling.
+func ParseState(contents []byte, meta MetadataResolver) (*State, error) {
+	if contents == nil {
+		return buildState("", nil, os.ErrNotExist, meta)
+	}
+	return buildState("", contents, nil, meta)
+}
+
+func buildState(lockfilePath string, contents []byte, err error, meta MetadataResolver) (*State, error) {
 	var file parserlock.File
 	var originalVersion string
 	switch {

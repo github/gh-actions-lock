@@ -2,10 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/filesource"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -34,6 +36,49 @@ func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *l
 // order. onScan, if non-nil, fires with 1-based progress before each workflow
 // is parsed so the UI can render [i/N] without leaking resolver detail.
 func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
+	return parseAll(paths, store, localReader{})
+}
+
+// ParseAllFrom is ParseAll reading workflows and in-repo actions from src
+// instead of the working tree. Paths are repo-relative.
+func ParseAllFrom(ctx context.Context, src filesource.Source, paths []string, store *lockfile.State) []checks.ParsedWorkflow {
+	return parseAll(paths, store, sourceReader{ctx: ctx, src: src})
+}
+
+// workflowReader supplies a workflow and the in-repo actions it reaches.
+type workflowReader interface {
+	Load(path string) (*workflowfile.File, error)
+	ScanSelf(workflowPath string, refs []string) workflowfile.SelfRepositoryActionScan
+}
+
+// localReader reads from the working tree.
+type localReader struct{}
+
+func (localReader) Load(path string) (*workflowfile.File, error) { return workflowfile.Load(path) }
+
+func (localReader) ScanSelf(workflowPath string, refs []string) workflowfile.SelfRepositoryActionScan {
+	return workflowfile.ScanSelfRepositoryActions(workflowPath, refs)
+}
+
+// sourceReader reads from a filesource.Source, such as a remote repository.
+type sourceReader struct {
+	ctx context.Context
+	src filesource.Source
+}
+
+func (r sourceReader) Load(path string) (*workflowfile.File, error) {
+	content, err := r.src.ReadFile(r.ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading workflow: %w", err)
+	}
+	return workflowfile.Parse(path, content)
+}
+
+func (r sourceReader) ScanSelf(_ string, refs []string) workflowfile.SelfRepositoryActionScan {
+	return workflowfile.ScanSelfRepositoryActionsFrom(r.ctx, r.src, refs)
+}
+
+func parseAll(paths []string, store *lockfile.State, rd workflowReader) []checks.ParsedWorkflow {
 	total := len(paths)
 	out := make([]checks.ParsedWorkflow, 0, total)
 	for _, path := range paths {
@@ -47,14 +92,14 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 				pw.ExistingDeps = deps
 			}
 		}
-		wf, err := workflowfile.Load(path)
+		wf, err := rd.Load(path)
 		if err != nil {
 			pw.LoadErr = err
 			out = append(out, pw)
 			continue
 		}
 		scan := wf.ExtractActionRefs()
-		selfScan := workflowfile.ScanSelfRepositoryActions(path, scan.SelfRepositoryActionRefs)
+		selfScan := rd.ScanSelf(path, scan.SelfRepositoryActionRefs)
 
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
 		// Refs inside `$/…` actions are rewritable too: their action file is

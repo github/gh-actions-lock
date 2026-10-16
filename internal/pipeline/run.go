@@ -7,6 +7,7 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/filesource"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
@@ -18,9 +19,12 @@ import (
 // RunOptions configures the Run pipeline.
 type RunOptions struct {
 	WorkflowPaths []string
-	Resolver      *resolve.Resolver
-	Store         *lockfile.State
-	Pool          *pinpool.Pool
+	// Source, when set, supplies workflow and in-repo action files instead
+	// of the working tree; WorkflowPaths are then repo-relative.
+	Source   filesource.Source
+	Resolver *resolve.Resolver
+	Store    *lockfile.State
+	Pool     *pinpool.Pool
 	// Relock re-resolves every ref live instead of trusting the lockfile.
 	Relock bool
 	// AcceptMoved explicitly permits replacing unreachable recorded pins.
@@ -49,7 +53,12 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 	// Phase 1: Parse.
 	endParse := prof.Phase("  parse workflows")
-	parsed := ParseAll(opts.WorkflowPaths, opts.Store)
+	var parsed []checks.ParsedWorkflow
+	if opts.Source != nil {
+		parsed = ParseAllFrom(ctx, opts.Source, opts.WorkflowPaths, opts.Store)
+	} else {
+		parsed = ParseAll(opts.WorkflowPaths, opts.Store)
+	}
 	endParse()
 
 	if ctx.Err() != nil {

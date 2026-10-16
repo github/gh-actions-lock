@@ -135,7 +135,7 @@ the directory must exist and contain the workflows.
 
 RUN LOGS
 
-Every run except --verify-local saves its full --json output, plus the
+Every run except --verify-local and a remote --verify saves its full --json output, plus the
 repository and whether the run succeeded (with its error, if any), to
 <user cache dir>/gh-actions-lock/logs/ (on macOS,
 ~/Library/Caches/gh-actions-lock/logs). Failed runs print the path.
@@ -151,13 +151,17 @@ $ gh actions-lock .github/workflows/ci.yml
 # Read-only check for CI integration (writes nothing, exits 1 if invalid)
 $ gh actions-lock --no-fix --json=valid,findings
 
+# Verify a repository without cloning it (default branch, or a given ref)
+$ gh actions-lock --verify octo/api
+$ gh actions-lock --verify -R octo/api --ref v1.2.0
+
 # All fields as JSON
 $ gh actions-lock --json
 `),
 		Version: cliVersion(),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.workflowPaths = args
+			if err := opts.resolveTarget(args); err != nil {
+				return err
 			}
 			return opts.validateOutputFlags()
 		},
