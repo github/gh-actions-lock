@@ -47,7 +47,8 @@ workflows and composite actions are followed remotely through the API.
 
 1. **Repo spec parser** (new `internal/repospec`): parse `OWNER/REPO`,
    `HOST/OWNER/REPO` and URLs into host/owner/repo via `go-gh/repository.Parse`.
-   Handle trailing `.git`; a `/tree/<ref>` URL sets the ref when `--ref` is absent.
+   Handle trailing `.git`; a `/tree/<ref>`, `/releases/tag/<tag>` or
+   `/commit/<sha>` URL sets the ref when `--ref` is absent.
 2. **Ref resolution**: resolve `--ref` (or default branch) to a commit SHA once
    via `Client.CommitSHA` / `GetDefaultBranch`. Pin every later read to that
    SHA so verification is a consistent snapshot, and report the SHA.
@@ -85,6 +86,21 @@ workflows and composite actions are followed remotely through the API.
 8. **Safety**: strictly read-only. No run log or cache written into the cwd
    repo, no migration, no prompts (force no-interactive). Normal token for the
    target host; unauthenticated only for public repos.
+9. **Renamed or transferred target**: the target repo is the trust root. The
+   lockfile does not record the target's own `owner_id`/`repo_id`, so a repo
+   *replaced* at the same name cannot be detected and is not claimed.
+   - Follow the redirect and verify normally; reads stay pinned to the SHA.
+   - If the API's canonical `full_name` differs from the request by more than
+     case, add a non-blocking `repo-renamed` finding naming the new location
+     (additive; verification result unchanged). Case-only differences are silent.
+   - A 404 or inaccessible target is an error, never a finding.
+   - Dependencies of the target keep today's rename/replace/unavailable
+     classification (`pipeline/parity.go`), which uses recorded IDs.
+   - `./…`/`$/…` composites are read from the same repo and SHA, so a rename
+     cannot affect them. Reusable workflows are locked dependencies and get the
+     dependency classification above.
+   - `ghapi` contents reads must expose the canonical name so this is observable.
+   - Pin exactly with a `/commit/<sha>` URL or `--ref <sha>`; unaffected by renames.
 
 ## Tests
 
@@ -96,7 +112,9 @@ workflows and composite actions are followed remotely through the API.
   lockfile, dir listing, SHA pinning); `./`/`$/` resolution against the target repo.
 - **Go command test** (`cmd/**`, httpmock, blocking CI): `-R owner/repo --verify`
   happy path, tampered lock entry fails, missing lockfile fails, `--ref`
-  honoured, GHE host, nothing written to disk, cwd outside any repo.
+  honoured, GHE host, nothing written to disk, cwd outside any repo; renamed
+  and transferred target yields a non-blocking `repo-renamed` finding while a
+  case-only difference yields none; 404 target errors.
 - **Catalog scenario**: one `needs_token` scenario against a real fixture repo
   for the live-API delta only; non-blocking, so backed by the Go tests above.
 
@@ -106,5 +124,6 @@ README `--verify` section, `--help` text, CHANGELOG entry. Additive, so a minor 
 
 ## Open questions
 
-- Accept `/tree/<ref>` / `/blob/` URLs, or only repo-root URLs?
+- Accept `/blob/` URLs? (Currently rejected; `/tree/`, `/releases/tag/` and
+  `/commit/` URLs are accepted.)
 - Dependabot heads-up? Findings JSON and exit codes are unchanged, so likely not needed.

@@ -517,6 +517,39 @@ func TestState_CorruptLockfileSurfacesError(t *testing.T) {
 		t.Errorf("lockfile must remain on disk after a corrupt-load error: %v", err)
 	}
 }
+func TestParseState(t *testing.T) {
+	t.Run("valid bytes", func(t *testing.T) {
+		s, err := ParseState([]byte("version: v0.0.3\ndependencies: {}\n"), fakeMetadataResolver{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.File().Version != "v0.0.3" {
+			t.Errorf("version = %q, want v0.0.3", s.File().Version)
+		}
+	})
+	t.Run("nil bytes is an empty lockfile", func(t *testing.T) {
+		s, err := ParseState(nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.AllDeps()) != 0 || len(s.WorkflowKeys()) != 0 {
+			t.Errorf("expected empty state, got deps=%d workflows=%d", len(s.AllDeps()), len(s.WorkflowKeys()))
+		}
+	})
+	t.Run("future version", func(t *testing.T) {
+		_, err := ParseState([]byte("version: v9.0.0\ndependencies: {}\n"), nil)
+		if !errors.Is(err, parserlock.ErrFutureVersion) {
+			t.Errorf("err = %v, want ErrFutureVersion", err)
+		}
+	})
+	t.Run("corrupt", func(t *testing.T) {
+		_, err := ParseState([]byte("version: [unterminated\n"), nil)
+		if !errors.Is(err, ErrCorruptLockfile) {
+			t.Errorf("err = %v, want ErrCorruptLockfile", err)
+		}
+	})
+}
+
 func setupClosure(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {

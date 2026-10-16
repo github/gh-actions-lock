@@ -370,6 +370,18 @@ func runCommandWithHTTPContext(t *testing.T, ctx context.Context, rt http.RoundT
 	stderrR, stderrW, err := os.Pipe()
 	require.NoError(t, err)
 
+	// Drain while the command runs: a pipe buffers only a few KB on Windows,
+	// so a large JSON payload would otherwise block the writer forever.
+	drain := func(r io.Reader) <-chan []byte {
+		ch := make(chan []byte, 1)
+		go func() {
+			b, _ := io.ReadAll(r)
+			ch <- b
+		}()
+		return ch
+	}
+	stdoutCh, stderrCh := drain(stdoutR), drain(stderrR)
+
 	newResolver := func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
 		return resolve.New(hostname, pool, resolve.WithTransport(parityFallback{rt}))
 	}
@@ -383,12 +395,7 @@ func runCommandWithHTTPContext(t *testing.T, ctx context.Context, rt http.RoundT
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
 
-	stdoutBytes, readErr := io.ReadAll(stdoutR)
-	require.NoError(t, readErr)
-	stderrBytes, readErr := io.ReadAll(stderrR)
-	require.NoError(t, readErr)
-
-	return string(stdoutBytes), string(stderrBytes), runErr
+	return string(<-stdoutCh), string(<-stderrCh), runErr
 }
 
 // ==========================================================================

@@ -677,6 +677,19 @@ scenarios:
       exit: 1
       output_contains: ["Re-run without --verify"]
 
+  - name: verify_remote_unlocked_repo
+    category: output_modes
+    description: >-
+      --verify -R against a public repo at a tag. Real-binary and live-API
+      delta only; the remote flow is covered deterministically by the Go
+      command tests in cmd/gh-actions-lock/verify_remote_test.go. actions/checkout
+      carries no actions.lock, so its actions are reported as not pinned.
+    needs_token: true
+    flags: ["--verify", "-R", "actions/checkout", "--ref", "v4.2.2", "--json=valid,findings"]
+    expect:
+      exit: 1
+      stdout_is_json: true
+
   - name: verify_pinned_stub
     category: output_modes
     description: "--verify with stub server — pinned lockfile passes (inconclusive is non-blocking in read-only mode)"

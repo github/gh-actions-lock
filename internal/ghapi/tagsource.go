@@ -69,6 +69,9 @@ func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoReleas
 
 // RepoMetadata holds repository-level metadata relevant for pinning decisions.
 type RepoMetadata struct {
+	// FullName is the canonical OWNER/REPO, which differs from the requested
+	// name after a rename or transfer.
+	FullName      string
 	DefaultBranch string
 	Visibility    string // "public", "private", or "internal"
 	PushedAt      string // ISO 8601 timestamp of last push
@@ -84,6 +87,7 @@ func (c *Client) RepoMetadata(ctx context.Context, owner, repo string) (RepoMeta
 		return RepoMetadata{}, fmt.Errorf("fetching metadata for %s/%s: %w", owner, repo, err)
 	}
 	return RepoMetadata{
+		FullName:      m.FullName,
 		DefaultBranch: m.DefaultBranch,
 		Visibility:    m.Visibility,
 		PushedAt:      m.PushedAt,
