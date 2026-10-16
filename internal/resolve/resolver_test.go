@@ -12,6 +12,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/pinpool"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,6 +91,51 @@ func TestResolveAllRecursiveWithCacheAndCompositeExpansion(t *testing.T) {
 	if !ok || len(parents) != 1 || parents[0] != "owner/composite@v1" {
 		t.Fatalf("expected parentMap to map actions/setup-go@v6 → [owner/composite@v1], got %v", pm)
 	}
+}
+
+func TestResolveAllRecursiveCompositeCalledFromParallelStep(t *testing.T) {
+	wf, err := workflowfile.Parse("wf.yml", []byte(`on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - parallel:
+          - uses: owner/composite@v1
+          - uses: actions/setup-node@v6
+`))
+	require.NoError(t, err)
+
+	r := seedCache(&Resolver{MaxRecursionDepth: DefaultMaxRecursionDepth}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("actions", "checkout", "", "v6"): {
+			dep:       dep.Dependency{NWO: "actions/checkout", Ref: "v6", SHA: strings.Repeat("a", 40)},
+			actionYML: "name: Checkout\nruns:\n  using: node20\n",
+		},
+		ghapi.ForActionRef("actions", "setup-node", "", "v6"): {
+			dep:       dep.Dependency{NWO: "actions/setup-node", Ref: "v6", SHA: strings.Repeat("b", 40)},
+			actionYML: "name: Node\nruns:\n  using: node20\n",
+		},
+		ghapi.ForActionRef("owner", "composite", "", "v1"): {
+			dep:       dep.Dependency{NWO: "owner/composite", Ref: "v1", SHA: strings.Repeat("c", 40)},
+			actionYML: "name: Composite\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-go@v6\n",
+		},
+		ghapi.ForActionRef("actions", "setup-go", "", "v6"): {
+			dep:       dep.Dependency{NWO: "actions/setup-go", Ref: "v6", SHA: strings.Repeat("d", 40)},
+			actionYML: "name: Go\nruns:\n  using: node20\n",
+		},
+	})
+
+	deps, parentMap, err := r.ResolveAllRecursive(context.Background(), wf.ExtractActionRefs().Refs)
+	require.NoError(t, err)
+
+	var keys []string
+	for _, d := range deps {
+		keys = append(keys, d.Key())
+	}
+	assert.ElementsMatch(t, []string{
+		"actions/checkout@v6", "actions/setup-node@v6", "owner/composite@v1", "actions/setup-go@v6",
+	}, keys)
+	assert.Equal(t, []string{"owner/composite@v1"}, parentMap["actions/setup-go@v6"])
 }
 
 func TestResolveAllRecursiveMultipleParents(t *testing.T) {

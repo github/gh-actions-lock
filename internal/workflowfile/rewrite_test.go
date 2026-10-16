@@ -115,6 +115,34 @@ jobs:
 	assert.NotContains(t, s, "pinned for stability")
 }
 
+func TestRewriteActionRefs_ParallelStepGroups(t *testing.T) {
+	f, err := Parse("wf.yml", []byte(`on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - parallel:
+          - uses: actions/setup-java/sub@v4 # keep?
+          - uses: "actions/setup-node@v4"
+`))
+	require.NoError(t, err)
+
+	output, changed, err := f.RewriteActionRefs(map[string]string{
+		"actions/checkout@v4":   "actions/checkout@v5",
+		"actions/setup-java@v4": "actions/setup-java@v5",
+		"actions/setup-node@v4": "actions/setup-node@v5",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, changed)
+
+	s := string(output)
+	assert.Contains(t, s, "uses: actions/checkout@v5\n")
+	assert.Contains(t, s, "uses: actions/setup-java/sub@v5\n")
+	assert.Contains(t, s, `uses: "actions/setup-node@v5"`)
+	assert.NotContains(t, s, "@v4")
+}
+
 func TestRewriteActionRefs_OnlyMatchesYAMLUses(t *testing.T) {
 	content := []byte(`name: ci
 on: push

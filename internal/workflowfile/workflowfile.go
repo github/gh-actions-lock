@@ -437,7 +437,7 @@ func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]pars
 // reference.
 func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
 	root := resolveAlias(documentRoot(node))
-	walkStepUses(mapValue(root, "runs"), fn)
+	walkStepUses(mapValue(root, "runs"), compositeSteps, fn)
 
 	jobs := mapValue(root, "jobs")
 	if jobs == nil || jobs.Kind != yaml.MappingNode {
@@ -451,25 +451,49 @@ func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
 		if use := scalarValue(mapValue(job, "uses")); use != "" {
 			fn(use, false)
 		}
-		walkStepUses(job, fn)
+		walkStepUses(job, jobSteps, fn)
 	}
 }
 
+// stepsContext is where a `steps:` sequence appears.
+type stepsContext int
+
+const (
+	// jobSteps is `jobs.<id>.steps`, which may contain `parallel:` groups.
+	jobSteps stepsContext = iota
+	// compositeSteps is `runs.steps`; composite actions don't support `parallel:`.
+	compositeSteps
+)
+
 // walkStepUses visits the `uses:` of each step in owner's `steps:` sequence.
-func walkStepUses(owner *yaml.Node, fn func(value string, stepLevel bool)) {
-	steps := mapValue(owner, "steps")
-	if steps == nil || steps.Kind != yaml.SequenceNode {
-		return
-	}
-	for _, stepNode := range steps.Content {
-		step := resolveAlias(stepNode)
-		if step == nil || step.Kind != yaml.MappingNode {
-			continue
-		}
+// A `parallel:` group is a flat list of steps; it is not walked recursively.
+func walkStepUses(owner *yaml.Node, ctx stepsContext, fn func(value string, stepLevel bool)) {
+	for _, step := range stepMappings(mapValue(owner, "steps")) {
 		if use := scalarValue(mapValue(step, "uses")); use != "" {
 			fn(use, true)
 		}
+		if ctx != jobSteps {
+			continue
+		}
+		for _, inner := range stepMappings(mapValue(step, "parallel")) {
+			if use := scalarValue(mapValue(inner, "uses")); use != "" {
+				fn(use, true)
+			}
+		}
 	}
+}
+
+func stepMappings(steps *yaml.Node) []*yaml.Node {
+	if steps == nil || steps.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var out []*yaml.Node
+	for _, node := range steps.Content {
+		if step := resolveAlias(node); step != nil && step.Kind == yaml.MappingNode {
+			out = append(out, step)
+		}
+	}
+	return out
 }
 
 func documentRoot(node *yaml.Node) *yaml.Node {
