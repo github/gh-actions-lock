@@ -98,6 +98,19 @@ func TestWriteRunLog_FileMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
+func TestWriteRunLog_FileModeWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("covered by TestWriteRunLog_FileMode on POSIX systems")
+	}
+	path := writeRunLog(t.TempDir(), &checks.Report{}, &pin.Record{}, true, "v0.0.3", "github.com", "github.com/o/r", nil)
+	require.NotEmpty(t, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular())
+	// Windows only reports 0666 (writable) or 0444 (read-only); 0600 is not representable.
+	assert.Equal(t, os.FileMode(0o666), info.Mode().Perm(), "log must not be read-only")
+}
+
 func TestGcLogs(t *testing.T) {
 	t.Run("removes files older than retention age", func(t *testing.T) {
 		dir := t.TempDir()
