@@ -18,23 +18,28 @@ workflows and composite actions are followed remotely through the API.
   `@REF` is an extension beyond `gh repo clone` (which has no ref syntax) and
   is equivalent to `--ref`. Specifying both `@REF` and `--ref`, or both a
   positional repo and `-R`, is an error unless the values are identical.
+- **Single workflow(s)**: `gh actions-lock --verify OWNER/REPO[@REF] .github/workflows/ci.yml`
+  verifies only the listed workflows. Paths are relative to the repo root and
+  must exist at the pinned SHA (a missing path is an error, not a skip). The
+  whole `actions.lock` is still fetched and parsed; narrowing only limits which
+  workflows are checked, and their transitive dependencies are followed as usual.
+  With `-R OWNER/REPO`, all positional args are repo-relative paths.
 - **Disambiguation** from today's positional `<workflow-path>` args (a bare
-  `owner/repo` looks like a relative path). Under `--verify`, an argument is a
-  remote repo when it is a URL, or it matches `[HOST/]OWNER/REPO[@REF]`, has
-  no `.yml`/`.yaml` extension, and does not exist on disk. Anything else is a
-  workflow path. Mixing a repo with workflow paths, or giving more than one
-  repo, is an error. Without `--verify`, positional args are always workflow
-  paths and repo detection never runs, so the remote form can't leak into
-  other modes.
+  `owner/repo` looks like a relative path). Under `--verify` without `-R`,
+  only the first positional can be a repo: it is one when it is a URL, or
+  matches `[HOST/]OWNER/REPO[@REF]`, has no `.yml`/`.yaml` extension, and does
+  not exist on disk. Every later argument is a repo-relative workflow path, so
+  the on-disk check never applies to them. If the first argument is not a repo,
+  all arguments are local workflow paths, as today. Without `--verify`,
+  positional args are always workflow paths and repo detection never runs, so
+  the remote form can't leak into other modes.
   Parsing lives in `internal/repospec` and is shared by `-R` and the positional form.
 - Host comes from the repo argument; otherwise `--hostname` / `GH_HOST` /
   default, as today. A host in `-R` that conflicts with `--hostname` is an error.
 - Only valid with `--verify`. Rejected in `validateOutputFlags` (run.go) when combined with:
   - no `--verify` (plain runs, `--verify-local`),
   - `--accept-moved`, `--relock`, `--no-migrate-local-actions`,
-  - positional `<workflow-path>` args alongside a remote repo (remote mode
-    verifies everything the lockfile lists; optional follow-up: treat them as
-    repo-relative paths).
+  - a second repo-shaped positional or both `-R` and a positional repo with differing values.
 - Output (`--json`, findings, exit codes) is unchanged; the JSON schema stays
   additive-only. Add `repo`/`ref` only as new optional fields.
 
@@ -84,7 +89,9 @@ workflows and composite actions are followed remotely through the API.
 ## Tests
 
 - **Go unit** (`internal/**`): repo spec parsing (all forms incl. `@REF`, bad
-  input, host conflict); positional disambiguation (existing local path wins,
+  input, host conflict); narrowing to listed workflows (missing path errors,
+  lockfile still fully loaded); positional disambiguation (existing local path wins,
+  only the first arg can be a repo,
   `.yml` suffix, URL, mixed args, non-`--verify` args stay workflow paths); flag validation matrix; remote `FileSource` with httpmock (404
   lockfile, dir listing, SHA pinning); `./`/`$/` resolution against the target repo.
 - **Go command test** (`cmd/**`, httpmock, blocking CI): `-R owner/repo --verify`
@@ -99,6 +106,5 @@ README `--verify` section, `--help` text, CHANGELOG entry. Additive, so a minor 
 
 ## Open questions
 
-- Should positional workflow paths narrow the remote scan?
 - Accept `/tree/<ref>` / `/blob/` URLs, or only repo-root URLs?
 - Dependabot heads-up? Findings JSON and exit codes are unchanged, so likely not needed.
