@@ -122,6 +122,16 @@ func (f *File) ExtractActionRefs() RefScan {
 
 	walkUses(&f.root, func(value string, stepLevel bool) {
 		value = strings.TrimSpace(value)
+		if !stepLevel {
+			if reusableWorkflow := parseRemoteReusableWorkflow(value); reusableWorkflow != nil {
+				dedupKey := reusableWorkflow.FullName() + "@" + reusableWorkflow.Ref
+				if !seen[dedupKey] {
+					seen[dedupKey] = true
+					scan.Refs = append(scan.Refs, *reusableWorkflow)
+				}
+				return
+			}
+		}
 		if SelfRepositoryRefHasVersion(value) {
 			if !seenSelf[value] {
 				seenSelf[value] = true
@@ -168,6 +178,29 @@ func (f *File) ExtractActionRefs() RefScan {
 	})
 
 	return scan
+}
+
+// parseRemoteReusableWorkflow extracts the repository/ref identity from a
+// job-level reusable-workflow reference. The workflow filename doesn't add a
+// separate pin because GitHub resolves the workflow at the repository commit.
+func parseRemoteReusableWorkflow(value string) *parserlock.ActionRef {
+	uses, ref, ok := strings.Cut(value, "@")
+	if !ok || ref == "" || strings.Contains(ref, "@") {
+		return nil
+	}
+
+	repository, workflowPath, ok := strings.Cut(uses, "/.github/workflows/")
+	if !ok || strings.Contains(workflowPath, "/") || strings.Contains(workflowPath, "\\") || strings.Contains(workflowPath, "@") {
+		return nil
+	}
+	if !strings.HasSuffix(workflowPath, ".yml") && !strings.HasSuffix(workflowPath, ".yaml") {
+		return nil
+	}
+	if strings.Count(repository, "/") != 1 {
+		return nil
+	}
+
+	return parserlock.ParseActionRef(repository + "@" + ref)
 }
 
 // SelfRepositoryActionScan is the transitive dependency scan of in-repo
