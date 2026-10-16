@@ -90,9 +90,10 @@ have read access to the tenant repositories used by your workflows.
 ### Self repository actions (`$/…`)
 
 `uses: $/…` references an action or reusable workflow in the **same repository** as
-the defining file, resolved at the **running commit**. Because it always resolves to
-that repository's running SHA it is **inherently pinned** — no lockfile entry is
-required, and it is valid anywhere a relative `./…` reference is:
+the defining file, resolved at the **running commit** of that workflow or action.
+This is independent of the workspace populated by `actions/checkout`. The reference
+is **inherently pinned** and needs no lockfile entry. It is valid anywhere a relative
+`./…` reference is:
 
 ```yaml
 steps:
@@ -129,6 +130,13 @@ Review the checkout and action references together, or use `--no-migrate-local-a
 to preserve the local references; workflows that keep `./…` remain ineligible
 for onboarding. This check covers explicit checkout steps in workflows and
 in-repo composite actions, not workspace changes made by scripts or remote actions.
+
+For a workflow triggered by `pull_request_target`, `$/…` in that workflow uses
+the default-branch commit selected for the run (`github.sha`), regardless of the
+PR's base branch (see [GitHub's event semantics](https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/)).
+A checkout of the same repository with no `ref`, or with `ref: ${{ github.sha }}`,
+uses that commit too. Checking out `ref: ${{ github.event.pull_request.head.sha }}`
+would make `./…` use the PR head instead, so the same guard rejects migration.
 
 ## How it works
 
