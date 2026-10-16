@@ -21,6 +21,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
+	"github.com/github/gh-actions-lock/internal/repospec"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
@@ -69,6 +70,12 @@ type checkOptions struct {
 	// action refs to the inherently-pinned `$/…` form. Migration runs by
 	// default on fix runs; set this to leave `./…` refs on disk untouched.
 	noMigrateLocalActions bool
+	// repo and ref select a remote repository to verify (-R, --ref).
+	repo string
+	ref  string
+	// remote is the resolved remote target; set by resolveTarget under
+	// --verify when -R or a repository argument was given.
+	remote *repospec.Spec
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -91,6 +98,8 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication, no file writes — ideal for pre-commit hooks.\n"+
 			"It does not check that the entries are trustworthy; use --verify in CI for that.")
+	cmd.Flags().StringVarP(&opts.repo, "repo", "R", "", "With --verify, check a remote repository `[HOST/]OWNER/REPO` through the API, without cloning or writing anything")
+	cmd.Flags().StringVar(&opts.ref, "ref", "", "With --verify and a remote repository, the `branch|tag|sha` to read (defaults to the default branch)")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 	cmd.Flags().BoolVar(&opts.noMigrateLocalActions, "no-migrate-local-actions", false,
 		"Do not rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form.\n"+
@@ -109,6 +118,16 @@ func (opts *checkOptions) validateOutputFlags() error {
 	if opts.verifyLocal && (opts.acceptMoved || opts.relock) {
 		return fmt.Errorf("--verify-local cannot be combined with --accept-moved or --relock because it runs offline")
 	}
+	if opts.repo != "" || opts.ref != "" || opts.remote != nil {
+		switch {
+		case !opts.verify:
+			return fmt.Errorf("--repo, --ref and a repository argument are only valid with --verify")
+		case opts.acceptMoved || opts.relock:
+			return fmt.Errorf("verifying a remote repository is read-only and cannot be combined with --accept-moved or --relock")
+		case opts.noMigrateLocalActions:
+			return fmt.Errorf("verifying a remote repository never migrates local actions; drop --no-migrate-local-actions")
+		}
+	}
 	return nil
 }
 
@@ -125,9 +144,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Expand verify mode flags (see verify.go for both modes).
 	applyVerifyFlags(opts)
 
-	// --verify-local: offline static coverage check. Skip all network setup.
-	if opts.verifyLocal {
-		return runVerifyLocal(opts, out, console)
+	if v := selectVerifier(opts, newResolver); v != nil {
+		return v.Verify(ctx, out, console)
 	}
 
 	// Every exit path below writes exactly one run log, judged by runErr, so

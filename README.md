@@ -58,6 +58,27 @@ gh actions-lock --verify
 offline, never writes, and only checks that every ref has a lockfile entry,
 not that the entries are trustworthy; use `--verify` in CI for that.
 
+To verify a repository you have not cloned, pass it with `-R` or as the first
+argument. The repository is read through the API at one commit, so nothing is
+cloned or written, and it works from outside any repository:
+
+```bash
+gh actions-lock --verify octo/api
+gh actions-lock --verify -R octo/api --ref v1.2.0
+gh actions-lock --verify https://github.com/octo/api/commit/<sha>
+```
+
+Without a ref it verifies the default branch. A branch, a tag, a commit, or a
+URL ending in `/tree/<ref>`, `/releases/tag/<tag>` or `/commit/<sha>` also
+sets the ref. Pass `.github/workflows/ci.yml` after the repository to check
+only that workflow. A repository with no `actions.lock` fails verification.
+
+If the repository was renamed or transferred, GitHub's redirect is followed and
+a non-blocking `repo-renamed` finding names the new location. The lockfile does
+not record the repository's own identity, so a repository replaced under the
+same name cannot be detected; pin a commit to be exact. `-R` only works with
+`--verify`, which stays read-only.
+
 Pins to branches or partial versions (e.g. `main`, `v4`) are not advanced when
 upstream moves. To regenerate the lockfile from the current upstream commits,
 run:

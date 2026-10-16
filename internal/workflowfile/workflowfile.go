@@ -5,15 +5,18 @@
 package workflowfile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-lock/internal/filesource"
 	"gopkg.in/yaml.v3"
 )
 
@@ -189,20 +192,103 @@ type SelfRepositoryActionScan struct {
 // inherently pinned; only remote dependencies found inside them are returned
 // in Refs.
 func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRepositoryActionScan {
-	var scan SelfRepositoryActionScan
 	if len(actionRefs) == 0 {
-		return scan
+		return SelfRepositoryActionScan{}
 	}
 
 	repoRoot, err := findRepoRoot(workflowPath)
 	if err != nil {
-		scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository actions: %v", err))
-		return scan
+		return SelfRepositoryActionScan{Errors: []string{fmt.Sprintf("can't inspect self repository actions: %v", err)}}
 	}
 	if repoRoot == "" {
-		scan.Errors = append(scan.Errors, "can't inspect self repository actions: not in a git repository (set "+RepoRootEnv+" to override)")
-		return scan
+		return SelfRepositoryActionScan{Errors: []string{"can't inspect self repository actions: not in a git repository (set " + RepoRootEnv + " to override)"}}
 	}
+
+	return scanSelfRepositoryActions(actionRefs, func(relPath string) ([]string, string, error) {
+		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
+		if !isWithinRoot(repoRoot, actionDir) {
+			return nil, "", errOutsideRepo
+		}
+		return readActionUses(repoRoot, actionDir)
+	})
+}
+
+// ScanSelfRepositoryActionsFrom is ScanSelfRepositoryActions over a Source,
+// for repositories that are not checked out (remote verification). Visited
+// action files are reported as repo-relative paths.
+func ScanSelfRepositoryActionsFrom(ctx context.Context, src filesource.Source, actionRefs []string) SelfRepositoryActionScan {
+	if len(actionRefs) == 0 {
+		return SelfRepositoryActionScan{}
+	}
+	return scanSelfRepositoryActions(actionRefs, func(relPath string) ([]string, string, error) {
+		return readActionUsesFrom(ctx, src, relPath)
+	})
+}
+
+// errOutsideRepo marks an action path that resolves outside the repository.
+var errOutsideRepo = errors.New("path resolves outside repository")
+
+// readActionUsesFrom is readActionUses over a Source. action.yaml is read
+// only when action.yml does not exist; any other failure is returned so the
+// scan cannot silently fall through to a manifest the runner would not use.
+func readActionUsesFrom(ctx context.Context, src filesource.Source, actionDir string) ([]string, string, error) {
+	var notFound error
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		actionPath := path.Join(actionDir, name)
+		content, err := src.ReadFile(ctx, actionPath)
+		if err != nil {
+			if errors.Is(err, filesource.ErrEscapesRoot) {
+				return nil, "", errOutsideRepo
+			}
+			if !filesource.IsNotExist(err) {
+				return nil, "", fmt.Errorf("reading %s: %w", name, err)
+			}
+			notFound = err
+			continue
+		}
+		uses, err := parseActionYAMLForUses(content)
+		if err != nil {
+			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
+		}
+		return uses, actionPath, nil
+	}
+	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", notFound)
+}
+
+// ReusableWorkflowPaths returns the repo-relative paths of same-repository
+// reusable workflows called by jobs (`./.github/workflows/x.yml` and
+// `$/.github/workflows/x.yml`), in first-seen order.
+func (f *File) ReusableWorkflowPaths() []string {
+	var paths []string
+	seen := make(map[string]bool)
+	walkUses(&f.root, func(value string, stepLevel bool) {
+		if stepLevel {
+			return
+		}
+		value = strings.TrimSpace(value)
+		var p string
+		switch {
+		case IsSelfRepositoryAction(value) && !SelfRepositoryRefHasVersion(value):
+			p = strings.TrimPrefix(value, "$/")
+		case parserlock.IsLocalReusableWorkflow(value):
+			p = strings.TrimPrefix(value, "./")
+		default:
+			return
+		}
+		p = path.Clean(p)
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	})
+	return paths
+}
+
+// scanSelfRepositoryActions walks `$/…` references breadth-first. read
+// returns the `uses:` values and file path of the action at a repo-relative
+// directory, or errOutsideRepo when the directory leaves the repository.
+func scanSelfRepositoryActions(actionRefs []string, read func(relPath string) ([]string, string, error)) SelfRepositoryActionScan {
+	var scan SelfRepositoryActionScan
 
 	type pendingAction struct {
 		ref   string
@@ -241,13 +327,11 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 		}
 
 		relPath := strings.TrimPrefix(current.ref, selfRepositoryPrefix)
-		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
-		if !isWithinRoot(repoRoot, actionDir) {
+		uses, actionPath, err := read(relPath)
+		if errors.Is(err, errOutsideRepo) {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("refusing to read self repository action outside repo root: %s", current.ref))
 			continue
 		}
-
-		uses, actionPath, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
