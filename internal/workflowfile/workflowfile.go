@@ -663,6 +663,18 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 // readActionUses returns the `uses:` values of an in-repo action definition
 // along with the file they were read from, so callers can rewrite that file.
 func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
+	content, actionPath, err := readActionFile(repoRoot, actionDir)
+	if err != nil {
+		return nil, "", err
+	}
+	uses, err := parseActionYAMLForUses(content)
+	if err != nil {
+		return nil, "", fmt.Errorf("parsing %s: %w", filepath.Base(actionPath), err)
+	}
+	return uses, actionPath, nil
+}
+
+func readActionFile(repoRoot, actionDir string) ([]byte, string, error) {
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := filepath.Join(actionDir, name)
@@ -678,11 +690,7 @@ func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
 			lastErr = err
 			continue
 		}
-		uses, err := parseActionYAMLForUses(content)
-		if err != nil {
-			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
-		}
-		return uses, actionPath, nil
+		return content, actionPath, nil
 	}
 	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
 }

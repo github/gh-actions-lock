@@ -9,6 +9,136 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateCheckoutRefsForMigration(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+		blocked bool
+	}{
+		{
+			name: "checkout in another job does not block migration",
+			content: `jobs:
+  other:
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: other}
+  build:
+    steps:
+      - uses: ./local
+`,
+		},
+		{
+			name: "checkout after the action does not block migration",
+			content: `jobs:
+  build:
+    steps:
+      - uses: ./local
+      - uses: actions/checkout@v4
+        with: {ref: other}
+`,
+		},
+		{
+			name: "one unsafe use blocks a shared replacement",
+			content: `jobs:
+  first:
+    steps:
+      - uses: ./local
+  second:
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: other}
+      - uses: ./local
+`,
+			blocked: true,
+		},
+		{
+			name: "checkout in composite steps blocks migration",
+			content: `runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with: {ref: other}
+    - uses: ./local
+`,
+			blocked: true,
+		},
+		{
+			name: "aliased checkout step blocks migration",
+			content: `jobs:
+  other:
+    steps:
+      - &checkout
+        uses: actions/checkout@v4
+        with: {ref: other}
+  build:
+    steps:
+      - *checkout
+      - uses: ./local
+`,
+			blocked: true,
+		},
+		{
+			name: "aliased inputs block migration",
+			content: `env:
+  inputs: &inputs {ref: other}
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with: *inputs
+      - uses: ./local
+`,
+			blocked: true,
+		},
+		{
+			name: "conditional checkout cannot clear an earlier custom ref",
+			content: `jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: other}
+      - uses: actions/checkout@v4
+        if: inputs.reset
+      - uses: ./local
+`,
+			blocked: true,
+		},
+		{
+			name: "checkout name is case insensitive and can be SHA pinned",
+			content: `jobs:
+  build:
+    steps:
+      - uses: Actions/Checkout@0123456789012345678901234567890123456789
+        with: {ref: other}
+      - uses: ./local
+`,
+			blocked: true,
+		},
+		{
+			name: "noncandidate local reference is left to diagnosis",
+			content: `jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: other}
+      - uses: ./missing
+`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Parse("ci.yml", []byte(tt.content))
+			require.NoError(t, err)
+			err = f.validateCheckoutRefsForMigration(map[string]string{"./local": "$/local"})
+			if tt.blocked {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "preceding actions/checkout")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestSubpathRewriteLookup(t *testing.T) {
 	replacements := map[string]string{
 		"actions/cache@27d5ce7": "actions/cache@v5.0.5",

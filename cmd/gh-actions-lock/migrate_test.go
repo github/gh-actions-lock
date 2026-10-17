@@ -11,11 +11,114 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMigrateLocalActions_CustomCheckoutRefWritesNothing(t *testing.T) {
+	for _, args := range [][]string{nil, {"--json"}, {".github/workflows/first.yml"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.Mkdir(".git", 0o755))
+			files := map[string]string{
+				".github/workflows/first.yml": "jobs:\n  build:\n    steps:\n      - uses: ./.github/actions/local\n",
+				".github/workflows/second.yml": `jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+      - uses: $/.github/actions/local
+`,
+				".github/actions/local/action.yml":  "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/helper\n",
+				".github/actions/helper/action.yml": "runs:\n  using: composite\n  steps:\n    - run: echo hello\n      shell: bash\n",
+				".github/workflows/actions.lock":    "version: 'v0.0.3'\nworkflows: {}\ndependencies: {}\n",
+			}
+			for path, content := range files {
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			}
+			before := snapshotWorkflows(t)
+			transport := &requestCountingTransport{}
+
+			_, _, err := runCommandWithHTTP(t, transport, args...)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "second.yml")
+			assert.Contains(t, err.Error(), "${{ env.TARGET_BRANCH }}")
+			assert.Contains(t, err.Error(), "--no-migrate-local-actions")
+			assert.Equal(t, before, snapshotWorkflows(t))
+			assert.Zero(t, transport.calls.Load(), "unsafe migration stops before resolving dependencies")
+		})
+	}
+}
+
+func TestMigrateLocalActions_ConfiguredWorkflowCallers(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		callerDir   string
+		absoluteDir bool
+		blocked     bool
+	}{
+		{name: "relative configured directory blocks unsafe migration", callerDir: ".github/custom-workflows", blocked: true},
+		{name: "absolute configured directory blocks unsafe migration", callerDir: ".github/custom-workflows", absoluteDir: true, blocked: true},
+		{name: "default directory remains checked with an override", callerDir: ".github/workflows", blocked: true},
+		{name: "running commit checkout allows migration", callerDir: ".github/custom-workflows"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.Mkdir(".git", 0o755))
+			workflowsDir := filepath.Join(".github", "custom-workflows")
+			configuredDir := workflowsDir
+			if tt.absoluteDir {
+				absDir, err := filepath.Abs(workflowsDir)
+				require.NoError(t, err)
+				configuredDir = absDir
+			}
+			t.Setenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR", configuredDir)
+			ref := "${{ github.sha }}"
+			if tt.blocked {
+				ref = "other"
+			}
+			firstPath := filepath.Join(workflowsDir, "first.yml")
+			secondPath := filepath.Join(tt.callerDir, "second.yml")
+			files := map[string]string{
+				firstPath:                                   "jobs:\n  build:\n    steps:\n      - uses: $/.github/actions/local\n",
+				secondPath:                                  "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n        with: {ref: '" + ref + "'}\n      - uses: $/.github/actions/local\n",
+				".github/actions/local/action.yml":          "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/helper\n",
+				".github/actions/helper/action.yml":         "runs:\n  using: composite\n  steps:\n    - run: echo hello\n      shell: bash\n",
+				filepath.Join(workflowsDir, "actions.lock"): "version: 'v0.0.3'\nworkflows: {}\ndependencies: {}\n",
+			}
+			for path, content := range files {
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			}
+			before := snapshotWorkflows(t)
+			transport := &requestCountingTransport{}
+
+			_, _, err := runCommandWithHTTP(t, transport, firstPath)
+
+			if tt.blocked {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), secondPath)
+				assert.Contains(t, err.Error(), `ref "other"`)
+				assert.Equal(t, before, snapshotWorkflows(t))
+				assert.Zero(t, transport.calls.Load(), "unsafe migration stops before resolving dependencies")
+				return
+			}
+			require.NoError(t, err)
+			content, err := os.ReadFile(".github/actions/local/action.yml")
+			require.NoError(t, err)
+			assert.Contains(t, string(content), "uses: $/.github/actions/helper")
+			caller, err := os.ReadFile(secondPath)
+			require.NoError(t, err)
+			assert.Equal(t, files[secondPath], string(caller))
+		})
+	}
+}
+
 // TestMigrateLocalActions_CompositeActionFiles verifies that migration
 // rewrites `./…` not just in workflow files but also inside in-repo composite
 // action definitions (action.yml), including ones nested a few directories deep.
 // A `./…` whose target does not resolve to an in-repo action file is left
-// untouched — that is the equivalence guard that keeps `$/` a safe replacement.
+// untouched.
 func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel, content string) {

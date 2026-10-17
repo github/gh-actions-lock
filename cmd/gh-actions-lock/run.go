@@ -634,16 +634,17 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 		}
 	}
 	files := append([]string(nil), paths...)
+	var repoRoot string
 
-	// Also sweep in-repo composite action files. The repo root is derived from
-	// a workflow path (they live under .github/workflows/); onboarding only
-	// runs when workflows exist, so an empty paths list means nothing to do.
+	// Also sweep in-repo composite action files. Derive the repo root from a
+	// workflow path; an empty paths list means nothing to do.
 	if len(paths) > 0 {
 		root, err := workflowfile.FindRepoRoot(paths[0])
 		if err != nil {
 			return 0, undo, err
 		}
 		if root != "" {
+			repoRoot = root
 			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
 			if err != nil {
 				return 0, undo, err
@@ -691,8 +692,35 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 		migrations = append(migrations, plannedMigration{path: path, original: original, content: content, changed: changed})
 	}
 
-	// Do not write anything until every candidate has passed structural and
-	// repository-boundary validation.
+	// Composite definitions are shared even when the command names only one
+	// workflow. Check all callers before writing changes to those definitions.
+	var migrationPaths []string
+	compositeChanged := false
+	for _, plan := range migrations {
+		migrationPaths = append(migrationPaths, plan.path)
+		name := filepath.Base(plan.path)
+		compositeChanged = compositeChanged || name == "action.yml" || name == "action.yaml"
+	}
+	if compositeChanged && repoRoot != "" {
+		workflowDirs := []string{filepath.Join(repoRoot, ".github", "workflows")}
+		if dir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR"); dir != "" {
+			workflowDirs = append(workflowDirs, dir)
+		}
+		var workflowPaths []string
+		for _, dir := range workflowDirs {
+			callers, err := workflowfile.DiscoverWorkflowsIn(dir)
+			if err != nil {
+				return 0, undo, err
+			}
+			workflowPaths = append(workflowPaths, callers...)
+		}
+		if err := workflowfile.ValidateLocalActionMigrations(workflowPaths, migrationPaths); err != nil {
+			return 0, undo, err
+		}
+	}
+
+	// Do not write anything until every candidate and its callers have passed
+	// validation.
 	total := 0
 	for _, plan := range migrations {
 		written = append(written, plan)
