@@ -636,9 +636,8 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 	files := append([]string(nil), paths...)
 	var repoRoot string
 
-	// Also sweep in-repo composite action files. The repo root is derived from
-	// a workflow path (they live under .github/workflows/); onboarding only
-	// runs when workflows exist, so an empty paths list means nothing to do.
+	// Also sweep in-repo composite action files. Derive the repo root from a
+	// workflow path; an empty paths list means nothing to do.
 	if len(paths) > 0 {
 		root, err := workflowfile.FindRepoRoot(paths[0])
 		if err != nil {
@@ -703,9 +702,17 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 		compositeChanged = compositeChanged || name == "action.yml" || name == "action.yaml"
 	}
 	if compositeChanged && repoRoot != "" {
-		workflowPaths, err := workflowfile.DiscoverWorkflowsIn(filepath.Join(repoRoot, ".github", "workflows"))
-		if err != nil {
-			return 0, undo, err
+		workflowDirs := []string{filepath.Join(repoRoot, ".github", "workflows")}
+		if dir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR"); dir != "" {
+			workflowDirs = append(workflowDirs, dir)
+		}
+		var workflowPaths []string
+		for _, dir := range workflowDirs {
+			callers, err := workflowfile.DiscoverWorkflowsIn(dir)
+			if err != nil {
+				return 0, undo, err
+			}
+			workflowPaths = append(workflowPaths, callers...)
 		}
 		if err := workflowfile.ValidateLocalActionMigrations(workflowPaths, migrationPaths); err != nil {
 			return 0, undo, err
