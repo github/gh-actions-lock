@@ -25,8 +25,10 @@ type PlanOptions struct {
 	RepoName  string
 	// NoNarrow disables tag narrowing: mutable version refs (v4, v3.1)
 	// are kept as the lock comment instead of being resolved to full
-	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
+	// patch tags (v4.2.1), and protects full-SHA source refs.
 	NoNarrow bool
+	// KeepSHA protects full-SHA source refs without disabling semver narrowing.
+	KeepSHA bool
 
 	// AcceptMoved treats ref-moved and unreachable-pin findings as
 	// resolvable: affected deps are pruned from the inventory and
@@ -382,11 +384,8 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 			continue
 		}
 
-		// ReverseLookup owns bare-SHA normalization unless --no-narrow protects it.
+		// ReverseLookup owns bare-SHA normalization.
 		if parserlock.IsFullSha(dep.Ref) {
-			if opts.NoNarrow {
-				preservedDeps[i] = true
-			}
 			continue
 		}
 
@@ -437,6 +436,7 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 	// reuse a ref locked to a different commit. Keep the discovered metadata.
 	for i := range deps {
 		if preservedDeps[i] || !directTracker.IsDirect(i) ||
+			(opts.NoNarrow || opts.KeepSHA) && parserlock.IsFullSha(originalRefs[i]) ||
 			hasConflictingLockTarget(opts, deps[i].NWO, deps[i].Ref, deps[i].SHA) {
 			deps[i].Ref = originalRefs[i]
 			delete(normRewrites, deps[i].Key())
@@ -635,6 +635,9 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 			continue
 		}
 		if parserlock.IsFullSha(e.Ref) {
+			if opts.KeepSHA {
+				continue
+			}
 			newRef := e.Tag
 			if newRef == "" && e.OnBranch != "" && opts.Resolver != nil {
 				// A containing branch cannot identify an older pinned commit.

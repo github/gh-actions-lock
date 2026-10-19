@@ -2,6 +2,7 @@ package pin
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -51,65 +52,75 @@ func TestNarrowDirectDeps_PreservesRefWhenExactTagIsFromAnotherFamily(t *testing
 }
 
 func TestNarrowDirectDeps_SameNWOSiblingRefsNormalizeIndependently(t *testing.T) {
-	const (
-		patchSHA = "4444444444444444444444444444444444444444"
-		bareSHA  = "2121212121212121212121212121212121212121"
-	)
+	for _, keepSHA := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keep-sha=%t", keepSHA), func(t *testing.T) {
+			const (
+				patchSHA = "4444444444444444444444444444444444444444"
+				bareSHA  = "2121212121212121212121212121212121212121"
+			)
 
-	reg := &httpmock.Registry{}
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/tags`),
-		httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/releases`),
-		httpmock.JSONResponse([]map[string]any{}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout$`),
-		httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
-		httpmock.JSONResponse(map[string]any{
-			"ref": "refs/heads/main", "object": map[string]any{"sha": bareSHA, "type": "commit"},
-		}),
-	)
+			reg := &httpmock.Registry{}
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/tags`),
+				httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/tags`),
+				httpmock.JSONResponse(httpmock.TagListResponse("v4.2.1", patchSHA, "v21", bareSHA)),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/releases`),
+				httpmock.JSONResponse([]map[string]any{}),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout$`),
+				httpmock.JSONResponse(map[string]any{"default_branch": "main"}),
+			)
+			reg.Register(
+				httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
+				httpmock.JSONResponse(map[string]any{
+					"ref": "refs/heads/main", "object": map[string]any{"sha": bareSHA, "type": "commit"},
+				}),
+			)
 
-	deps := []dep.Dependency{
-		{NWO: "actions/checkout", Ref: "v4", SHA: patchSHA},
-		{NWO: "actions/checkout", Ref: bareSHA, SHA: bareSHA},
+			deps := []dep.Dependency{
+				{NWO: "actions/checkout", Ref: "v4", SHA: patchSHA},
+				{NWO: "actions/checkout", Ref: bareSHA, SHA: bareSHA},
+			}
+			refs := []parserlock.ActionRef{
+				{Owner: "actions", Repo: "checkout", Ref: "v4"},
+				{Owner: "actions", Repo: "checkout", Ref: bareSHA},
+			}
+			direct := lockfile.NewDirectTracker(refs, deps)
+			rewrites := make(map[string]string)
+			preserved := make(map[int]bool)
+			tagger := tag.NewListerForTest(t, reg)
+
+			narrowDirectDeps(context.Background(), PlanOptions{Tagger: tagger, KeepSHA: keepSHA}, deps, direct, rewrites, preserved)
+
+			resolver, err := resolve.New("github.com", pinpool.New(2, nil), resolve.WithTransport(reg))
+			require.NoError(t, err)
+			reverseRewrites, issues, err := reverseLookupRewrites(
+				context.Background(),
+				PlanOptions{Resolver: resolver, KeepSHA: keepSHA},
+				checks.WorkflowReport{},
+				deps,
+				direct,
+				preserved,
+			)
+			require.NoError(t, err)
+			assert.Empty(t, issues)
+			assert.Equal(t, "v4.2.1", deps[0].Ref)
+			assert.Equal(t, "actions/checkout@v4.2.1", rewrites["actions/checkout@v4"])
+			if keepSHA {
+				assert.Equal(t, bareSHA, deps[1].Ref)
+				assert.NotContains(t, reverseRewrites, "actions/checkout@"+bareSHA)
+			} else {
+				assert.Equal(t, "v21", deps[1].Ref)
+				assert.Equal(t, "actions/checkout@v21", reverseRewrites["actions/checkout@"+bareSHA])
+			}
+		})
 	}
-	refs := []parserlock.ActionRef{
-		{Owner: "actions", Repo: "checkout", Ref: "v4"},
-		{Owner: "actions", Repo: "checkout", Ref: bareSHA},
-	}
-	direct := lockfile.NewDirectTracker(refs, deps)
-	rewrites := make(map[string]string)
-	preserved := make(map[int]bool)
-	tagger := tag.NewListerForTest(t, reg)
-
-	narrowDirectDeps(context.Background(), PlanOptions{Tagger: tagger}, deps, direct, rewrites, preserved)
-
-	resolver, err := resolve.New("github.com", pinpool.New(2, nil), resolve.WithTransport(reg))
-	require.NoError(t, err)
-	reverseRewrites, issues, err := reverseLookupRewrites(
-		context.Background(),
-		PlanOptions{Resolver: resolver},
-		checks.WorkflowReport{},
-		deps,
-		direct,
-		preserved,
-	)
-	require.NoError(t, err)
-	assert.Empty(t, issues)
-	assert.Equal(t, "v4.2.1", deps[0].Ref)
-	assert.Equal(t, "v21", deps[1].Ref)
-	assert.Equal(t, "actions/checkout@v21", reverseRewrites["actions/checkout@"+bareSHA])
 }
 
 // An incomplete graph must not become an apparently complete lockfile.
@@ -950,31 +961,47 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 		return resolver, tagger, wr, reg
 	}
 
-	t.Run("no-narrow preserves bare SHA through ReverseLookup", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t)
-
-		opts := PlanOptions{
-			Resolver: resolver,
-			Tagger:   tagger,
-			Pool:     pinpool.New(2, nil),
-			NoNarrow: true,
-		}
-
-		result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
-		require.NoError(t, err)
-
-		var pinned []Entry
-		for _, e := range result.entries {
-			if e.Resolution == Pinned {
-				pinned = append(pinned, e)
+	for _, tt := range []struct {
+		name     string
+		noNarrow bool
+		keepSHA  bool
+		noTagger bool
+	}{
+		{name: "no-narrow preserves bare SHA", noNarrow: true},
+		{name: "keep-sha preserves bare SHA", keepSHA: true},
+		{name: "keep-sha works without tag narrowing", keepSHA: true, noTagger: true},
+		{name: "no-narrow works without tag narrowing", noNarrow: true, noTagger: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver, tagger, wr, _ := newSlowPathFixtures(t)
+			if tt.noTagger {
+				tagger = nil
 			}
-		}
-		require.Len(t, pinned, 1, "expected exactly one pinned entry")
-		assert.Equal(t, sha, pinned[0].Ref, "bare SHA must survive both narrowDirectDeps and ReverseLookup")
-		assert.Empty(t, pinned[0].AutoFixedRef, "no auto-fix should be recorded")
-		require.Len(t, result.wplans, 1)
-		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite when --no-narrow")
-	})
+
+			opts := PlanOptions{
+				Resolver: resolver,
+				Tagger:   tagger,
+				Pool:     pinpool.New(2, nil),
+				NoNarrow: tt.noNarrow,
+				KeepSHA:  tt.keepSHA,
+			}
+
+			result, err := planWorkflow(context.Background(), wr, opts, func(string) {})
+			require.NoError(t, err)
+
+			var pinned []Entry
+			for _, e := range result.entries {
+				if e.Resolution == Pinned {
+					pinned = append(pinned, e)
+				}
+			}
+			require.Len(t, pinned, 1, "expected exactly one pinned entry")
+			assert.Equal(t, sha, pinned[0].Ref, "bare SHA must survive both narrowDirectDeps and ReverseLookup")
+			assert.Empty(t, pinned[0].AutoFixedRef, "no auto-fix should be recorded")
+			require.Len(t, result.wplans, 1)
+			assert.Empty(t, result.wplans[0].Rewrites, "full-SHA source ref is protected")
+		})
+	}
 
 	t.Run("default narrows bare SHA to exact major tag", func(t *testing.T) {
 		resolver, tagger, wr, _ := newSlowPathFixtures(t)

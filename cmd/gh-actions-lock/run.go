@@ -43,6 +43,7 @@ type checkOptions struct {
 	// are kept as-is in the lock comment instead of being resolved to
 	// the full patch tag (e.g. "v4.2.1").
 	noNarrow bool
+	keepSHA  bool
 	// allowRunners and allowAllRunners are deprecated no-ops retained for
 	// backward compatibility. The hosted/self-hosted runner restriction has
 	// been removed; all runner labels are now accepted. These flags will be
@@ -78,10 +79,12 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false,
-		"Keep mutable version refs (e.g. v4) instead of narrowing to full semver (e.g. v4.2.1).\n"+
-			"Only refs that parse as semantic versions are narrowed (v4, v4.2); branch names\n"+
+		"Keep full SHA and mutable version refs instead of normalizing SHA refs or narrowing versions.\n"+
+			"Without this flag, semantic versions (v4, v4.2) are narrowed; branch names\n"+
 			"like 'main' or non-version tags are never narrowed because a full semver tag is\n"+
 			"far more likely to resolve to exactly one commit for its entire lifetime.")
+	cmd.Flags().BoolVar(&opts.keepSHA, "keep-sha", false,
+		"Preserve full SHA uses: refs while still narrowing mutable semantic versions")
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
@@ -426,6 +429,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		RepoOwner:   repoOwner,
 		RepoName:    repoName,
 		NoNarrow:    opts.noNarrow,
+		KeepSHA:     opts.keepSHA,
 		AcceptMoved: opts.acceptMoved,
 		Relock:      opts.relock,
 		PartialScan: !fullScan,

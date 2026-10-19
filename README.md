@@ -126,6 +126,14 @@ repository remote and uses the credentials stored by `gh` for that host. You do
 not need to export a token or pass `--hostname` on every run. The account must
 have read access to the tenant repositories used by your workflows.
 
+### Preserving SHA references
+
+`--keep-sha` leaves existing full-SHA `uses:` references unchanged while still
+narrowing mutable semantic versions to exact tags. `--no-narrow` preserves both
+SHA references and imprecise version references. Both options still resolve
+dependencies and verify that each pinned commit belongs to its recorded ref;
+neither bypasses lockfile verification.
+
 ### Self repository actions (`$/…`)
 
 `uses: $/…` references an action or reusable workflow in the **same repository** as

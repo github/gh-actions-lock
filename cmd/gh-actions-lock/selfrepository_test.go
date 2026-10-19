@@ -196,6 +196,15 @@ dependencies:
 	lockAfterNoNarrow, err := os.ReadFile(lockPath)
 	require.NoError(t, err)
 
+	_, _, err = runCommandWithHTTP(t, transport, "--keep-sha", filepath.Join(".github", "workflows", "ci.yml"))
+	require.NoError(t, err)
+	keptAction, err := os.ReadFile(actionPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(keptAction), "uses: actions/create-github-app-token@"+sha)
+	keptLock, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+	assert.Equal(t, lockAfterNoNarrow, keptLock)
+
 	_, _, err = runCommandWithHTTP(t, transport, filepath.Join(".github", "workflows", "ci.yml"))
 	require.ErrorContains(t, err, "partial workflow scan")
 	action, readErr := os.ReadFile(actionPath)
