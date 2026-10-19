@@ -157,6 +157,16 @@ Overrides apply when the user config is the selected policy; zero disables the
 restriction for that repository. Dependabot's semver-specific days and
 include/exclude filters are not supported and produce warnings.
 
+For a one-off run or CI, `gh actions-lock --cooldown-days 7` overrides the
+**global default**. Default precedence is flag, positive Dependabot
+`default-days`, user config `cooldown_days`, then none. A positive flag keeps
+per-repo overrides from the selected policy: with the user config above,
+`--cooldown-days 3` still requires 14 days for `actions/checkout` and three for
+other repositories. It does not import user-config overrides when Dependabot
+is the selected policy. Explicit `--cooldown-days 0` disables **all** cooldowns
+for that run, including per-repo overrides; negative values are rejected.
+Omitting the flag never disables a configured policy.
+
 Cooldown applies before writing **every newly adopted commit**, including
 transitive dependencies, branch refs, full SHAs, exact tags, `--no-narrow`,
 `--relock`, and `--accept-moved`. A candidate that is too young, or whose date

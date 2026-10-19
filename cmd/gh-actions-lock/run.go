@@ -45,6 +45,9 @@ type checkOptions struct {
 	// the full patch tag (e.g. "v4.2.1").
 	noNarrow bool
 	keepSHA  bool
+	// cooldownDays overrides only the selected policy's global default.
+	// Presence is checked separately so explicit zero can disable the policy.
+	cooldownDays int
 	// allowRunners and allowAllRunners are deprecated no-ops retained for
 	// backward compatibility. The hosted/self-hosted runner restriction has
 	// been removed; all runner labels are now accepted. These flags will be
@@ -85,6 +88,8 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
+	cmd.Flags().IntVar(&opts.cooldownDays, "cooldown-days", 0,
+		"Minimum adoption age in days; overrides the configured global default but keeps per-repo overrides (0 disables all cooldowns this run)")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false,
 		"Keep full SHA and mutable version refs instead of normalizing SHA refs or narrowing versions.\n"+
 			"Without this flag, semantic versions (v4, v4.2) are narrowed; branch names\n"+
@@ -112,6 +117,9 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 // validateOutputFlags rejects incoherent structured-output flag combinations.
 // Wired as PreRunE so the error surfaces at the command layer before any work runs.
 func (opts *checkOptions) validateOutputFlags() error {
+	if opts.cooldownDays < 0 {
+		return fmt.Errorf("--cooldown-days must be non-negative")
+	}
 	if err := format.ValidateJSONFields(opts.jsonFields); err != nil {
 		return err
 	}
@@ -304,12 +312,18 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		console.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
-	// Build a Lister for pin narrowing, reusing the resolver's API client; cooldown is resolved dependabot > config file > none.
+	// Reuse the resolver's API client for narrowing and adoption checks.
 	var tagger *tag.Lister
 	var cooldownCfg tag.CooldownConfig
 	var cooldownWarnings []string
 	if gc := r.GHClient(); gc != nil {
 		cooldownCfg, _, cooldownWarnings = ResolveCooldown(".")
+		if cmd.Flags().Changed("cooldown-days") {
+			cooldownCfg.DefaultDays = opts.cooldownDays
+			if opts.cooldownDays == 0 {
+				cooldownCfg.RepoOverrides = nil
+			}
+		}
 		tagger = tag.NewLister(gc, cooldownCfg)
 	}
 

@@ -121,6 +121,20 @@ never narrowed because the latest semver release in a repo may have
 nothing to do with the ref the workflow intended.
 Pass --no-narrow to disable this behavior entirely.
 
+RELEASE COOLDOWN
+
+--cooldown-days N sets the global minimum age for newly adopted commits.
+Precedence for the global default: flag, positive Dependabot default-days,
+user config cooldown_days, then no restriction. Positive flag values preserve
+per-repo overrides from the selected config; --cooldown-days 0 disables all
+cooldowns for this run. Negative values are rejected.
+
+Cooldown blocks the entire write for too-young or undatable candidates,
+including transitive dependencies and --relock/--accept-moved. Approved
+existing pins are not re-aged. Age uses commit committer dates and available
+GitHub Release published_at dates, not first-seen or push times. It is a CLI
+adoption policy, not runtime age enforcement.
+
 --json selects the output format only (independent of --no-fix);
 structured results go to stdout and progress to stderr:
 
