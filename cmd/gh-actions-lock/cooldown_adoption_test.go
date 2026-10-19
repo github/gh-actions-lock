@@ -103,6 +103,7 @@ func TestCooldownRejectsNewAdoptionWithoutWrites(t *testing.T) {
 		ref       string
 		mode      string
 		noNarrow  bool
+		keepSHA   bool
 		recorded  bool
 		composite bool
 		release   bool
@@ -113,6 +114,8 @@ func TestCooldownRejectsNewAdoptionWithoutWrites(t *testing.T) {
 		{name: "branch still guarded", ref: "main"},
 		{name: "full SHA still guarded", ref: parityTestSHA, noNarrow: true},
 		{name: "normalized full SHA still guarded", ref: parityTestSHA, release: true},
+		{name: "preserved full SHA still guarded", ref: parityTestSHA, keepSHA: true, release: true},
+		{name: "preserved SHA fresh commit still guarded", ref: parityTestSHA, keepSHA: true},
 		{name: "transitive branch still guarded", ref: "v4.2.2", composite: true},
 		{name: "relock still guarded", ref: "main", mode: "--relock", recorded: true},
 		{name: "accept moved still guarded", ref: "main", mode: "--accept-moved", recorded: true},
@@ -142,6 +145,9 @@ func TestCooldownRejectsNewAdoptionWithoutWrites(t *testing.T) {
 			args := []string{"--no-interactive", path}
 			if tc.noNarrow {
 				args = append(args, "--no-narrow")
+			}
+			if tc.keepSHA {
+				args = append(args, "--keep-sha")
 			}
 			if tc.mode != "" {
 				args = append(args, tc.mode)

@@ -65,6 +65,16 @@ The release candidate containing #174 is behavior-breaking and needs a major
 release classification and Dependabot coordination before publication. It does
 not introduce a lockfile schema or select a release version.
 
+The combined candidate also blocks mutable external job-level reusable calls
+with `not-pinned` findings and warns about full-SHA callees whose dependencies
+are not inspected. Configured cooldown now gates newly adopted commits in
+write modes, including relock and accept-moved; refusals use the new
+`release-cooldown` error category. The optional `--cooldown-days` flag overrides
+the selected policy's default; explicit zero disables all cooldowns for that
+run. Cover these changed findings, exit statuses, no-write failures, and policy
+overrides in the Dependabot compatibility review. No JSON field or lockfile
+schema change is required.
+
 Previously accepted locks can now fail to load (exit 2): every entry's `ref`
 must be non-empty, not a SHA, not `refs/`-qualified, and must match its key's
 ref unless the key uses a full SHA. Restore trusted lock metadata from version
