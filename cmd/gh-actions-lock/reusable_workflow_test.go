@@ -65,10 +65,13 @@ func TestReusableWorkflowCoverage(t *testing.T) {
 					assert.Zero(t, calls, "caller lockfile enforcement must not be claimed for a callee")
 					if !remote {
 						after := snapshotWorkflows(t)
+						require.Contains(t, before, wf)
+						require.Contains(t, after, wf)
 						assert.Equal(t, before[wf], after[wf])
 						if mode != "" || ref != remoteSHA {
 							assert.Equal(t, before, after)
 						} else {
+							require.Contains(t, after, parserlock.Path)
 							file, err := parserlock.Parse([]byte(after[parserlock.Path]))
 							require.NoError(t, err)
 							assert.Empty(t, file.Dependencies)

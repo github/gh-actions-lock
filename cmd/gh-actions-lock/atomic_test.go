@@ -54,7 +54,7 @@ func registerSetupGo(reg *httpmock.Registry) {
 }
 
 // snapshotWorkflows reads every file under .github so a test can assert the
-// run left the tree byte-identical.
+// run left the tree byte-identical. Keys use slash-normalized paths.
 func snapshotWorkflows(t *testing.T) map[string]string {
 	t.Helper()
 	files := map[string]string{}
@@ -63,10 +63,23 @@ func snapshotWorkflows(t *testing.T) map[string]string {
 			return err
 		}
 		b, err := os.ReadFile(p)
-		files[p] = string(b)
+		files[filepath.ToSlash(p)] = string(b)
 		return err
 	}))
 	return files
+}
+
+func TestSnapshotWorkflowsUsesSlashKeys(t *testing.T) {
+	wf := writeTempWorkflow(t, "jobs: {}\n")
+	const lockPath = ".github/workflows/actions.lock"
+	const lockContents = "version: 'v0.0.3'\n"
+	require.NoError(t, os.WriteFile(lockPath, []byte(lockContents), 0o600))
+
+	files := snapshotWorkflows(t)
+	require.Contains(t, files, wf)
+	assert.Equal(t, "jobs: {}\n", files[wf])
+	require.Contains(t, files, lockPath)
+	assert.Equal(t, lockContents, files[lockPath])
 }
 
 // repoIDMismatch answers parity as intact except for actions/checkout, which
