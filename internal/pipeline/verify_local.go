@@ -11,7 +11,8 @@ import (
 )
 
 // VerifyLocalCoverage performs a zero-network static check: every action ref
-// in the parsed workflows must have a matching lockfile entry. Returns a
+// in the parsed workflows and every recorded transitive edge must have a
+// matching dependency entry. Returns a
 // Report with NotPinned findings for any uncovered refs, suitable for rendering
 // with the standard terminal or JSON formatters.
 func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) *checks.Report {

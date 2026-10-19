@@ -43,6 +43,24 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 	if err := validateRequiredRewrites(rec.Workflows); err != nil {
 		return err
 	}
+	pinnedByWorkflow := groupPinnedByWorkflow(rec)
+	var refreshed []string
+	var refreshDeps []dep.Dependency
+	refreshParents := make(dep.ParentMap)
+	for _, wp := range rec.Workflows {
+		if wp.Refresh {
+			refreshed = append(refreshed, workflowfile.KeyFromPath(wp.Path))
+			refreshDeps = append(refreshDeps, pinnedByWorkflow[wp.Path]...)
+			for child, parents := range buildParentMap(rec, wp.Path) {
+				refreshParents[child] = append(refreshParents[child], parents...)
+			}
+		}
+	}
+	if len(refreshed) > 0 {
+		if err := store.PrepareRefresh(refreshed, refreshDeps, refreshParents); err != nil {
+			return fmt.Errorf("refreshing lockfile graph: %w", err)
+		}
+	}
 
 	// Phase 1: Rewrite workflow files (uses: line changes).
 	if len(rec.Workflows) > 0 {
@@ -73,7 +91,6 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 	}
 
 	// Phase 2: Update lockfile entries for each scanned workflow.
-	pinnedByWorkflow := groupPinnedByWorkflow(rec)
 	if len(rec.Workflows) > 0 {
 		progress("Updating lockfile")
 	}

@@ -103,6 +103,9 @@ func checkRefMovedAndForgery(ctx context.Context, pw ParsedWorkflow, depIndex ma
 // checkOneRefMoved resolves a single ref and compares against the pinned SHA.
 // Returns a finding and true if there's a mismatch; false if the ref is current.
 func checkOneRefMoved(ctx context.Context, pw ParsedWorkflow, ref parserlock.ActionRef, pin lockedPin, r CheckResolver) (Finding, bool) {
+	if pin.Commit == "" {
+		return Finding{}, false
+	}
 	sha, ok := r.ResolveRef(ref.Owner, ref.Repo, ref.Ref)
 	if !ok || sha == "" {
 		return Finding{}, false

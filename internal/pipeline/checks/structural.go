@@ -6,7 +6,45 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/lockfile"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
+
+func checkRecordedClosure(pw ParsedWorkflow, file parserlock.File) []Finding {
+	direct := make(map[string]bool, len(pw.Refs))
+	for _, ref := range pw.Refs {
+		direct[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)] = true
+	}
+	for _, d := range pw.RecordedDeps(pw.Refs) {
+		owner, repo := d.OwnerRepo()
+		direct[parserlock.IndexKey(owner, repo, d.Ref)] = true
+	}
+	_, missing := lockfile.InspectClosure(file, workflowfile.KeyFromPath(pw.Path), func(pin parserlock.Pin) bool {
+		return direct[pin.IndexKey()]
+	})
+	var out []Finding
+	for _, m := range missing {
+		f := Finding{
+			WorkflowPath:       pw.Path,
+			Category:           NotPinned,
+			Severity:           SeverityError,
+			Confidence:         ConfidenceHigh,
+			IncompleteLockfile: true,
+			TrackedAction:      true,
+			Detail:             fmt.Sprintf("lockfile references %s but its dependency metadata is missing", m.Key),
+			Remediation:        "restore the missing entry from version control, or run `gh actions-lock --relock` to resolve the graph again",
+		}
+		if pin, ok := parserlock.ParsePin(m.Key); ok {
+			f.Dependency = &dep.Dependency{NWO: pin.NWO, Ref: pin.Ref}
+		}
+		if parent, ok := parserlock.ParsePin(m.Parent); ok {
+			f.ParentNWO = parent.NWO + "@" + parent.Ref
+			f.Detail += fmt.Sprintf(" (used by %s)", f.ParentNWO)
+		}
+		out = append(out, f)
+	}
+	return out
+}
 
 // checkUntracked emits NotPinned for a workflow with no uses: refs that
 // has no lockfile entry. Lockfile enforcement requires every workflow to be

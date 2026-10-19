@@ -356,7 +356,20 @@ type LockedPin struct {
 func (s *State) Closure(workflowKey string, live func(parserlock.Pin) bool) []LockedPin {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	out, _ := InspectClosure(s.file, workflowKey, live)
+	return out
+}
+
+// MissingPin identifies a dangling reference in a workflow's recorded graph.
+type MissingPin struct {
+	Key    string
+	Parent string
+}
+
+// InspectClosure checks metadata coverage while walking the selected roots.
+func InspectClosure(file parserlock.File, workflowKey string, live func(parserlock.Pin) bool) ([]LockedPin, []MissingPin) {
 	var out []LockedPin
+	var missing []MissingPin
 	seen := map[string]bool{}
 	var walk func(key, parent string)
 	walk = func(key, parent string) {
@@ -365,8 +378,9 @@ func (s *State) Closure(workflowKey string, live func(parserlock.Pin) bool) []Lo
 		}
 		seen[key] = true
 		pin, ok := parserlock.ParsePin(key)
-		action, found := s.file.Dependencies[key]
+		action, found := file.Dependencies[key]
 		if !ok || !found {
+			missing = append(missing, MissingPin{Key: key, Parent: parent})
 			return
 		}
 		out = append(out, LockedPin{Pin: pin, Action: action, Parent: parent})
@@ -374,12 +388,12 @@ func (s *State) Closure(workflowKey string, live func(parserlock.Pin) bool) []Lo
 			walk(child, key)
 		}
 	}
-	for _, key := range s.file.Workflows[workflowKey] {
+	for _, key := range file.Workflows[workflowKey] {
 		if pin, ok := parserlock.ParsePin(key); ok && live(pin) {
 			walk(key, "")
 		}
 	}
-	return out
+	return out, missing
 }
 
 // RecordedRepoID returns the repo ID recorded for owner/repo, or 0. It never
@@ -388,6 +402,88 @@ func (s *State) RecordedRepoID(owner, repo string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.idCache[repoIDKey(s.hostname, owner, repo)][1]
+}
+
+// PrepareRefresh clears edges owned exclusively by refreshed workflows.
+// Shared pins cannot advance without refreshing their other workflows.
+func (s *State) PrepareRefresh(workflows []string, deps []dep.Dependency, parents dep.ParentMap) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	selected := make(map[string]bool, len(workflows))
+	for _, wf := range workflows {
+		selected[wf] = true
+	}
+	refresh := map[string]bool{}
+	protected := map[string]bool{}
+	for wf := range s.file.Workflows {
+		pins, _ := InspectClosure(s.file, wf, func(parserlock.Pin) bool { return true })
+		for _, lp := range pins {
+			if selected[wf] {
+				refresh[lp.Pin.String()] = true
+			} else {
+				protected[lp.Pin.String()] = true
+			}
+		}
+	}
+	keyToPin := map[string]string{}
+	commits := map[string]string{}
+	for _, d := range deps {
+		pin, err := depToPin(d)
+		if err != nil {
+			return err
+		}
+		key := pin.Canonical().String()
+		commit := d.HashAlgoOrDetect() + "-" + d.SHA
+		if previous, ok := commits[key]; ok && !strings.EqualFold(previous, commit) {
+			return fmt.Errorf("refreshed graph has conflicting commits for %s", key)
+		}
+		commits[key] = commit
+		keyToPin[d.Key()] = key
+		if existing, ok := s.file.Dependencies[key]; ok && protected[key] {
+			if !strings.EqualFold(existing.Commit, commit) {
+				return fmt.Errorf("cannot refresh shared pin %s without refreshing all workflows that use it", key)
+			}
+		}
+	}
+	children := map[string]map[string]bool{}
+	for child, pp := range parents {
+		childPin, ok := keyToPin[child]
+		if !ok {
+			return fmt.Errorf("refreshed graph is missing child %s", child)
+		}
+		for _, parent := range pp {
+			parentPin, ok := keyToPin[parent]
+			if !ok {
+				return fmt.Errorf("refreshed graph is missing parent %s", parent)
+			}
+			if children[parentPin] == nil {
+				children[parentPin] = map[string]bool{}
+			}
+			children[parentPin][childPin] = true
+		}
+	}
+	for _, key := range keyToPin {
+		if !protected[key] {
+			continue
+		}
+		existing := s.file.Dependencies[key]
+		for _, child := range existing.Uses {
+			if children[key][child] {
+				continue
+			}
+			if _, ok := s.file.Dependencies[child]; !ok {
+				return fmt.Errorf("cannot refresh shared graph %s while child %s remains missing; refresh all workflows that use it", key, child)
+			}
+		}
+	}
+	for key := range refresh {
+		if !protected[key] {
+			action := s.file.Dependencies[key]
+			action.Uses = nil
+			s.file.Dependencies[key] = action
+		}
+	}
+	return nil
 }
 
 // AllDeps returns every action entry in the lockfile as a Dependency,

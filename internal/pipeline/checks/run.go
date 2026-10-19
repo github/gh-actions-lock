@@ -26,6 +26,7 @@ func RunChecks(ctx context.Context, pw ParsedWorkflow, lf parserlock.File, r Che
 	var out []Finding
 	out = append(out, checkUntracked(pw, tracked)...)
 	out = append(out, checkNotPinned(pw, depPins, depIndex)...)
+	out = append(out, checkRecordedClosure(pw, lf)...)
 	out = append(out, checkShaAsRef(pw, depIndex)...)
 	out = append(out, checkRefChanged(pw, depPins)...)
 	out = append(out, checkStale(pw, depPins)...)

@@ -30,6 +30,8 @@ type Entry struct {
 type WorkflowPlan struct {
 	Path     string
 	Rewrites map[string]string
+	// Refresh replaces the recorded edges with a newly resolved graph.
+	Refresh bool
 	// RequiredRewrites move redirected `uses:` to the canonical repository;
 	// Commit fails rather than skip one.
 	RequiredRewrites map[string]string

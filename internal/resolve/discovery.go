@@ -106,6 +106,33 @@ const batchActionFileSize = 20
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
 // caller and safe to mutate or hold across concurrent resolver calls.
 func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.ActionRef) ([]dep.Dependency, dep.ParentMap, error) {
+	return r.resolveRecursive(ctx, refs, nil)
+}
+
+// UnlockedRefError identifies a dependency discovered in a locked manifest
+// without a recorded commit. Verification must not resolve its mutable ref.
+type UnlockedRefError struct {
+	Ref parserlock.ActionRef
+}
+
+func (e *UnlockedRefError) Error() string {
+	return fmt.Sprintf("no locked commit for %s@%s", e.Ref.FullName(), e.Ref.Ref)
+}
+
+// ResolveLockedRecursive discovers dependencies using only recorded commits.
+// Its content cache is separate from live-ref resolution and lockfile seeds.
+func (r *Resolver) ResolveLockedRecursive(ctx context.Context, refs []parserlock.ActionRef, deps []dep.Dependency) ([]dep.Dependency, dep.ParentMap, error) {
+	locked := make(map[ghapi.NWORef]string, len(deps))
+	for _, d := range deps {
+		owner, repo := d.OwnerRepo()
+		if d.SHA != "" {
+			locked[ghapi.ForNWORef(owner, repo, d.Ref)] = d.SHA
+		}
+	}
+	return r.resolveRecursive(ctx, refs, locked)
+}
+
+func (r *Resolver) resolveRecursive(ctx context.Context, refs []parserlock.ActionRef, locked map[ghapi.NWORef]string) ([]dep.Dependency, dep.ParentMap, error) {
 	seen := make(map[ghapi.ActionRef]bool)
 	var allDeps []dep.Dependency
 	parentMap := make(dep.ParentMap)
@@ -159,6 +186,13 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			key := cacheKey(request.ref)
 			if !seen[key] {
 				seen[key] = true
+				if locked != nil && request.fetchRef == "" {
+					request.fetchRef = locked[ghapi.ForNWORef(request.ref.Owner, request.ref.Repo, request.ref.Ref)]
+					if request.fetchRef == "" {
+						resolveErr = errors.Join(resolveErr, &UnlockedRefError{Ref: request.ref})
+						continue
+					}
+				}
 				toResolve = append(toResolve, request)
 			}
 		}
@@ -170,8 +204,8 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		var deps []dep.Dependency
 		var actionYMLs []string
 		var err error
-		deps, actionYMLs, err = r.resolveWithActionYMLParallel(ctx, toResolve, depth, &resolveDone, &resolveTotal)
-		if depth > 0 || ghapi.DependabotProxy() {
+		deps, actionYMLs, err = r.resolveWithActionYMLParallel(ctx, toResolve, depth, &resolveDone, &resolveTotal, locked != nil)
+		if depth > 0 || ghapi.DependabotProxy() || locked != nil {
 			// A remote composite's `uses:` can't be rewritten here, and the
 			// runner looks it up as written, so keep the name it uses. Nor
 			// can Dependabot's, which reads back only actions.lock.
@@ -196,10 +230,18 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 		for i := range deps {
 			yml := actionYMLs[i]
 			if yml == "" {
+				callee := strings.HasPrefix(deps[i].Path, ".github/workflows/") &&
+					(strings.HasSuffix(deps[i].Path, ".yml") || strings.HasSuffix(deps[i].Path, ".yaml"))
+				if locked != nil && !callee {
+					resolveErr = errors.Join(resolveErr, fmt.Errorf("action manifest is missing at locked commit for %s", deps[i].Key()))
+				}
 				continue
 			}
 
 			meta, parseErr := parserlock.ParseActionMeta(yml)
+			if parseErr != nil {
+				resolveErr = errors.Join(resolveErr, fmt.Errorf("reading manifest for %s: %w", deps[i].Key(), parseErr))
+			}
 			if parseErr != nil || meta.Execution != parserlock.ExecComposite {
 				continue
 			}
@@ -266,7 +308,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 				// → other-repo). The path-aware seen{} set keys on FullName@Ref
 				// and so prevents re-resolving an exact self repository reference, making
 				// this enqueue loop-safe.
-				if childKey == parentKey {
+				if strings.EqualFold(actionRef.NWO(), deps[i].NWO) && actionRef.Ref == deps[i].Ref {
 					nextPending = append(nextPending, request)
 					continue
 				}
@@ -300,7 +342,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 // resolveDone and resolveTotal are rolling counters owned by ResolveAllRecursive
 // that span every BFS depth, so a single non-jumping progress bar can cover
 // direct + transitive resolution as one phase.
-func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []resolutionRequest, depth int, resolveDone, resolveTotal *atomic.Int64) ([]dep.Dependency, []string, error) {
+func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []resolutionRequest, depth int, resolveDone, resolveTotal *atomic.Int64, locked bool) ([]dep.Dependency, []string, error) {
 	type resolveResult struct {
 		dep dep.Dependency
 		yml string
@@ -310,7 +352,14 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 
 	var uncachedIdx []int
 	for i, request := range refs {
-		if entry, ok := r.cache.Get(cacheKey(request.ref)); ok {
+		cache := &r.cache
+		key := cacheKey(request.ref)
+		if locked {
+			cache = &r.lockedContentCache
+			key = ghapi.ForActionRef(request.ref.Owner, request.ref.Repo, request.ref.Path, request.fetchRef)
+		}
+		if entry, ok := cache.Get(key); ok {
+			entry.dep.Ref = request.ref.Ref
 			results[i] = resolveResult{dep: entry.dep, yml: entry.actionYML, ok: true}
 		} else {
 			uncachedIdx = append(uncachedIdx, i)
@@ -411,7 +460,12 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []reso
 					if res[j].OriginalNWO != "" {
 						d.OriginalRefs = []parserlock.ActionRef{ref}
 					}
-					r.cache.Put(cacheKey(ref), resolvedEntry{dep: d, actionYML: res[j].ActionYML})
+					entry := resolvedEntry{dep: d, actionYML: res[j].ActionYML}
+					if locked {
+						r.lockedContentCache.Put(ghapi.ForActionRef(ref.Owner, ref.Repo, ref.Path, refs[idx].fetchRef), entry)
+					} else {
+						r.cache.Put(cacheKey(ref), entry)
+					}
 					results[idx] = resolveResult{dep: d, yml: res[j].ActionYML, ok: true}
 				} else if j < len(res) && res[j].Err != nil {
 					errs = append(errs, fmt.Errorf("%s@%s: %w", ref.NWO(), ref.Ref, res[j].Err))

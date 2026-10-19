@@ -67,6 +67,7 @@ type Resolver struct {
 
 	// Domain-level caches: action resolution, branch hints.
 	cache              syncmap.Map[ghapi.ActionRef, resolvedEntry]
+	lockedContentCache syncmap.Map[ghapi.ActionRef, resolvedEntry]
 	latestRefCache     syncmap.Map[ghapi.Repo, string]
 	branchHintBySHA    syncmap.Map[ghapi.NWOSha, string]
 	releaseBranchCache syncmap.Map[ghapi.Repo, []ghapi.BranchHead]

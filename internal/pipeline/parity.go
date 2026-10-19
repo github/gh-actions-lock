@@ -25,8 +25,8 @@ import (
 // until --relock. A ref that is gone, or a history check that can't
 // finish, blocks.
 //
-// A pinned commit fixes the dependencies it declares, so the flattened
-// closure in the lockfile is checked in one batch with no recursion.
+// The recorded closure is checked in one batch. Online verification also
+// compares its edges with manifests at the locked commits.
 // Pins resolved in this run (refs absent from recordedKeys, and their
 // transitive closure from this run's resolve) join the same batch. Any
 // blocking finding keeps its workflow out of the write.

@@ -23,8 +23,10 @@ type RunOptions struct {
 	Pool          *pinpool.Pool
 	// Relock re-resolves every ref live instead of trusting the lockfile.
 	Relock bool
+	// AcceptMoved explicitly permits replacing unreachable recorded pins.
+	AcceptMoved bool
 	// Verify also checks that each pin on a mutable ref is still in that
-	// ref's history, at one Compare call per ref that moved.
+	// ref's history and that locked manifests match the recorded graph.
 	Verify bool
 
 	// Resolver UX hooks — set these for interactive spinner mode.
@@ -126,19 +128,29 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Phase 3: Diagnose.
 	endDiag := prof.Phase("  diagnose (parallel)")
 	report := DiagnoseParsed(ctx, parsed, r, opts.Store, opts.Pool)
+	for i := range report.Workflows {
+		wr := &report.Workflows[i]
+		for j := range wr.Findings {
+			f := &wr.Findings[j]
+			if f.IncompleteLockfile {
+				f.Remediable = opts.Relock
+				if !opts.Relock {
+					wr.SkipCommit = true
+				}
+			}
+		}
+	}
 	endDiag()
 
-	// Phase 4: Parity. Under --relock the entries are about to be replaced,
-	// so only what re-resolving can't fix matters: repository identity, a
-	// full-SHA key's commit, which no relock moves, and a ref that is not a
-	// tag or branch, which resolution would still accept by rev-parse rules.
+	// Phase 4: Parity. Refreshing cannot excuse a repository identity change
+	// or an unreachable recorded commit, including transitive pins.
 	if r != nil {
 		keep := func(checks.Finding, parserlock.Pin) bool { return true }
 		if opts.Relock {
 			keep = func(f checks.Finding, p parserlock.Pin) bool {
 				c := f.Category
 				return c == checks.RepoRenamed || c == checks.RepoReplaced || c == checks.RepoUnavailable ||
-					c == checks.UnreachablePin && (parserlock.IsFullSha(p.Ref) || f.RefMissing)
+					c == checks.UnreachablePin && (!opts.AcceptMoved || parserlock.IsFullSha(p.Ref) || f.RefMissing)
 			}
 		}
 		endParity := prof.Phase("  parity check")
@@ -154,5 +166,10 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		}
 	}
 
+	if opts.Verify && r != nil && opts.Store != nil {
+		if err := checkLockedManifests(ctx, r, parsed, opts.Store, report); err != nil {
+			return nil, err
+		}
+	}
 	return &RunResult{Report: report, Valid: report.IsValid()}, nil
 }

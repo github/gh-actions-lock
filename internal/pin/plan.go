@@ -33,9 +33,8 @@ type PlanOptions struct {
 	// re-resolved to their current live SHA.
 	AcceptMoved bool
 
-	// Relock treats ref-moved findings (a branch or partial-version ref
-	// that legitimately advanced) as resolvable, re-pinning them to the
-	// current live SHA. Unlike AcceptMoved it leaves unreachable-pin
+	// Relock rebuilds the complete graph from current refs, even when no
+	// recorded ref moved. Unlike AcceptMoved it leaves unreachable-pin
 	// findings untouched so possible tampering stays a hard error.
 	Relock bool
 
@@ -151,8 +150,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// workflows[path] and Save's GC removes its dependencies[] entry.
 	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
 	repinMoved := repinsMoved(opts) && wr.CountByCategory(checks.RefMoved) > 0
+	refresh := opts.Relock || opts.AcceptMoved
 
-	if !wr.NeedsAttention() && !repinMoved {
+	if !wr.NeedsAttention() && !repinMoved && !refresh {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
 		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
@@ -170,7 +170,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// SHA before the hard-error gate runs. Leave the workflow untouched from
 	// its original inventory; the unreachable-pin error still fails the run.
 	// --accept-moved deliberately accepts these, so it is exempt.
-	if opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0 && repinMoved {
+	if opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0 {
 		entries = verifiedEntries(wr.Inventory, wr.Path)
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 		return planResult{entries: entries, wplans: wplans}, nil
@@ -180,12 +180,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	unrecordedRefs, inventorySHA := partitionByInventory(inventory, wr.ActionRefs)
 	entries = verifiedEntries(inventory, wr.Path)
 
-	// A moved *transitive* dep is pruned from inventory but is not a direct
-	// ActionRef, so partitionByInventory marks nothing unrecorded and the
-	// verified fast path would silently drop it instead of bumping it. Force
-	// the workflow's direct roots through recursive resolution so the moved
-	// transitive is re-pinned to its current SHA.
-	if len(unrecordedRefs) == 0 && repinMoved {
+	// Explicit refresh must rebuild the graph, not just entries with movement
+	// findings: absent children have no recorded SHA to compare.
+	if refresh || len(unrecordedRefs) == 0 && repinMoved {
 		unrecordedRefs, inventorySHA = partitionByInventory(nil, wr.ActionRefs)
 		entries = verifiedEntries(nil, wr.Path)
 	}
@@ -297,13 +294,14 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
 			Path:             wr.Path,
+			Refresh:          refresh,
 			Rewrites:         rewrites,
 			RequiredRewrites: required,
 			SelfActionFiles:  wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Refresh: refresh, SelfActionFiles: wr.SelfActionFiles})
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).

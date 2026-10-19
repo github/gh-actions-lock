@@ -57,6 +57,8 @@ type Finding struct {
 	// tracked action, not onboarding, so --no-onboard lets it through to
 	// be resolved and history-checked.
 	TrackedAction bool
+	// IncompleteLockfile distinguishes damaged recorded graphs from new refs.
+	IncompleteLockfile bool
 }
 
 // InventoryEntry describes a single dependency with context.

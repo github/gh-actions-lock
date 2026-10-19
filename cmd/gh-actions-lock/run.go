@@ -85,10 +85,10 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
-	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Re-resolve every ref and advance moved ones (e.g. main, v4) to their current upstream SHA; leaves unreachable pins as errors")
-	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Frozen check: run the same checks as the default without writing; fails if the lockfile is incomplete or the runner would reject a pin")
+	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Re-resolve the complete dependency graph from current refs; leaves unreachable pins as errors")
+	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Frozen check: verify locked commits and their dependency manifests without writing; fails on incomplete coverage or rejected pins")
 	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
-		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
+		"Offline coverage check: verify direct refs and recorded transitive edges have dependency entries.\n"+
 			"No network calls, no authentication, no file writes — ideal for pre-commit hooks.\n"+
 			"It does not check that the entries are trustworthy; use --verify in CI for that.")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
@@ -296,6 +296,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Store:         store,
 		Pool:          pool,
 		Relock:        relock,
+		AcceptMoved:   opts.acceptMoved,
 		Verify:        opts.verify,
 		Profile:       prof,
 	}
