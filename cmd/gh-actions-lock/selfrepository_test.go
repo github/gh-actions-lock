@@ -17,13 +17,19 @@ import (
 type requestCountingTransport struct {
 	calls atomic.Int64
 	// parity answers parity queries without counting them.
-	parity bool
+	parity    bool
+	manifests bool
 	// tags, when set, answers tag and release listings (tag name to commit) without
 	// counting them: a SHA repair must prove its tag peels to the commit.
 	tags map[string]string
 }
 
 func (t *requestCountingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.manifests && httpmock.GraphQL(`file: file\(path`)(req) {
+		reg := &httpmock.Registry{}
+		registerNodeManifests(reg)
+		return reg.RoundTrip(req)
+	}
 	if t.parity && httpmock.GraphQL(`commit: object\(oid`)(req) {
 		return parityOK(req)
 	}
@@ -117,7 +123,7 @@ jobs:
 
 func TestExistingSHARefRewritesSelfRepositoryAction(t *testing.T) {
 	const sha = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
-	transport := &requestCountingTransport{parity: true, tags: map[string]string{"v3.2.0": sha}}
+	transport := &requestCountingTransport{parity: true, manifests: true, tags: map[string]string{"v3.2.0": sha}}
 
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))

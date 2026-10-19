@@ -18,8 +18,7 @@ import (
 // writeStaleLockfileRepo builds a scratch repo whose lockfile records two
 // workflows — workflow.yml (present on disk, uses checkout@v6) and deleted.yml
 // (no file on disk, uses setup-go@v6) — and chdirs into it. Both pins are
-// mutable v6 refs so they're trusted from the lockfile without any network
-// call. Returns the lockfile path.
+// mutable v6 refs. Returns the lockfile path.
 func writeStaleLockfileRepo(t *testing.T) string {
 	t.Helper()
 	checkoutSHA := "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
@@ -57,6 +56,7 @@ jobs:
 // and that the now-orphaned dependency is garbage-collected with it.
 func TestCheck_FullScan_PrunesDeletedWorkflow(t *testing.T) {
 	reg := &httpmock.Registry{}
+	registerNodeManifests(reg)
 	defer reg.Verify(t)
 
 	lockPath := writeStaleLockfileRepo(t)
@@ -79,6 +79,7 @@ func TestCheck_FullScan_PrunesDeletedWorkflow(t *testing.T) {
 // dep survive untouched.
 func TestCheck_PartialInvocation_DoesNotPrune(t *testing.T) {
 	reg := &httpmock.Registry{}
+	registerNodeManifests(reg)
 	defer reg.Verify(t)
 
 	lockPath := writeStaleLockfileRepo(t)
@@ -97,6 +98,7 @@ func TestCheck_PartialInvocation_DoesNotPrune(t *testing.T) {
 // entry as a non-blocking info finding without touching the lockfile.
 func TestCheck_NoFix_ReportsStaleWorkflow(t *testing.T) {
 	reg := &httpmock.Registry{}
+	registerNodeManifests(reg)
 	defer reg.Verify(t)
 
 	lockPath := writeStaleLockfileRepo(t)
@@ -294,6 +296,11 @@ func TestProximaPrunesBeforeVerifyingHosts(t *testing.T) {
 					staleCalls++
 					return httpmock.StatusResponse(http.StatusNotFound)(req)
 				case "/graphql":
+					if httpmock.GraphQL(`file: file\(path`)(req) {
+						reg := &httpmock.Registry{}
+						registerNodeManifests(reg)
+						return reg.RoundTrip(req)
+					}
 					if tt.mismatch {
 						return parityRepoID(req, http.StatusOK, 2)
 					}

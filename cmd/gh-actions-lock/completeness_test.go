@@ -213,29 +213,37 @@ func TestCompleteness_RelockRebuildsWithoutRefMovement(t *testing.T) {
 	}
 }
 
-func TestCompleteness_VerifyInspectsLockedManifests(t *testing.T) {
-	for _, keepChild := range []bool{false, true} {
-		t.Run(fmt.Sprintf("child recorded=%v", keepChild), func(t *testing.T) {
-			path, file := generateGraph(t)
-			parent := file.Dependencies["acme/parent@v1.0.0"]
-			parent.Uses = nil
-			file.Dependencies["acme/parent@v1.0.0"] = parent
-			if !keepChild {
-				delete(file.Dependencies, "acme/child@v2")
-			}
-			writeGraph(t, file)
-			before := snapshotWorkflows(t)
+func TestCompleteness_OnlineModesInspectLockedManifests(t *testing.T) {
+	for _, mode := range []string{"--verify", "--no-fix", "--no-onboard", ""} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			for _, keepChild := range []bool{false, true} {
+				t.Run(fmt.Sprintf("child recorded=%v", keepChild), func(t *testing.T) {
+					path, file := generateGraph(t)
+					parent := file.Dependencies["acme/parent@v1.0.0"]
+					parent.Uses = nil
+					file.Dependencies["acme/parent@v1.0.0"] = parent
+					if !keepChild {
+						delete(file.Dependencies, "acme/child@v2")
+					}
+					writeGraph(t, file)
+					before := snapshotWorkflows(t)
 
-			_, _, err := runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
-			require.NoError(t, err, "offline verification cannot infer an erased remote edge")
-			transport := &graphTransport{movedParent: true}
-			p, err := runParity(t, transport, "--verify", path)
-			require.ErrorIs(t, err, errSilent)
-			assert.False(t, p.Valid)
-			require.Len(t, p.Findings, 1)
-			assert.Contains(t, p.Findings[0].Detail, "lockfile omits that edge")
-			assert.Equal(t, "acme/parent@v1.0.0", p.Findings[0].RequiredBy)
-			assert.Equal(t, before, snapshotWorkflows(t))
+					_, _, err := runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
+					require.NoError(t, err, "offline verification cannot infer an erased remote edge")
+					transport := &graphTransport{movedParent: true}
+					args := []string{path}
+					if mode != "" {
+						args = append([]string{mode}, args...)
+					}
+					p, err := runParity(t, transport, args...)
+					require.ErrorIs(t, err, errSilent)
+					assert.False(t, p.Valid)
+					require.Len(t, p.Findings, 1)
+					assert.Contains(t, p.Findings[0].Detail, "lockfile omits that edge")
+					assert.Equal(t, "acme/parent@v1.0.0", p.Findings[0].RequiredBy)
+					assert.Equal(t, before, snapshotWorkflows(t))
+				})
+			}
 		})
 	}
 }
@@ -259,33 +267,41 @@ func TestCompleteness_RelockReplacesObsoleteEdges(t *testing.T) {
 }
 
 func TestCompleteness_VerifyManifestFailureIsBlocking(t *testing.T) {
-	for _, tt := range []struct {
-		name       string
-		dropEdge   bool
-		categories []string
-	}{
-		{name: "complete recorded graph", categories: []string{"reachability-unknown"}},
-		{name: "omitted edge does not hide inspection failure", dropEdge: true, categories: []string{"not-pinned", "reachability-unknown"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			path, file := generateGraph(t)
-			if tt.dropEdge {
-				parent := file.Dependencies["acme/parent@v1.0.0"]
-				parent.Uses = nil
-				file.Dependencies["acme/parent@v1.0.0"] = parent
-				writeGraph(t, file)
+	for _, mode := range []string{"--verify", "--no-fix", "--no-onboard", ""} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			for _, tt := range []struct {
+				name       string
+				dropEdge   bool
+				categories []string
+			}{
+				{name: "complete recorded graph", categories: []string{"reachability-unknown"}},
+				{name: "omitted edge does not hide inspection failure", dropEdge: true, categories: []string{"not-pinned", "reachability-unknown"}},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					path, file := generateGraph(t)
+					if tt.dropEdge {
+						parent := file.Dependencies["acme/parent@v1.0.0"]
+						parent.Uses = nil
+						file.Dependencies["acme/parent@v1.0.0"] = parent
+						writeGraph(t, file)
+					}
+					before := snapshotWorkflows(t)
+					args := []string{path}
+					if mode != "" {
+						args = append([]string{mode}, args...)
+					}
+					p, err := runParity(t, &graphTransport{failChild: true}, args...)
+					require.ErrorIs(t, err, errSilent)
+					assert.False(t, p.Valid)
+					var categories []string
+					for _, f := range p.Findings {
+						categories = append(categories, f.Category)
+						assert.Equal(t, "error", f.Severity)
+					}
+					assert.ElementsMatch(t, tt.categories, categories)
+					assert.Equal(t, before, snapshotWorkflows(t))
+				})
 			}
-			before := snapshotWorkflows(t)
-			p, err := runParity(t, &graphTransport{failChild: true}, "--verify", path)
-			require.ErrorIs(t, err, errSilent)
-			assert.False(t, p.Valid)
-			var categories []string
-			for _, f := range p.Findings {
-				categories = append(categories, f.Category)
-				assert.Equal(t, "error", f.Severity)
-			}
-			assert.ElementsMatch(t, tt.categories, categories)
-			assert.Equal(t, before, snapshotWorkflows(t))
 		})
 	}
 }

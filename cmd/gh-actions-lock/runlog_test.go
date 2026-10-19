@@ -231,6 +231,7 @@ func TestCheck_RunLogOnEveryExitPath(t *testing.T) {
 	t.Run("successful run logs success without printing the path", func(t *testing.T) {
 		logDir := isolateRunLogs(t)
 		reg := &httpmock.Registry{}
+		registerNodeManifests(reg)
 		reg.Register(
 			httpmock.GraphQLForRepo("actions", "checkout"),
 			httpmock.JSONResponse(map[string]any{

@@ -1132,11 +1132,10 @@ func TestCheckCommand_JSONDeduplicatesDependencies(t *testing.T) {
 	// When two workflow files share the same dep, top-level dependencies
 	// should deduplicate them.
 	reg := &httpmock.Registry{}
+	registerNodeManifests(reg)
 	defer reg.Verify(t)
 
-	// No HTTP stub: both workflows are fully recorded in the lockfile, so
-	// the fast path skips every network round-trip. The dedup logic under
-	// test operates purely on the inventory built from disk.
+	// Locked manifests are inspected without changing the shared pin.
 
 	wf1 := writeTempWorkflow(t, `
 name: ci
@@ -1338,7 +1337,8 @@ jobs:
 // (fast path, no network) and its recorded SHA is left as-is.
 func TestCheck_DefaultRun_DoesNotBumpBranchRef(t *testing.T) {
 	reg := &httpmock.Registry{}
-	defer reg.Verify(t) // no stubs should be hit on the fast path
+	registerNodeManifests(reg)
+	defer reg.Verify(t)
 
 	staleSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
