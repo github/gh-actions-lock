@@ -26,6 +26,7 @@ func TestDiagnoseOneParsed_LocalAction_NotOnboarded(t *testing.T) {
 	assert.Len(t, wr.Findings, 1)
 	assert.Equal(t, checks.LocalAction, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityWarning, wr.Findings[0].Severity)
+	assert.Contains(t, wr.Findings[0].Detail, "runtime workspace dependencies")
 }
 
 func TestDiagnoseOneParsed_LocalAction_AlreadyOnboarded(t *testing.T) {
@@ -45,6 +46,7 @@ func TestDiagnoseOneParsed_LocalAction_AlreadyOnboarded(t *testing.T) {
 	assert.Len(t, wr.Findings, 1)
 	assert.Equal(t, checks.LocalAction, wr.Findings[0].Category)
 	assert.Equal(t, checks.SeverityError, wr.Findings[0].Severity)
+	assert.Contains(t, wr.Findings[0].Detail, "cannot be proven from this checkout")
 	assert.Contains(t, wr.Findings[0].Remediation, "remove")
 }
 

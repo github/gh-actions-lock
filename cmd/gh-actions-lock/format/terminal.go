@@ -395,7 +395,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	}
 
 	if len(localActionWorkflows) > 0 {
-		out.TermCaution("%d %s skipped — local path actions are not yet supported",
+		out.TermCaution("%d %s skipped — local path actions have unverified workspace dependencies",
 			len(localActionWorkflows),
 			ui.Pluralize(len(localActionWorkflows), "workflow", "workflows"))
 		var localNames []string

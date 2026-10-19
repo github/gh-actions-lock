@@ -331,7 +331,7 @@ func localActionFinding(pw checks.ParsedWorkflow, store *lockfile.State) checks.
 			Category:     checks.LocalAction,
 			Severity:     checks.SeverityError,
 			Confidence:   checks.ConfidenceHigh,
-			Detail:       "workflow uses local path actions which are not supported; remove local path actions to continue using the lockfile",
+			Detail:       "workflow uses local path actions whose runtime workspace dependencies cannot be proven from this checkout",
 			Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (automatic on fix runs; disable with --no-migrate-local-actions), or remove the `./…` steps",
 		}
 	}
@@ -340,7 +340,7 @@ func localActionFinding(pw checks.ParsedWorkflow, store *lockfile.State) checks.
 		Category:     checks.LocalAction,
 		Severity:     checks.SeverityWarning,
 		Confidence:   checks.ConfidenceHigh,
-		Detail:       "workflow uses local path actions; lockfile onboarding is not supported",
+		Detail:       "workflow uses local path actions; automatic lockfile coverage cannot prove their runtime workspace dependencies",
 		Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (automatic on fix runs; disable with --no-migrate-local-actions)",
 	}
 }

@@ -175,7 +175,13 @@ Finally, locked actions must have a branch that the commit being locked exists w
 ## Limitations
 
 There are currently eligibility limitations for workflows that can be onboarded to lockfiles:
-- Workflows in the lockfile cannot use local-path actions, these will be skipped for onboarding. This is also a short-term gap.
+- The CLI cannot prove complete coverage for workspace-local `./…` actions.
+  These execute from the runner workspace, which checkouts, downloads, and scripts
+  can change; they do not necessarily refer to the files in this checkout.
+  The CLI skips onboarding them and reports an error if a workflow already in
+  the lockfile retains them. This is a CLI discovery limitation, not a claim that
+  the runner prohibits local actions. `--no-migrate-local-actions` disables
+  rewriting, not coverage validation; it does not ignore unknown dependencies.
 
 ## License
 
