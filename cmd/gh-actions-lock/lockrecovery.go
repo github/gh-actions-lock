@@ -81,7 +81,7 @@ func newLockRecovery(noInteractive bool, console *ui.UI, newConfirm confirmFacto
 		}
 		// Release the terminal so the prompt renders cleanly over any spinner.
 		console.StopProgress()
-		ok, err := confirm.Confirm(fmt.Sprintf("Lockfile %s is unreadable (%v). Delete and recreate it?", lockPath, parseErr), false)
+		ok, err := confirm.Confirm(fmt.Sprintf("Lockfile %s has invalid contents (%v). Delete and recreate it?", lockPath, parseErr), false)
 		if err != nil {
 			return false, err
 		}
@@ -89,9 +89,9 @@ func newLockRecovery(noInteractive bool, console *ui.UI, newConfirm confirmFacto
 			return false, fmt.Errorf("%w; left in place", parseErr)
 		}
 		if err := os.Remove(lockPath); err != nil {
-			return false, fmt.Errorf("deleting unreadable lockfile %s: %w", lockPath, err)
+			return false, fmt.Errorf("deleting invalid lockfile %s: %w", lockPath, err)
 		}
-		console.TermNeutral("Deleted unreadable lockfile %s; it will be recreated.", lockPath)
+		console.TermNeutral("Deleted invalid lockfile %s; it will be recreated.", lockPath)
 		return true, nil
 	}
 }

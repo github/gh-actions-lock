@@ -1631,7 +1631,7 @@ scenarios:
     expect:
       exit: 2
       output_contains:
-        - "unreadable"
+        - "contents are invalid"
 
   - name: onboarded_no_interactive_corrupt
     category: lockfile
@@ -1647,7 +1647,7 @@ scenarios:
     expect:
       exit: 2
       output_contains:
-        - "unreadable"
+        - "contents are invalid"
 
   # ╔═════════════════════════════════════════════════════════════════════════╗
   # ║══════════════════════════════ dependabot ═══════════════════════════════║
@@ -1819,7 +1819,7 @@ scenarios:
     expect:
       exit: 2
       output_contains:
-        - "unreadable"
+        - "contents are invalid"
 
   - name: dbot_multi_workflow
     category: dependabot

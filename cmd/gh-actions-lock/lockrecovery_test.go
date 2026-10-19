@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/ui"
@@ -101,6 +102,9 @@ func TestNewLockRecovery(t *testing.T) {
 		}
 		if !fc.called {
 			t.Error("confirmer should have been consulted")
+		}
+		if !strings.Contains(fc.gotPrompt, "has invalid contents") || !strings.Contains(fc.gotPrompt, parseErr.Error()) {
+			t.Errorf("prompt must distinguish invalid contents from I/O failure and preserve the cause: %s", fc.gotPrompt)
 		}
 		if fileExists(t, lock) {
 			t.Error("lockfile should have been deleted")

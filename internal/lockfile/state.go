@@ -54,8 +54,8 @@ type State struct {
 // required key). It is distinct from a missing lockfile (legitimately empty)
 // and from a future-version lockfile (ErrFutureVersion). Callers decide
 // recovery policy: prompt to delete and recreate, or fail loudly. Loading
-// must never silently discard an unreadable lockfile and overwrite it.
-var ErrCorruptLockfile = errors.New("lockfile is unreadable")
+// must never silently discard an invalid lockfile and overwrite it.
+var ErrCorruptLockfile = errors.New("lockfile contents are invalid")
 
 // LoadState reads the lockfile at repoRoot, returning an empty in-memory file
 // when none exists on disk. A lockfile that exists but cannot be parsed is

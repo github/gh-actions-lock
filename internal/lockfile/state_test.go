@@ -16,6 +16,20 @@ import (
 
 type fakeMetadataResolver struct{}
 
+func TestLoadStateAt_ReadFailureIsNotInvalidContents(t *testing.T) {
+	_, err := LoadStateAt(t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("reading a directory must fail")
+	}
+	if errors.Is(err, ErrCorruptLockfile) {
+		t.Fatalf("an I/O error must not offer invalid-content recovery: %v", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("read failure must preserve the I/O cause: %v", err)
+	}
+}
+
 func (fakeMetadataResolver) RepoIDs(_ context.Context, _, owner, repo string) (int64, int64, error) {
 	return 1, 2, nil
 }

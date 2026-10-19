@@ -58,7 +58,7 @@ is looked up only as a tag, then a branch, the way the runner does. An exact
 tag (`v4.2.1`) must still point at the commit. Any other pin, including a branch
 (`main`), a partial version (`v4`) or a full SHA (`uses: owner/repo@<sha>`),
 must have its commit in that ref's history, so a fork commit can't pass as
-upstream. A `ref` the runner would reject makes the lockfile unreadable (exit
+upstream. A `ref` the runner would reject makes the lockfile invalid (exit
 2): it must be a short tag or branch name, never a SHA or a `refs/` name, and
 it must equal the `uses:` ref unless that is a full SHA. A `uses:` ref that is
 neither a tag nor a branch, such as `pull/1/head`, is never locked. Generation
