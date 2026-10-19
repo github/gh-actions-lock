@@ -39,9 +39,9 @@ func TestBuildActionFileQuery(t *testing.T) {
 		}
 	}
 	for k, want := range map[string]any{
-		"owner0": "actions", "name0": "checkout", "expr0": "v6^{commit}",
+		"owner0": "actions", "name0": "checkout", "expr0": "refs/tags/v6^{commit}", "branch0": "refs/heads/v6^{commit}",
 		"yml0": "action.yml", "yaml0": "action.yaml",
-		"owner1": "actions", "name1": "cache", "expr1": "v4^{commit}",
+		"owner1": "actions", "name1": "cache", "expr1": "refs/tags/v4^{commit}", "branch1": "refs/heads/v4^{commit}",
 		"yml1": "save/action.yml", "yaml1": "save/action.yaml",
 	} {
 		if vars[k] != want {
@@ -139,7 +139,7 @@ func TestParseActionFileResponse_FileErrors(t *testing.T) {
 			}
 			results := parseActionFileResponse(
 				map[string]json.RawMessage{"a0": raw},
-				[]ActionFileRequest{{Owner: "o", Repo: "r", Ref: "v1"}},
+				[]ActionFileRequest{{Owner: "o", Repo: "r", Ref: sha}},
 				map[string]int{"a0": 0},
 				&api.GraphQLError{Errors: tt.errors}, "github.com")
 			require.Len(t, results, 1)

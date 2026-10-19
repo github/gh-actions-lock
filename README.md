@@ -61,7 +61,10 @@ must have its commit in that ref's history, so a fork commit can't pass as
 upstream. A `ref` the runner would reject makes the lockfile unreadable (exit
 2): it must be a short tag or branch name, never a SHA or a `refs/` name, and
 it must equal the `uses:` ref unless that is a full SHA. A `uses:` ref that is
-neither a tag nor a branch, such as `pull/1/head`, is never locked.
+neither a tag nor a branch, such as `pull/1/head`, is never locked. Generation
+and relocking use the same tag-first lookup. If a tag and branch share a name
+but point at different commits, the run fails without writing. Choose a distinct,
+unambiguous tag or branch name; relocking the same ambiguous name cannot fix it.
 `--verify` also reads action manifests at
 the locked commits to check that the recorded transitive graph covers their
 dependencies, without advancing to current upstream commits.
@@ -88,6 +91,24 @@ combining manifests from different commits into one lockfile entry.
 Suspicious pins whose recorded commit is no longer
 reachable upstream are left as errors — use `--accept-moved` to re-resolve
 those as well.
+
+A deleted recorded ref still blocks, including with `--relock --accept-moved`.
+Restore the trusted ref or deliberately select and review another ref. A branch
+force-push that removes the locked commit from its history also blocks a normal
+run; it is not enough that another ref still contains that commit.
+
+### Container image warnings
+
+Action commits do not pin the contents of mutable container image tags. The CLI
+warns in terminal output about direct `uses: docker://...` images and images in
+remote action manifests it reads: Docker actions' `runs.image` and composite
+actions' `uses: docker://...`, including transitive actions and cached manifests.
+Warnings name the action responsible and do not change JSON findings or exit
+codes. Digest-qualified images do not warn.
+
+`--verify` inspects the recorded commits' manifests. A sticky run that does not
+need those manifests, or offline `--verify-local`, cannot discover images hidden
+behind remote actions. Dockerfiles and their base images are not analyzed.
 
 ### GitHub Enterprise Cloud with data residency
 

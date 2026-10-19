@@ -123,8 +123,10 @@ func TestCheckPins_RESTOnly(t *testing.T) {
 	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/`+paritySHA+`$`), httpmock.JSONResponse(map[string]any{"sha": paritySHA}))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag$`), httpmock.JSONResponse(map[string]any{"full_name": "octo/retag"}))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/refs/tags/v1\.0\.0$`), httpmock.JSONResponse(map[string]any{"sha": parityMoved}))
+	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/refs/heads/v1\.0\.0$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/`+paritySHA+`$`), httpmock.JSONResponse(map[string]any{"sha": paritySHA}))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/refs/tags/v2\.0\.0$`), httpmock.JSONResponse(map[string]any{"sha": paritySHA}))
+	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/refs/heads/v2\.0\.0$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/retag/commits/`+parityMoved+`$`), httpmock.StatusResponse(http.StatusUnprocessableEntity))
 	reg.Register(httpmock.REST("GET", `^/repos/octo/deleted$`), httpmock.StatusResponse(http.StatusNotFound))
 
@@ -170,7 +172,7 @@ func TestPinCheckRefs(t *testing.T) {
 }
 
 func TestCheckPins_RefLookup(t *testing.T) {
-	t.Run("graphql prefers the tag over a same-named branch", func(t *testing.T) {
+	t.Run("graphql marks conflicting refs and accepts branch-only refs", func(t *testing.T) {
 		reg := &httpmock.Registry{}
 		defer reg.Verify(t)
 		var gotQuery string
@@ -188,6 +190,8 @@ func TestCheckPins_RefLookup(t *testing.T) {
 		})
 		require.NoError(t, states[0].Err)
 		require.NoError(t, states[1].Err)
+		assert.True(t, states[0].AmbiguousRef)
+		assert.False(t, states[1].AmbiguousRef)
 		assert.Contains(t, gotQuery, "tag: object(expression: $tag0)")
 		assert.Contains(t, gotQuery, "head: object(expression: $head0)")
 		assert.Equal(t, "refs/tags/v1^{commit}", gotVars["tag0"])

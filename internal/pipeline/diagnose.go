@@ -70,9 +70,25 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 	var resolvedParents dep.ParentMap
 	if r != nil {
 		var resolveErr error
-		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
+		var warnings []string
+		liveDeps, resolvedParents, warnings, resolveErr = r.ResolveWithWarnings(ctx, pw.Refs, nil)
+		wr.ParseWarnings = append(wr.ParseWarnings, warnings...)
 		if resolveErr != nil {
 			blockingResolverError := false
+			var ambiguous *ghapi.AmbiguousRefError
+			if errors.As(resolveErr, &ambiguous) {
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: pw.Path,
+					Category:     checks.UnreachablePin,
+					Severity:     checks.SeverityError,
+					Confidence:   checks.ConfidenceHigh,
+					Dependency:   &dep.Dependency{NWO: ambiguous.Owner + "/" + ambiguous.Repo, Ref: ambiguous.Ref},
+					Detail:       ambiguous.Error(),
+					Remediation:  ghapi.RefCollisionRemediation,
+					RefMissing:   true,
+				})
+				blockingResolverError = true
+			}
 			if resolve.IsCompositeLocalPath(resolveErr) {
 				wr.Findings = append(wr.Findings, checks.Finding{
 					WorkflowPath: pw.Path,

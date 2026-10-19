@@ -54,6 +54,7 @@ func (g *graphTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				break
 			}
 			ref := strings.TrimSuffix(body.Variables[fmt.Sprintf("expr%d", i)], "^{commit}")
+			ref = strings.TrimPrefix(ref, "refs/tags/")
 			sha, yml := graphLeafSHA, nodeActionYAML
 			switch strings.ToLower(name) {
 			case "parent":

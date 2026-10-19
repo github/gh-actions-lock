@@ -34,11 +34,16 @@ func checkLockedManifests(ctx context.Context, r *resolve.Resolver, parsed []che
 				}
 			}
 		}
-		_, parents, err := r.ResolveLockedRecursive(ctx, recorded, deps)
+		_, parents, warnings, err := r.ResolveWithWarnings(ctx, recorded, deps)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		wr := &report.Workflows[i]
+		for _, warning := range warnings {
+			if !slices.Contains(wr.ParseWarnings, warning) {
+				wr.ParseWarnings = append(wr.ParseWarnings, warning)
+			}
+		}
 		// The recorded edges must include every edge discovered at the locked
 		// commits, even when a child exists elsewhere in the same lockfile.
 		for _, child := range slices.Sorted(maps.Keys(parents)) {

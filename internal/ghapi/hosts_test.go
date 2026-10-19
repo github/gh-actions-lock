@@ -138,8 +138,9 @@ func TestProximaContentErrorsAreNotLeafActions(t *testing.T) {
 			defer reg.Verify(t)
 			reg.Register(hostRequest("api.github.com", `repos/o/r$`),
 				httpmock.JSONResponse(map[string]any{"visibility": "public", "id": 2, "owner": map[string]any{"id": 1}}))
-			reg.Register(hostRequest("api.github.com", `repos/o/r/commits/v1$`),
+			reg.Register(hostRequest("api.github.com", `repos/o/r/commits/refs/tags/v1$`),
 				httpmock.JSONResponse(map[string]any{"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}))
+			reg.Register(hostRequest("api.github.com", `repos/o/r/commits/refs/heads/v1$`), httpmock.StatusResponse(404))
 			reg.Register(hostRequest("api.github.com", `repos/o/r/contents/action.yml$`), httpmock.StatusResponse(status))
 			c, err := New("tenant.ghe.com", WithClientTransport(reg))
 			require.NoError(t, err)

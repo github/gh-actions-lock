@@ -112,6 +112,12 @@ func registerMissingRef(reg *httpmock.Registry, ref string, proxy bool) {
 	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout$`), httpmock.JSONResponse(map[string]any{
 		"full_name": "actions/checkout", "id": 1, "owner": map[string]any{"id": 1},
 	}))
-	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/`+regexp.QuoteMeta(ref)+`$`),
-		httpmock.StatusResponse(http.StatusUnprocessableEntity))
+	refs := []string{ref}
+	if len(ref) != 40 {
+		refs = []string{"refs/tags/" + ref, "refs/heads/" + ref}
+	}
+	for _, name := range refs {
+		reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/`+regexp.QuoteMeta(name)+`$`),
+			httpmock.StatusResponse(http.StatusUnprocessableEntity))
+	}
 }

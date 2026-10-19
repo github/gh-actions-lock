@@ -414,7 +414,7 @@ func TestResolveAllRecursiveSelfRepositoryNestedFetchesParentSHA(t *testing.T) {
 	reg.Register(
 		httpmock.GraphQLForRepo("org", "fixtures"),
 		httpmock.GraphQLQuery(`{"data":{"a0":{"nameWithOwner":"org/fixtures","object":{"oid":"`+parentSHA+`","file":{"object":{"text":"runs:\n  using: composite\n  steps:\n    - uses: $/child\n"}}}}}}`, func(_ string, variables map[string]any) {
-			assert.Equal(t, "main^{commit}", variables["expr0"])
+			assert.Equal(t, "refs/tags/main^{commit}", variables["expr0"])
 		}),
 	)
 	reg.Register(

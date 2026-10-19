@@ -55,6 +55,42 @@ must move with the release. Update `dependabot-core` when the release changes:
 Dependabot
 [pins the CLI version and binary checksums](https://github.com/dependabot/dependabot-core/blob/main/github_actions/Dockerfile)
 and currently
-[accepts only lockfile schema `v0.0.2`](https://github.com/dependabot/dependabot-core/blob/main/github_actions/lib/dependabot/github_actions/constants.rb).
+[accepts lockfile schemas `v0.0.2` and `v0.0.3`](https://github.com/dependabot/dependabot-core/blob/main/github_actions/lib/dependabot/github_actions/constants.rb).
 Add schema support there before this CLI emits a new version. Unrelated releases
 do not need a Dependabot bump.
+
+## Recorded-ref validation upgrade
+
+The release candidate containing #174 is behavior-breaking and needs a major
+release classification and Dependabot coordination before publication. It does
+not introduce a lockfile schema or select a release version.
+
+Previously accepted locks can now fail to load (exit 2): every entry's `ref`
+must be non-empty, not a SHA, not `refs/`-qualified, and must match its key's
+ref unless the key uses a full SHA. Restore trusted lock metadata from version
+control or regenerate it from reviewed workflow refs; do not replace invalid
+metadata with guessed ref names.
+
+Online validation rejects pins whose recorded ref is missing or no longer
+contains the commit. Exact version tags must still point at that commit.
+Restoring the trusted recorded ref or explicitly reviewing a different ref is
+required for a deleted ref; another ref containing the commit is not a fallback.
+`--relock --accept-moved` can deliberately select current commits from existing
+refs, but cannot bypass a missing or ambiguous recorded ref.
+
+Generation, relocking, and verification check tags before branches. If both
+names exist at different commits, the CLI emits a blocking `unreachable-pin`
+finding without writing. Recovery requires an unambiguous ref name, not a
+repin hint. The existing category and additive-only JSON contract are preserved.
+Dependabot consumes pre-fix findings but post-fix exit status: validate both,
+including exit 2 parse failures, proxy lookup failures, collision remediation,
+and complete transitive-graph rebuilding, before updating its binary checksums.
+
+Online verification now checks transitive edges against manifests at locked
+commits. Offline verification cannot detect edges erased from both the graph
+and metadata. Explicit relocking rebuilds the graph even when no ref moved.
+Container-image warnings remain terminal-only and non-blocking.
+
+Newly emitted lockfiles use the canonical documentation URL in their header.
+Expect a one-time comment-only change when an existing lockfile is rewritten;
+the header update does not change its schema.

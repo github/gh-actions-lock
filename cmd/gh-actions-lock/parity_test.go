@@ -392,15 +392,18 @@ func TestParity_UnchangedRerunRequestCountRESTOnly(t *testing.T) {
 	commit := httpmock.JSONResponse(map[string]any{"sha": parityTestSHA})
 	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/`+parityTestSHA+`$`), commit)
 	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/tags/v4$`), commit)
+	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/heads/v4$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/tags/v4\.2\.1$`), commit)
+	reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/heads/v4\.2\.1$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/actions/setup-go/commits/`+parityTestSHA+`$`), commit)
 	reg.Register(httpmock.REST("GET", `^/repos/actions/setup-go/commits/refs/tags/v5$`), commit)
+	reg.Register(httpmock.REST("GET", `^/repos/actions/setup-go/commits/refs/heads/v5$`), httpmock.StatusResponse(http.StatusNotFound))
 	path := writeParityFixture(t)
 
 	p, err := runParity(t, ct, path)
 	require.NoError(t, err)
 	assert.True(t, p.Valid, "%+v", p.Findings)
-	assert.Equal(t, 7, ct.n, "2 repos + 1 exact tag + 2 mutable refs x 2: %v", ct.urls)
+	assert.Equal(t, 10, ct.n, "2 repos + 3 tag/branch lookups + 2 mutable commit checks: %v", ct.urls)
 }
 
 // countingTransport counts every request, matched or not.
@@ -713,6 +716,7 @@ func TestParity_DependabotProxyKeepsRenamedName(t *testing.T) {
 	}))
 	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/refs/tags/v2\.2\.2$`),
 		httpmock.JSONResponse(map[string]any{"sha": parityTestSHA}))
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/refs/heads/v2\.2\.2$`), httpmock.StatusResponse(http.StatusNotFound))
 	useDefaultTransport(t, reg)
 	path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
 	wfBefore, err := os.ReadFile(path)
@@ -745,8 +749,10 @@ func TestParity_DependabotProxyFirstRunKeepsRenamedName(t *testing.T) {
 		"full_name": "typesafegithub/github-actions-typing", "id": 1, "owner": map[string]any{"id": 42},
 	}))
 	commit := httpmock.JSONResponse(map[string]any{"sha": parityTestSHA})
-	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing/commits/v2\.2\.2$`), commit)
+	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing/commits/refs/tags/v2\.2\.2$`), commit)
+	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing/commits/refs/heads/v2\.2\.2$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/refs/tags/v2\.2\.2$`), commit)
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/refs/heads/v2\.2\.2$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing/contents/action\.yml$`), httpmock.StatusResponse(http.StatusNotFound))
 	reg.Register(httpmock.REST("GET", `^/repos/typesafegithub/github-actions-typing/contents/action\.yaml$`), httpmock.StatusResponse(http.StatusNotFound))
 	useDefaultTransport(t, reg)
@@ -800,6 +806,7 @@ func TestParity_MutableRefHistory(t *testing.T) {
 						}))
 						reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/`+parityTestSHA+`$`), httpmock.JSONResponse(map[string]any{"sha": parityTestSHA}))
 						reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/tags/v4$`), httpmock.JSONResponse(map[string]any{"sha": live}))
+						reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/heads/v4$`), httpmock.StatusResponse(http.StatusNotFound))
 					} else {
 						reg.Register(httpmock.GraphQL(`head: object\(expression`), httpmock.JSONResponse(map[string]any{
 							"data": map[string]any{"a0": map[string]any{
@@ -950,6 +957,7 @@ func TestParity_VerifyRefCaseSensitive(t *testing.T) {
 						heads = append(heads, ref)
 						return httpmock.JSONResponse(map[string]any{"sha": parityTestSHA})(req)
 					})
+					reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/heads/`+ref+`$`), httpmock.StatusResponse(http.StatusNotFound))
 				}
 			} else {
 				reg.Register(httpmock.GraphQL(`head: object\(expression`), func(req *http.Request) (*http.Response, error) {
@@ -1009,6 +1017,7 @@ func TestParity_CancelDuringAncestryAborts(t *testing.T) {
 				}))
 				reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/`+parityTestSHA+`$`), httpmock.JSONResponse(map[string]any{"sha": parityTestSHA}))
 				reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/tags/v4$`), httpmock.JSONResponse(map[string]any{"sha": live}))
+				reg.Register(httpmock.REST("GET", `^/repos/actions/checkout/commits/refs/heads/v4$`), httpmock.StatusResponse(http.StatusNotFound))
 			} else {
 				reg.Register(httpmock.GraphQL(`head: object\(expression`), httpmock.JSONResponse(map[string]any{
 					"data": map[string]any{"a0": map[string]any{

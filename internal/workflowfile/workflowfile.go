@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
+	"github.com/github/gh-actions-lock/internal/dockerimage"
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,10 +85,9 @@ func appendDockerWarning(warnings *[]string, seen map[string]bool, value string)
 		return true
 	}
 	seen[value] = true
-	if strings.Contains(strings.TrimPrefix(value, "docker://"), "@") {
-		return true
+	if warning := dockerimage.Warning(value, ""); warning != "" {
+		*warnings = append(*warnings, warning)
 	}
-	*warnings = append(*warnings, fmt.Sprintf("%s is not covered by the actions lockfile; container image tags are mutable", value))
 	return true
 }
 

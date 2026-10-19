@@ -43,20 +43,23 @@ type ActionFileResult struct {
 
 // repoResponse is the raw GraphQL response shape for a single repository alias.
 type repoResponse struct {
-	NameWithOwner string `json:"nameWithOwner"`
-	Object        *struct {
-		OID  string `json:"oid"`
-		File *struct {
-			Object *struct {
-				Text string `json:"text"`
-			} `json:"object"`
-		} `json:"file"`
-		FileYAML *struct {
-			Object *struct {
-				Text string `json:"text"`
-			} `json:"object"`
-		} `json:"fileYaml"`
-	} `json:"object"`
+	NameWithOwner string        `json:"nameWithOwner"`
+	Object        *actionObject `json:"object"`
+	Branch        *actionObject `json:"branch"`
+}
+
+type actionObject struct {
+	OID  string `json:"oid"`
+	File *struct {
+		Object *struct {
+			Text string `json:"text"`
+		} `json:"object"`
+	} `json:"file"`
+	FileYAML *struct {
+		Object *struct {
+			Text string `json:"text"`
+		} `json:"object"`
+	} `json:"fileYaml"`
 }
 
 // ResolveActionFiles resolves action refs to commit OIDs and fetches
@@ -220,7 +223,11 @@ func buildActionFileQuery(refs []ActionFileRequest) (string, map[string]any, map
 		vars[nameVar] = ref.Repo
 		// Peel through annotated tags with `^{commit}` so the
 		// `... on Commit` fragment matches for annotated tag refs.
-		vars[exprVar] = ref.Ref + "^{commit}"
+		expr := ref.Ref
+		if !fullCommitRef(ref.Ref) {
+			expr = "refs/tags/" + ref.Ref
+		}
+		vars[exprVar] = expr + "^{commit}"
 		vars[ymlVar] = ymlPath
 		vars[yamlVar] = yamlPath
 
@@ -232,12 +239,19 @@ func buildActionFileQuery(refs []ActionFileRequest) (string, map[string]any, map
 
 		fmt.Fprintf(&body, " %s: repository(owner: $%s, name: $%s) {", alias, ownerVar, nameVar)
 		body.WriteString(" nameWithOwner")
-		fmt.Fprintf(&body, " object(expression: $%s) {", exprVar)
-		body.WriteString(" ... on Commit { oid")
-		fmt.Fprintf(&body, " file: file(path: $%s) { object { ... on Blob { text } } }", ymlVar)
-		fmt.Fprintf(&body, " fileYaml: file(path: $%s) { object { ... on Blob { text } } }", yamlVar)
-		body.WriteString(" }")
-		body.WriteString(" }")
+		objects := []struct{ alias, variable string }{{"object", exprVar}}
+		if !fullCommitRef(ref.Ref) {
+			branchVar := fmt.Sprintf("branch%d", i)
+			vars[branchVar] = "refs/heads/" + ref.Ref + "^{commit}"
+			fmt.Fprintf(&decl, ", $%s: String!", branchVar)
+			objects = append(objects, struct{ alias, variable string }{"branch", branchVar})
+		}
+		for _, object := range objects {
+			fmt.Fprintf(&body, " %s: object(expression: $%s) { ... on Commit { oid", object.alias, object.variable)
+			fmt.Fprintf(&body, " file: file(path: $%s) { object { ... on Blob { text } } }", ymlVar)
+			fmt.Fprintf(&body, " fileYaml: file(path: $%s) { object { ... on Blob { text } } }", yamlVar)
+			body.WriteString(" } }")
+		}
 		body.WriteString(" }")
 	}
 
@@ -285,8 +299,9 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 				if len(item.Path) > 0 && item.Path[0] == alias {
 					// Both metadata spellings are queried; either may be absent.
 					// Reusable workflows can have neither.
-					if item.Type == "NOT_FOUND" && len(item.Path) == 3 && item.Path[1] == "object" &&
-						(item.Path[2] == "file" || item.Path[2] == "fileYaml") {
+					if item.Type == "NOT_FOUND" && len(item.Path) >= 2 &&
+						(item.Path[1] == "object" || item.Path[1] == "branch") &&
+						(len(item.Path) == 2 && !fullCommitRef(ref.Ref) || len(item.Path) == 3 && (item.Path[2] == "file" || item.Path[2] == "fileYaml")) {
 						continue
 					}
 					results[idx].Err = fmt.Errorf("%s", item.Message)
@@ -306,6 +321,15 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		if err := canonicalize(&results[idx], repo.NameWithOwner); err != nil {
 			results[idx].Err = err
 			continue
+		}
+		if !fullCommitRef(ref.Ref) {
+			if repo.Object != nil && repo.Branch != nil && !strings.EqualFold(repo.Object.OID, repo.Branch.OID) {
+				results[idx].Err = &AmbiguousRefError{Owner: ref.Owner, Repo: ref.Repo, Ref: ref.Ref}
+				continue
+			}
+			if repo.Object == nil {
+				repo.Object = repo.Branch
+			}
 		}
 
 		if repo.Object == nil || repo.Object.OID == "" {

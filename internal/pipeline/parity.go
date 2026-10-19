@@ -268,6 +268,11 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 	}
 	short := parserlock.ShortSHA(pc.SHA)
 	switch {
+	case st.AmbiguousRef:
+		f.Category = checks.UnreachablePin
+		f.Detail = (&ghapi.AmbiguousRefError{Owner: pc.Owner, Repo: pc.Repo, Ref: cmp.Or(pc.Tag, pc.Head)}).Error() + via
+		f.Remediation = ghapi.RefCollisionRemediation
+		f.RefMissing = true
 	case st.Err != nil:
 		f.Category = checks.ReachabilityUnknown
 		f.Severity = checks.SeverityWarning

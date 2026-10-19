@@ -330,14 +330,7 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 
 	base := c.anonBase()
 
-	// Resolve ref → commit SHA via the commits endpoint.
-	commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s",
-		base,
-		url.PathEscape(result.Owner),
-		url.PathEscape(result.Repo),
-		url.PathEscape(ref.Ref),
-	)
-	sha, err := c.anonGetCommitSHA(ctx, commitURL)
+	sha, err := c.anonResolveRef(ctx, result.Owner, result.Repo, ref.Ref)
 	if err != nil {
 		var missing *RefNotFoundError
 		if errors.As(err, &missing) {
@@ -375,6 +368,35 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 	}
 	result.ActionYML = content
 	return result
+}
+
+func (c *Client) anonResolveRef(ctx context.Context, owner, repo, ref string) (string, error) {
+	names := []string{ref}
+	if !fullCommitRef(ref) {
+		names = []string{"refs/tags/" + ref, "refs/heads/" + ref}
+	}
+	var target string
+	for _, name := range names {
+		commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s", c.anonBase(),
+			url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(name))
+		sha, err := c.anonGetCommitSHA(ctx, commitURL)
+		var missing *RefNotFoundError
+		switch {
+		case errors.As(err, &missing):
+			continue
+		case err != nil:
+			return "", err
+		case target != "" && !strings.EqualFold(target, sha):
+			return "", &AmbiguousRefError{Owner: owner, Repo: repo, Ref: ref}
+		default:
+			target = sha
+		}
+	}
+	if target == "" {
+		return "", &RefNotFoundError{Owner: owner, Repo: repo, Ref: ref,
+			Err: fmt.Errorf("ref %q does not resolve to a tag or branch", ref)}
+	}
+	return target, nil
 }
 
 // anonGetCommitSHA fetches the commit SHA for a ref without authentication.

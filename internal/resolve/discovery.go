@@ -10,8 +10,10 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/dockerimage"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pinpool"
+	"gopkg.in/yaml.v3"
 )
 
 // CompositeLocalPathError is returned when a remote composite action uses a
@@ -106,7 +108,7 @@ const batchActionFileSize = 20
 // The returned ParentMap (child dep key → parent dep keys) is owned by the
 // caller and safe to mutate or hold across concurrent resolver calls.
 func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.ActionRef) ([]dep.Dependency, dep.ParentMap, error) {
-	return r.resolveRecursive(ctx, refs, nil)
+	return r.resolveRecursive(ctx, refs, nil, nil)
 }
 
 // UnlockedRefError identifies a dependency discovered in a locked manifest
@@ -122,6 +124,10 @@ func (e *UnlockedRefError) Error() string {
 // ResolveLockedRecursive discovers dependencies using only recorded commits.
 // Its content cache is separate from live-ref resolution and lockfile seeds.
 func (r *Resolver) ResolveLockedRecursive(ctx context.Context, refs []parserlock.ActionRef, deps []dep.Dependency) ([]dep.Dependency, dep.ParentMap, error) {
+	return r.resolveRecursive(ctx, refs, lockedCommits(deps), nil)
+}
+
+func lockedCommits(deps []dep.Dependency) map[ghapi.NWORef]string {
 	locked := make(map[ghapi.NWORef]string, len(deps))
 	for _, d := range deps {
 		owner, repo := d.OwnerRepo()
@@ -129,10 +135,22 @@ func (r *Resolver) ResolveLockedRecursive(ctx context.Context, refs []parserlock
 			locked[ghapi.ForNWORef(owner, repo, d.Ref)] = d.SHA
 		}
 	}
-	return r.resolveRecursive(ctx, refs, locked)
+	return locked
 }
 
-func (r *Resolver) resolveRecursive(ctx context.Context, refs []parserlock.ActionRef, locked map[ghapi.NWORef]string) ([]dep.Dependency, dep.ParentMap, error) {
+// ResolveWithWarnings also collects image warnings from the fetched manifests.
+// A non-nil locked slice restricts discovery to its immutable commits.
+func (r *Resolver) ResolveWithWarnings(ctx context.Context, refs []parserlock.ActionRef, locked []dep.Dependency) ([]dep.Dependency, dep.ParentMap, []string, error) {
+	var commits map[ghapi.NWORef]string
+	if locked != nil {
+		commits = lockedCommits(locked)
+	}
+	var warnings []string
+	deps, parents, err := r.resolveRecursive(ctx, refs, commits, &warnings)
+	return deps, parents, warnings, err
+}
+
+func (r *Resolver) resolveRecursive(ctx context.Context, refs []parserlock.ActionRef, locked map[ghapi.NWORef]string, warnings *[]string) ([]dep.Dependency, dep.ParentMap, error) {
 	seen := make(map[ghapi.ActionRef]bool)
 	var allDeps []dep.Dependency
 	parentMap := make(dep.ParentMap)
@@ -175,6 +193,7 @@ func (r *Resolver) resolveRecursive(ctx context.Context, refs []parserlock.Actio
 	}
 
 	var resolveErr error
+	warned := make(map[string]bool)
 
 	for len(pending) > 0 {
 		if depth >= r.MaxRecursionDepth {
@@ -241,6 +260,27 @@ func (r *Resolver) resolveRecursive(ctx context.Context, refs []parserlock.Actio
 			meta, parseErr := parserlock.ParseActionMeta(yml)
 			if parseErr != nil {
 				resolveErr = errors.Join(resolveErr, fmt.Errorf("reading manifest for %s: %w", deps[i].Key(), parseErr))
+			}
+			if parseErr == nil && warnings != nil {
+				images := meta.NestedUses
+				if meta.Execution == parserlock.ExecDocker {
+					var manifest struct {
+						Runs struct {
+							Image string `yaml:"image"`
+						} `yaml:"runs"`
+					}
+					if err := yaml.Unmarshal([]byte(yml), &manifest); err != nil {
+						resolveErr = errors.Join(resolveErr, fmt.Errorf("reading container image for %s: %w", deps[i].Key(), err))
+					} else {
+						images = append(images, manifest.Runs.Image)
+					}
+				}
+				for _, image := range images {
+					if warning := dockerimage.Warning(strings.TrimSpace(image), deps[i].Key()); warning != "" && !warned[warning] {
+						*warnings = append(*warnings, warning)
+						warned[warning] = true
+					}
+				}
 			}
 			if parseErr != nil || meta.Execution != parserlock.ExecComposite {
 				continue

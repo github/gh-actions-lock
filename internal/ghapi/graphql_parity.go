@@ -41,8 +41,9 @@ type PinState struct {
 	RepoMissing bool
 	// ViaFallback marks a verdict from the REST-only or SSO fallback path,
 	// where a missing token or SSO grant is the likelier cause.
-	ViaFallback bool
-	CommitFound bool
+	ViaFallback  bool
+	CommitFound  bool
+	AmbiguousRef bool
 	// TagOID is the commit Tag peels to; empty when the tag is gone.
 	TagOID string
 	// HeadOID is the commit Head peels to; empty when the ref is gone.
@@ -224,6 +225,7 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 			RepoID:        repo.DatabaseID,
 			CommitFound:   repo.Commit != nil && repo.Commit.OID != "",
 		}
+		states[i].AmbiguousRef = repo.Tag != nil && repo.Head != nil && !strings.EqualFold(repo.Tag.OID, repo.Head.OID)
 		var oid string
 		switch {
 		case repo.Tag != nil:
@@ -268,9 +270,8 @@ func aliasError(gqlErr *api.GraphQLError, alias string) error {
 }
 
 // checkPinsREST costs one repos/{owner}/{repo} call per unique repo plus one
-// commits call per intact pin: the Tag when one is set (a match proves the
-// commit exists), otherwise the SHA. A Head costs one more commits call. A
-// ref that is a branch rather than a tag costs one extra call.
+// tag and branch lookup per recorded ref to detect collisions. An exact tag
+// match proves the commit exists; other pins also require a SHA lookup.
 func (c *Client) checkPinsREST(ctx context.Context, pins []PinCheck) []PinState {
 	states := make([]PinState, len(pins))
 	for i, p := range pins {
@@ -291,6 +292,11 @@ func (c *Client) checkPinREST(ctx context.Context, p PinCheck) PinState {
 	if p.Tag != "" {
 		sha, err := c.restRef(ctx, p)
 		if err != nil {
+			var ambiguous *AmbiguousRefError
+			if errors.As(err, &ambiguous) {
+				s.AmbiguousRef = true
+				return s
+			}
 			return PinState{Err: err}
 		}
 		s.TagOID = sha
@@ -307,6 +313,11 @@ func (c *Client) checkPinREST(ctx context.Context, p PinCheck) PinState {
 	}
 	if p.Head != "" && s.CommitFound {
 		if s.HeadOID, err = c.restRef(ctx, p); err != nil {
+			var ambiguous *AmbiguousRefError
+			if errors.As(err, &ambiguous) {
+				s.AmbiguousRef = true
+				return s
+			}
 			return PinState{Err: err}
 		}
 	}
@@ -316,13 +327,20 @@ func (c *Client) checkPinREST(ctx context.Context, p PinCheck) PinState {
 // restRef returns the commit p's ref points at, "" when it is neither a tag
 // nor a branch.
 func (c *Client) restRef(ctx context.Context, p PinCheck) (string, error) {
+	var target string
 	for _, ref := range p.refs() {
 		sha, found, err := c.restCommit(ctx, p.Owner, p.Repo, ref)
-		if err != nil || found {
-			return sha, err
+		if err != nil {
+			return "", err
+		}
+		if found {
+			if target != "" && !strings.EqualFold(target, sha) {
+				return "", &AmbiguousRefError{Owner: p.Owner, Repo: p.Repo, Ref: cmp.Or(p.Tag, p.Head)}
+			}
+			target = sha
 		}
 	}
-	return "", nil
+	return target, nil
 }
 
 // refs lists the full names p's Tag or Head is looked up as, in order: a
