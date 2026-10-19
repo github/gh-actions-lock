@@ -584,12 +584,12 @@ def checkout_graphql_ref_move(srv, live_sha)
   end
 end
 
-def checkout_graphql_success(srv)
+def checkout_graphql_success(srv, name_with_owner: "actions/checkout")
   srv.on(:POST, %r{/graphql$}) do |req|
     body = JSON.parse(req.body) rescue {}
     query = body["query"] || ""
 
-    if query.include?("commit: object(oid")
+    status, headers, response = if query.include?("commit: object(oid")
       checkout_parity(body)
     elsif query.include?("expression")
       [200, { "Content-Type" => "application/json" },
@@ -607,6 +607,7 @@ def checkout_graphql_success(srv)
     else
       [200, { "Content-Type" => "application/json" }, JSON.generate({ data: {} })]
     end
+    [status, headers, response.gsub('"actions/checkout"', JSON.generate(name_with_owner))]
   end
 end
 
@@ -677,10 +678,7 @@ STUB_WIRING = {
   # Parity sees actions/checkout redirect to a new name with the same repo ID.
   dbot_renamed_repo_warns: ->(s) {
     s.stub_server do |srv|
-      srv.on(:POST, %r{/graphql$}) do |req|
-        status, headers, body = checkout_parity(JSON.parse(req.body))
-        [status, headers, body.gsub('"actions/checkout"', '"actions/checkout-renamed"')]
-      end
+      checkout_graphql_success(srv, name_with_owner: "actions/checkout-renamed")
     end
     s.env("GH_TOKEN" => "gho_fake_renamed_token")
   },
