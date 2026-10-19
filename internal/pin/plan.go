@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -125,7 +126,40 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		rec.Workflows = append(rec.Workflows, pr.wplans...)
 	}
 
+	if planErr == nil && opts.Tagger != nil {
+		checkAdoptions(ctx, rec, opts)
+	}
 	return rec, planErr
+}
+
+func checkAdoptions(ctx context.Context, rec *Record, opts PlanOptions) {
+	now := time.Now()
+	approved := make(map[string]bool)
+	if opts.Store != nil {
+		for _, d := range opts.Store.AllDeps() {
+			approved[targetKey(d.Hostname, d.NWO, d.Ref, d.SHA)] = true
+		}
+	}
+	for i := range rec.Entries {
+		e := &rec.Entries[i]
+		if e.Resolution != Pinned && e.Resolution != Verified {
+			continue
+		}
+		// Verification and same-commit ref normalization are not new adoption.
+		if e.Resolution == Verified || approved[targetKey(e.Hostname, e.NWO, e.Ref, e.SHA)] {
+			continue
+		}
+		owner, repo := splitNWO(e.NWO)
+		if err := opts.Tagger.CheckAdoption(ctx, owner, repo, e.Ref, e.SHA, now); err != nil {
+			e.Resolution = Unresolved
+			e.Issue = string(checks.ReleaseCooldown)
+			e.Reason = fmt.Sprintf("%s@%s (%s): %s", e.NWO, e.Ref, e.SHA, err)
+		}
+	}
+}
+
+func targetKey(hostname, nwo, ref, sha string) string {
+	return strings.ToLower(hostname+"/"+nwo) + "@" + ref + ":" + strings.ToLower(sha)
 }
 
 type planResult struct {

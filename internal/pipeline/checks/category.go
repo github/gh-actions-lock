@@ -103,6 +103,9 @@ const (
 	// honor (e.g. semver-*-days or include/exclude). Surfaced so the ignored
 	// configuration is never silent.
 	CooldownConfigIgnored Category = "cooldown-config-ignored"
+	// ReleaseCooldown means a newly adopted candidate is too young or its
+	// cooldown age could not be established. Existing pins are not re-aged.
+	ReleaseCooldown Category = "release-cooldown"
 )
 
 // IsInconclusive reports whether c represents a diagnostic that

@@ -2,9 +2,13 @@ package ghapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
 
 // RepoTag is a tag name paired with the commit SHA it resolves to, as
@@ -117,4 +121,67 @@ func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string
 		}
 	}
 	return result.SHA, nil
+}
+
+// CommitDate returns the committer timestamp of an exact commit, not its push time.
+func (c *Client) CommitDate(ctx context.Context, owner, repo, sha string) (string, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("repos/%s/%s/commits/%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	var result struct {
+		SHA    string `json:"sha"`
+		Commit struct {
+			Committer struct {
+				Date string `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+	}
+	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
+		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+			if err := c.anonGet(ctx, path, &result); err != nil {
+				return "", fmt.Errorf("fetching commit date for %s/%s@%s: %w", owner, repo, sha, err)
+			}
+		} else {
+			return "", fmt.Errorf("fetching commit date for %s/%s@%s: %w", owner, repo, sha, c.ssoErr(owner, err))
+		}
+	}
+	if !strings.EqualFold(result.SHA, sha) {
+		return "", fmt.Errorf("commit date response for %s/%s@%s identified %q", owner, repo, sha, result.SHA)
+	}
+	return result.Commit.Committer.Date, nil
+}
+
+// ReleaseByTag looks up a release outside the recent-release listing.
+// A 404 means no visible release; other failures must not become missing dates.
+func (c *Client) ReleaseByTag(ctx context.Context, owner, repo, tag string) (*RepoRelease, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("repos/%s/%s/releases/tags/%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(tag))
+	var result struct {
+		TagName     string `json:"tag_name"`
+		PublishedAt string `json:"published_at"`
+		Immutable   bool   `json:"immutable"`
+	}
+	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
+		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+			err = c.anonGet(ctx, path, &result)
+		}
+		if err != nil {
+			var httpErr *api.HTTPError
+			if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("fetching release for %s/%s@%s: %w", owner, repo, tag, c.ssoErr(owner, err))
+		}
+	}
+	if result.TagName != tag {
+		return nil, fmt.Errorf("release response for %s/%s@%s identified %q", owner, repo, tag, result.TagName)
+	}
+	return &RepoRelease{TagName: result.TagName, PublishedAt: result.PublishedAt, Immutable: result.Immutable}, nil
 }

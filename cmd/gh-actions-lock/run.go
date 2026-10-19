@@ -456,12 +456,27 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	})
 	endPlan()
 	rl.record = record
+	for _, entry := range record.Unresolved() {
+		if entry.Issue == string(checks.ReleaseCooldown) {
+			report.RepoFindings = append(report.RepoFindings, checks.Finding{
+				Category: checks.ReleaseCooldown, Severity: checks.SeverityError,
+				Confidence: checks.ConfidenceHigh, Detail: entry.Reason,
+			})
+		}
+	}
 	if planErr == nil && len(record.Unresolved()) > 0 {
 		planErr = fmt.Errorf("cannot write an incomplete lockfile: %d unresolved dependencies", len(record.Unresolved()))
 	}
 	if planErr != nil {
 		console.StopProgress()
 		unresolved := replaceOffHistoryFindings(report, record.Unresolved())
+		if opts.jsonFields == "" {
+			for _, entry := range record.Unresolved() {
+				if entry.Issue == string(checks.ReleaseCooldown) {
+					console.TermError("%s", entry.Reason)
+				}
+			}
+		}
 		if opts.jsonFields != "" {
 			if err := format.WriteJSON(out, report, record, false, opts.jsonFields, cliVersion(), store.File().Version, r.Hostname()); err != nil {
 				return err

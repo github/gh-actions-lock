@@ -53,6 +53,10 @@ type Lister struct {
 	tagCache     syncmap.Map[ghapi.Repo, []Info]
 	repoCache    syncmap.Map[ghapi.Repo, *RepoInfo]
 	releaseDates syncmap.Map[ghapi.Repo, map[string]string] // owner/repo → tag → published_at
+	releases     syncmap.Map[ghapi.Repo, map[string]releaseInfo]
+	releaseSF    singleflight.Group
+	dateCache    syncmap.Map[ghapi.NWORef, candidateDate]
+	dateSF       singleflight.Group
 	cooldown     CooldownConfig
 	tagsSF       singleflight.Group
 	repoSF       singleflight.Group
@@ -203,6 +207,23 @@ type releaseInfo struct {
 }
 
 func (tl *Lister) fetchReleaseTags(ctx context.Context, owner, repo string) (map[string]releaseInfo, error) {
+	key := ghapi.ForRepo(owner, repo)
+	if cached, ok := tl.releases.Get(key); ok {
+		return cached, nil
+	}
+	result, err, _ := tl.releaseSF.Do(key.String(), func() (any, error) {
+		if cached, ok := tl.releases.Get(key); ok {
+			return cached, nil
+		}
+		return tl.loadReleaseTags(ctx, owner, repo)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(map[string]releaseInfo), nil
+}
+
+func (tl *Lister) loadReleaseTags(ctx context.Context, owner, repo string) (map[string]releaseInfo, error) {
 	releases, err := tl.client.Releases(ctx, owner, repo)
 	if err != nil {
 		return nil, err
@@ -217,11 +238,10 @@ func (tl *Lister) fetchReleaseTags(ctx context.Context, owner, repo string) (map
 	// Put so the cache entry is written atomically (no read-modify-write).
 	dates := make(map[string]string, len(releases))
 	for _, rel := range releases {
-		if rel.PublishedAt != "" {
-			dates[rel.TagName] = rel.PublishedAt
-		}
+		dates[rel.TagName] = rel.PublishedAt
 	}
 	tl.releaseDates.Put(ghapi.ForRepo(owner, repo), dates)
+	tl.releases.Put(ghapi.ForRepo(owner, repo), set)
 	return set, nil
 }
 

@@ -134,6 +134,51 @@ Restore the trusted ref or deliberately select and review another ref. A branch
 force-push that removes the locked commit from its history also blocks a normal
 run; it is not enough that another ref still contains that commit.
 
+### Release cooldown
+
+Configure a minimum adoption age with the `github-actions` entry's
+`cooldown.default-days` in `.github/dependabot.yml` (or `.yaml`), or with
+`cooldown_days` in `~/.config/gh-actions-lock/config.yml`. A positive Dependabot
+default takes precedence over the user config. A missing or non-positive
+Dependabot default falls back to the user config. With neither configured,
+there is no age restriction; newly pinned recent releases receive an
+informational notice.
+
+The user config also supports per-repository overrides:
+
+```yaml
+cooldown_days: 7
+repos:
+  actions/checkout:
+    cooldown_days: 14
+```
+
+Overrides apply when the user config is the selected policy; zero disables the
+restriction for that repository. Dependabot's semver-specific days and
+include/exclude filters are not supported and produce warnings.
+
+Cooldown applies before writing **every newly adopted commit**, including
+transitive dependencies, branch refs, full SHAs, exact tags, `--no-narrow`,
+`--relock`, and `--accept-moved`. A candidate that is too young, or whose date
+cannot be established, blocks the entire write with a `release-cooldown` error.
+The CLI does not guess an older target of a floating ref or swap commits behind
+an already-resolved dependency graph. Existing approved pins are sticky and are
+not re-aged; verification does not apply a new adoption policy retroactively.
+
+Age uses the later of the selected commit's **committer timestamp** and the
+GitHub Release **published_at** dates available for the selected ref and tags
+pointing at that commit. Release metadata is reused from the recent-release
+cache, with exact-tag lookups for misses. Tag-to-commit association uses the
+existing tag listing (up to 100 tags); releases attached to other, unlisted
+aliases are not discovered. Without a release, the committer timestamp is the
+fallback. Missing/malformed timestamps and API failures fail closed. A 404 for
+a release means no visible release, so the commit timestamp is used instead.
+
+These dates are not first-seen, push, branch-movement, or tag-creation times.
+Git commit timestamps are publisher-controlled: old or backdated commits can
+have been pushed or tagged recently. This is a CLI adoption check, **not runtime
+age enforcement** or proof of how long code has been publicly available.
+
 ### Container image warnings
 
 Action commits do not pin the contents of mutable container image tags. The CLI

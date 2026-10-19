@@ -46,8 +46,8 @@ func appendCooldownConfigFindings(report *checks.Report, warnings []string) {
 
 // injectFreshTagFindings flags tags pinned this run that were released within
 // freshTagWindow, for actions whose effective cooldown is 0 (so the resolver's
-// cooldown filter didn't already gate them). An action with a positive cooldown
-// is skipped: fresh releases were filtered during narrowing. Tags without a
+// adoption guard didn't already gate them). An action with a positive cooldown
+// is skipped: newly adopted commits already passed the age guard. Tags without a
 // GitHub Release have no date and aren't flagged.
 func injectFreshTagFindings(ctx context.Context, report *checks.Report, record *pin.Record, tagger *tag.Lister, cooldownCfg tag.CooldownConfig) {
 	seen := map[string]bool{} // NWO@tag → already flagged
@@ -57,7 +57,7 @@ func injectFreshTagFindings(ctx context.Context, report *checks.Report, record *
 			continue
 		}
 		if cooldownCfg.CooldownDays(owner, repo) > 0 {
-			continue // resolver already filtered fresh tags for this action
+			continue // adoption already checked this action's cooldown
 		}
 		tagName := e.Tag
 		if tagName == "" {
