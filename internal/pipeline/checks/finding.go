@@ -59,6 +59,8 @@ type Finding struct {
 	TrackedAction bool
 	// IncompleteLockfile distinguishes damaged recorded graphs from new refs.
 	IncompleteLockfile bool
+	// ReusableWorkflow marks a job-level call the caller's lockfile cannot pin.
+	ReusableWorkflow bool
 }
 
 // InventoryEntry describes a single dependency with context.
@@ -133,6 +135,9 @@ func (f *Finding) IsValid() bool {
 
 // IsWarning returns true for findings that should render as warnings (not errors).
 func (f *Finding) IsWarning() bool {
+	if f.ReusableWorkflow {
+		return f.Severity == SeverityWarning
+	}
 	switch {
 	case f.Category == ShaAsRef:
 		return true
@@ -151,7 +156,7 @@ func (f *Finding) IsWarning() bool {
 
 // IsRemediableNotPinned reports whether pinning can resolve this finding.
 func (f *Finding) IsRemediableNotPinned() bool {
-	return f.Category == NotPinned && (f.ActionRef != nil || f.Remediable)
+	return f.Category == NotPinned && !f.ReusableWorkflow && (f.ActionRef != nil || f.Remediable)
 }
 
 // DepKey returns a dependency identifier for display grouping.

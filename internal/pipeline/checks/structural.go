@@ -10,6 +10,36 @@ import (
 	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
+// CheckReusableWorkflows refuses mutable job-level refs: caller lock entries
+// cannot make them immutable. Full-SHA calls still leave callee coverage unknown.
+func CheckReusableWorkflows(pw ParsedWorkflow) []Finding {
+	var out []Finding
+	for _, ref := range pw.ReusableWorkflowRefErrs {
+		out = append(out, Finding{
+			WorkflowPath:     pw.Path,
+			Category:         NotPinned,
+			Severity:         SeverityError,
+			Confidence:       ConfidenceHigh,
+			ReusableWorkflow: true,
+			Detail:           fmt.Sprintf("invalid external reusable workflow reference %q", ref),
+			Remediation:      "pin jobs.<id>.uses to a full SHA using owner/repo/.github/workflows/name.yml@<sha>",
+		})
+	}
+	for _, ref := range pw.ReusableWorkflowRefs {
+		f := newRefFinding(pw, ref, NotPinned, SeverityError, ConfidenceHigh)
+		f.ReusableWorkflow = true
+		f.Detail = fmt.Sprintf("external reusable workflow %s@%s is not enforced by the caller's lockfile", ref.FullName(), ref.Ref)
+		f.Remediation = "pin jobs.<id>.uses to a full SHA; caller lockfile entries do not pin reusable workflow calls"
+		if parserlock.IsFullSha(ref.Ref) {
+			f.Severity = SeverityWarning
+			f.Detail = fmt.Sprintf("external reusable workflow %s@%s is SHA-pinned, but its own lockfile and dependencies are not verified", ref.FullName(), ref.Ref)
+			f.Remediation = "verify the callee repository separately at that commit"
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 func checkRecordedClosure(pw ParsedWorkflow, file parserlock.File) []Finding {
 	direct := make(map[string]bool, len(pw.Refs))
 	for _, ref := range pw.Refs {

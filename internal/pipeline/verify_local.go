@@ -46,6 +46,7 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 			continue
 		}
 
+		wr.Findings = append(wr.Findings, checks.CheckReusableWorkflows(pw)...)
 		if pw.DepsErr != nil {
 			wr.Findings = append(wr.Findings, checks.Finding{
 				WorkflowPath: pw.Path,

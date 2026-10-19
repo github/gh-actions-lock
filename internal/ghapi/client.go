@@ -153,6 +153,7 @@ func newClient(hostname string, opts ...ClientOption) (*Client, error) {
 		apiOpts.Transport = anonymousTransport{inner: apiOpts.Transport}
 		c.restOnly = true
 	}
+	apiOpts.Transport = snapshotTransport{inner: apiOpts.Transport}
 
 	gql, err := api.NewGraphQLClient(apiOpts)
 	if err != nil {
@@ -171,12 +172,12 @@ func newClient(hostname string, opts ...ClientOption) (*Client, error) {
 	// insecure TLS setting as the main client for integration tests.
 	if os.Getenv("GH_ACTIONS_LOCK_INSECURE") != "" {
 		c.anonHTTP = &http.Client{
-			Transport: &http.Transport{
+			Transport: snapshotTransport{inner: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // integration tests only
-			},
+			}},
 		}
 	} else {
-		c.anonHTTP = http.DefaultClient
+		c.anonHTTP = &http.Client{Transport: snapshotTransport{inner: http.DefaultTransport}}
 	}
 	if cfg.anonymous {
 		c.anonHTTP = &http.Client{Transport: apiOpts.Transport}

@@ -129,6 +129,8 @@ func (opts *checkOptions) validateOutputFlags() error {
 			return fmt.Errorf("verifying a remote repository is read-only and cannot be combined with --accept-moved or --relock")
 		case opts.noMigrateLocalActions:
 			return fmt.Errorf("verifying a remote repository never migrates local actions; drop --no-migrate-local-actions")
+		case opts.profileDir != "":
+			return fmt.Errorf("verifying a remote repository never writes profiles; drop --profile")
 		}
 	}
 	return nil

@@ -12,6 +12,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/filesource"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline"
@@ -32,6 +33,7 @@ type remoteVerifier struct {
 
 // Verify implements verifier.
 func (v remoteVerifier) Verify(ctx context.Context, out io.Writer, console *ui.UI) error {
+	ctx = ghapi.WithSnapshotRedirects(ctx)
 	opts, spec := v.opts, v.opts.remote
 	hostname := remoteHostname(spec, opts.hostname)
 
@@ -70,6 +72,9 @@ func (v remoteVerifier) Verify(ctx context.Context, out io.Writer, console *ui.U
 	sha, err := client.CommitSHA(ctx, spec.Owner, spec.Repo, ref)
 	if err != nil {
 		return err
+	}
+	if !parserlock.IsFullSha(sha) {
+		return fmt.Errorf("resolving %s/%s@%s: API did not return a full commit SHA", spec.Owner, spec.Repo, ref)
 	}
 	src := filesource.Remote{Reader: client, Owner: spec.Owner, Repo: spec.Repo, SHA: sha}
 	target := fmt.Sprintf("%s/%s@%s", spec.Owner, spec.Repo, ref)
@@ -218,7 +223,7 @@ func remoteWorkflowPaths(ctx context.Context, src filesource.Source, explicit []
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("no workflow files found in %s of %s", dir, target)
 	}
-	return paths, nil
+	return withReusableWorkflows(ctx, src, paths, target)
 }
 
 // withReusableWorkflows expands explicit workflow paths through job-level

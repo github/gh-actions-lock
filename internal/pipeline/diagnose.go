@@ -244,6 +244,13 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	wr.ParseWarnings = pw.ParseWarnings
 
 	hasTerminalFinding := false
+	for _, f := range checks.CheckReusableWorkflows(pw) {
+		wr.Findings = append(wr.Findings, f)
+		if !f.IsValid() {
+			hasTerminalFinding = true
+			wr.SkipCommit = true
+		}
+	}
 	if len(pw.SelfRepositoryRefErrs) > 0 {
 		wr.Findings = append(wr.Findings, checks.Finding{
 			WorkflowPath: pw.Path,

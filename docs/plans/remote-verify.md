@@ -122,11 +122,21 @@ workflows and composite actions are followed remotely through the API.
     lookup, so a `*.ghe.com` 404 never falls back to a github.com namesake.
 16. **Missing lockfile** adds an explicit blocking `not-pinned` repository
     finding, so workflows with only local actions cannot pass.
-17. **Explicit workflow paths** expand through same-repo reusable workflow calls
+17. **Workflow discovery and explicit paths** expand through same-repo reusable workflow calls
     (`./.github/workflows/x.yml`, `$/...`), deduplicated for cycles; a missing
     callee is an error.
 18. `action.yaml` is read only when `action.yml` is absent; other errors propagate.
 19. Contents reads use the SAML/SSO anonymous fallback like other API calls.
+20. A snapshot must resolve to a full commit SHA before any content reads.
+    Redirects must retain the API origin and pinned ref; target renames on
+    that origin remain supported. Potentially truncated Contents inventories
+    (1,000 entries) fail rather than silently omitting workflows.
+21. External job-level reusable workflow refs are not enforced by the caller's
+    lockfile. Mutable refs fail with `not-pinned` and must be pinned directly
+    to a full SHA; full-SHA calls warn that the callee's lockfile and graph are
+    not verified. The rule applies to local, offline and remote verification.
+    Job refs are not narrowed or automatically entered into the action graph.
+22. Remote `--profile` is rejected rather than silently ignored or writing files.
 
 ## Tests
 

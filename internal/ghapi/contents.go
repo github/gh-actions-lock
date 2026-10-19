@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -58,8 +59,17 @@ func (c *Client) ListDir(ctx context.Context, owner, repo, ref, dir string) ([]f
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, fmt.Errorf("%s is not a directory", dir)
 	}
+	// The Contents API silently truncates directories at 1,000 entries.
+	// A partial inventory must not produce a successful verification.
+	if len(items) >= 1000 {
+		return nil, fmt.Errorf("%s: directory listing may be truncated at the Contents API limit of 1000 entries", dir)
+	}
 	entries := make([]filesource.Entry, 0, len(items))
 	for _, it := range items {
+		if it.Name == "" || it.Name == "." || it.Name == ".." ||
+			strings.ContainsAny(it.Name, "/\\") || it.Path != path.Join(dir, it.Name) || it.Type == "" {
+			return nil, fmt.Errorf("%s: invalid directory entry %q", dir, it.Name)
+		}
 		entries = append(entries, filesource.Entry{Name: it.Name, Path: it.Path, IsDir: it.Type == "dir"})
 	}
 	return entries, nil

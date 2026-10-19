@@ -15,6 +15,10 @@ type ParsedWorkflow struct {
 	// Refs are all remote dependency roots attributed to the workflow. This
 	// includes refs found inside in-repo `$/…` actions.
 	Refs []parserlock.ActionRef
+	// ReusableWorkflowRefs are external job-level calls outside caller
+	// lockfile enforcement.
+	ReusableWorkflowRefs    []parserlock.ActionRef
+	ReusableWorkflowRefErrs []string
 	// RewriteRefs are the refs that pinning may rewrite in source: the
 	// workflow YAML plus the in-repo `$/…` action files it reaches.
 	RewriteRefs []parserlock.ActionRef

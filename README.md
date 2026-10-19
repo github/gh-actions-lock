@@ -87,7 +87,23 @@ gh actions-lock --verify https://github.com/octo/api/commit/<sha>
 Without a ref it verifies the default branch. A branch, a tag, a commit, or a
 URL ending in `/tree/<ref>`, `/releases/tag/<tag>` or `/commit/<sha>` also
 sets the ref. Pass `.github/workflows/ci.yml` after the repository to check
-only that workflow. A repository with no `actions.lock` fails verification.
+that workflow and the same-repository reusable workflows it calls. Missing
+callees fail verification, including during a full-directory scan. A repository
+with no `actions.lock` fails verification.
+
+External job-level reusable workflow calls are not enforced by the caller's
+lockfile. Mutable calls fail with a `not-pinned` error, even if a caller lock
+entry exists; pin `jobs.<id>.uses` directly to a full SHA. The CLI does not
+automatically lock or narrow these calls. Full-SHA calls retain a non-blocking
+`not-pinned` warning in JSON and terminal output because the callee's own
+lockfile and dependencies are not verified. This rule also applies to local
+runs, including `--verify-local`.
+
+Remote verification never writes a run log and rejects `--profile`. Repository
+URLs cannot contain credentials, ports, query parameters or fragments. A
+directory with 1,000 or more entries fails explicitly because the Contents API
+cannot guarantee a complete listing at that size; select workflow files
+explicitly instead.
 
 If the repository was renamed or transferred, GitHub's redirect is followed and
 a non-blocking `repo-renamed` finding names the new location. The lockfile does

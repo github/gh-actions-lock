@@ -56,6 +56,12 @@ func Parse(s string) (Spec, error) {
 	if err != nil {
 		return Spec{}, fmt.Errorf("invalid repository %q: %w", s, err)
 	}
+	if err := validateName(r.Owner, r.Name); err != nil {
+		return Spec{}, err
+	}
+	if err := validateHost(r.Host); err != nil {
+		return Spec{}, err
+	}
 	return Spec{Host: strings.ToLower(r.Host), Owner: r.Owner, Repo: r.Name, Ref: ref}, nil
 }
 
@@ -68,6 +74,9 @@ func parseURL(s string) (Spec, error) {
 	if err != nil || u.Host == "" {
 		return Spec{}, fmt.Errorf("invalid repository URL %q", s)
 	}
+	if u.User != nil || u.Port() != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return Spec{}, fmt.Errorf("invalid repository URL: credentials, ports, queries and fragments are not supported")
+	}
 	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(segs) < 2 || segs[0] == "" || segs[1] == "" {
 		return Spec{}, fmt.Errorf("invalid repository URL %q: expected https://HOST/OWNER/REPO", s)
@@ -76,6 +85,12 @@ func parseURL(s string) (Spec, error) {
 		Host:  strings.ToLower(u.Hostname()),
 		Owner: segs[0],
 		Repo:  strings.TrimSuffix(segs[1], ".git"),
+	}
+	if err := validateHost(spec.Host); err != nil {
+		return Spec{}, err
+	}
+	if err := validateName(spec.Owner, spec.Repo); err != nil {
+		return Spec{}, err
 	}
 	rest := segs[2:]
 	switch {
@@ -90,6 +105,37 @@ func parseURL(s string) (Spec, error) {
 		return Spec{}, fmt.Errorf("invalid repository URL %q: only repository root, /tree/<ref>, /releases/tag/<tag> and /commit/<sha> URLs are supported", s)
 	}
 	return spec, nil
+}
+
+func validateName(owner, repo string) error {
+	for _, name := range []string{owner, repo} {
+		if name == "" || name == "." || name == ".." {
+			return fmt.Errorf("invalid repository name %q", name)
+		}
+		for _, c := range name {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+				return fmt.Errorf("invalid repository name %q", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateHost(host string) error {
+	if host == "" {
+		return nil
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return fmt.Errorf("invalid repository host %q", host)
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return fmt.Errorf("invalid repository host %q", host)
+			}
+		}
+	}
+	return nil
 }
 
 // Equal reports whether two specs name the same repository and ref.

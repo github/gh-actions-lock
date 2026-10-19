@@ -18,9 +18,19 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 
 	lines := strings.Split(string(f.Content), "\n")
 	changed := 0
+	jobUses := make(map[*yaml.Node]bool)
+	jobs := mapValue(resolveAlias(documentRoot(&f.root)), "jobs")
+	if jobs != nil && jobs.Kind == yaml.MappingNode {
+		for i := 1; i < len(jobs.Content); i += 2 {
+			jobUses[mapValue(resolveAlias(jobs.Content[i]), "uses")] = true
+		}
+	}
 
 	walkYAMLNodes(&f.root, func(keyNode, valueNode *yaml.Node) {
 		if keyNode == nil || valueNode == nil || keyNode.Value != "uses" || valueNode.Kind != yaml.ScalarNode {
+			return
+		}
+		if jobUses[valueNode] {
 			return
 		}
 		// Skip aliases / nodes that came from anchors. Replacing one

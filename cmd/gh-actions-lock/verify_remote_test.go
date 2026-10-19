@@ -121,6 +121,7 @@ func TestVerifyRemote_DefaultBranchPasses(t *testing.T) {
 	}
 	rr := newRemoteRepo(files, reg)
 	registerParity(reg)
+	registerNodeManifests(reg)
 	cwd := chdirEmpty(t)
 
 	stdout, _, err := runCommandWithHTTP(t, rr, "--verify", "--json=valid,findings", "octo/api")
@@ -146,6 +147,7 @@ func TestVerifyRemote_ExplicitRefSkipsDefaultBranchLookup(t *testing.T) {
 	}
 	rr := newRemoteRepo(files, reg)
 	registerParity(reg)
+	registerNodeManifests(reg)
 	chdirEmpty(t)
 
 	var asked []string
@@ -183,6 +185,7 @@ func TestVerifyRemote_RenamedTarget(t *testing.T) {
 			}, reg)
 			rr.fullName = tt.fullName
 			registerParity(reg)
+			registerNodeManifests(reg)
 			chdirEmpty(t)
 
 			stdout, _, err := runCommandWithHTTP(t, rr, "--verify", "--json=valid,findings", "octo/api")
@@ -362,6 +365,7 @@ jobs:
 			reg := &httpmock.Registry{}
 			rr := newRemoteRepo(tt.files, reg)
 			registerParity(reg)
+			registerNodeManifests(reg)
 			reg.Register(
 				httpmock.GraphQLForRepo("actions", "checkout"),
 				httpmock.JSONResponse(map[string]any{"data": map[string]any{
@@ -414,6 +418,7 @@ func TestVerifyRemote_NarrowedWorkflowPath(t *testing.T) {
 		".github/workflows/actions.lock": remoteLock("actions/checkout@v6"),
 	}, reg)
 	registerParity(reg)
+	registerNodeManifests(reg)
 	chdirEmpty(t)
 
 	_, _, err := runCommandWithHTTP(t, rr, "--verify", "octo/api", ".github/workflows/ci.yml")

@@ -102,6 +102,8 @@ func parseAll(paths []string, store *lockfile.State, rd workflowReader) []checks
 		selfScan := rd.ScanSelf(path, scan.SelfRepositoryActionRefs)
 
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
+		pw.ReusableWorkflowRefs = scan.ReusableWorkflowRefs
+		pw.ReusableWorkflowRefErrs = scan.ReusableWorkflowRefErrs
 		// Refs inside `$/…` actions are rewritable too: their action file is
 		// rewritten alongside the workflow, so narrowing stays in sync.
 		pw.RewriteRefs = pw.Refs

@@ -122,7 +122,7 @@ func PresentReadOnlyFailures(out *ui.UI, report *checks.Report) (hasFixable bool
 		g := groups[key]
 		out.TermBlank()
 		for _, f := range g.findings {
-			if IsAutoFixable(f.Category) && !f.RefMissing {
+			if IsAutoFixable(f.Category) && !f.RefMissing && !f.ReusableWorkflow {
 				hasFixable = true
 			} else if f.Severity == checks.SeverityError {
 				blocked = true
@@ -154,7 +154,7 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 			out.TermDetail("  ↳ %s", out.TermDim(DepReleaseURL(f.Dependency.Hostname, owner+"/"+repo, nil)))
 		}
 	}
-	if (IsAlertedCategory(f.Category) || f.RefMissing) && f.Remediation != "" {
+	if (IsAlertedCategory(f.Category) || f.RefMissing || f.ReusableWorkflow) && f.Remediation != "" {
 		out.TermDetail("  %s %s", out.TermYellow(ui.IconWarning), f.Remediation)
 	}
 	if f.RecommendedTag != "" {
@@ -304,7 +304,7 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 			out.Detail("  ↳ %s", out.Dim(DepReleaseURL(f.Dependency.Hostname, owner+"/"+repo, nil)))
 		}
 	}
-	if (IsAlertedCategory(f.Category) || f.RefMissing) && f.Remediation != "" {
+	if (IsAlertedCategory(f.Category) || f.RefMissing || f.ReusableWorkflow) && f.Remediation != "" {
 		out.Detail("  %s %s", out.Yellow(ui.IconWarning), f.Remediation)
 	}
 	if f.RecommendedTag != "" {
@@ -425,7 +425,8 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		wg := warnMap[key]
 		f := wg.finding
 		depKey := f.DepKey()
-		if f.Category.IsInconclusive() && f.Severity == checks.SeverityWarning {
+		if (f.Category.IsInconclusive() || f.Category == checks.NotPinned && f.ActionRef != nil) &&
+			f.Severity == checks.SeverityWarning {
 			label := depKey
 			if label == "" {
 				label = f.WorkflowPath

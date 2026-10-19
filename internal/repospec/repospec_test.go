@@ -37,6 +37,18 @@ func TestParse(t *testing.T) {
 		{name: "single segment", in: "octo", isErr: true},
 		{name: "too many segments", in: "a/b/c/d", isErr: true},
 		{name: "empty ref", in: "octo/api@", isErr: true},
+		{name: "url credentials", in: "https://token@github.com/octo/api", isErr: true},
+		{name: "url port", in: "https://github.com:8443/octo/api", isErr: true},
+		{name: "url query", in: "https://github.com/octo/api?ref=other", isErr: true},
+		{name: "url fragment", in: "https://github.com/octo/api#other", isErr: true},
+		{name: "url encoded path separator", in: "https://github.com/octo%2Fother/api", isErr: true},
+		{name: "url dot segment", in: "https://github.com/octo/..", isErr: true},
+		{name: "url empty repository after git suffix", in: "https://github.com/octo/.git", isErr: true},
+		{name: "host with port", in: "github.com:8443/octo/api", isErr: true},
+		{name: "query in repository", in: "octo/api?ref=other", isErr: true},
+		{name: "url empty query", in: "https://github.com/octo/api?", isErr: true},
+		{name: "invalid host characters", in: "https://bad_host/octo/api", isErr: true},
+		{name: "url encoded host separator in name", in: "https://github.com/octo/api%252fother", isErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

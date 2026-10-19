@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +56,9 @@ func TestReadFile_Errors(t *testing.T) {
 		{name: "directory rejected", respond: httpmock.JSONResponse([]map[string]any{{"name": "a", "type": "file"}})},
 		{name: "unsupported encoding", respond: httpmock.JSONResponse(map[string]any{"type": "file", "encoding": "none", "content": ""})},
 		{name: "symlink rejected", respond: httpmock.JSONResponse(map[string]any{"type": "symlink"})},
+		{name: "invalid base64", respond: httpmock.JSONResponse(map[string]any{"type": "file", "encoding": "base64", "content": "%%%"})},
+		{name: "unauthorized is not absence", respond: httpmock.StatusResponse(http.StatusUnauthorized)},
+		{name: "forbidden is not absence", respond: httpmock.StatusResponse(http.StatusForbidden)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,6 +72,47 @@ func TestReadFile_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestListDir_RejectsIncompleteOrMalformedInventory(t *testing.T) {
+	tests := []struct {
+		name  string
+		items []map[string]any
+	}{
+		{name: "path traversal", items: []map[string]any{{"name": "../ci.yml", "path": ".github/ci.yml", "type": "file"}}},
+		{name: "mismatched path", items: []map[string]any{{"name": "ci.yml", "path": ".github/elsewhere/ci.yml", "type": "file"}}},
+		{name: "missing name", items: []map[string]any{{"path": ".github/workflows/ci.yml", "type": "file"}}},
+		{name: "missing type", items: []map[string]any{{"name": "ci.yml", "path": ".github/workflows/ci.yml"}}},
+	}
+	limit := make([]map[string]any, 1000)
+	for i := range limit {
+		name := fmt.Sprintf("ci-%d.yml", i)
+		limit[i] = map[string]any{"name": name, "path": ".github/workflows/" + name, "type": "file"}
+	}
+	t.Run("999 entries remain supported", func(t *testing.T) {
+		reg := &httpmock.Registry{}
+		reg.Register(httpmock.REST(http.MethodGet, `/contents/`), httpmock.JSONResponse(limit[:999]))
+		entries, err := newContentsClient(t, reg).ListDir(context.Background(), "octo", "api", remoteContentsSHA, ".github/workflows")
+		require.NoError(t, err)
+		assert.Len(t, entries, 999)
+		reg.Verify(t)
+	})
+	tests = append(tests, struct {
+		name  string
+		items []map[string]any
+	}{name: "potentially truncated inventory", items: limit})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			reg.Register(httpmock.REST(http.MethodGet, `/contents/`), httpmock.JSONResponse(tt.items))
+			_, err := newContentsClient(t, reg).ListDir(context.Background(), "octo", "api", remoteContentsSHA, ".github/workflows")
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, fs.ErrNotExist)
+			reg.Verify(t)
+		})
+	}
+}
+
+const remoteContentsSHA = "0123456789abcdef0123456789abcdef01234567"
 
 func errorsIsNotExist(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 

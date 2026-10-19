@@ -98,6 +98,10 @@ func appendDockerWarning(warnings *[]string, seen map[string]bool, value string)
 type RefScan struct {
 	// Refs are remote repository action references (owner/repo[/path]@ref).
 	Refs []parserlock.ActionRef
+	// ReusableWorkflowRefs are external job-level calls. The runner does not
+	// apply the caller's action lockfile to them.
+	ReusableWorkflowRefs    []parserlock.ActionRef
+	ReusableWorkflowRefErrs []string
 	// LocalPaths are `./…` local composite action references (reusable
 	// workflows are excluded — they resolve differently).
 	LocalPaths []string
@@ -154,6 +158,16 @@ func (f *File) ExtractActionRefs() RefScan {
 			if !seenLocal[value] {
 				seenLocal[value] = true
 				scan.LocalPaths = append(scan.LocalPaths, value)
+			}
+			return
+		}
+		if !stepLevel {
+			if ref := parserlock.ParseReusableWorkflowRef(value); ref != nil {
+				scan.ReusableWorkflowRefs = append(scan.ReusableWorkflowRefs, parserlock.ActionRef{
+					Owner: ref.Owner, Repo: ref.Repo, Path: ref.Path, Ref: ref.Ref,
+				})
+			} else {
+				scan.ReusableWorkflowRefErrs = append(scan.ReusableWorkflowRefErrs, value)
 			}
 			return
 		}
