@@ -252,8 +252,9 @@ type LookupIssue struct {
 
 // ReverseLookup leaves symbolic refs unchanged and reverse-lookups bare SHA
 // refs via DiscoverContaining. For bare SHAs it populates dep.Tag and dep.Branch
-// and computes the canonical @ref. The ref priority is:
-// tag (semver-ish release) > protected branch > default branch > any branch.
+// and computes the canonical @ref. Exact tags take precedence over branch
+// heads. A containing branch remains metadata when its head differs from SHA,
+// so historical pins on the same branch keep distinct refs.
 // When the canonical ref differs from dep.Ref the change is recorded in
 // the returned rewrites map and dep.Ref is updated in place.
 //
@@ -300,7 +301,9 @@ func (r *Resolver) ReverseLookup(ctx context.Context, deps []dep.Dependency) (ma
 			newRef = branch
 		}
 		if newRef == "" {
-			newRef = branch
+			if head, ok := r.GetBranchHead(ctx, owner, repo, branch); ok && strings.EqualFold(head.SHA, d.SHA) {
+				newRef = branch
+			}
 		}
 		if newRef == "" || newRef == d.Ref {
 			continue

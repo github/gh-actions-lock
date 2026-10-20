@@ -418,7 +418,13 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	})
 
 	t.Run("SHA metadata repairs to branch", func(t *testing.T) {
-		tagger, _ := newTagger(t)
+		tagger, reg := newTagger(t)
+		reg.Register(httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
+			httpmock.JSONResponse(map[string]any{
+				"ref": "refs/heads/main", "object": map[string]any{"sha": sha, "type": "commit"},
+			}))
+		resolver, err := resolve.New("github.com", pinpool.New(2, nil), resolve.WithTransport(reg))
+		require.NoError(t, err)
 		report := fastPathReport(sha)
 		report.Inventory[0].Dep.Branch = "main"
 		report.ActionRefs = []parserlock.ActionRef{{
@@ -427,7 +433,7 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 			Ref:   sha,
 		}}
 
-		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger}, func(string) {})
+		result, err := planWorkflow(context.Background(), report, PlanOptions{Tagger: tagger, Resolver: resolver}, func(string) {})
 		require.NoError(t, err)
 
 		require.Len(t, result.entries, 1)
@@ -504,6 +510,165 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		require.Len(t, result.wplans, 1)
 		assert.Nil(t, result.wplans[0].Rewrites)
 	})
+}
+
+func TestPlanPreservesDifferentHistoricalSHAsOnSameBranch(t *testing.T) {
+	const headSHA = "cccccccccccccccccccccccccccccccccccccccc"
+	shas := []string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}
+	for _, tt := range []struct {
+		name   string
+		locked int
+	}{
+		{name: "fresh lockfile"},
+		{name: "existing lockfile", locked: 2},
+		{name: "new workflow with existing lockfile", locked: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.REST("GET", `repos/owner/action/git/ref/heads/main`),
+				httpmock.JSONResponse(map[string]any{
+					"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
+				}))
+			if tt.locked < len(shas) {
+				reg.Register(httpmock.REST("GET", `repos/owner/action$`),
+					httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
+				reg.Register(httpmock.REST("GET", `repos/owner/action/tags`),
+					httpmock.JSONResponse(httpmock.TagListResponse()))
+				for _, sha := range shas[tt.locked:] {
+					reg.Register(httpmock.REST("GET", `repos/owner/action/compare/`+sha+`\.\.\.`+headSHA),
+						httpmock.JSONResponse(httpmock.CompareAncestorResponse(sha)))
+				}
+			}
+			pool := pinpool.New(2, nil)
+			resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
+			require.NoError(t, err)
+			report := &checks.Report{}
+			for i, sha := range shas {
+				d := dep.Dependency{Hostname: "github.com", NWO: "owner/action", Ref: sha, SHA: sha, Branch: "main"}
+				resolver.SeedFromLockfile([]dep.Dependency{d})
+				wr := checks.WorkflowReport{
+					Path:       ".github/workflows/" + sha + ".yml",
+					ActionRefs: []parserlock.ActionRef{{Owner: "owner", Repo: "action", Ref: sha}},
+				}
+				if i < tt.locked {
+					wr.Inventory = []checks.InventoryEntry{{Dep: d, File: wr.Path, Direct: true}}
+				} else {
+					wr.Findings = []checks.Finding{{Category: checks.NotPinned, Severity: checks.SeverityError}}
+				}
+				report.Workflows = append(report.Workflows, wr)
+			}
+
+			record, err := Plan(context.Background(), report, PlanOptions{
+				Resolver: resolver, Tagger: tag.NewListerForTest(t, reg), Pool: pool,
+			})
+			require.NoError(t, err)
+			require.Len(t, record.Entries, len(shas))
+			for i, entry := range record.Entries {
+				assert.Equal(t, shas[i], entry.Ref)
+				assert.Equal(t, shas[i], entry.SHA)
+				assert.Equal(t, "main", entry.OnBranch)
+			}
+			require.Len(t, record.Workflows, len(shas))
+			for _, wp := range record.Workflows {
+				assert.Empty(t, wp.Rewrites)
+			}
+		})
+	}
+}
+
+func TestPlanNormalizationRespectsLockedTarget(t *testing.T) {
+	const (
+		oldSHA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		headSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	for _, tt := range []struct {
+		name      string
+		nwo       string
+		lockedRef string
+		lockedSHA string
+		tag       string
+		wantRef   string
+	}{
+		{
+			name: "branch pinned to another commit", nwo: "owner/action",
+			lockedRef: "main", lockedSHA: oldSHA, wantRef: headSHA,
+		},
+		{
+			name: "tag pinned to another commit", nwo: "owner/action",
+			lockedRef: "v1.0.0", lockedSHA: oldSHA, tag: "v1.0.0", wantRef: headSHA,
+		},
+		{
+			name: "matching branch pin permits normalization", nwo: "owner/action",
+			lockedRef: "main", lockedSHA: headSHA, wantRef: "main",
+		},
+		{
+			name: "matching tag pin permits normalization", nwo: "owner/action",
+			lockedRef: "v1.0.0", lockedSHA: headSHA, tag: "v1.0.0", wantRef: "v1.0.0",
+		},
+		{
+			name: "repository case does not bypass locked pin", nwo: "Owner/Action",
+			lockedRef: "main", lockedSHA: oldSHA, wantRef: headSHA,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`$`),
+				httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
+			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`/git/ref/heads/main`),
+				httpmock.JSONResponse(map[string]any{
+					"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
+				}))
+			tags := httpmock.TagListResponse()
+			if tt.tag != "" {
+				tags = httpmock.TagListResponse(tt.tag, headSHA)
+			}
+			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`/tags`), httpmock.JSONResponse(tags))
+			store, err := lockfile.LoadState(t.TempDir(), fakeMeta{})
+			require.NoError(t, err)
+			locked := dep.Dependency{Hostname: "github.com", NWO: "owner/action", Ref: tt.lockedRef, SHA: tt.lockedSHA}
+			require.NoError(t, store.Set(context.Background(), "existing.yml", []dep.Dependency{locked}, nil, nil))
+			pool := pinpool.New(2, nil)
+			resolver, err := resolve.New("github.com", pool, resolve.WithTransport(reg))
+			require.NoError(t, err)
+			resolver.SeedFromLockfile([]dep.Dependency{{Hostname: "github.com", NWO: tt.nwo, Ref: headSHA, SHA: headSHA}})
+			owner, repo := splitNWO(tt.nwo)
+			report := &checks.Report{Workflows: []checks.WorkflowReport{
+				{
+					Path:      ".github/workflows/existing.yml",
+					Inventory: []checks.InventoryEntry{{Dep: locked, Direct: true}},
+				},
+				{
+					Path:       ".github/workflows/new.yml",
+					ActionRefs: []parserlock.ActionRef{{Owner: owner, Repo: repo, Ref: headSHA}},
+					Findings:   []checks.Finding{{Category: checks.NotPinned, Severity: checks.SeverityError}},
+				},
+			}}
+
+			record, err := Plan(context.Background(), report, PlanOptions{
+				Resolver: resolver, Tagger: tag.NewListerForTest(t, reg), Store: store, Pool: pool,
+			})
+			require.NoError(t, err)
+			require.Len(t, record.Entries, 2)
+			assert.Equal(t, tt.lockedRef, record.Entries[0].Ref)
+			assert.Equal(t, tt.lockedSHA, record.Entries[0].SHA)
+			assert.Equal(t, tt.wantRef, record.Entries[1].Ref)
+			assert.Equal(t, headSHA, record.Entries[1].SHA)
+			assert.Equal(t, "main", record.Entries[1].OnBranch)
+			assert.Equal(t, tt.tag, record.Entries[1].Tag)
+			require.Len(t, record.Workflows, 2)
+			assert.Empty(t, record.Workflows[0].Rewrites)
+			if tt.wantRef == headSHA {
+				assert.Empty(t, record.Workflows[1].Rewrites)
+			} else {
+				assert.Equal(t, map[string]string{tt.nwo + "@" + headSHA: tt.nwo + "@" + tt.wantRef}, record.Workflows[1].Rewrites)
+			}
+		})
+	}
 }
 
 func TestPlanRejectsConflictingSameRunRepairs(t *testing.T) {
