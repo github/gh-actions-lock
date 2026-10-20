@@ -736,7 +736,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
-      output_contains: ["complete lockfile coverage"]
+      output_contains: ["valid lockfile coverage for inspected actions"]
 
   - name: verify_local_missing_pin
     category: output_modes
@@ -789,7 +789,7 @@ scenarios:
       lockfile_template: pinned_checkout
     expect:
       exit: 0
-      output_contains: ["complete lockfile coverage"]
+      output_contains: ["valid lockfile coverage for inspected actions"]
 
   - name: verify_conflict_verify_local
     category: output_modes
@@ -1204,7 +1204,7 @@ scenarios:
             main: index.js
     expect:
       exit: 0
-      output_contains: ["complete lockfile coverage"]
+      output_contains: ["valid lockfile coverage for inspected actions"]
 
   - name: self_repository_reusable_workflow_valid
     category: workflow_parsing
@@ -1228,7 +1228,7 @@ scenarios:
           '.github/workflows/ci.yml': []
     expect:
       exit: 0
-      output_contains: ["complete lockfile coverage"]
+      output_contains: ["valid lockfile coverage for inspected actions"]
 
   - name: self_repository_action_missing
     category: workflow_parsing
