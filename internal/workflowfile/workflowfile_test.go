@@ -484,6 +484,88 @@ jobs:
 	assert.Contains(t, err.Error(), "`uses:` can't contain an expression")
 }
 
+func TestExtractActionRefs_ParallelStepAliases(t *testing.T) {
+	f, err := Parse("wf.yml", []byte(`
+on: push
+x-group: &grp
+  - uses: a/one@v1
+  - &step
+    uses: a/two@v1
+jobs:
+  group-alias:
+    runs-on: x
+    steps:
+      - parallel: *grp
+  step-alias:
+    runs-on: x
+    steps:
+      - parallel:
+          - *step
+          - uses: a/three@v1
+  job-anchor: &job
+    runs-on: x
+    steps:
+      - parallel:
+          - uses: a/four@v1
+  job-alias: *job
+`))
+	require.NoError(t, err)
+	var keys []string
+	for _, r := range f.ExtractActionRefs().Refs {
+		keys = append(keys, r.FullName()+"@"+r.Ref)
+	}
+	assert.ElementsMatch(t, []string{"a/one@v1", "a/two@v1", "a/three@v1", "a/four@v1"}, keys)
+}
+
+func TestExtractActionRefs_ParallelStepClassification(t *testing.T) {
+	f, err := Parse("wf.yml", []byte(`
+on: push
+jobs:
+  build:
+    runs-on: x
+    steps:
+      - uses: a/dup@v1
+      - parallel:
+          - uses: a/dup@v1
+          - uses: a/dup/sub@v1
+            with:
+              uses: a/not-a-ref@v1
+          - uses: docker://alpine:3
+          - uses: ./local/action
+          - uses: $/self/action
+          - uses: $/self/versioned@main
+          - run: echo hi
+`))
+	require.NoError(t, err)
+	scan := f.ExtractActionRefs()
+
+	var keys []string
+	for _, r := range scan.Refs {
+		keys = append(keys, r.FullName()+"@"+r.Ref)
+	}
+	assert.ElementsMatch(t, []string{"a/dup@v1", "a/dup/sub@v1"}, keys, "remote refs are deduplicated across parallel and plain steps")
+	assert.Equal(t, []string{"./local/action"}, scan.LocalPaths)
+	assert.Equal(t, []string{"$/self/action"}, scan.SelfRepositoryActionRefs, "parallel steps are step-level")
+	assert.Equal(t, []string{"$/self/versioned@main"}, scan.SelfRepositoryRefErrs)
+	assert.Len(t, scan.Warnings, 1, "docker:// inside parallel is disclosed")
+}
+
+func TestExtractActionRefs_MalformedParallelValues(t *testing.T) {
+	tests := map[string]string{
+		"null":             "      - parallel:\n",
+		"scalar":           "      - parallel: a/x@v1\n",
+		"mapping":          "      - parallel:\n          uses: a/x@v1\n",
+		"sequence of text": "      - parallel:\n          - a/x@v1\n",
+	}
+	for name, steps := range tests {
+		t.Run(name, func(t *testing.T) {
+			f, err := Parse("wf.yml", []byte("on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n"+steps))
+			require.NoError(t, err)
+			assert.Empty(t, f.ExtractActionRefs().Refs)
+		})
+	}
+}
+
 func TestExtractActionRefs_CompositeIgnoresParallel(t *testing.T) {
 	f, err := Parse("action.yml", []byte(`
 runs:
