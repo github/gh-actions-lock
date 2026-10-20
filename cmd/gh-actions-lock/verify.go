@@ -4,22 +4,37 @@ package main
 //
 //   --verify       Frozen check: the default checks, including runner parity
 //                  for every locked pin, without writing. Requires auth.
+//                  With -R or an OWNER/REPO argument it reads the repository
+//                  through the API instead of the working tree.
 //
 //   --verify-local Offline static coverage check. Every action ref must have
 //                  a lockfile entry. No network, no auth, no writes — ideal for
 //                  pre-commit. Same-repo `./…` refs are reported, not migrated.
 
 import (
-	"fmt"
+	"context"
 	"io"
-	"os"
-	"path/filepath"
 
-	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
-	"github.com/github/gh-actions-lock/internal/lockfile"
-	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/ui"
 )
+
+// verifier is one self-contained verification mode. It reports a failing
+// verification as errSilent after rendering the findings itself.
+type verifier interface {
+	Verify(ctx context.Context, out io.Writer, console *ui.UI) error
+}
+
+// selectVerifier returns the verifier for the standalone modes, or nil when
+// the invocation is a regular check run that continues in runCheck.
+func selectVerifier(opts *checkOptions, newResolver resolverFunc) verifier {
+	switch {
+	case opts.remote != nil:
+		return remoteVerifier{opts: opts, newResolver: newResolver}
+	case opts.verifyLocal:
+		return localVerifier{opts: opts}
+	}
+	return nil
+}
 
 // applyVerifyFlags expands --verify into its constituent flags. Called at the
 // top of runCheck before any work begins.
@@ -27,56 +42,4 @@ func applyVerifyFlags(opts *checkOptions) {
 	if opts.verify {
 		opts.noFix = true
 	}
-}
-
-// runVerifyLocal performs the offline lockfile coverage check. It parses all
-// workflows and verifies that every action ref has a corresponding lockfile
-// entry — no network, no auth, never writes to disk.
-func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
-	workflowsDir := os.Getenv("GH_ACTIONS_LOCK_WORKFLOWS_DIR")
-	paths, err := discoverWorkflowPaths(opts.workflowPaths, workflowsDir, false)
-	if err != nil {
-		return err
-	}
-
-	// Load the lockfile without a resolver (no network).
-	var store *lockfile.State
-	if workflowsDir != "" {
-		store, err = lockfile.LoadStateAt(filepath.Join(workflowsDir, "actions.lock"), nil)
-	} else {
-		store, err = lockfile.LoadState(".", nil)
-	}
-	if err != nil {
-		return fmt.Errorf("opening lockfile: %w", err)
-	}
-	hostname := resolveHostname(opts.hostname)
-	if err := store.SetHostname(hostname); err != nil {
-		return err
-	}
-
-	parsed := pipeline.ParseAll(paths, store)
-	report := pipeline.VerifyLocalCoverage(parsed, store)
-	valid := report.IsValid()
-
-	if opts.jsonFields != "" {
-		if err := format.WriteJSON(out, report, nil, valid, opts.jsonFields, cliVersion(), store.File().Version, hostname); err != nil {
-			return err
-		}
-	} else {
-		format.PresentResults(console, report, valid, false)
-	}
-
-	if !valid {
-		if opts.jsonFields == "" {
-			console.TermDetail("Run without --verify-local to resolve and pin missing actions and migrate `./…` refs to `$/…`.")
-		}
-		return errSilent
-	}
-
-	total := len(paths)
-	if opts.jsonFields == "" {
-		console.TermSuccess("All %d %s have complete lockfile coverage.",
-			total, ui.Pluralize(total, "workflow", "workflows"))
-	}
-	return nil
 }
