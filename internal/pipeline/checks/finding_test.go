@@ -19,5 +19,19 @@ func TestFindingIsValidFollowsSeverity(t *testing.T) {
 				assert.Equal(t, want, r.IsValid())
 			})
 		}
+
+	}
+}
+
+func TestInconclusiveFindingPresentationFollowsSeverity(t *testing.T) {
+	for _, category := range []Category{ReachabilityUnknown, AncestryUnknown} {
+		for _, severity := range []Severity{SeverityWarning, SeverityError} {
+			t.Run(string(category)+"/"+string(severity), func(t *testing.T) {
+				finding := Finding{Category: category, Severity: severity}
+				assert.Equal(t, severity == SeverityWarning, finding.IsWarning())
+				report := WorkflowReport{Findings: []Finding{finding}}
+				assert.Equal(t, severity == SeverityError, report.NeedsAttention())
+			})
+		}
 	}
 }

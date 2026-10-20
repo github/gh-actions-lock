@@ -108,7 +108,7 @@ func TestParityFinding(t *testing.T) {
 			}
 			assert.True(t, ok)
 			assert.Equal(t, tt.want, f.Category)
-			assert.Equal(t, tt.wantWarn || tt.want == checks.ReachabilityUnknown, f.Severity == checks.SeverityWarning)
+			assert.Equal(t, tt.wantWarn, f.Severity == checks.SeverityWarning)
 			if tt.wantDetail != "" {
 				assert.Equal(t, tt.wantDetail, f.Detail)
 			}
@@ -199,7 +199,7 @@ func TestParityFinding_FullSHAKey(t *testing.T) {
 			state: ghapi.PinState{NameWithOwner: "actions/checkout", CommitFound: true}, want: checks.UnreachablePin,
 			wantDetail: "ref does-not-exist is not a tag or branch of actions/checkout; the runner will reject this pin",
 		},
-		{name: "inconclusive stays a warning", head: "v6.1.0", state: ghapi.PinState{Err: errors.New("timeout")}, want: checks.ReachabilityUnknown},
+		{name: "inconclusive blocks", head: "v6.1.0", state: ghapi.PinState{Err: errors.New("timeout")}, want: checks.ReachabilityUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,7 +216,7 @@ func TestParityFinding_FullSHAKey(t *testing.T) {
 			}
 			assert.True(t, ok)
 			assert.Equal(t, tt.want, f.Category)
-			assert.Equal(t, tt.want == checks.ReachabilityUnknown, f.Severity == checks.SeverityWarning)
+			assert.Equal(t, checks.SeverityError, f.Severity)
 			if tt.wantDetail != "" {
 				assert.Equal(t, tt.wantDetail, f.Detail)
 			}

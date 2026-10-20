@@ -83,6 +83,14 @@ metadata with guessed ref names.
 
 Online validation rejects pins whose recorded ref is missing or no longer
 contains the commit. Exact version tags must still point at that commit.
+An inconclusive online parity check now blocks exact-tag keys too: outside
+the Dependabot proxy it emits an error-severity `reachability-unknown` finding
+and exits 1 without writing; proxy lookup failures retain exit 2 for retry.
+This replaces the prior warning/exit-0 result for recorded exact tags.
+The diagnostic identifies the entry and says verification was inconclusive,
+not that the lockfile is invalid. Cover this exit-code/severity change in
+Dependabot compatibility coordination. Offline `--verify-local` still makes
+no API or provenance claim.
 Restoring the trusted recorded ref or explicitly reviewing a different ref is
 required for a deleted ref; another ref containing the commit is not a fallback.
 `--relock --accept-moved` can deliberately select current commits from existing

@@ -33,8 +33,8 @@ import (
 //
 // Identity follows the runner: only the repo ID counts. A rename or
 // transfer redirect to the same repo ID is a warning, also inside a
-// remote composite; a different ID or a name that doesn't resolve blocks. Fresh pins fail closed: an
-// inconclusive check keeps them out of the write.
+// remote composite; a different ID or a name that doesn't resolve blocks.
+// Every pin fails closed when verification is inconclusive.
 //
 // Under the Dependabot proxy any inconclusive check is an error: the run
 // aborts so Dependabot retries rather than shipping an unverified lock.
@@ -130,22 +130,16 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	if ghapi.DependabotProxy() {
 		for i, st := range states {
 			if st.Err != nil {
-				return fmt.Errorf("could not verify locked %s/%s@%s: %w", pins[i].Owner, pins[i].Repo, parserlock.ShortSHA(pins[i].SHA), st.Err)
+				return fmt.Errorf("could not verify locked %s/%s@%s (commit %s): verification inconclusive: %w",
+					pins[i].Owner, pins[i].Repo, cmp.Or(pins[i].Tag, pins[i].Head), parserlock.ShortSHA(pins[i].SHA), st.Err)
 			}
 		}
 	}
 	for i, st := range states {
 		for _, o := range owners[i] {
 			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st)
-			switch {
-			case ok && o.fresh && st.Err != nil:
-				f.Severity = checks.SeverityError
-				f.Remediation = "retry; nothing is written until the repository identity is confirmed"
-			// A history check fails closed: the commit is otherwise unproven.
-			case ok && pins[i].Head != "" && st.Err != nil && keep(checks.Finding{Category: checks.UnreachablePin}, o.lp.Pin):
-				f.Severity = checks.SeverityError
-				f.Remediation = "retry; a pin is accepted only once its commit is traced to its tag or branch"
-			case !ok || !keep(f, o.lp.Pin):
+			// Refresh options cannot excuse an inconclusive verification.
+			if !ok || st.Err == nil && !keep(f, o.lp.Pin) {
 				continue
 			}
 			wr := &report.Workflows[o.report]
@@ -275,10 +269,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		f.RefMissing = true
 	case st.Err != nil:
 		f.Category = checks.ReachabilityUnknown
-		f.Severity = checks.SeverityWarning
 		f.Confidence = checks.ConfidenceLow
-		f.Detail = fmt.Sprintf("could not verify locked %s@%s: %s", nwo, short, st.Err)
-		f.Remediation = "retry; the runner will re-check this pin at job start"
+		f.Detail = fmt.Sprintf("could not verify locked %s@%s (commit %s)%s: verification inconclusive: %s",
+			nwo, lp.Pin.Ref, short, via, st.Err)
+		f.Remediation = "retry when the API is available; nothing is written until verification succeeds"
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable
 		f.Detail = fmt.Sprintf("%s is missing or not visible to this token%s", nwo, via)

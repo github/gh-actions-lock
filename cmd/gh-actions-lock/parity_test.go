@@ -647,8 +647,7 @@ func useDefaultTransport(t *testing.T, rt http.RoundTripper) {
 
 // TestParity_DependabotProxyInconclusiveAborts: under the Dependabot proxy
 // a rate limit or server error on a recorded pin aborts with exit 2 so
-// Dependabot retries, instead of passing on a warning. Outside the proxy
-// the same failure stays a warning.
+// Dependabot retries, rather than receiving an invalid-lockfile verdict.
 func TestParity_DependabotProxyInconclusiveAborts(t *testing.T) {
 	for name, tc := range map[string]struct {
 		resp   httpmock.Responder
@@ -691,10 +690,29 @@ jobs:
 	}
 }
 
-func TestParity_InconclusiveWarnsWithoutProxy(t *testing.T) {
-	reg := &httpmock.Registry{}
-	registerNodeManifests(reg)
-	path := writeTempWorkflow(t, `
+func TestParity_ExactTagInconclusiveBlocks(t *testing.T) {
+	modes := map[string][]string{
+		"default":      nil,
+		"verify":       {"--verify"},
+		"no-fix":       {"--no-fix"},
+		"no-onboard":   {"--no-onboard"},
+		"keep-sha":     {"--keep-sha"},
+		"relock":       {"--relock"},
+		"accept-moved": {"--relock", "--accept-moved"},
+	}
+	for mode, args := range modes {
+		for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+			for _, jsonOutput := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/json=%t", mode, status, jsonOutput), func(t *testing.T) {
+					reg := &httpmock.Registry{}
+					defer reg.Verify(t)
+					reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.StatusResponse(status))
+					if mode == "relock" || mode == "accept-moved" {
+						reg.Register(httpmock.GraphQL(`file: file\(path`), httpmock.JSONResponse(map[string]any{
+							"data": map[string]any{"a0": testRepoResponse("actions/checkout", parityTestSHA, nodeActionYAML)},
+						}))
+					}
+					path := writeTempWorkflow(t, `
 name: ci
 on: push
 jobs:
@@ -703,10 +721,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.1
 `, "actions/checkout@v4.2.1=sha1-"+parityTestSHA)
+					lockBefore := readTempLockfilePins(t)
+					workflowBefore, err := os.ReadFile(path)
+					require.NoError(t, err)
 
-	_, stderr, err := runCommandWithHTTP(t, parityDown{reg}, "--verify", path)
-	require.NoError(t, err, stderr)
-	assert.Contains(t, stderr, "could not verify locked actions/checkout")
+					flags := append([]string{"--no-narrow", "--no-interactive"}, args...)
+					if jsonOutput {
+						flags = append(flags, "--json=valid,findings")
+					}
+					stdout, stderr, err := runCommandWithHTTP(t, reg, append(flags, path)...)
+					require.ErrorIs(t, err, errSilent, stdout+stderr)
+					if jsonOutput {
+						var payload parityPayload
+						require.NoError(t, json.Unmarshal([]byte(stdout), &payload), stdout+stderr)
+						assert.False(t, payload.Valid)
+						var found bool
+						for _, finding := range payload.Findings {
+							if finding.Category != "reachability-unknown" {
+								continue
+							}
+							found = true
+							assert.Equal(t, "actions/checkout@v4.2.1", finding.Dependency)
+							assert.Equal(t, "error", finding.Severity)
+							assert.Contains(t, finding.Detail, "verification inconclusive")
+							assert.NotContains(t, finding.Detail, "invalid")
+						}
+						assert.True(t, found, "%+v", payload.Findings)
+					} else {
+						assert.Contains(t, stderr, "actions/checkout@v4.2.1")
+						assert.Contains(t, stderr, "verification inconclusive")
+						assert.NotContains(t, stderr, "invalid lockfile")
+					}
+					assert.Equal(t, lockBefore, readTempLockfilePins(t))
+					workflowAfter, err := os.ReadFile(path)
+					require.NoError(t, err)
+					assert.Equal(t, workflowBefore, workflowAfter)
+				})
+			}
+		}
+	}
 }
 
 // TestParity_DependabotProxyKeepsRenamedName: Dependabot reads back only

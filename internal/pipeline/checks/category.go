@@ -56,11 +56,9 @@ const (
 	// differ but can't classify the move as benign-but-known
 	// (ref-moved) vs. tampered (unreachable-pin).
 	AncestryUnknown Category = "ancestry-unknown"
-	// ReachabilityUnknown means branch_commits couldn't decide
-	// whether the pinned SHA is still reachable from any branch in
-	// the upstream repo (resolver failure, GraphQL rate limit, etc).
-	// Non-blocking diagnostic: surfaced so consumers can retry rather
-	// than treating the dep as verified.
+	// ReachabilityUnknown means an API failure left verification inconclusive.
+	// Locked-pin parity emits an error so consumers retry without accepting
+	// an unverified lock or treating it as proven invalid.
 	ReachabilityUnknown Category = "reachability-unknown"
 	// OnboardingRequired means a `check --no-onboard` run encountered a
 	// workflow (or an action within one) that has no existing entry in the
@@ -107,10 +105,8 @@ const (
 )
 
 // IsInconclusive reports whether c represents a diagnostic that
-// couldn't reach a verdict (network/rate-limit fallback). These are
-// surfaced as warnings but are not blocking: consumers (e.g.
-// Dependabot FindingMapper) treat them as "scan inconclusive, retry"
-// rather than "lockfile is bad".
+// couldn't reach a verdict (network/rate-limit fallback). Severity determines
+// whether a finding blocks; the category does not mean "lockfile is bad".
 func (c Category) IsInconclusive() bool {
 	switch c {
 	case AncestryUnknown, ReachabilityUnknown:
