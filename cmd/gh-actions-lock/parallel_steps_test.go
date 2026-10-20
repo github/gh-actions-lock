@@ -13,9 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// writeParallelStepsRepo writes workflow.yml plus a lockfile that already pins
-// checkout@v6 and setup-go@v6 (mutable refs trusted without a network call),
-// and chdirs into the repo. Returns the lockfile path.
 func writeParallelStepsRepo(t *testing.T, workflow string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -35,6 +32,7 @@ func TestCheck_ParallelStepGroups(t *testing.T) {
 	t.Run("full scan keeps a dependency used only in a parallel group", func(t *testing.T) {
 		reg := &httpmock.Registry{}
 		defer reg.Verify(t)
+		registerNodeManifests(reg)
 		lockPath := writeParallelStepsRepo(t, `on: push
 jobs:
   build:
@@ -45,8 +43,8 @@ jobs:
           - uses: actions/setup-go@v6
           - run: echo hi
 `)
-		_, _, err := runCommandWithHTTP(t, reg, "--json=valid")
-		require.NoError(t, err)
+		_, stderr, err := runCommandWithHTTP(t, reg, "--json=valid")
+		require.NoError(t, err, stderr)
 		got, err := os.ReadFile(lockPath)
 		require.NoError(t, err)
 		assert.Contains(t, string(got), "'actions/setup-go@v6'")
