@@ -1,5 +1,5 @@
 // Package workflowfile owns the parsed workflow YAML representation: loading,
-// extraction of action refs, local composite discovery, and comment-preserving
+// extraction of action refs, self-repository discovery, and comment-preserving
 // rewriting. It intentionally has no dependency on the lockfile or resolver
 // packages.
 package workflowfile
@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -424,108 +423,6 @@ func DiscoverWorkflowsIn(dir string) ([]string, error) {
 // an unusable override is an error.
 func FindRepoRoot(startPath string) (string, error) {
 	return findRepoRoot(startPath)
-}
-
-// DiscoverCompositeActionFiles walks the repository rooted at root and returns
-// the paths of all action definition files (action.yml / action.yaml). The
-// .git directory is skipped. Non-composite action files are included; callers
-// migrate them with MigrateLocalActionsToSelfRepository, which no-ops when a file has
-// no local `./…` steps.
-func DiscoverCompositeActionFiles(root string) ([]string, error) {
-	if root == "" {
-		return nil, nil
-	}
-	var paths []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Name() == "action.yml" || d.Name() == "action.yaml" {
-			if err := ValidatePathWithinRoot(root, p); err != nil {
-				return err
-			}
-			info, err := os.Stat(p)
-			if err != nil {
-				return err
-			}
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("action definition %s is not a regular file", p)
-			}
-			paths = append(paths, p)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discovering action files under %s: %w", root, err)
-	}
-	sort.Strings(paths)
-	return paths, nil
-}
-
-// ExtractLocalCompositeRefs reads action.yml files from local paths relative
-// to the workflow file's directory and returns any repository action refs
-// found in their steps.
-func ExtractLocalCompositeRefs(workflowPath string, localPaths []string) ([]parserlock.ActionRef, []string) {
-	var refs []parserlock.ActionRef
-	var warnings []string
-	seen := make(map[string]bool)
-
-	repoRoot, err := findRepoRoot(workflowPath)
-	if err != nil {
-		if len(localPaths) > 0 {
-			warnings = append(warnings, fmt.Sprintf("can't resolve local action paths: %v", err))
-		}
-		return nil, warnings
-	}
-	if repoRoot == "" {
-		if len(localPaths) > 0 {
-			warnings = append(warnings, "can't resolve local action paths: not in a git repository")
-		}
-		return nil, warnings
-	}
-
-	for _, localPath := range localPaths {
-		relPath := strings.TrimPrefix(localPath, "./")
-		actionDir := filepath.Join(repoRoot, relPath)
-		if !isWithinRoot(repoRoot, actionDir) {
-			warnings = append(warnings, fmt.Sprintf("refusing to read action file outside repo root: %s", localPath))
-			continue
-		}
-
-		actionContent, err := os.ReadFile(filepath.Join(actionDir, "action.yml"))
-		if err != nil {
-			actionContent, err = os.ReadFile(filepath.Join(actionDir, "action.yaml"))
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("can't read action file for %s: %v", localPath, err))
-				continue
-			}
-		}
-
-		uses, parseErr := parseActionYAMLForUses(actionContent)
-		if parseErr != nil {
-			warnings = append(warnings, fmt.Sprintf("can't parse action file for %s: %v", localPath, parseErr))
-			continue
-		}
-
-		for _, use := range uses {
-			actionRef := parserlock.ParseActionRef(use)
-			if actionRef != nil {
-				dedupKey := actionRef.FullName() + "@" + actionRef.Ref
-				if !seen[dedupKey] {
-					seen[dedupKey] = true
-					refs = append(refs, *actionRef)
-				}
-			}
-		}
-	}
-
-	return refs, warnings
 }
 
 // walkUses visits `uses:` values at the only places GitHub Actions honors

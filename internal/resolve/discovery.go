@@ -16,25 +16,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// CompositeLocalPathError is returned when a remote composite action uses a
-// local path (./…) reference in its steps. We cannot resolve transitive
-// dependencies behind such references, so the workflow must be blocked.
-type CompositeLocalPathError struct {
-	// Parent is the NWO@Ref of the composite action containing the local path.
-	Parent string
-	// LocalPath is the ./… value found in the composite's steps.
-	LocalPath string
+const localActionWarningPrefix = "Local actions are allowed but never followed or locked"
+
+// LocalActionWarning identifies a workspace path whose dependencies are not covered.
+func LocalActionWarning(parent, localPath string) string {
+	return fmt.Sprintf("%s: %s uses %s; its uses: dependencies are not covered by this lockfile", localActionWarningPrefix, parent, localPath)
 }
 
-func (e *CompositeLocalPathError) Error() string {
-	return fmt.Sprintf("composite action %s uses local path %q which cannot be resolved for pinning", e.Parent, e.LocalPath)
-}
-
-// IsCompositeLocalPath reports whether err (or any error in its chain)
-// is a CompositeLocalPathError.
-func IsCompositeLocalPath(err error) bool {
-	var target *CompositeLocalPathError
-	return errors.As(err, &target)
+// IsLocalActionWarning identifies notices emitted by LocalActionWarning.
+func IsLocalActionWarning(warning string) bool {
+	return strings.HasPrefix(warning, localActionWarningPrefix+": ")
 }
 
 // InvalidSelfRepositoryRefError is returned when a fetched composite carries
@@ -138,7 +129,7 @@ func lockedCommits(deps []dep.Dependency) map[ghapi.NWORef]string {
 	return locked
 }
 
-// ResolveWithWarnings also collects image warnings from the fetched manifests.
+// ResolveWithWarnings also collects coverage and image notices from fetched manifests.
 // A non-nil locked slice restricts discovery to its immutable commits.
 func (r *Resolver) ResolveWithWarnings(ctx context.Context, refs []parserlock.ActionRef, locked []dep.Dependency) ([]dep.Dependency, dep.ParentMap, []string, error) {
 	var commits map[ghapi.NWORef]string
@@ -295,10 +286,13 @@ func (r *Resolver) resolveRecursive(ctx context.Context, refs []parserlock.Actio
 			for _, rawUse := range meta.NestedUses {
 				use := strings.TrimSpace(rawUse)
 				if strings.HasPrefix(use, "./") {
-					resolveErr = errors.Join(resolveErr, &CompositeLocalPathError{
-						Parent:    parentKey,
-						LocalPath: use,
-					})
+					if warnings != nil {
+						warning := LocalActionWarning(parentKey, use)
+						if !warned[warning] {
+							*warnings = append(*warnings, warning)
+							warned[warning] = true
+						}
+					}
 					continue
 				}
 				var request resolutionRequest

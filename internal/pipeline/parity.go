@@ -358,7 +358,7 @@ func lockedSHA(commit string) string {
 }
 
 func isBlocked(pw checks.ParsedWorkflow) bool {
-	return pw.LoadErr != nil || pw.DepsErr != nil || len(pw.LocalPaths) > 0 ||
+	return pw.LoadErr != nil || pw.DepsErr != nil ||
 		len(pw.SelfRepositoryRefErrs) > 0 || len(pw.SelfRepositoryResolutionErrs) > 0
 }
 

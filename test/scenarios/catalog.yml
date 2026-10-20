@@ -451,9 +451,9 @@ scenarios:
       output_contains:
         - "docker://alpine:3.18 is not covered by the actions lockfile; container image tags are mutable"
 
-  - name: local_action_skipped
+  - name: local_actions_allowed
     category: workflow_parsing
-    description: "Local action (./path) — entire workflow skipped"
+    description: "Real API mixed workflow locks remote actions and discloses that ./ actions are not followed"
     needs_token: true
     fixtures:
       workflows:
@@ -469,10 +469,12 @@ scenarios:
                   - uses: actions/checkout@v4
     expect:
       exit: 0
+      output_contains: ["Local actions are allowed but never followed or locked"]
+      lockfile_deps_cover_direct: true
 
-  - name: local_action_onboarded_error
+  - name: local_action_onboarded_allowed
     category: workflow_parsing
-    description: "Onboarded workflow adds local path action — hard error"
+    description: "Real API onboarded workflow permits a local action without losing remote coverage"
     needs_token: true
     fixtures:
       workflows:
@@ -488,12 +490,12 @@ scenarios:
                   - uses: actions/checkout@v4
       lockfile_template: pinned_checkout
     expect:
-      exit: 1
-      output_contains: ["local path actions"]
+      exit: 0
+      output_contains: ["Local actions are allowed but never followed or locked"]
 
-  - name: composite_local_path_blocked
+  - name: composite_local_path_allowed
     category: workflow_parsing
-    description: "Remote composite using ./local-path internally — blocked because transitive deps are unresolvable"
+    description: "Real API composite remains locked while its ./ workspace dependencies are explicitly outside coverage"
     needs_token: true
     fixtures:
       workflows:
@@ -501,12 +503,12 @@ scenarios:
           name: CI
           actions: ["nodeselector/actions-test-fixtures/composite-with-local-path@main"]
     expect:
-      exit: 1
-      output_contains: ["local path actions", "composite"]
+      exit: 0
+      output_contains: ["Local actions are allowed but never followed or locked", "composite"]
 
-  - name: composite_local_path_blocked_deep
+  - name: composite_local_path_allowed_deep
     category: workflow_parsing
-    description: "Remote composite whose $/ chain runs several levels deep before a leaf uses ./local-path — blocked transitively, not at the top level"
+    description: "Real API $/ traversal continues until an opaque ./ action, attributing its uncovered dependencies to the leaf"
     needs_token: true
     fixtures:
       workflows:
@@ -514,12 +516,12 @@ scenarios:
           name: CI
           actions: ["nodeselector/actions-test-fixtures/deep-blocked@main"]
     expect:
-      exit: 1
-      output_contains: ["local path actions", "composite", "deep-blocked-helper"]
+      exit: 0
+      output_contains: ["Local actions are allowed but never followed or locked", "deep-blocked-helper"]
 
-  - name: migrate_local_actions_rewrite
+  - name: local_actions_not_followed
     category: workflow_parsing
-    description: "migration runs by default on fix runs: rewrites a deep in-repo ./ chain to $/, then discovers, narrows and pins the remote dependency reached only through that $/ chain; no self repository ref enters the lockfile"
+    description: "Real binary emits an empty workflow lock entry without following or rewriting a local composite chain, even with a remote dependency behind it"
     needs_stub: true
     tags: [stub]
     fixtures:
@@ -555,15 +557,15 @@ scenarios:
       delete_lockfile: true
     expect:
       exit: 0
-      lockfile_contains: ["'actions/checkout@v4.2.2':"]
-      lockfile_excludes: ["$/"]
+      output_contains: ["Local actions are allowed but never followed or locked"]
+      lockfile_excludes: ["actions/checkout", "$/"]
       files_contain:
-        ".github/workflows/ci.yml": ["uses: $/my-action"]
-        "my-action/action.yml": ["uses: $/helper"]
-        "helper/action.yml": ["uses: $/nested/deep"]
-        "nested/deep/action.yml": ["uses: actions/checkout@v4.2.2"]
+        ".github/workflows/ci.yml": ["uses: ./my-action"]
+        "my-action/action.yml": ["uses: ./helper"]
+        "helper/action.yml": ["uses: ./nested/deep"]
+        "nested/deep/action.yml": ["uses: actions/checkout@v4"]
       files_exclude:
-        ".github/workflows/ci.yml": ["uses: ./my-action", "actions/checkout"]
+        ".github/workflows/ci.yml": ["$/", "actions/checkout"]
 
   - name: sub_path_action
     category: workflow_parsing
@@ -1011,7 +1013,7 @@ scenarios:
 
   - name: local_action_only
     category: workflow_parsing
-    description: "Workflow with only local path actions (no remote refs) — skipped cleanly"
+    description: "Real binary emits an onboarded workflow entry for local-only actions and discloses their coverage limit"
     needs_token: true
     fixtures:
       workflows:
@@ -1027,6 +1029,7 @@ scenarios:
                   - uses: ./.github/actions/other-action
     expect:
       exit: 0
+      output_contains: ["Local actions are allowed but never followed or locked"]
 
   - name: self_hosted_runner_pinned
     category: workflow_parsing

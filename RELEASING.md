@@ -101,6 +101,13 @@ manifests at locked commits. Offline verification cannot detect edges erased fro
 and metadata. Explicit relocking rebuilds the graph even when no ref moved.
 Container-image warnings remain terminal-only and non-blocking.
 
+Local `./…` actions no longer block locking or verification. They are never
+followed, locked, or automatically migrated to `$/…`; their nested dependencies
+remain outside lockfile coverage. The existing `local-action` finding is now
+informational and visible in JSON. Validate these severity and exit-code changes
+with Dependabot, including workflows that mix local actions with missing or
+rejected remote pins. `--no-migrate-local-actions` remains a compatibility no-op.
+
 Newly emitted lockfiles use the canonical documentation URL in their header.
 Expect a one-time comment-only change when an existing lockfile is rewritten;
 the header update does not change its schema.

@@ -229,9 +229,10 @@ neither bypasses lockfile verification.
 ### Self repository actions (`$/…`)
 
 `uses: $/…` references an action or reusable workflow in the **same repository** as
-the defining file, resolved at the **running commit**. Because it always resolves to
-that repository's running SHA it is **inherently pinned** — no lockfile entry is
-required, and it is valid anywhere a relative `./…` reference is:
+the defining file, resolved at the **running commit** of that workflow or action.
+This is independent of the workspace populated by `actions/checkout`. The reference
+is **inherently pinned** and needs no lockfile entry. It is valid anywhere a relative
+`./…` reference is:
 
 ```yaml
 steps:
@@ -244,36 +245,45 @@ jobs:
 A trailing `@ref` (e.g. `$/actions/my-action@v1`) is rejected — the ref is always
 the running commit.
 
-Same-repo `./…` composite action references are automatically converted to `$/…`
-on fix runs. The migration rewrites `./…` steps both in your workflows and in
-your in-repo composite action definitions (`action.yml`). Only `./…` paths that
-resolve to an in-repo action file are rewritten. `--verify` and `--verify-local`
-never migrate; they report `./…` refs as `local-action` findings instead. To
-leave `./…` refs untouched on fix runs, opt out with
-`--no-migrate-local-actions`:
+For a workflow triggered by `pull_request_target`, `$/…` in that workflow uses
+the default-branch commit selected for the run (`github.sha`), regardless of the
+PR's base branch (see [GitHub's event semantics](https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/)).
+A checkout of the same repository with no `ref`, or with `ref: ${{ github.sha }}`,
+uses that commit too. Checking out `ref: ${{ github.event.pull_request.head.sha }}`
+can make `./…` use different code. The CLI never converts `./…` references to `$/…`.
 
-```bash
-gh actions-lock --no-migrate-local-actions
-```
+### Local path actions (`./…`)
+
+Local path actions are allowed. `gh actions-lock` cannot and will not follow
+`./…`: these paths refer to the runner workspace, which checkouts, downloads,
+and scripts can change. Local actions are never locked, and their own `uses:`
+dependencies are **not covered by the lockfile**.
+
+Locking, sticky runs, `--verify`, and `--verify-local` report this limit as a
+non-blocking `local-action` notice, including in JSON. Other directly named
+actions and dependencies reached through `$/…` or remote composites are still
+checked and locked normally. A local action does not excuse missing or rejected
+pins elsewhere in the workflow.
+
+Local references and action files are left unchanged; automatic migration is
+no longer performed. `--no-migrate-local-actions` remains accepted as a
+compatibility no-op. Using `$/…` is an explicit source choice with different
+runtime semantics, not an automatic replacement for `./…`.
 
 ## How it works
 
 A repo gets a lockfile (located at [`.github/workflows/actions.lock`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/actions.lock)) and workflows are onboarded to the lockfile on a per-workflow basis. 
 
-Workflows that are onboarded to the lockfile enforce that all dependencies are present in the lockfile and guarantees that the locked commit for an Action is what's executed on the runner. Lockfiles are also verified for forgeries. The sha must exist in the refs it's stated to exist in. Repository identity is recorded and redirects and mismatches are blocked at runtime. 
+For actions covered by the lockfile, onboarded workflows enforce that dependencies are present and that the locked commit is executed on the runner. Workspace-local `./…` actions and their dependencies are not covered. Lockfiles are also verified for forgeries. The sha must exist in the refs it's stated to exist in. Repository identity is recorded and redirects and mismatches are blocked at runtime.
 
 Finally, locked actions must have a branch that the commit being locked exists within. This is to make impostor commit style attacks harder.
 
 ## Limitations
 
-There are currently eligibility limitations for workflows that can be onboarded to lockfiles:
-- The CLI cannot prove complete coverage for workspace-local `./…` actions.
-  These execute from the runner workspace, which checkouts, downloads, and scripts
-  can change; they do not necessarily refer to the files in this checkout.
-  The CLI skips onboarding them and reports an error if a workflow already in
-  the lockfile retains them. This is a CLI discovery limitation, not a claim that
-  the runner prohibits local actions. `--no-migrate-local-actions` disables
-  rewriting, not coverage validation; it does not ignore unknown dependencies.
+Workspace-local `./…` actions are allowed but outside lockfile coverage.
+The CLI never follows these paths or their nested dependencies, even when a
+matching action file exists in the current checkout. Verification checks the
+remaining lockfile coverage; a successful check does not validate local actions.
 
 ## License
 

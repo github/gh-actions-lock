@@ -24,7 +24,7 @@ jobs:
 `
 
 // writeCleanWorkflow adds a workflow the run could pin on its own, plus a
-// local action the run would migrate to `$/…` when withLocal is set.
+// local action outside lockfile coverage when withLocal is set.
 func writeCleanWorkflow(t *testing.T, reg *httpmock.Registry, withLocal bool) string {
 	t.Helper()
 	registerSetupGo(reg)
@@ -43,8 +43,12 @@ func writeCleanWorkflow(t *testing.T, reg *httpmock.Registry, withLocal bool) st
 
 // registerSetupGo stubs resolution of actions/setup-go@v5.0.0.
 func registerSetupGo(reg *httpmock.Registry) {
+	registerSetupGoManifest(reg, nodeActionYAML)
+}
+
+func registerSetupGoManifest(reg *httpmock.Registry, manifest string) {
 	reg.Register(httpmock.GraphQLForRepo("actions", "setup-go"), httpmock.JSONResponse(map[string]any{
-		"data": map[string]any{"a0": testRepoResponse("actions/setup-go", parityTestMoved, nodeActionYAML)},
+		"data": map[string]any{"a0": testRepoResponse("actions/setup-go", parityTestMoved, manifest)},
 	}))
 	reg.Register(httpmock.REST("GET", `^/repos/actions/setup-go/tags`),
 		httpmock.JSONResponse(httpmock.TagListResponse("v5.0.0", parityTestMoved)))
@@ -111,7 +115,7 @@ func (repoIDMismatch) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // TestRun_CleanWorkflowPins is the control for the tests below: on its own,
-// the clean workflow is pinned and migrated.
+// the remote action is pinned without changing local references.
 func TestRun_CleanWorkflowPins(t *testing.T) {
 	reg := &httpmock.Registry{}
 	writeTempWorkflow(t, "name: ci\non: push\n")
@@ -122,8 +126,9 @@ func TestRun_CleanWorkflowPins(t *testing.T) {
 	assert.Contains(t, readTempLockfilePins(t), "actions/setup-go")
 	b, err := os.ReadFile(clean)
 	require.NoError(t, err)
-	assert.Contains(t, string(b), "$/.github/actions/local")
-	assert.Contains(t, stderr, "Migrated 1 local action")
+	assert.Contains(t, string(b), "./.github/actions/local")
+	assert.Contains(t, stderr, "never followed or locked")
+	assert.NotContains(t, stderr, "Migrated")
 }
 
 func TestRun_BlockingErrorWritesNothing(t *testing.T) {
@@ -139,6 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4.2.1
+      - uses: ./uninspectable
 `, "actions/checkout@v4.2.1=sha1-"+parityTestSHA)
 			clean := writeCleanWorkflow(t, reg, true)
 			before := snapshotWorkflows(t)
@@ -172,7 +178,7 @@ func TestRun_UnloadableWorkflowWritesNothing(t *testing.T) {
 }
 
 // TestRun_UnresolvedWritesNothing: an action that can't be resolved aborts
-// the run, and the output must not claim the rolled-back migration landed.
+// the run without changing either workflows or local action definitions.
 func TestRun_UnresolvedWritesNothing(t *testing.T) {
 	// acme/gone has no stub, so it can't be resolved.
 	reg := &httpmock.Registry{}

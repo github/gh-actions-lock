@@ -1249,8 +1249,8 @@ func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "migration enabled"},
-		{name: "migration disabled", args: []string{"--no-migrate-local-actions"}},
+		{name: "default"},
+		{name: "compatibility flag", args: []string{"--no-migrate-local-actions"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := &httpmock.Registry{}
@@ -1259,12 +1259,8 @@ func TestCheckCommand_LoadErrorFailsFixMode(t *testing.T) {
 			workflowPath := writeTempWorkflow(t, "name: [")
 			args := append(tt.args, workflowPath)
 			_, stderr, err := runCommandWithHTTP(t, reg, args...)
-			require.Error(t, err)
-			if tt.name == "migration enabled" {
-				assert.Contains(t, err.Error(), "parsing workflow YAML")
-			} else {
-				require.ErrorIs(t, err, errSilent)
-			}
+			require.ErrorIs(t, err, errSilent)
+			assert.Contains(t, stderr, "failed to load workflow")
 			assert.NotContains(t, stderr, "All 1 workflow valid")
 		})
 	}

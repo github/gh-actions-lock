@@ -209,7 +209,7 @@ jobs:
 }
 
 func TestCheck_RunLogOnEveryExitPath(t *testing.T) {
-	t.Run("failure before diagnosis still logs the error", func(t *testing.T) {
+	t.Run("missing workflow logs its diagnosis", func(t *testing.T) {
 		logDir := isolateRunLogs(t)
 		writeTempWorkflow(t, "name: ci\non: push\njobs: {}\n")
 
@@ -221,11 +221,16 @@ func TestCheck_RunLogOnEveryExitPath(t *testing.T) {
 			Succeeded bool   `json:"succeeded"`
 			Valid     bool   `json:"valid"`
 			Error     string `json:"error"`
+			Findings  []struct {
+				Detail string `json:"detail"`
+			} `json:"findings"`
 		}
 		readOnlyRunLog(t, logDir, &payload)
 		assert.False(t, payload.Succeeded)
 		assert.False(t, payload.Valid)
-		assert.Equal(t, err.Error(), payload.Error)
+		assert.Empty(t, payload.Error, "silent errors are represented by findings")
+		require.NotEmpty(t, payload.Findings)
+		assert.Contains(t, payload.Findings[0].Detail, "missing.yml")
 	})
 
 	t.Run("successful run logs success without printing the path", func(t *testing.T) {

@@ -85,11 +85,8 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 			})
 		}
 
-		// Same-repo `./…` refs are terminal, matching --verify.
 		if len(pw.LocalPaths) > 0 {
-			wr.Findings = append(wr.Findings, localActionFinding(pw, store))
-			results = append(results, wr)
-			continue
+			wr.Findings = append(wr.Findings, localActionFinding(pw))
 		}
 
 		// Use RunChecks with a nil resolver to get structural-only findings

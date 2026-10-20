@@ -201,7 +201,6 @@ func TestValidateOutputFlags_Remote(t *testing.T) {
 		{name: "remote with verify-local", opts: checkOptions{verifyLocal: true, remote: remote}, wantErr: "only valid with --verify"},
 		{name: "remote with accept-moved", opts: checkOptions{verify: true, remote: remote, acceptMoved: true}, wantErr: "read-only"},
 		{name: "remote with relock", opts: checkOptions{verify: true, remote: remote, relock: true}, wantErr: "read-only"},
-		{name: "remote with no-migrate-local-actions", opts: checkOptions{verify: true, remote: remote, noMigrateLocalActions: true}, wantErr: "never migrates"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

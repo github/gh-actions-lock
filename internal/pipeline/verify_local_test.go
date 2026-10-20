@@ -233,8 +233,8 @@ func TestVerifyLocalCoverage_LocalPathsMatchVerify(t *testing.T) {
 		path     string
 		severity checks.Severity
 	}{
-		{".github/workflows/ci.yml", checks.SeverityError},
-		{".github/workflows/new.yml", checks.SeverityWarning},
+		{".github/workflows/ci.yml", checks.SeverityInfo},
+		{".github/workflows/new.yml", checks.SeverityInfo},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			pw := checks.ParsedWorkflow{
@@ -243,11 +243,11 @@ func TestVerifyLocalCoverage_LocalPathsMatchVerify(t *testing.T) {
 				LocalPaths: []string{"./my-action"},
 			}
 			report := VerifyLocalCoverage([]checks.ParsedWorkflow{pw}, store)
-			require.Len(t, report.Workflows[0].Findings, 1)
+			require.NotEmpty(t, report.Workflows[0].Findings)
 			f := report.Workflows[0].Findings[0]
 			assert.Equal(t, checks.LocalAction, f.Category)
 			assert.Equal(t, tc.severity, f.Severity)
-			assert.Equal(t, localActionFinding(pw, store), f)
+			assert.Equal(t, localActionFinding(pw), f)
 		})
 	}
 }

@@ -345,6 +345,10 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	warnMap := map[string]*warningGroup{}
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
+			if f.Category == checks.LocalAction && f.Severity == checks.SeverityInfo {
+				out.TermDetail("%s: %s", wr.Path, f.Detail)
+				continue
+			}
 			if f.IsWarning() {
 				if f.DepKey() == "" && f.Category == checks.ReachabilityUnknown &&
 					strings.HasPrefix(f.Detail, "could not re-resolve actions") {
@@ -470,7 +474,7 @@ func IsAlertedCategory(c checks.Category) bool {
 // re-pins the finding without operator intervention. Only structural drift
 // qualifies: a missing, changed, or orphaned lock entry. Integrity failures
 // (unreachable-pin, misleading-sha) need investigation or --accept-moved, and
-// local-path actions aren't supported at all — so none of those should
+// local-path coverage notices need no automatic fix — so none of those should
 // trigger the "Re-run without --no-fix to apply fixes" hint.
 func IsAutoFixable(c checks.Category) bool {
 	switch c {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/github/gh-actions-lock/internal/dep"
@@ -14,7 +15,6 @@ import (
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
-	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // DiagnoseParsed runs engine diagnostics for each pre-parsed workflow, assuming
@@ -72,7 +72,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		var resolveErr error
 		var warnings []string
 		liveDeps, resolvedParents, warnings, resolveErr = r.ResolveWithWarnings(ctx, pw.Refs, nil)
-		wr.ParseWarnings = append(wr.ParseWarnings, warnings...)
+		appendResolutionWarnings(&wr, warnings)
 		if resolveErr != nil {
 			blockingResolverError := false
 			var ambiguous *ghapi.AmbiguousRefError
@@ -86,17 +86,6 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 					Detail:       ambiguous.Error(),
 					Remediation:  ghapi.RefCollisionRemediation,
 					RefMissing:   true,
-				})
-				blockingResolverError = true
-			}
-			if resolve.IsCompositeLocalPath(resolveErr) {
-				wr.Findings = append(wr.Findings, checks.Finding{
-					WorkflowPath: pw.Path,
-					Category:     checks.LocalAction,
-					Severity:     checks.SeverityError,
-					Confidence:   checks.ConfidenceHigh,
-					Detail:       fmt.Sprintf("a composite action uses local path actions whose transitive dependencies cannot be resolved: %s", resolveErr),
-					Remediation:  "the composite action must reference dependencies by owner/repo/path@ref instead of ./path",
 				})
 				blockingResolverError = true
 			}
@@ -213,8 +202,8 @@ func selfRepositoryFinding(pw checks.ParsedWorkflow) checks.Finding {
 	}
 }
 
-// precheckWorkflow handles terminal preconditions (load error, local-path
-// actions, non-hosted runner, no refs, unreadable deps). It returns true when
+// precheckWorkflow handles terminal preconditions (load error,
+// no refs, unreadable deps). It returns true when
 // one fired; otherwise the report is seeded with ActionRefs/ParseWarnings.
 func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.WorkflowReport, bool) {
 	wr := checks.WorkflowReport{Path: pw.Path}
@@ -276,8 +265,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	}
 
 	if len(pw.LocalPaths) > 0 {
-		wr.Findings = append(wr.Findings, localActionFinding(pw, store))
-		hasTerminalFinding = true
+		wr.Findings = append(wr.Findings, localActionFinding(pw))
 	}
 
 	if hasTerminalFinding {
@@ -328,27 +316,31 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	return wr, false
 }
 
-// localActionFinding reports same-repo `./…` refs: an error once the workflow
-// is onboarded to the lockfile, a warning before. Shared by --verify and
-// --verify-local so both modes agree.
-func localActionFinding(pw checks.ParsedWorkflow, store *lockfile.State) checks.Finding {
-	if store != nil && store.HasWorkflow(workflowfile.KeyFromPath(pw.Path)) {
-		return checks.Finding{
-			WorkflowPath: pw.Path,
-			Category:     checks.LocalAction,
-			Severity:     checks.SeverityError,
-			Confidence:   checks.ConfidenceHigh,
-			Detail:       "workflow uses local path actions whose runtime workspace dependencies cannot be proven from this checkout",
-			Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (automatic on fix runs; disable with --no-migrate-local-actions), or remove the `./…` steps",
-		}
-	}
+func localActionFinding(pw checks.ParsedWorkflow) checks.Finding {
 	return checks.Finding{
 		WorkflowPath: pw.Path,
 		Category:     checks.LocalAction,
-		Severity:     checks.SeverityWarning,
+		Severity:     checks.SeverityInfo,
 		Confidence:   checks.ConfidenceHigh,
-		Detail:       "workflow uses local path actions; automatic lockfile coverage cannot prove their runtime workspace dependencies",
-		Remediation:  "rewrite same-repo `uses: ./…` to `uses: $/…` (automatic on fix runs; disable with --no-migrate-local-actions)",
+		Detail:       resolve.LocalActionWarning(pw.Path, strings.Join(pw.LocalPaths, ", ")),
+	}
+}
+
+func appendResolutionWarnings(wr *checks.WorkflowReport, warnings []string) {
+	for _, warning := range warnings {
+		if resolve.IsLocalActionWarning(warning) {
+			if !slices.ContainsFunc(wr.Findings, func(f checks.Finding) bool {
+				return f.Category == checks.LocalAction && f.Detail == warning
+			}) {
+				wr.Findings = append(wr.Findings, checks.Finding{
+					WorkflowPath: wr.Path,
+					Category:     checks.LocalAction, Severity: checks.SeverityInfo,
+					Confidence: checks.ConfidenceHigh, Detail: warning,
+				})
+			}
+		} else if !slices.Contains(wr.ParseWarnings, warning) {
+			wr.ParseWarnings = append(wr.ParseWarnings, warning)
+		}
 	}
 }
 

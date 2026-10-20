@@ -74,8 +74,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	for i := range parsed {
 		// Structural blockers are terminal at diagnose time. Do not perform
 		// unrelated network work for a workflow the planner must reject.
-		if len(parsed[i].LocalPaths) > 0 ||
-			len(parsed[i].SelfRepositoryRefErrs) > 0 ||
+		if len(parsed[i].SelfRepositoryRefErrs) > 0 ||
 			len(parsed[i].SelfRepositoryResolutionErrs) > 0 {
 			parsed[i].Resolved = true
 			continue

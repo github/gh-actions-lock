@@ -39,11 +39,7 @@ func checkLockedManifests(ctx context.Context, r *resolve.Resolver, parsed []che
 			return ctx.Err()
 		}
 		wr := &report.Workflows[i]
-		for _, warning := range warnings {
-			if !slices.Contains(wr.ParseWarnings, warning) {
-				wr.ParseWarnings = append(wr.ParseWarnings, warning)
-			}
-		}
+		appendResolutionWarnings(wr, warnings)
 		// The recorded edges must include every edge discovered at the locked
 		// commits, even when a child exists elsewhere in the same lockfile.
 		for _, child := range slices.Sorted(maps.Keys(parents)) {

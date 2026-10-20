@@ -668,8 +668,16 @@ STUB_WIRING = {
   cooldown_ignored_keys_surface_in_readonly: ->(s) {
     wire_checkout_success(s, "gho_fake_cooldown_ignored_token")
   },
-  migrate_local_actions_rewrite: ->(s) {
-    wire_checkout_success(s, "gho_fake_migrate_token")
+  local_actions_not_followed: ->(s) {
+    s.stub_server do |srv|
+      [:GET, :POST].each do |method|
+        srv.on(method, /.*/) do |_req|
+          [500, { "Content-Type" => "application/json" },
+           JSON.generate({ message: "Unexpected API request behind a local action" })]
+        end
+      end
+    end
+    s.env("GH_TOKEN" => "gho_fake_local_path_token")
   },
   self_repository_shared_dependency: ->(s) {
     wire_checkout_success(s, "gho_fake_self_repository_token")

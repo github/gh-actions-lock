@@ -13,17 +13,12 @@ import (
 )
 
 // skipFindingInJSON reports whether a finding should be omitted from JSON
-// output. Run-only and valid-OK workflows are noise; local-action
-// warnings are informational skips (errors are kept because they mean
-// an already-tracked workflow became ineligible).
+// output. Coverage notices remain visible even when non-blocking.
 func skipFindingInJSON(f checks.Finding) bool {
 	if f.Category == checks.RunOnly {
 		return true
 	}
 	if f.Category == checks.Valid && f.Severity == checks.SeverityOK {
-		return true
-	}
-	if f.Category == checks.LocalAction && f.Severity != checks.SeverityError {
 		return true
 	}
 	if f.Category == checks.SelfRepositoryAction {

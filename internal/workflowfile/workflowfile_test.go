@@ -3,7 +3,6 @@ package workflowfile
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -182,80 +181,6 @@ jobs:
 	assert.Equal(t, []string{"$/shared"}, scan.SelfRepositoryActionRefs)
 }
 
-func TestMigrateLocalActionsToSelfRepository(t *testing.T) {
-	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
-
-	// An in-repo composite action exists → eligible for migration.
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, "local-action"), 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "local-action", "action.yml"),
-		[]byte("runs:\n  using: composite\n"), 0o644))
-
-	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
-	content := []byte("jobs:\n  build:\n    steps:\n" +
-		"      - uses: ./local-action\n" +
-		"      - uses: ./missing-action\n")
-	require.NoError(t, os.WriteFile(workflowPath, content, 0o644))
-
-	f, err := Load(workflowPath)
-	require.NoError(t, err)
-
-	out, changed, err := f.MigrateLocalActionsToSelfRepository()
-	require.NoError(t, err)
-
-	// Only the path with an in-repo action file is rewritten.
-	assert.Equal(t, 1, changed)
-	assert.Contains(t, string(out), "uses: $/local-action")
-	assert.Contains(t, string(out), "uses: ./missing-action")
-}
-
-func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
-	content := []byte("jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n")
-	f, err := Parse("ci.yml", content)
-	require.NoError(t, err)
-
-	out, changed, err := f.MigrateLocalActionsToSelfRepository()
-	require.NoError(t, err)
-	assert.Equal(t, 0, changed)
-	assert.Equal(t, content, out)
-}
-
-func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.T) {
-	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local-action"), 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(repoRoot, "local-action", "action.yml"),
-		[]byte("runs:\n  using: composite\n"), 0o644))
-
-	tests := []struct {
-		name    string
-		invalid string
-	}{
-		{"forbidden ref", "$/actions/bad@v1"},
-		{"expression ref", "$/actions/bad@${{ matrix.ref }}"},
-		{"missing action", "$/actions/missing"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			workflowPath := filepath.Join(repoRoot, ".github", "workflows", strings.ReplaceAll(tt.name, " ", "-")+".yml")
-			content := []byte("jobs:\n  build:\n    steps:\n" +
-				"      - uses: ./local-action\n" +
-				"      - uses: '" + tt.invalid + "'\n")
-			f, err := Parse(workflowPath, content)
-			require.NoError(t, err)
-
-			out, changed, err := f.MigrateLocalActionsToSelfRepository()
-
-			require.Error(t, err)
-			assert.Zero(t, changed)
-			assert.Equal(t, content, out)
-		})
-	}
-}
-
 func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
@@ -345,55 +270,6 @@ func actionRefStrings(refs []parserlock.ActionRef) []string {
 	return values
 }
 
-func TestDiscoverCompositeActionFiles(t *testing.T) {
-	root := t.TempDir()
-	write := func(rel string) {
-		full := filepath.Join(root, rel)
-		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
-		require.NoError(t, os.WriteFile(full, []byte("runs:\n  using: composite\n"), 0o644))
-	}
-	write("action.yml")
-	write("nested/deep/action.yaml")
-	write(".github/actions/thing/action.yml")
-	write("not-an-action.yml")
-	// A stray file inside .git must be skipped.
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "action.yml"), []byte("x"), 0o644))
-
-	got, err := DiscoverCompositeActionFiles(root)
-	require.NoError(t, err)
-
-	want := []string{
-		filepath.Join(root, ".github/actions/thing/action.yml"),
-		filepath.Join(root, "action.yml"),
-		filepath.Join(root, "nested/deep/action.yaml"),
-	}
-	assert.Equal(t, want, got)
-}
-
-func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
-	got, err := DiscoverCompositeActionFiles("")
-	require.NoError(t, err)
-	assert.Nil(t, got)
-}
-
-func TestDiscoverCompositeActionFiles_RejectsSymlinkEscape(t *testing.T) {
-	root := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "action.yml")
-	require.NoError(t, os.WriteFile(outside, []byte("runs:\n  using: composite\n"), 0o644))
-	actionDir := filepath.Join(root, "actions", "escape")
-	require.NoError(t, os.MkdirAll(actionDir, 0o755))
-	if err := os.Symlink(outside, filepath.Join(actionDir, "action.yml")); err != nil {
-		t.Skipf("creating symlink: %v", err)
-	}
-
-	paths, err := DiscoverCompositeActionFiles(root)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outside repository root")
-	assert.Empty(t, paths)
-}
-
 func TestDiscoverWorkflowsIn(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ci.yml"), []byte("name: ci\n"), 0o644))
@@ -411,24 +287,6 @@ func TestDiscoverWorkflowsIn_MissingDir(t *testing.T) {
 	paths, err := DiscoverWorkflowsIn(filepath.Join(t.TempDir(), "nope"))
 	require.NoError(t, err)
 	assert.Nil(t, paths)
-}
-
-func TestExtractLocalCompositeRefs_RejectsPathTraversal(t *testing.T) {
-	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
-	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
-	require.NoError(t, os.WriteFile(workflowPath, []byte("name: ci\n"), 0o644))
-
-	_, warnings := ExtractLocalCompositeRefs(workflowPath, []string{"./../../etc"})
-
-	var sawRefusal bool
-	for _, w := range warnings {
-		if strings.Contains(w, "refusing to read action file outside repo root") {
-			sawRefusal = true
-		}
-	}
-	assert.True(t, sawRefusal, "expected refusal warning, got: %#v", warnings)
 }
 
 func TestParseIgnoresNonUsesKeys(t *testing.T) {

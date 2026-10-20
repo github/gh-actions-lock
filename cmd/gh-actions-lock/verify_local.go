@@ -56,14 +56,14 @@ func (v localVerifier) Verify(_ context.Context, out io.Writer, console *ui.UI) 
 
 	if !valid {
 		if opts.jsonFields == "" {
-			console.TermDetail("Run without --verify-local to resolve and pin missing actions and migrate `./…` refs to `$/…`.")
+			console.TermDetail("Run without --verify-local to resolve and pin missing actions.")
 		}
 		return errSilent
 	}
 
 	total := len(paths)
 	if opts.jsonFields == "" {
-		console.TermSuccess("All %d %s have complete lockfile coverage.",
+		console.TermSuccess("All %d %s have valid lockfile coverage for inspected actions.",
 			total, ui.Pluralize(total, "workflow", "workflows"))
 	}
 	return nil
