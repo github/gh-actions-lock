@@ -96,8 +96,8 @@ Dependabot consumes pre-fix findings but post-fix exit status: validate both,
 including exit 2 parse failures, proxy lookup failures, collision remediation,
 and complete transitive-graph rebuilding, before updating its binary checksums.
 
-Online verification now checks transitive edges against manifests at locked
-commits. Offline verification cannot detect edges erased from both the graph
+Every online mode except explicit relocking checks transitive edges against
+manifests at locked commits. Offline verification cannot detect edges erased from both the graph
 and metadata. Explicit relocking rebuilds the graph even when no ref moved.
 Container-image warnings remain terminal-only and non-blocking.
 

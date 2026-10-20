@@ -58,14 +58,14 @@ is looked up only as a tag, then a branch, the way the runner does. An exact
 tag (`v4.2.1`) must still point at the commit. Any other pin, including a branch
 (`main`), a partial version (`v4`) or a full SHA (`uses: owner/repo@<sha>`),
 must have its commit in that ref's history, so a fork commit can't pass as
-upstream. A `ref` the runner would reject makes the lockfile invalid (exit
-2): it must be a short tag or branch name, never a SHA or a `refs/` name, and
+upstream. Invalid ref metadata makes the lockfile invalid (exit
+2): it must be a non-empty short tag or branch name, never a SHA or a `refs/` name, and
 it must equal the `uses:` ref unless that is a full SHA. A `uses:` ref that is
 neither a tag nor a branch, such as `pull/1/head`, is never locked. Generation
 and relocking use the same tag-first lookup. If a tag and branch share a name
 but point at different commits, the run fails without writing. Choose a distinct,
 unambiguous tag or branch name; relocking the same ambiguous name cannot fix it.
-Every online non-refresh run also reads action manifests at
+Every online run except explicit relocking also reads action manifests at
 the locked commits to check that the recorded transitive graph covers their
 dependencies, without advancing to current upstream commits.
 
