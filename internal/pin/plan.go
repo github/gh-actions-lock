@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"maps"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -100,7 +99,7 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 				return fmt.Errorf("planning %s: %w", iwr.wr.Path, err)
 			}
 			for i := range pr.wplans {
-				applySHACaseRewrites(&pr.wplans[i], iwr.wr.SHACaseRewrites)
+				respellRewrites(&pr.wplans[i], iwr.wr.SHASpellings)
 			}
 			results[iwr.idx] = pr
 			return nil
@@ -324,27 +323,15 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	return planResult{entries: entries, wplans: wplans}, nil
 }
 
-// applySHACaseRewrites makes wp lowercase each full SHA its source spells
-// in uppercase. Planning keys rewrites by the lowercase spelling, so a
-// planned rewrite of the lowercase `uses:` also applies to the source
-// spelling, and otherwise the source is just lowercased.
-func applySHACaseRewrites(wp *WorkflowPlan, caseRewrites map[string]string) {
-	if len(caseRewrites) == 0 {
-		return
-	}
-	planned := wp.Rewrites
-	wp.Rewrites = maps.Clone(planned)
-	if wp.Rewrites == nil {
-		wp.Rewrites = map[string]string{}
-	}
-	for old, canon := range caseRewrites {
-		target, ok := workflowfile.LookupRewrite(canon, planned)
-		if !ok {
-			target = canon
+// respellRewrites keys planned rewrites of a full-SHA `uses:` by the
+// spelling the source has, since planning keys them by the lowercase one.
+func respellRewrites(wp *WorkflowPlan, spellings map[string]string) {
+	for source, canon := range spellings {
+		if target, ok := workflowfile.LookupRewrite(canon, wp.Rewrites); ok {
+			wp.Rewrites[source] = target
 		}
-		wp.Rewrites[old] = target
 		if required, ok := wp.RequiredRewrites[canon]; ok {
-			wp.RequiredRewrites[old] = required
+			wp.RequiredRewrites[source] = required
 			delete(wp.RequiredRewrites, canon)
 		}
 	}

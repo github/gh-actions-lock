@@ -1217,33 +1217,35 @@ func tagResolver(t *testing.T, owner, repo string, tags ...string) *resolve.Reso
 	return r
 }
 
-func TestApplySHACaseRewrites(t *testing.T) {
+func TestRespellRewrites(t *testing.T) {
 	upper := "o/a@" + strings.Repeat("A", 40)
 	lower := "o/a@" + strings.Repeat("a", 40)
+	moved := "n/a@" + strings.Repeat("a", 40)
 	tests := map[string]struct {
 		planned  map[string]string
 		required map[string]string
 		want     map[string]string
 		wantReq  map[string]string
 	}{
-		"lowercases an unplanned use": {
-			want: map[string]string{upper: lower},
+		"leaves an unplanned use as written": {
+			planned: map[string]string{},
+			want:    map[string]string{},
 		},
-		"applies the planned rewrite of the lowercase use": {
+		"applies the planned rewrite to the source spelling": {
 			planned: map[string]string{lower: "o/a@v1"},
 			want:    map[string]string{lower: "o/a@v1", upper: "o/a@v1"},
 		},
 		"keys a required rewrite by the source spelling": {
-			planned:  map[string]string{lower: "n/a@" + strings.Repeat("a", 40)},
-			required: map[string]string{lower: "n/a@" + strings.Repeat("a", 40)},
-			want:     map[string]string{lower: "n/a@" + strings.Repeat("a", 40), upper: "n/a@" + strings.Repeat("a", 40)},
-			wantReq:  map[string]string{upper: "n/a@" + strings.Repeat("a", 40)},
+			planned:  map[string]string{lower: moved},
+			required: map[string]string{lower: moved},
+			want:     map[string]string{lower: moved, upper: moved},
+			wantReq:  map[string]string{upper: moved},
 		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			wp := WorkflowPlan{Rewrites: tt.planned, RequiredRewrites: tt.required}
-			applySHACaseRewrites(&wp, map[string]string{upper: lower})
+			respellRewrites(&wp, map[string]string{upper: lower})
 			assert.Equal(t, tt.want, wp.Rewrites)
 			assert.Equal(t, tt.wantReq, wp.RequiredRewrites)
 		})
