@@ -72,7 +72,8 @@ func fullSHAShaped(s string) bool {
 }
 
 // AcceptedRefName reports whether name is a ref name the Actions backend
-// accepts: a valid ref name that isn't shaped like `git describe` output.
+// accepts: a valid ref name that isn't shaped like `git describe` output and
+// has no @, which the backend's `uses:` grammar rejects.
 func AcceptedRefName(name string) bool {
-	return ValidRefName(name) && !describeSuffix.MatchString(name)
+	return ValidRefName(name) && !describeSuffix.MatchString(name) && !strings.Contains(name, "@")
 }

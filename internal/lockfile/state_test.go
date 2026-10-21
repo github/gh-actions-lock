@@ -1075,6 +1075,18 @@ func TestLoadStateCanonicalizesFullSHAs(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, store.File().Dependencies, 1)
 	})
+	t.Run("merges spellings whose children are listed in another order", func(t *testing.T) {
+		twoChildren := func(key, commit, first, second string) string {
+			return entry(key, "v1", commit, first) + "      - '" + second + "'\n"
+		}
+		other := "o/other@v3"
+		store, err := load(t, "o/comp@"+lower,
+			twoChildren("o/comp@"+upper, upper, "o/child@"+child, other),
+			twoChildren("o/comp@"+lower, lower, other, "o/child@"+child),
+			childEntry, entry(other, "v3", lower, ""))
+		require.NoError(t, err)
+		assert.Len(t, store.File().Dependencies, 3)
+	})
 	t.Run("rejects spellings that disagree", func(t *testing.T) {
 		_, err := load(t, "o/comp@"+lower, entry("o/comp@"+upper, "v1", upper, ""), entry("o/comp@"+lower, "v2", lower, ""))
 		require.ErrorIs(t, err, ErrCorruptLockfile)

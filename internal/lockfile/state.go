@@ -952,26 +952,24 @@ func extractVersion(contents []byte) string {
 	return ""
 }
 
-// canonicalKeys spells each pin key canonically (see CanonicalRef),
-// deduplicating keys that differed only in case. Unparseable keys are kept.
+// canonicalKeys spells each pin key canonically (see CanonicalRef) and
+// returns them sorted and deduplicated, as Save writes them, or nil.
+// Unparseable keys are kept.
 func canonicalKeys(keys []string) []string {
 	if len(keys) == 0 {
-		return keys
+		return nil
 	}
 	out := make([]string, 0, len(keys))
-	seen := make(map[string]bool, len(keys))
 	for _, raw := range keys {
 		key := raw
 		if pin, ok := parserlock.ParsePin(raw); ok {
 			pin.Ref = CanonicalRef(pin.Ref)
 			key = pin.String()
 		}
-		if !seen[key] {
-			seen[key] = true
-			out = append(out, key)
-		}
+		out = append(out, key)
 	}
-	return out
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // isSHARef returns true when ref is a hex string of SHA-1 (40) or

@@ -35,6 +35,7 @@ func TestAcceptedRefName(t *testing.T) {
 		{"v1-G1234", true}, // uppercase G
 		{"v1-g1234-rc", true},
 		{"main~1", false},
+		{"rel@1", false},
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, AcceptedRefName(tt.name), tt.name)
