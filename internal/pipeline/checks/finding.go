@@ -44,10 +44,6 @@ type Finding struct {
 	// it differs from the pinned SHA (e.g. ref-moved, misleading-sha,
 	// unreachable-pin).
 	ObservedSHA string
-	// DocURL points to docs explaining the finding. Populated by the
-	// engine adapter so it's parity-aligned with the editor's
-	// codeDescription link; "" when no URL is mapped.
-	DocURL string
 	// RecommendedTag is the most recent stable tag whose commit is
 	// reachable from a branch, populated for unreachable-SHA findings
 	// when one can be found. Empty otherwise.

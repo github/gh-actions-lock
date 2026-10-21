@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +83,7 @@ jobs:
 			found = true
 			assert.Equal(t, detail, f.Detail)
 			assert.Equal(t, remedy, f.Remediation)
-			assert.Empty(t, f.DocURL, "the security-hardening page doesn't explain a missing ref")
+			assert.Equal(t, checks.NotPinned.DocURL(), f.DocURL, "the not-pinned section covers a missing ref")
 		}
 	}
 	assert.True(t, found, stdout)

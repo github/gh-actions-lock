@@ -22,6 +22,7 @@ import (
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1311,7 +1312,7 @@ jobs:
 			assert.Equal(t, "error", p.Findings[0].Severity)
 			assert.Equal(t, "ref v4 is not a tag or branch of actions/checkout; the Actions backend will reject this pin", p.Findings[0].Detail)
 			assert.Equal(t, "point `uses:` at a tag or branch that exists, then run `gh actions-lock`", p.Findings[0].Remediation)
-			assert.Empty(t, p.Findings[0].DocURL, "the hardening guide is unrelated to a missing ref")
+			assert.Equal(t, checks.UnreachablePin.DocURL(), p.Findings[0].DocURL, "the unreachable-pin section covers a missing ref")
 
 			stdout, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
 			require.ErrorIs(t, err, errSilent)
@@ -1321,7 +1322,7 @@ jobs:
 			assert.Contains(t, term, "point `uses:` at a tag or branch that exists, then run `gh actions-lock`")
 			assert.NotContains(t, term, "not in upstream history")
 			assert.NotContains(t, term, "/releases")
-			assert.NotContains(t, term, "see:")
+			assert.Contains(t, term, "see: "+checks.UnreachablePin.DocURL())
 		})
 	}
 }

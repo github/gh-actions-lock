@@ -3,7 +3,6 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -65,11 +64,4 @@ func TestReleasesURL(t *testing.T) {
 	assert.Equal(t,
 		"https://github.com/actions/checkout/releases",
 		ReleasesURL("actions", "checkout", sha))
-}
-
-func TestDocURLFor(t *testing.T) {
-	// A known category resolves to a security-hardening anchor.
-	assert.Contains(t, DocURLFor(checks.NotPinned), securityHardeningBase)
-	// Categories without a finding URL (e.g. Valid) return empty.
-	assert.Equal(t, "", DocURLFor(checks.Valid))
 }

@@ -167,7 +167,6 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 				f.Remediation = fmt.Sprintf("pin to a tag instead: https://%s/%s/releases", d.Hostname, d.NWO)
 			}
 		}
-		f.DocURL = DocURLFor(f.Category)
 		wr.Findings = append(wr.Findings, f)
 	}
 
@@ -285,7 +284,6 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 		// present and carry no unused pins.
 		if store != nil {
 			for _, f := range checks.RunChecks(context.Background(), pw, store.File(), nil) {
-				f.DocURL = DocURLFor(f.Category)
 				wr.Findings = append(wr.Findings, f)
 			}
 		}
@@ -315,17 +313,12 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 			Remediable:   true,
 			Detail:       fmt.Sprintf("failed to read dependencies: %s", pw.DepsErr),
 			Remediation:  "fix or regenerate the dependencies: section with `gh actions-lock`",
-			DocURL:       DocURLFor(checks.NotPinned),
 		})
 		return wr, true
 	}
 
 	return wr, false
 }
-
-// LocalActionDocURL explains local-action warnings. Kept out of docURLs,
-// which mirrors the editor's table.
-const LocalActionDocURL = "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#local-action"
 
 // localActionFindings warns about each `./…` action a workflow (or one of its
 // `$/…` actions) uses. They name the runner workspace, which checkouts and
@@ -342,7 +335,6 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 			LocalPath:       p,
 			LocalRemoteUses: workflowfile.LocalActionRemoteUses(pw.Path, p),
 			Detail:          "cannot follow workspace-local action " + p,
-			DocURL:          LocalActionDocURL,
 		})
 	}
 	for _, lu := range pw.NestedLocalUses {
@@ -355,7 +347,6 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 			LocalPath:       lu.Path,
 			LocalRemoteUses: workflowfile.LocalActionRemoteUses(pw.Path, lu.Path),
 			Detail:          fmt.Sprintf("cannot follow workspace-local action %s used by %s", lu.Path, lu.Parent),
-			DocURL:          LocalActionDocURL,
 		})
 	}
 	return out
@@ -381,7 +372,6 @@ func nestedLocalActionFindings(path string, local []*resolve.CompositeLocalPathE
 			LocalPath:       l.LocalPath,
 			LocalRemoteUses: workflowfile.LocalActionRemoteUses(path, l.LocalPath),
 			Detail:          fmt.Sprintf("cannot follow workspace-local action %s used by %s", l.LocalPath, l.Parent),
-			DocURL:          LocalActionDocURL,
 		})
 	}
 	return out

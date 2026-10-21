@@ -40,8 +40,8 @@ func PresentResults(out *ui.UI, report *checks.Report, valid bool, willRemediate
 			continue
 		}
 		out.TermWarn("%s", f.Detail)
-		if f.DocURL != "" {
-			out.TermDetail("see: %s", out.TermLink(f.DocURL, f.DocURL))
+		if u := f.DocURL(); u != "" {
+			out.TermDetail("see: %s", out.TermLink(u, u))
 		}
 	}
 
@@ -251,8 +251,8 @@ func renderTermFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 		out.TermDetail("  ↳ Suggested pin: %s@%s (%s) — newest release currently on that branch",
 			nwo, f.RecommendedTag, sha)
 	}
-	if f.DocURL != "" {
-		out.TermDetail("  see: %s", out.DocLink(f.DocURL))
+	if u := f.DocURL(); u != "" {
+		out.TermDetail("  see: %s", out.DocLink(u))
 	}
 }
 
@@ -450,8 +450,8 @@ func renderFindingDetail(out *ui.UI, f checks.Finding, dep string) {
 		out.Detail("  ↳ Suggested re-pin: %s@%s (%s) — latest release reachable from a branch",
 			nwo, f.RecommendedTag, sha)
 	}
-	if f.DocURL != "" {
-		out.Detail("  see: %s", out.DocLink(f.DocURL))
+	if u := f.DocURL(); u != "" {
+		out.Detail("  see: %s", out.DocLink(u))
 	}
 }
 
@@ -475,7 +475,6 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 	var warnOrder []string
 	warnMap := map[string]*warningGroup{}
 	localByWorkflow := map[string][]string{}
-	localDocURL := ""
 	localCount := 0
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
@@ -488,7 +487,6 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 					use += " (in " + f.ParentNWO + ")"
 				}
 				localByWorkflow[wr.Path] = append(localByWorkflow[wr.Path], use)
-				localDocURL = f.DocURL
 				localCount++
 				continue
 			}
@@ -540,9 +538,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 		for _, p := range slices.Sorted(maps.Keys(localByWorkflow)) {
 			out.TermDetail("↳ %s: %s", p, strings.Join(localByWorkflow[p], ", "))
 		}
-		if localDocURL != "" {
-			out.TermDetail("↳ %s", localDocURL)
-		}
+		out.TermDetail("↳ %s", checks.LocalAction.DocURL())
 	}
 	if len(unpinnedWorkflows) > 0 {
 		out.TermWarn("%d %s not yet pinned",
@@ -617,6 +613,7 @@ func renderContainerImages(out *ui.UI, report *checks.Report) {
 		for _, fix := range fixes {
 			out.TermDetail("↳ %s", fix)
 		}
+		out.TermDetail("↳ %s", checks.ContainerImage.DocURL())
 	}
 }
 

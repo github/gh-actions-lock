@@ -581,7 +581,6 @@ func tagCommitMismatchFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef
 		ObservedSHA:  st.HeadOID,
 		ParentNWO:    lockParent(lp),
 		Detail:       fmt.Sprintf("tag %s points at %s; the lockfile locks %s, an older commit in its history", pc.Head, parserlock.ShortSHA(st.HeadOID), parserlock.ShortSHA(pc.SHA)),
-		DocURL:       DocURLFor(checks.TagCommitMismatch),
 	}
 	if f.ParentNWO != "" {
 		f.Detail += fmt.Sprintf(" (used by %s)", f.ParentNWO)
@@ -729,9 +728,6 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		}
 	default:
 		return checks.Finding{}, false
-	}
-	if !f.RefMissing {
-		f.DocURL = DocURLFor(f.Category)
 	}
 	return f, true
 }

@@ -116,7 +116,7 @@ func findingFromReport(f checks.Finding) Finding {
 		Confidence:  string(f.Confidence),
 		Detail:      f.Detail,
 		Remediation: f.Remediation,
-		DocURL:      f.DocURL,
+		DocURL:      f.DocURL(),
 		Retryable:   f.Retryable,
 	}
 	if f.Dependency != nil {

@@ -17,8 +17,8 @@ import (
 //
 // Returned findings have their primitive fields populated, plus
 // ActionRef (for direct uses) and Dependency (for ref-tied entries).
-// DocURL and ParentNWO are attached by the caller (diagnoseOneParsed)
-// because they need lookup tables runChecks doesn't carry.
+// ParentNWO is attached by the caller (diagnoseOneParsed)
+// because it needs lookup tables runChecks doesn't carry.
 func RunChecks(ctx context.Context, pw ParsedWorkflow, lf parserlock.File, r CheckResolver) []Finding {
 	wfEntry, tracked := lf.LookupWorkflow(workflowfile.KeyFromPath(pw.Path))
 	depPins, depIndex := parseWorkflowDeps(wfEntry, lf.Dependencies)

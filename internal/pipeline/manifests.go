@@ -193,14 +193,12 @@ func manifestFindings(path string, n manifestNode, entry parserlock.Action, rd *
 		Severity:     checks.SeverityError,
 		Confidence:   checks.ConfidenceHigh,
 		Dependency:   &dep.Dependency{NWO: p.NWO, Path: n.path, Ref: p.Ref, SHA: sha},
-		DocURL:       DocURLFor(checks.IncompleteLockfile),
 	}
 	switch {
 	case rd.err != nil:
 		// Unverified dependencies block until a re-run reads the manifest.
 		f.Category, f.Confidence = checks.ReachabilityUnknown, checks.ConfidenceLow
 		f.MarkRetryable(rd.err)
-		f.DocURL = DocURLFor(checks.ReachabilityUnknown)
 		f.Detail = fmt.Sprintf("could not read locked manifest %s at %s: %s", nodeName(n), short, verbose(rd.err))
 		f.TermDetail = fmt.Sprintf("could not read locked manifest %s at %s: %s", nodeName(n), short, briefCause(rd.err))
 		return []checks.Finding{f}

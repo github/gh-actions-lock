@@ -323,6 +323,7 @@ func TestPresentResults_ContainerImagesGroupedByImage(t *testing.T) {
 	assert.Contains(t, got, "used by .github/workflows/b.yml: o/a@v1")
 	assert.Contains(t, got, "pin it as alpine:3@sha256:")
 	assert.Contains(t, got, "ask the maintainer of o/a@v1 to pin it by digest")
+	assert.Equal(t, 1, strings.Count(got, "↳ "+checks.ContainerImage.DocURL()+"\n"), "one doc link per image")
 }
 
 // TestPresentResults_ExcludeCategoriesSkipsImpostor verifies that excluded
@@ -512,7 +513,6 @@ func TestPresentResults_RepoFindingsSurface(t *testing.T) {
 			Severity:   checks.SeverityWarning,
 			Confidence: checks.ConfidenceHigh,
 			Detail:     "repo publishes non-immutable releases",
-			DocURL:     "https://example.com/docs",
 		}},
 	}
 	PresentResults(u, report, true, false)
@@ -521,7 +521,7 @@ func TestPresentResults_RepoFindingsSurface(t *testing.T) {
 	if !strings.Contains(got, "repo publishes non-immutable releases") {
 		t.Errorf("RepoFindings missing from terminal output:\n%s", got)
 	}
-	if !strings.Contains(got, "example.com/docs") {
+	if !strings.Contains(got, checks.NotPinned.DocURL()) {
 		t.Errorf("RepoFindings DocURL missing from terminal output:\n%s", got)
 	}
 }
@@ -544,7 +544,6 @@ func TestPresentReadOnlyFailures_ForgeryReachesTerminal(t *testing.T) {
 				Dependency:   &dep.Dependency{NWO: "octo/action", Ref: "main", SHA: "aaaa"},
 				Detail:       "pinned aaaa is not an ancestor of bbbb",
 				Remediation:  "investigate immediately",
-				DocURL:       "https://example.com/docs",
 			}},
 		}},
 	}
@@ -861,7 +860,7 @@ func TestPresentReadOnlyFailures_GroupsRetryable(t *testing.T) {
 func TestRenderWarnings_LocalActions(t *testing.T) {
 	const doc = "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#local-action"
 	local := func(wf, path, parent string) checks.Finding {
-		return checks.Finding{WorkflowPath: wf, Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: path, ParentNWO: parent, DocURL: doc}
+		return checks.Finding{WorkflowPath: wf, Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: path, ParentNWO: parent}
 	}
 	t.Run("one action", func(t *testing.T) {
 		u, buf := newTestUI()

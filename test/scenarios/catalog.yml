@@ -1779,7 +1779,7 @@ scenarios:
             confidence: high
             dependency: actions/checkout@v4
             detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
@@ -1791,7 +1791,7 @@ scenarios:
                 confidence: high
                 dependency: actions/checkout@v4
                 detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
                 remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/ci.yml
@@ -1826,7 +1826,7 @@ scenarios:
             confidence: high
             dependency: actions/setup-node@v4
             detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/ci.yml
@@ -1844,7 +1844,7 @@ scenarios:
                 confidence: high
                 dependency: actions/setup-node@v4
                 detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
                 remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/ci.yml
@@ -1897,7 +1897,7 @@ scenarios:
             confidence: high
             dependency: actions/checkout@v4
             detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
@@ -1905,7 +1905,7 @@ scenarios:
             confidence: high
             dependency: actions/setup-node@v4
             detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
             remediation: onboard it first with `gh actions-lock` (without --no-onboard)
             severity: info
             workflow: .github/workflows/deploy.yml
@@ -1926,7 +1926,7 @@ scenarios:
                 confidence: high
                 dependency: actions/checkout@v4
                 detail: actions/checkout@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
                 remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/deploy.yml
@@ -1934,7 +1934,7 @@ scenarios:
                 confidence: high
                 dependency: actions/setup-node@v4
                 detail: actions/setup-node@v4 has no lockfile entry; --no-onboard refuses to add new workflows or actions
-                doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+                doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#onboarding-required"
                 remediation: onboard it first with `gh actions-lock` (without --no-onboard)
                 severity: info
                 workflow: .github/workflows/deploy.yml
@@ -2078,7 +2078,7 @@ scenarios:
             confidence: high
             dependency: actions/checkout@v4
             detail: "locked commit 11bd71901bbe is not in actions/checkout's history: it was force-pushed away, or the lockfile was edited; v4 currently points at bbbbbbbbbbbb"
-            doc_url: "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions"
+            doc_url: "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#unreachable-pin"
             remediation: "verify it, then run `gh actions-lock --accept-moved`"
             severity: error
             workflow: .github/workflows/ci.yml

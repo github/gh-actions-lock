@@ -14,7 +14,6 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
-	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -683,6 +682,7 @@ func TestRun_ContainerImages(t *testing.T) {
 			assert.Len(t, byDetail, 4, "%+v", p.Findings)
 			alpine := byDetail["container image alpine:3 is not pinned by digest; used by job test, job test container, acme/comp@v1"]
 			assert.Equal(t, "warning", alpine.Severity)
+			assert.Equal(t, checks.ContainerImage.DocURL(), alpine.DocURL)
 			assert.Empty(t, alpine.RequiredBy)
 			dock := byDetail["container image ghcr.io/acme/dock:1 is not pinned by digest; used by acme/dock@v1"]
 			assert.Equal(t, "acme/dock@v1", dock.RequiredBy)
@@ -711,7 +711,7 @@ func TestRun_LocalActionsAreOpaque(t *testing.T) {
 			require.Len(t, local, 1, "%+v", p.Findings)
 			assert.Equal(t, "warning", local[0].Severity)
 			assert.Equal(t, "cannot follow workspace-local action ./.github/actions/local", local[0].Detail)
-			assert.Equal(t, pipeline.LocalActionDocURL, local[0].DocURL)
+			assert.Equal(t, checks.LocalAction.DocURL(), local[0].DocURL)
 
 			assert.Contains(t, readTempLockfilePins(t), "actions/setup-go")
 			after := snapshotWorkflows(t)
@@ -922,7 +922,7 @@ func TestRun_LocalActionUsingRemoteActionsBlocks(t *testing.T) {
 			p, err := runParity(t, reg, append(tc.args, "--no-interactive", path)...)
 			local := localActionFindings(p.Findings)
 			require.Len(t, local, 1, "%+v", p.Findings)
-			assert.Equal(t, pipeline.LocalActionDocURL, local[0].DocURL)
+			assert.Equal(t, checks.LocalAction.DocURL(), local[0].DocURL)
 			if tc.blocked {
 				require.ErrorIs(t, err, errSilent)
 				assert.False(t, p.Valid)
