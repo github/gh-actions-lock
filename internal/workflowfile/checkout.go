@@ -52,8 +52,9 @@ func ValidateLocalActionMigrations(workflowPaths, migrationPaths []string) error
 	return nil
 }
 
-type checkoutRef struct {
+type checkoutOverride struct {
 	path string
+	name string
 	node *yaml.Node
 }
 
@@ -62,15 +63,15 @@ type checkoutValidator struct {
 	migrations map[string]bool // nil means all local action references are candidates
 	files      map[string]*File
 	active     map[checkoutContext]bool
-	results    map[checkoutContext]*checkoutRef
+	results    map[checkoutContext]*checkoutOverride
 }
 
 type checkoutContext struct {
 	steps *yaml.Node
-	ref   *yaml.Node
+	input *yaml.Node
 }
 
-func (f *File) validateCheckoutRefsForMigration(replacements map[string]string) error {
+func (f *File) validateCheckoutForMigration(replacements map[string]string) error {
 	root, err := findRepoRoot(f.Path)
 	if err != nil {
 		return err
@@ -103,17 +104,17 @@ func (v *checkoutValidator) validate(f *File, replacements map[string]string) er
 	return nil
 }
 
-func (v *checkoutValidator) steps(f *File, owner *yaml.Node, replacements map[string]string, customRef *checkoutRef, depth int) (*checkoutRef, error) {
+func (v *checkoutValidator) steps(f *File, owner *yaml.Node, replacements map[string]string, override *checkoutOverride, depth int) (*checkoutOverride, error) {
 	if depth > maxYAMLWalkDepth {
 		return nil, fmt.Errorf("checking checkout context in %s: composite action nesting exceeds %d", f.Path, maxYAMLWalkDepth)
 	}
 	steps := mapValue(owner, "steps")
 	if steps == nil || steps.Kind != yaml.SequenceNode {
-		return customRef, nil
+		return override, nil
 	}
 	context := checkoutContext{steps: steps}
-	if customRef != nil {
-		context.ref = customRef.node
+	if override != nil {
+		context.input = override.node
 	}
 	if result, ok := v.results[context]; ok {
 		return result, nil
@@ -123,7 +124,7 @@ func (v *checkoutValidator) steps(f *File, owner *yaml.Node, replacements map[st
 	}
 	if v.active == nil {
 		v.active = make(map[checkoutContext]bool)
-		v.results = make(map[checkoutContext]*checkoutRef)
+		v.results = make(map[checkoutContext]*checkoutOverride)
 	}
 	v.active[context] = true
 	defer delete(v.active, context)
@@ -132,15 +133,21 @@ func (v *checkoutValidator) steps(f *File, owner *yaml.Node, replacements map[st
 		uses := strings.TrimSpace(scalarValue(mapValue(step, "uses")))
 		action, _, hasRef := strings.Cut(uses, "@")
 		if hasRef && strings.EqualFold(action, "actions/checkout") {
-			ref := mapValue(mapValue(step, "with"), "ref")
-			value := strings.TrimSpace(scalarValue(ref))
-			if value != "" && !isRunningCommitRef(value) {
-				customRef = &checkoutRef{path: f.Path, node: ref}
+			for _, input := range []struct{ name, context string }{
+				{"repository", "github.repository"},
+				{"ref", "github.sha"},
+			} {
+				node := mapValue(mapValue(step, "with"), input.name)
+				value := strings.TrimSpace(scalarValue(node))
+				if value != "" && !isContextExpression(value, input.context) {
+					override = &checkoutOverride{path: f.Path, name: input.name, node: node}
+					break
+				}
 			}
-			// Keep earlier custom refs: a later checkout can be conditional.
+			// Keep earlier overrides: a later checkout can be conditional.
 		}
-		if replacement, ok := replacements[uses]; ok && customRef != nil {
-			return nil, fmt.Errorf("cannot migrate %s to %s in %s: preceding actions/checkout uses ref %q at %s:%d; $/ resolves to the running commit, not the checked-out ref; use --no-migrate-local-actions to keep local references", uses, replacement, f.Path, customRef.node.Value, customRef.path, customRef.node.Line)
+		if replacement, ok := replacements[uses]; ok && override != nil {
+			return nil, fmt.Errorf("cannot migrate %s to %s in %s: preceding actions/checkout uses %s %q at %s:%d; $/ resolves to the defining repository's running commit, not the checked-out workspace; use --no-migrate-local-actions to keep local references", uses, replacement, f.Path, override.name, override.node.Value, override.path, override.node.Line)
 		}
 		var localPath string
 		switch {
@@ -174,19 +181,19 @@ func (v *checkoutValidator) steps(f *File, owner *yaml.Node, replacements map[st
 		// A composite inherits the caller's checkout state and can change the
 		// workspace seen by subsequent steps, even if its invocation is conditional.
 		runs := mapValue(documentRoot(&child.root), "runs")
-		nextRef, err := v.steps(child, runs, v.replacements(child), customRef, depth+1)
+		nextOverride, err := v.steps(child, runs, v.replacements(child), override, depth+1)
 		if err != nil {
 			return nil, err
 		}
-		customRef = nextRef
+		override = nextOverride
 	}
-	v.results[context] = customRef
-	return customRef, nil
+	v.results[context] = override
+	return override, nil
 }
 
-func isRunningCommitRef(value string) bool {
+func isContextExpression(value, context string) bool {
 	if !strings.HasPrefix(value, "${{") || !strings.HasSuffix(value, "}}") {
 		return false
 	}
-	return strings.TrimSpace(value[3:len(value)-2]) == "github.sha"
+	return strings.TrimSpace(value[3:len(value)-2]) == context
 }

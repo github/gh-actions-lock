@@ -137,9 +137,9 @@ func (f *File) ValidateRequiredActionRefRewrites(replacements map[string]string)
 // MigrateLocalActionsToSelfRepository rewrites same-repo `./…` composite action
 // references to the inherently-pinned `$/…` form. Only local paths that
 // resolve to an in-repo action file are candidates. A preceding checkout of a
-// custom ref prevents migration. Local reusable workflows are never candidates
-// (ExtractActionRefs excludes them). Returns the new content and the number of
-// `uses:` lines changed.
+// custom repository or ref prevents migration. Local reusable workflows are
+// never candidates (ExtractActionRefs excludes them). Returns the new content
+// and the number of `uses:` lines changed.
 func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 	scan := f.ExtractActionRefs()
 	if err := f.validateSelfRepositoryMigration(scan); err != nil {
@@ -150,7 +150,7 @@ func (f *File) MigrateLocalActionsToSelfRepository() ([]byte, int, error) {
 		return append([]byte(nil), f.Content...), 0, err
 	}
 	replacements := f.localActionReplacements(repoRoot)
-	if err := f.validateCheckoutRefsForMigration(replacements); err != nil {
+	if err := f.validateCheckoutForMigration(replacements); err != nil {
 		return append([]byte(nil), f.Content...), 0, err
 	}
 

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidateCheckoutRefsForMigration(t *testing.T) {
+func TestValidateCheckoutForMigration(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		content string
@@ -91,6 +91,19 @@ jobs:
 			blocked: true,
 		},
 		{
+			name: "aliased repository input blocks migration",
+			content: `env:
+  inputs: &inputs {repository: other/project}
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with: *inputs
+      - uses: ./local
+`,
+			blocked: true,
+		},
+		{
 			name: "conditional checkout cannot clear an earlier custom ref",
 			content: `jobs:
   build:
@@ -128,7 +141,7 @@ jobs:
 		t.Run(tt.name, func(t *testing.T) {
 			f, err := Parse("ci.yml", []byte(tt.content))
 			require.NoError(t, err)
-			err = f.validateCheckoutRefsForMigration(map[string]string{"./local": "$/local"})
+			err = f.validateCheckoutForMigration(map[string]string{"./local": "$/local"})
 			if tt.blocked {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "preceding actions/checkout")

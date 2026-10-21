@@ -15,6 +15,7 @@ func TestMigrateLocalActionsToSelfRepository_CheckoutContext(t *testing.T) {
 		workflow string
 		outer    string
 		blocked  bool
+		source   string
 	}{
 		{
 			name:     "custom ref reaches an already migrated composite",
@@ -78,6 +79,26 @@ func TestMigrateLocalActionsToSelfRepository_CheckoutContext(t *testing.T) {
 			workflow: "      - uses: actions/checkout@v4\n        with: {ref: other}\n      - uses: $/outer\n",
 			outer:    "    - uses: $/leaf\n",
 		},
+		{
+			name:     "other repository reaches a nested composite after a safe call",
+			workflow: "      - uses: $/outer\n      - uses: actions/checkout@v4\n        with: {repository: other/project}\n      - uses: $/outer\n",
+			outer:    "    - uses: $/middle\n",
+			blocked:  true,
+			source:   `repository "other/project"`,
+		},
+		{
+			name:     "repository checkout in a composite reaches subsequent caller steps",
+			workflow: "      - uses: $/outer\n      - uses: ./leaf\n",
+			outer:    "    - uses: actions/checkout@v4\n      with: {repository: other/project}\n",
+			blocked:  true,
+			source:   `repository "other/project"`,
+		},
+		{
+			name:     "default checkout cannot clear an earlier repository override",
+			workflow: "      - uses: actions/checkout@v4\n        with: {repository: other/project}\n      - uses: actions/checkout@v4\n        if: inputs.reset\n        with: {repository: '${{ github.repository }}'}\n      - uses: ./leaf\n",
+			blocked:  true,
+			source:   `repository "other/project"`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -99,7 +120,11 @@ func TestMigrateLocalActionsToSelfRepository_CheckoutContext(t *testing.T) {
 			if tt.blocked {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "preceding actions/checkout")
-				assert.Contains(t, err.Error(), `ref "other"`)
+				source := tt.source
+				if source == "" {
+					source = `ref "other"`
+				}
+				assert.Contains(t, err.Error(), source)
 				assert.Contains(t, err.Error(), ".yml:")
 				assert.Zero(t, changed)
 				assert.Equal(t, workflow, string(content))

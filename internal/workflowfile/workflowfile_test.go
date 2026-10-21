@@ -222,7 +222,7 @@ func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
 	assert.Equal(t, content, out)
 }
 
-func TestMigrateLocalActionsToSelfRepository_CheckoutRef(t *testing.T) {
+func TestMigrateLocalActionsToSelfRepository_CheckoutInputs(t *testing.T) {
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "local-action"), 0o755))
@@ -230,9 +230,10 @@ func TestMigrateLocalActionsToSelfRepository_CheckoutRef(t *testing.T) {
 		[]byte("runs:\n  using: composite\n"), 0o644))
 
 	for _, tt := range []struct {
-		name    string
-		ref     string
-		blocked bool
+		name       string
+		ref        string
+		repository string
+		blocked    bool
 	}{
 		{name: "default ref"},
 		{name: "empty ref", ref: "''"},
@@ -245,11 +246,29 @@ func TestMigrateLocalActionsToSelfRepository_CheckoutRef(t *testing.T) {
 		{name: "environment variable", ref: "${{ env.TARGET_BRANCH }}", blocked: true},
 		{name: "pull request head", ref: "${{ github.event.pull_request.head.sha }}", blocked: true},
 		{name: "running branch can move", ref: "${{ github.ref }}", blocked: true},
+		{name: "empty repository", repository: "''"},
+		{name: "whitespace repository", repository: "'  '"},
+		{name: "current repository", repository: "${{ github.repository }}"},
+		{name: "current repository without spaces", repository: "${{github.repository}}"},
+		{name: "current repository with surrounding whitespace", repository: "'  ${{ github.repository }}  '"},
+		{name: "current repository and running commit", repository: "${{ github.repository }}", ref: "${{ github.sha }}"},
+		{name: "current repository with custom ref", repository: "${{ github.repository }}", ref: "other", blocked: true},
+		{name: "other repository with default ref", repository: "other/project", blocked: true},
+		{name: "other repository with running commit", repository: "other/project", ref: "${{ github.sha }}", blocked: true},
+		{name: "repository from workflow input", repository: "${{ inputs.repository }}", blocked: true},
+		{name: "pull request head repository", repository: "${{ github.event.pull_request.head.repo.full_name }}", blocked: true},
+		{name: "repository expression with fallback", repository: "${{ inputs.repository || github.repository }}", blocked: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			content := "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n"
+			if tt.ref != "" || tt.repository != "" {
+				content += "        with:\n"
+			}
 			if tt.ref != "" {
-				content += "        with:\n          ref: " + tt.ref + "\n"
+				content += "          ref: " + tt.ref + "\n"
+			}
+			if tt.repository != "" {
+				content += "          repository: " + tt.repository + "\n"
 			}
 			content += "      - uses: ./local-action\n"
 			f, err := Parse(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"), []byte(content))
@@ -259,7 +278,12 @@ func TestMigrateLocalActionsToSelfRepository_CheckoutRef(t *testing.T) {
 			if tt.blocked {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "actions/checkout")
-				assert.Contains(t, err.Error(), tt.ref)
+				if tt.repository != "" && tt.repository != "${{ github.repository }}" {
+					assert.Contains(t, err.Error(), "repository")
+					assert.Contains(t, err.Error(), tt.repository)
+				} else {
+					assert.Contains(t, err.Error(), tt.ref)
+				}
 				assert.Contains(t, err.Error(), "--no-migrate-local-actions")
 				assert.Zero(t, changed)
 				assert.Equal(t, content, string(out))

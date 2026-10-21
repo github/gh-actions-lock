@@ -119,15 +119,21 @@ gh actions-lock --no-migrate-local-actions
 ```
 
 Migration stops before writing files if a local action follows an
-`actions/checkout` step with a non-empty `ref` other than `${{ github.sha }}`
-in the same job, including checkouts and local references reached through
-in-repo composite actions. Checkout state follows nested `./…` and `$/…`
-calls and carries back to subsequent caller steps. Since composite definitions
+`actions/checkout` step in the same job with either:
+
+- A non-empty `ref` other than `${{ github.sha }}`.
+- A non-empty `repository` other than `${{ github.repository }}`. Literal
+  repository names and other expressions are rejected because the CLI cannot
+  establish that they name the same repository at runtime.
+
+This includes checkouts and local references reached through in-repo composite
+actions. Checkout state follows nested `./…` and `$/…` calls and carries back
+to subsequent caller steps. Since composite definitions
 are migrated repository-wide, their callers are checked even in workflows
 outside a scoped run. This includes workflows in both `.github/workflows` and
-the directory configured by `GH_ACTIONS_LOCK_WORKFLOWS_DIR`. A custom ref can
-make `./…` load different code from `$/…`. The error identifies the action file
-and the checkout's file and line.
+the directory configured by `GH_ACTIONS_LOCK_WORKFLOWS_DIR`. A custom repository
+or ref can make `./…` load different code from `$/…`. The error identifies the
+action file and the checkout input's file and line.
 Review the checkout and action references together, or use `--no-migrate-local-actions`
 to preserve the local references; workflows that keep `./…` remain ineligible
 for onboarding. This check covers explicit checkout steps in workflows and

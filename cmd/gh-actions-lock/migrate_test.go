@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,41 +12,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMigrateLocalActions_CustomCheckoutRefWritesNothing(t *testing.T) {
-	for _, args := range [][]string{nil, {"--json"}, {".github/workflows/first.yml"}} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			t.Chdir(t.TempDir())
-			require.NoError(t, os.Mkdir(".git", 0o755))
-			files := map[string]string{
-				".github/workflows/first.yml": "jobs:\n  build:\n    steps:\n      - uses: ./.github/actions/local\n",
-				".github/workflows/second.yml": `jobs:
+func TestMigrateLocalActions_CustomCheckoutWritesNothing(t *testing.T) {
+	for _, input := range []struct {
+		name  string
+		value string
+	}{
+		{name: "ref", value: "${{ env.TARGET_BRANCH }}"},
+		{name: "repository", value: "other/project"},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			for _, mode := range []struct {
+				name string
+				args []string
+			}{
+				{name: "full run leaves files unchanged"},
+				{name: "JSON run leaves files unchanged", args: []string{"--json"}},
+				{name: "scoped run checks unselected callers", args: []string{".github/workflows/first.yml"}},
+			} {
+				t.Run(mode.name, func(t *testing.T) {
+					t.Chdir(t.TempDir())
+					require.NoError(t, os.Mkdir(".git", 0o755))
+					files := map[string]string{
+						".github/workflows/first.yml": "jobs:\n  build:\n    steps:\n      - uses: ./.github/actions/local\n",
+						".github/workflows/second.yml": fmt.Sprintf(`jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TARGET_BRANCH }}
+          %s: %s
       - uses: $/.github/actions/local
-`,
-				".github/actions/local/action.yml":  "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/helper\n",
-				".github/actions/helper/action.yml": "runs:\n  using: composite\n  steps:\n    - run: echo hello\n      shell: bash\n",
-				".github/workflows/actions.lock":    "version: 'v0.0.3'\nworkflows: {}\ndependencies: {}\n",
-			}
-			for path, content := range files {
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-			}
-			before := snapshotWorkflows(t)
-			transport := &requestCountingTransport{}
+`, input.name, input.value),
+						".github/actions/local/action.yml":  "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/helper\n",
+						".github/actions/helper/action.yml": "runs:\n  using: composite\n  steps:\n    - run: echo hello\n      shell: bash\n",
+						".github/workflows/actions.lock":    "version: 'v0.0.3'\nworkflows: {}\ndependencies: {}\n",
+					}
+					for path, content := range files {
+						require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+						require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+					}
+					before := snapshotWorkflows(t)
+					transport := &requestCountingTransport{}
 
-			_, _, err := runCommandWithHTTP(t, transport, args...)
+					_, _, err := runCommandWithHTTP(t, transport, mode.args...)
 
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "second.yml")
-			assert.Contains(t, err.Error(), "${{ env.TARGET_BRANCH }}")
-			assert.Contains(t, err.Error(), "--no-migrate-local-actions")
-			assert.Equal(t, before, snapshotWorkflows(t))
-			assert.Zero(t, transport.calls.Load(), "unsafe migration stops before resolving dependencies")
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), "second.yml:7")
+					assert.Contains(t, err.Error(), fmt.Sprintf("%s %q", input.name, input.value))
+					assert.Contains(t, err.Error(), "--no-migrate-local-actions")
+					assert.Equal(t, before, snapshotWorkflows(t))
+					assert.Zero(t, transport.calls.Load(), "unsafe migration stops before resolving dependencies")
+				})
+			}
 		})
 	}
 }
