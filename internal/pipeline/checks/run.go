@@ -29,6 +29,7 @@ func RunChecks(ctx context.Context, pw ParsedWorkflow, lf parserlock.File, r Che
 	out = append(out, checkSHARecordedRef(pw, wfEntry, lf.Dependencies)...)
 	out = append(out, checkShaAsRef(pw, depIndex)...)
 	out = append(out, checkRefChanged(pw, depPins)...)
+	out = append(out, checkSHACase(pw)...)
 	out = append(out, checkStale(pw, depPins)...)
 
 	if r != nil {

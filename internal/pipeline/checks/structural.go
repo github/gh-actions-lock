@@ -2,6 +2,8 @@ package checks
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -91,6 +93,27 @@ func checkSHARecordedRef(pw ParsedWorkflow, wfEntry []string, deps map[string]pa
 		f.Reresolve = true
 		// The entry exists, so --no-onboard must not treat this as onboarding.
 		f.TrackedAction = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// checkSHACase emits a remediable RefChanged error for each `uses:` that
+// spells a full SHA in uppercase. The lockfile records it in lowercase and
+// the Actions backend matches the spelling exactly, so a fix run lowercases
+// the `uses:` too.
+func checkSHACase(pw ParsedWorkflow) []Finding {
+	var out []Finding
+	for _, old := range slices.Sorted(maps.Keys(pw.SHACaseRewrites)) {
+		ref := parserlock.ParseActionRef(pw.SHACaseRewrites[old])
+		if ref == nil {
+			continue
+		}
+		f := newRefFinding(pw, *ref, RefChanged, SeverityError, ConfidenceHigh)
+		f.Detail = fmt.Sprintf("uses: %s spells a full SHA in uppercase; the lockfile records it in lowercase and the Actions backend matches the spelling exactly", old)
+		f.Remediation = "run `gh actions-lock` to lowercase the SHA"
+		f.Remediable = true
+		f.Dependency = synthDep(*ref, ref.Ref)
 		out = append(out, f)
 	}
 	return out

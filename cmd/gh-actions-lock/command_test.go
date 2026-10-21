@@ -1511,7 +1511,7 @@ jobs:
 // parser rejects is never skipped, in a workflow or a $/ composite, in
 // any mode or transport. Nothing is fetched or written.
 func TestFreshMalformedRemoteRefCannotOnboard(t *testing.T) {
-	for _, rejected := range []string{"actions/checkout@main:action.yml", "actions/checkout/.github/workflows/ci.yml@v4"} {
+	for _, rejected := range []string{"actions/checkout@main:action.yml", "actions/checkout/.github/workflows/ci.yml@v4", "actions/checkout@rel@1"} {
 		t.Run(rejected, func(t *testing.T) { testMalformedRemoteRefCannotOnboard(t, rejected) })
 	}
 }
@@ -1573,6 +1573,8 @@ func TestRemoteCompositeMalformedRefBlocks(t *testing.T) {
 	tests := map[string]string{
 		"actions/checkout@main:action.yml":             "uses: actions/checkout@main:action.yml is not an action reference the Actions backend accepts",
 		"actions/checkout/.github/workflows/ci.yml@v4": "reusable workflows should be referenced at the top-level `jobs.<job_id>.uses` key, not within steps",
+		"actions/checkout@rel@1":                       "uses: actions/checkout@rel@1 has more than one @",
+		"actions/checkout@" + strings.Repeat("A", 40):  "spells a full SHA in uppercase",
 	}
 	for use, want := range tests {
 		t.Run(use, func(t *testing.T) { testRemoteCompositeMalformedRef(t, use, want) })
@@ -1600,4 +1602,42 @@ jobs:
 	require.ErrorIs(t, err, errSilent, stderr)
 	assert.Contains(t, stderr, want)
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(path), "actions.lock"))
+}
+
+// TestUppercaseSHAUseIsLowercased: the Actions backend matches a `uses:` ref
+// to its lockfile key exactly, and the lockfile spells full SHAs in
+// lowercase, so an uppercase `uses:` is fixable and a fix run lowercases it.
+func TestUppercaseSHAUseIsLowercased(t *testing.T) {
+	lower := "94de994a9f6fffee200243214e17002e2920bb59"
+	upper := strings.ToUpper(lower)
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: octo/action@`+upper+`
+`, "octo/action@"+upper+"=sha1-"+upper+"=v1")
+
+	_, stderr, err := runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
+	require.Error(t, err)
+	assert.Contains(t, stderr, "spells a full SHA in uppercase")
+
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQLForRepo("octo", "action"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": testRepoResponse("octo/action", lower, nodeActionYAML)},
+	}))
+	_, stderr, err = runCommandWithHTTP(t, reg, "--no-narrow", "--no-interactive", path)
+	require.NoError(t, err, stderr)
+
+	workflow, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(workflow), "octo/action@"+lower)
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "'octo/action@"+lower+"':")
+	assert.NotContains(t, lock, upper)
+
+	_, stderr, err = runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
+	require.NoError(t, err, stderr)
 }

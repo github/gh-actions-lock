@@ -11,9 +11,8 @@ import (
 	"github.com/github/gh-actions-lock/internal/ghapi"
 )
 
-// depToPin converts a dep.Dependency into a parserlock.Pin without any
-// case-normalization — callers should rely on Pin.String / Pin.Canonical for
-// the canonical form. Sub-action path is dropped: the lockfile pin grammar
+// depToPin converts a dep.Dependency into a parserlock.Pin with its full-SHA
+// ref spelled canonically; Pin.String folds owner/repo. Sub-action path is dropped: the lockfile pin grammar
 // identifies a downloaded tarball at repo+sha granularity, and distinct
 // subpaths in the same repo+ref collapse to one entry.
 func depToPin(d dep.Dependency) (parserlock.Pin, error) {
@@ -30,8 +29,18 @@ func depToPin(d dep.Dependency) (parserlock.Pin, error) {
 	return parserlock.Pin{
 		Owner: owner,
 		Repo:  repo,
-		Ref:   d.Ref,
+		Ref:   CanonicalRef(d.Ref),
 	}, nil
+}
+
+// CanonicalRef spells a full commit SHA in lowercase and returns any other
+// ref unchanged. The Actions backend matches a `uses:` ref to its lockfile
+// key exactly, so a full SHA has one spelling in both.
+func CanonicalRef(ref string) string {
+	if parserlock.IsFullSha(ref) {
+		return strings.ToLower(ref)
+	}
+	return ref
 }
 
 // ValidEntryRef reports whether ref is a lock entry ref the Actions backend

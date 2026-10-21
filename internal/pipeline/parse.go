@@ -68,6 +68,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 			continue
 		}
 
+		pw.SHACaseRewrites = lowercaseSHAs(scan.Refs, selfScan.Refs)
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
 		// Refs inside `$/…` actions are rewritable too: their action file is
 		// rewritten alongside the workflow, so narrowing stays in sync.
@@ -82,6 +83,26 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		out = append(out, pw)
 	}
 	return out
+}
+
+// lowercaseSHAs spells each full-SHA ref in groups canonically, in place,
+// and returns the `uses:` rewrites that bring the source in line.
+func lowercaseSHAs(groups ...[]parserlock.ActionRef) map[string]string {
+	var rewrites map[string]string
+	for _, group := range groups {
+		for i, ref := range group {
+			canon := lockfile.CanonicalRef(ref.Ref)
+			if canon == ref.Ref {
+				continue
+			}
+			if rewrites == nil {
+				rewrites = map[string]string{}
+			}
+			rewrites[ref.FullName()+"@"+ref.Ref] = ref.FullName() + "@" + canon
+			group[i].Ref = canon
+		}
+	}
+	return rewrites
 }
 
 func mergeActionRefs(groups ...[]parserlock.ActionRef) []parserlock.ActionRef {

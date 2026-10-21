@@ -29,6 +29,8 @@ func TestClassify(t *testing.T) {
 		{"actions/check out@v4", Step, Invalid},
 		{"actions/checkout/../x@v4", Step, Invalid},
 		{"octo/workflows/.github/workflows/nested/release.yml@v1", Job, Invalid},
+		{"octo/action@rel@1", Step, Invalid},
+		{"octo/workflows/.github/workflows/release.yml@rel@1", Job, Invalid},
 	}
 	for _, tt := range tests {
 		r := Classify(tt.use, tt.pos)
@@ -42,4 +44,6 @@ func TestError(t *testing.T) {
 		"uses: actions/checkout@main:action.yml is not an action reference the Actions backend accepts")
 	assert.EqualError(t, Classify("actions/checkout/.github/workflows/ci.yml@v4", Step).Err(),
 		"uses: actions/checkout/.github/workflows/ci.yml@v4 is a reusable workflow; reusable workflows should be referenced at the top-level `jobs.<job_id>.uses` key, not within steps")
+	assert.EqualError(t, Classify("octo/action@rel@1", Step).Err(),
+		"uses: octo/action@rel@1 has more than one @; the Actions backend expects {owner}/{repo}[/path]@ref")
 }

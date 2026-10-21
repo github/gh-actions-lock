@@ -234,6 +234,7 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 	if wr.RewriteRefs == nil {
 		wr.RewriteRefs = pw.Refs
 	}
+	wr.SHACaseRewrites = pw.SHACaseRewrites
 	wr.SelfActionFiles = pw.SelfActionFiles
 	wr.SelfActionRefs = pw.SelfActionRefs
 	wr.ParseWarnings = pw.ParseWarnings

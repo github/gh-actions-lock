@@ -73,7 +73,7 @@ func TestHostScopedMetadataAndPinCollisions(t *testing.T) {
 	require.NoError(t, store.SetHostname("tenant.ghe.com"))
 	sha := strings.Repeat("a", 40)
 	tenant := dep.Dependency{Hostname: "tenant.ghe.com", NWO: "o/r", Ref: "tenant", SHA: sha}
-	public := dep.Dependency{Hostname: "github.com", NWO: "o/r", Ref: "public", SHA: sha}
+	public := dep.Dependency{Hostname: "github.com", NWO: "o/q", Ref: "public", SHA: sha}
 	require.NoError(t, store.Set(context.Background(), ".github/workflows/ci.yml", []dep.Dependency{tenant, public}, nil, nil))
 	require.NoError(t, store.Save())
 	reloaded, err := LoadState(dir, nil)
@@ -82,20 +82,37 @@ func TestHostScopedMetadataAndPinCollisions(t *testing.T) {
 	file := reloaded.File()
 	assert.Empty(t, file.Dependencies["o/r@tenant"].Hostname)
 	assert.EqualValues(t, 20, file.Dependencies["o/r@tenant"].RepoID)
-	assert.Equal(t, "github.com", file.Dependencies["o/r@public"].Hostname)
-	assert.EqualValues(t, 2, file.Dependencies["o/r@public"].RepoID)
+	assert.Equal(t, "github.com", file.Dependencies["o/q@public"].Hostname)
+	assert.EqualValues(t, 2, file.Dependencies["o/q@public"].RepoID)
 	deps, err := reloaded.Get(".github/workflows/ci.yml")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"github.com", "tenant.ghe.com"}, []string{deps[0].Hostname, deps[1].Hostname})
 	require.NoError(t, reloaded.Set(context.Background(), ".github/workflows/ci.yml", deps, nil, nil))
 	assert.EqualValues(t, 20, reloaded.File().Dependencies["o/r@tenant"].RepoID)
-	assert.EqualValues(t, 2, reloaded.File().Dependencies["o/r@public"].RepoID)
+	assert.EqualValues(t, 2, reloaded.File().Dependencies["o/q@public"].RepoID)
 
-	public.Ref = tenant.Ref
-	require.ErrorContains(t, store.Set(context.Background(), ".github/workflows/other.yml", []dep.Dependency{public}, nil, nil), "conflicting hosts")
-	fresh, err := LoadState(t.TempDir(), hostMetadata{})
-	require.NoError(t, err)
-	require.ErrorContains(t, fresh.Set(context.Background(), ".github/workflows/ci.yml", []dep.Dependency{tenant, public}, nil, nil), "conflicting hosts")
+	t.Run("rejects one pin on two hosts", func(t *testing.T) {
+		moved := public
+		moved.NWO, moved.Ref = tenant.NWO, tenant.Ref
+		require.ErrorContains(t, store.Set(context.Background(), ".github/workflows/other.yml", []dep.Dependency{moved}, nil, nil), "conflicting hosts")
+	})
+	t.Run("rejects one repository on two hosts in a write", func(t *testing.T) {
+		fresh, err := LoadState(t.TempDir(), hostMetadata{})
+		require.NoError(t, err)
+		other := public
+		other.NWO = tenant.NWO
+		require.ErrorContains(t, fresh.Set(context.Background(), ".github/workflows/ci.yml", []dep.Dependency{tenant, other}, nil, nil), "conflicting hosts")
+	})
+	t.Run("rejects a lockfile locking one repository on two hosts", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(dir, parserlock.Path))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, parserlock.Path), []byte(strings.ReplaceAll(string(raw), "o/q@", "o/r@")), 0o600))
+		forged, err := LoadState(dir, nil)
+		require.NoError(t, err)
+		err = forged.SetHostname("tenant.ghe.com")
+		require.ErrorIs(t, err, ErrCorruptLockfile)
+		assert.ErrorContains(t, err, "o/r is locked on both github.com and tenant.ghe.com")
+	})
 }
 
 func TestLegacyAndOmittedHostnames(t *testing.T) {

@@ -55,6 +55,7 @@ type Ref struct {
 
 const (
 	problemMalformed = "is not an action reference the Actions backend accepts"
+	problemExtraAt   = "has more than one @; the Actions backend expects {owner}/{repo}[/path]@ref"
 	problemStepWF    = "is a reusable workflow; reusable workflows should be referenced at the top-level `jobs.<job_id>.uses` key, not within steps"
 )
 
@@ -73,6 +74,10 @@ func Classify(raw string, pos Position) Ref {
 		r.Kind = Expression
 	case strings.HasPrefix(v, "$/"):
 		r.Kind = SelfRepository
+	case strings.Count(v, "@") > 1:
+		// The lockfile grammar accepts a ref containing @, but the Actions
+		// backend rejects the workflow, with or without a lockfile.
+		r.Kind, r.Problem = Invalid, problemExtraAt
 	default:
 		if a := parserlock.ParseActionRef(v); a != nil {
 			r.Kind, r.Action = Action, *a

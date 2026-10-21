@@ -22,7 +22,10 @@ type ParsedWorkflow struct {
 	// step-level `$/…` refs. They are rewritten alongside the workflow.
 	SelfActionFiles []string
 	// SelfActionRefs are the remote refs found specifically inside SelfActionFiles.
-	SelfActionRefs     []parserlock.ActionRef
+	SelfActionRefs []parserlock.ActionRef
+	// SHACaseRewrites maps each `uses:` value that spells a full SHA in
+	// uppercase to its lowercase form. Refs already carry the lowercase SHA.
+	SHACaseRewrites    map[string]string
 	LocalPaths         []string
 	SelfRepositoryRefs []string
 	// SelfRepositoryRefErrs holds malformed `$/…@ref` values (the invalid form).

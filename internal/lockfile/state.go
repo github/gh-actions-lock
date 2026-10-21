@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -161,8 +162,8 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 		idCache:         map[string][2]int64{},
 		hostname:        "github.com",
 	}
-	// Normalize on-disk entries to the canonical (lowercased) pin form so any
-	// legacy mixed-case keys are rewritten on the next Save.
+	// Normalize on-disk entries to the canonical pin form (owner/repo and full
+	// SHAs lowercased) so legacy mixed-case keys are rewritten on the next Save.
 	// Check entries in file order, so an invalid lockfile is always reported
 	// by its first bad entry.
 	lines, err := entryLines(contents)
@@ -182,6 +183,7 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 		return cmp.Or(cmp.Compare(line(a), line(b)), strings.Compare(a, b))
 	})
 	normalizedDependencies := make(map[string]parserlock.Action, len(file.Dependencies))
+	spelledAs := make(map[string]string, len(file.Dependencies))
 	for _, pinKey := range keys {
 		action := file.Dependencies[pinKey]
 		pin, ok := parserlock.ParsePin(pinKey)
@@ -189,15 +191,29 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 			normalizedDependencies[pinKey] = action
 			continue
 		}
+		where := parserlock.Path
+		if n, ok := lines[pin.String()]; ok {
+			where = fmt.Sprintf("%s: line %d", where, n)
+		}
+		if strings.Contains(pin.Ref, "@") {
+			return nil, &contentError{fmt.Sprintf("%s: entry for %s has a ref containing @, which the Actions backend rejects", where, pinKey)}
+		}
 		if !ValidEntryRef(pin, action.Ref) && !RecordsOwnSHA(pin, action.Ref) {
-			where := parserlock.Path
-			if n, ok := lines[pin.String()]; ok {
-				where = fmt.Sprintf("%s: line %d", where, n)
-			}
 			return nil, &contentError{fmt.Sprintf("%s: entry for %s %s", where, pinKey, entryRefError(pin, action.Ref))}
 		}
+		pin.Ref = CanonicalRef(pin.Ref)
+		action.Ref = CanonicalRef(action.Ref)
+		action.Commit = strings.ToLower(action.Commit)
+		action.Uses = canonicalKeys(action.Uses)
 		canon := pin.String()
+		if prev, dup := normalizedDependencies[canon]; dup {
+			if !reflect.DeepEqual(prev, action) {
+				return nil, &contentError{fmt.Sprintf("%s: entries %s and %s spell one full SHA in different cases but record different dependencies", where, spelledAs[canon], pinKey)}
+			}
+			continue
+		}
 		normalizedDependencies[canon] = action
+		spelledAs[canon] = pinKey
 		if action.OwnerID != 0 && action.RepoID != 0 {
 			// idCache is keyed by lowercase owner/repo to match lookupIDs and the
 			// canonical pin reader; mixed-case keys here would silently miss.
@@ -206,22 +222,7 @@ func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	}
 	s.file.Dependencies = normalizedDependencies
 	for wfKey, deps := range s.file.Workflows {
-		changed := false
-		normalized := make([]string, len(deps))
-		for i, raw := range deps {
-			if pin, ok := parserlock.ParsePin(raw); ok {
-				canon := pin.String()
-				if canon != raw {
-					changed = true
-				}
-				normalized[i] = canon
-			} else {
-				normalized[i] = raw
-			}
-		}
-		if changed {
-			s.file.Workflows[wfKey] = normalized
-		}
+		s.file.Workflows[wfKey] = canonicalKeys(deps)
 	}
 	return s, nil
 }
@@ -233,6 +234,9 @@ func (s *State) SetHostname(hostname string) error {
 	defer s.mu.Unlock()
 	s.hostname = hostname
 	if hostname == "github.com" || ghapi.IsProxima(hostname) {
+		if err := s.checkOneHostPerRepo(); err != nil {
+			return err
+		}
 		s.idCache = map[string][2]int64{}
 		for key, action := range s.file.Dependencies {
 			if pin, ok := parserlock.ParsePin(key); ok && action.OwnerID != 0 && action.RepoID != 0 {
@@ -252,6 +256,24 @@ func (s *State) SetHostname(hostname string) error {
 		if pin, ok := parserlock.ParsePin(key); ok {
 			s.idCache[repoIDKey(hostname, pin.Owner, pin.Repo)] = [2]int64{action.OwnerID, action.RepoID}
 		}
+	}
+	return nil
+}
+
+// checkOneHostPerRepo rejects a repository locked on two hosts: the Actions
+// backend binds each owner/repo to one host. Requires s.mu.
+func (s *State) checkOneHostPerRepo() error {
+	hosts := map[string]string{}
+	for _, key := range slices.Sorted(maps.Keys(s.file.Dependencies)) {
+		pin, ok := parserlock.ParsePin(key)
+		if !ok {
+			continue
+		}
+		host := s.hostOrHome(s.file.Dependencies[key].Hostname)
+		if prev, ok := hosts[pin.NWO]; ok && prev != host {
+			return &contentError{fmt.Sprintf("%s: %s is locked on both %s and %s; a repository can be locked on only one host", parserlock.Path, pin.NWO, prev, host)}
+		}
+		hosts[pin.NWO] = host
 	}
 	return nil
 }
@@ -610,11 +632,11 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		if hostname == "" {
 			hostname = s.hostname
 		}
-		pinKey := pin.Canonical().String()
-		if host, ok := pinHosts[pinKey]; ok && host != hostname {
-			return fmt.Errorf("dependency %s has conflicting hosts %s and %s", pinKey, host, hostname)
+		nwo := pin.Canonical().NWO
+		if host, ok := pinHosts[nwo]; ok && host != hostname {
+			return fmt.Errorf("dependency %s has conflicting hosts %s and %s", nwo, host, hostname)
 		}
-		pinHosts[pinKey] = hostname
+		pinHosts[nwo] = hostname
 		k := repoIDKey(hostname, pin.Owner, pin.Repo)
 		if _, ok := seenRepos[k]; ok {
 			continue
@@ -766,7 +788,7 @@ func (s *State) Set(ctx context.Context, workflowKey string, deps []dep.Dependen
 		s.file.Dependencies[pinKey] = parserlock.Action{
 			Hostname: hostname,
 			Ref:      ref,
-			Commit:   d.HashAlgoOrDetect() + "-" + d.SHA,
+			Commit:   d.HashAlgoOrDetect() + "-" + strings.ToLower(d.SHA),
 			OwnerID:  ids[0],
 			RepoID:   ids[1],
 			Uses:     uses,
@@ -787,6 +809,9 @@ func (s *State) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneOrphans()
+	if err := s.checkOneHostPerRepo(); err != nil {
+		return err
+	}
 
 	full := s.lockPath
 
@@ -925,6 +950,28 @@ func extractVersion(contents []byte) string {
 		}
 	}
 	return ""
+}
+
+// canonicalKeys spells each pin key canonically (see CanonicalRef),
+// deduplicating keys that differed only in case. Unparseable keys are kept.
+func canonicalKeys(keys []string) []string {
+	if len(keys) == 0 {
+		return keys
+	}
+	out := make([]string, 0, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for _, raw := range keys {
+		key := raw
+		if pin, ok := parserlock.ParsePin(raw); ok {
+			pin.Ref = CanonicalRef(pin.Ref)
+			key = pin.String()
+		}
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // isSHARef returns true when ref is a hex string of SHA-1 (40) or

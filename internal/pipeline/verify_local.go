@@ -28,6 +28,7 @@ func VerifyLocalCoverage(parsed []checks.ParsedWorkflow, store *lockfile.State) 
 				}
 				return pw.Refs
 			}(),
+			SHACaseRewrites: pw.SHACaseRewrites,
 			SelfActionFiles: pw.SelfActionFiles,
 			SelfActionRefs:  pw.SelfActionRefs,
 			Deps:            pw.ExistingDeps,

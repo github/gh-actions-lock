@@ -3,6 +3,7 @@ package lockfile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1032,4 +1033,56 @@ func TestStateClosureDirectPinIsNeverTransitive(t *testing.T) {
 		got[lp.Pin.String()] = lp.Parent
 	}
 	assert.Equal(t, map[string]string{"octo/composite@v1": "", "actions/checkout@" + sha: ""}, got)
+}
+
+func TestLoadStateCanonicalizesFullSHAs(t *testing.T) {
+	upper := strings.Repeat("A", 40)
+	lower := strings.Repeat("a", 40)
+	child := strings.Repeat("B", 40)
+	entry := func(key, ref, commit, uses string) string {
+		out := fmt.Sprintf("  '%s':\n    ref: '%s'\n    commit: 'sha1-%s'\n    owner_id: 1\n    repo_id: 2\n", key, ref, commit)
+		if uses != "" {
+			out += fmt.Sprintf("    uses:\n      - '%s'\n", uses)
+		}
+		return out
+	}
+	childEntry := entry("o/child@"+child, "v2", child, "")
+	load := func(t *testing.T, workflow string, entries ...string) (*State, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "actions.lock")
+		body := "version: 'v0.0.3'\nworkflows:\n  .github/workflows/ci.yml:\n    - '" + workflow + "'\ndependencies:\n" + strings.Join(entries, "")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return LoadStateAt(path, nil)
+	}
+
+	t.Run("lowercases keys, refs, commits, uses and workflow roots", func(t *testing.T) {
+		store, err := load(t, "o/comp@"+upper, entry("O/Comp@"+upper, "v1", upper, "o/child@"+child), childEntry)
+		require.NoError(t, err)
+		file := store.File()
+		assert.Equal(t, []string{"o/comp@" + lower}, file.Workflows[".github/workflows/ci.yml"])
+		require.Contains(t, file.Dependencies, "o/comp@"+lower)
+		assert.Equal(t, "sha1-"+lower, file.Dependencies["o/comp@"+lower].Commit)
+		assert.Equal(t, []string{"o/child@" + strings.ToLower(child)}, file.Dependencies["o/comp@"+lower].Uses)
+		assert.Contains(t, file.Dependencies, "o/child@"+strings.ToLower(child))
+		require.NoError(t, store.Save())
+		raw, err := os.ReadFile(store.lockPath)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), upper)
+		assert.NotContains(t, string(raw), child)
+	})
+	t.Run("merges spellings of one entry", func(t *testing.T) {
+		store, err := load(t, "o/comp@"+lower, entry("o/comp@"+upper, "v1", upper, ""), entry("o/comp@"+lower, "v1", lower, ""))
+		require.NoError(t, err)
+		assert.Len(t, store.File().Dependencies, 1)
+	})
+	t.Run("rejects spellings that disagree", func(t *testing.T) {
+		_, err := load(t, "o/comp@"+lower, entry("o/comp@"+upper, "v1", upper, ""), entry("o/comp@"+lower, "v2", lower, ""))
+		require.ErrorIs(t, err, ErrCorruptLockfile)
+		assert.ErrorContains(t, err, "spell one full SHA in different cases")
+	})
+	t.Run("rejects a ref containing @", func(t *testing.T) {
+		_, err := load(t, "o/comp@rel@1", entry("o/comp@rel@1", "rel@1", lower, ""))
+		require.ErrorIs(t, err, ErrCorruptLockfile)
+		assert.ErrorContains(t, err, "ref containing @")
+	})
 }

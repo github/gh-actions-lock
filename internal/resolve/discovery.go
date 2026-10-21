@@ -55,15 +55,19 @@ func IsInvalidSelfRepositoryRef(err error) bool {
 }
 
 // MalformedNestedRefError is returned when a fetched composite's `uses:`
-// names a remote action the parser can't accept. It is never skipped: the
-// composite's dependencies would be locked without it.
+// names a remote action the parser can't accept, or one the lockfile can't
+// spell the way the composite does. It is never skipped: the composite's
+// dependencies would be locked without it.
 type MalformedNestedRefError struct {
 	Parent string
 	Ref    string
 }
 
 func (e *MalformedNestedRefError) Error() string {
-	return fmt.Sprintf("composite action %s: %s", e.Parent, uses.Classify(e.Ref, uses.Step).Err())
+	if err := uses.Classify(e.Ref, uses.Step).Err(); err != nil {
+		return fmt.Sprintf("composite action %s: %s", e.Parent, err)
+	}
+	return fmt.Sprintf("composite action %s: uses: %s spells a full SHA in uppercase; the lockfile records full SHAs in lowercase, and the Actions backend matches the composite's spelling exactly", e.Parent, e.Ref)
 }
 
 // selfRepositoryPrefix marks a `$/…` self repository action inside a composite's
@@ -258,8 +262,9 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 					}
 				} else {
 					c := uses.Classify(use, uses.Step)
-					if c.Kind == uses.Invalid {
+					if c.Kind == uses.Invalid || c.Kind == uses.Action && c.Action.Ref != strings.ToLower(c.Action.Ref) && parserlock.IsFullSha(c.Action.Ref) {
 						resolveErr = errors.Join(resolveErr, &MalformedNestedRefError{Parent: parentKey, Ref: use})
+						continue
 					}
 					if c.Kind != uses.Action {
 						continue

@@ -30,12 +30,7 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 		}
 
 		oldValue := strings.TrimSpace(valueNode.Value)
-		newValue, ok := replacements[oldValue]
-		if !ok {
-			// Sub-path actions: uses: owner/repo/path@ref should match
-			// a rewrite keyed on owner/repo@ref (NWO-level granularity).
-			newValue, ok = subpathRewriteLookup(oldValue, replacements)
-		}
+		newValue, ok := LookupRewrite(oldValue, replacements)
 		if !ok || newValue == "" || newValue == oldValue {
 			return
 		}
@@ -201,6 +196,15 @@ func localActionExists(repoRoot, localPath string) bool {
 		}
 	}
 	return false
+}
+
+// LookupRewrite returns the replacement for a `uses:` value: an exact key,
+// else, for a sub-path action owner/repo/path@ref, a key owner/repo@ref.
+func LookupRewrite(usesValue string, replacements map[string]string) (string, bool) {
+	if v, ok := replacements[usesValue]; ok {
+		return v, true
+	}
+	return subpathRewriteLookup(usesValue, replacements)
 }
 
 // subpathRewriteLookup handles sub-path actions like actions/cache/restore@ref.
