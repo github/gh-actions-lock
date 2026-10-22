@@ -13,6 +13,31 @@ const PublisherTagReleasesDocURL = "https://docs.github.com/en/actions/how-tos/c
 // a branch.
 const PublisherEscalationCopy = "Ask the action maintainer to tag releases from a branch"
 
+var docURLs = map[checks.Category]string{
+	checks.NotPinned:           securityHardeningBase + "#using-third-party-actions",
+	checks.ShaAsRef:            securityHardeningBase + "#using-third-party-actions",
+	checks.RefChanged:          securityHardeningBase + "#using-third-party-actions",
+	checks.Stale:               securityHardeningBase + "#using-third-party-actions",
+	checks.MisleadingSHA:       securityHardeningBase + "#using-third-party-actions",
+	checks.RefMoved:            securityHardeningBase + "#using-third-party-actions",
+	checks.TagCommitMismatch:   securityHardeningBase + "#using-third-party-actions",
+	checks.UnreachablePin:      securityHardeningBase + "#using-third-party-actions",
+	checks.RepoRenamed:         securityHardeningBase + "#using-third-party-actions",
+	checks.RepoReplaced:        securityHardeningBase + "#using-third-party-actions",
+	checks.OwnerIDChanged:      securityHardeningBase + "#using-third-party-actions",
+	checks.RepoUnavailable:     securityHardeningBase + "#using-third-party-actions",
+	checks.OnboardingRequired:  securityHardeningBase + "#using-third-party-actions",
+	checks.AncestryUnknown:     securityHardeningBase + "#using-third-party-actions",
+	checks.ReachabilityUnknown: securityHardeningBase + "#using-third-party-actions",
+	checks.IncompleteLockfile:  securityHardeningBase + "#using-third-party-actions",
+}
+
+// DocURLFor returns the documentation URL for a finding category, or ""
+// when the category has no associated URL (e.g. checks.Valid).
+func DocURLFor(c checks.Category) string {
+	return docURLs[c]
+}
+
 // ReleasesURL returns the GitHub releases URL for an action. When ref
 // looks like a tag, links to the specific release; otherwise links to
 // the releases index so users can pick one.
