@@ -13,6 +13,8 @@ func TestCategoryDocURL(t *testing.T) {
 		want     string
 	}{
 		{NotPinned, base + "#not-pinned"},
+		{MissingRef, base + "#ref-missing"},
+		{InvalidWorkflow, base + "#invalid-workflow"},
 		{ShaAsRef, base + "#sha-as-ref"},
 		{RefChanged, base + "#ref-changed"},
 		{RefMoved, base + "#ref-moved"},

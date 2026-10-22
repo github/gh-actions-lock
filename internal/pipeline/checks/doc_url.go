@@ -12,6 +12,8 @@ const troubleshootingDocs = "https://docs.github.com/actions/reference/security/
 // RunOnly and SelfRepositoryAction need no action, so they have none.
 var documented = map[Category]bool{
 	NotPinned:                true,
+	MissingRef:               true,
+	InvalidWorkflow:          true,
 	ShaAsRef:                 true,
 	RefChanged:               true,
 	RefMoved:                 true,

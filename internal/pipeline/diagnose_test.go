@@ -134,7 +134,7 @@ func TestDiagnoseOneParsed_LoadErrorIsInvalidWorkflow(t *testing.T) {
 	assert.Equal(t, checks.InvalidWorkflow, f.Category)
 	assert.Equal(t, checks.SeverityError, f.Severity)
 	assert.Contains(t, f.Detail, "failed to load workflow")
-	assert.Empty(t, f.DocURL, "the security-hardening page doesn't explain a YAML error")
+	assert.Equal(t, "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#invalid-workflow", f.DocURL())
 	assert.True(t, wr.SkipCommit)
 	assert.False(t, wr.IsValid())
 }

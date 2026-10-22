@@ -83,7 +83,7 @@ jobs:
 			found = true
 			assert.Equal(t, detail, f.Detail)
 			assert.Equal(t, remedy, f.Remediation)
-			assert.Equal(t, checks.NotPinned.DocURL(), f.DocURL, "the not-pinned section covers a missing ref")
+			assert.Equal(t, checks.MissingRef.DocURL(), f.DocURL)
 		}
 	}
 	assert.True(t, found, stdout)
