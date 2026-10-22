@@ -134,7 +134,7 @@ func TestDiagnoseOneParsed_LoadErrorIsInvalidWorkflow(t *testing.T) {
 	assert.Equal(t, checks.InvalidWorkflow, f.Category)
 	assert.Equal(t, checks.SeverityError, f.Severity)
 	assert.Contains(t, f.Detail, "failed to load workflow")
-	assert.Equal(t, "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#invalid-workflow", f.DocURL())
+	assert.Equal(t, "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#invalid-workflow", f.DocURL())
 	assert.True(t, wr.SkipCommit)
 	assert.False(t, wr.IsValid())
 }

@@ -858,7 +858,7 @@ func TestPresentReadOnlyFailures_GroupsRetryable(t *testing.T) {
 }
 
 func TestRenderWarnings_LocalActions(t *testing.T) {
-	const doc = "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#local-action"
+	const doc = "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#local-action"
 	local := func(wf, path, parent string) checks.Finding {
 		return checks.Finding{WorkflowPath: wf, Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: path, ParentNWO: parent}
 	}

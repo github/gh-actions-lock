@@ -180,7 +180,7 @@ A `./…` inside a remote composite can't be rewritten, so only
 
 A `./…` action the CLI can't read from the checkout, or one with only `run:`
 steps, is a non-blocking `local-action` warning. Both link to the
-[troubleshooting docs](https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting#local-action).
+[troubleshooting docs](docs/troubleshooting.md#local-action).
 The workflow's other dependencies are locked and checked as usual.
 
 ## How it works
@@ -207,5 +207,7 @@ This project is licensed under the terms of the MIT open source license. See [LI
 gh-actions-lock is maintained by @github/actions-dispatch-reviewers. See [CODEOWNERS](./CODEOWNERS).
 
 ## Support
+
+For help with a specific error or warning, see [Troubleshooting](docs/troubleshooting.md).
 
 Support is best-effort and community-based. Please file bugs and feature requests as [GitHub issues](https://github.com/github/gh-actions-lock/issues). See [SUPPORT.md](./SUPPORT.md) for details.

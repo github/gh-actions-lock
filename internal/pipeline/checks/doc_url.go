@@ -1,12 +1,13 @@
 package checks
 
-// troubleshootingDocs has one section per finding category, anchored by the
-// category string.
+// troubleshootingDocs is docs/troubleshooting.md on the default branch. It has
+// one section per finding category, anchored by the category string; a test
+// checks the headings.
 //
 // The editor's TypeScript table (actions/languageservices,
 // workflow-parser/src/lockfile/diagnostics/doc-urls.ts) presents the same
 // links and needs the same per-category anchors.
-const troubleshootingDocs = "https://docs.github.com/actions/reference/security/workflow-dependency-lockfile-troubleshooting"
+const troubleshootingDocs = "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md"
 
 // documented lists the categories with a troubleshooting section. Valid,
 // RunOnly and SelfRepositoryAction need no action, so they have none.
