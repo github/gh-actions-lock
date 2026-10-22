@@ -1,5 +1,20 @@
 package pipeline
 
+import "github.com/github/gh-actions-lock/internal/pipeline/checks"
+
+// Documentation URLs for each finding Category.
+//
+// Parity twin of the TypeScript engine's doc URL table at
+// languageservices/workflow-parser/src/lockfile/diagnostics/doc-urls.ts.
+// Strings here MUST stay in sync with that table — the CLI and editor
+// present the same link to users so the experience is identical.
+//
+// Categories that don't yet have a dedicated docs anchor fall back to
+// the canonical "using third-party actions" page so users always land
+// somewhere actionable.
+
+const securityHardeningBase = "https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions"
+
 // PublisherTagReleasesDocURL points to GitHub's guidance for action publishers
 // on tagging releases from a branch. It's surfaced alongside unreachable-pin
 // findings to help users escalate to the action's maintainer when the pinned
