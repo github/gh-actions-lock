@@ -36,9 +36,9 @@ import (
 // transitive closure from this run's resolve) join the same batch. Any
 // blocking finding keeps its workflow out of the write.
 //
-// Identity follows the runner: only the repo ID counts. A rename or
-// transfer redirect to the same repo ID is a warning, also inside a
-// remote composite; a different ID or a name that doesn't resolve blocks. Fresh pins fail closed: an
+// Repository identity follows the runner's repo ID. A rename or transfer
+// redirect to the same repo ID is a warning, also inside a remote composite.
+// A same-name owner ID change blocks, while fresh pins fail closed: an
 // inconclusive check keeps them out of the write.
 //
 // Under the Dependabot proxy any inconclusive check is an error: the run
@@ -721,6 +721,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		if f.ParentNWO != "" {
 			f.Remediation = fmt.Sprintf("do not trust it: the locked repository was deleted and its name taken over, possibly by an attacker. Stop using %s or upgrade it to a version that doesn't use %s", f.ParentNWO, nwo)
 		}
+	case st.NameWithOwner != "" && strings.EqualFold(st.NameWithOwner, nwo) && idChanged(lp.Action.OwnerID, st.OwnerID):
+		f.Category = checks.OwnerIDChanged
+		f.Detail = fmt.Sprintf("%s owner ID changed (%d, locked %d); verify the owner before updating the lockfile%s", nwo, st.OwnerID, lp.Action.OwnerID, via)
+		f.Remediation = fmt.Sprintf("verify the owner of %s, then run `gh actions-lock` to update the lockfile", nwo)
 	case !st.CommitFound:
 		f.Category = checks.UnreachablePin
 		f.Detail = checks.NotInHistoryDetail(pc.SHA, nwo, cmp.Or(pc.Head, ref.Ref), st.HeadOID) + via
