@@ -28,7 +28,7 @@ gh actions-lock            # onboard or fix: pin every resolvable action and wri
 git add .github/workflows/ # check into source
 ```
 
-Rerun `gh actions-lock` after adding a workflow or changing any `uses:`.
+Rerun `gh actions-lock` after adding a workflow or changing any `uses:`. To bump an action, edit its `uses:` line and rerun; only that entry changes.
 
 Make sure you don't check in a corrupt lockfile. Copy [`.github/workflows/verify-lockfile.yml`](.github/workflows/verify-lockfile.yml) into your repository, modify it for your needs, then run `gh actions-lock` once so that workflow is locked too.
 

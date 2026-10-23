@@ -480,17 +480,17 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		}
 		if len(record.Unresolved()) > 0 {
 			if opts.jsonFields == "" {
+				blocking, ready := withoutPendingFixes(report)
+				ready = slices.DeleteFunc(ready, func(p string) bool {
+					return slices.ContainsFunc(record.Unresolved(), func(e pin.Entry) bool { return slices.Contains(e.Workflows, p) })
+				})
 				if len(unresolved) < len(record.Unresolved()) {
-					format.PresentReadOnlyFailures(console, report)
+					format.PresentReadOnlyFailures(console, blocking)
 				}
 				if len(unresolved) > 0 {
 					renderUnresolvedWarnings(console, unresolved)
 				}
-				console.TermBlank()
-				console.TermError("Nothing was written: fix the errors above and re-run")
-				if fullScan {
-					console.TermDetail("To lock only some workflows, pass their paths: gh actions-lock <workflow>...")
-				}
+				renderBlockedHint(console, ready, fullScan)
 			}
 			return errSilent
 		}
@@ -517,9 +517,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		if investigated := record.Investigated(); len(investigated) > 0 {
 			renderInvestigationAlerts(console, investigated, r)
 		}
-		format.PresentReadOnlyFailures(console, withoutPendingPins(report))
-		console.TermBlank()
-		console.TermError("Nothing was written: fix the errors above and re-run")
+		blocking, ready := withoutPendingFixes(report)
+		format.PresentReadOnlyFailures(console, blocking)
+		renderBlockedHint(console, ready, fullScan)
 		return errSilent
 	}
 

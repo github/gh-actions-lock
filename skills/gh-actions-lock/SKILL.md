@@ -55,11 +55,13 @@ git add .github/workflows/
 ```
 
 - Rerun after adding a workflow or changing any `uses:`. Locked pins are sticky: a plain run only
-  resolves refs the lockfile doesn't record yet.
+  resolves refs the lockfile doesn't record yet. To bump an action, edit `uses:` and run
+  `gh actions-lock`; don't use `--relock`, which also moves every floating ref.
 - Partial versions (`v4`) are narrowed to the highest matching full tag (`v4.2.1`) when first
   pinned. `--no-narrow` keeps them as written.
 - Writes are all or nothing. If any error remains that the run can't fix, it changes nothing,
-  not even for workflows that are otherwise fine.
+  not even for workflows that are otherwise fine. The output then lists only the errors that
+  blocked it, and names the command that locks the workflows without errors.
 - Commit `actions.lock` together with any workflow edits the run made.
 
 **Local `./…` actions.** The CLI never follows, locks or rewrites a workspace path. When a local

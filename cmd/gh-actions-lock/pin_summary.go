@@ -59,18 +59,52 @@ func runHasBlockingErrors(report *checks.Report, record *pin.Record, acceptMoved
 	return false
 }
 
-// withoutPendingPins drops not-pinned findings a plain run would have
-// pinned, so a blocked run lists only the errors that stopped it.
-func withoutPendingPins(report *checks.Report) *checks.Report {
+// isPendingFix reports whether a fix run resolves f itself: a new pin, a
+// `uses:` edit, or the entry that edit leaves unused.
+func isPendingFix(f checks.Finding) bool {
+	if f.IsRemediableNotPinned() {
+		return true
+	}
+	return (f.Category == checks.RefChanged || f.Category == checks.Stale) && !f.RefMissing
+}
+
+// withoutPendingFixes drops the findings a fix run would have resolved, so a
+// blocked run lists only the errors that stopped it rather than blaming the
+// edit it was asked to lock. ready names the workflows whose only errors
+// were such fixes: a run scoped to them can still write.
+func withoutPendingFixes(report *checks.Report) (blocking *checks.Report, ready []string) {
 	out := *report
 	out.Workflows = make([]checks.WorkflowReport, len(report.Workflows))
 	for i, wr := range report.Workflows {
+		pending := false
 		wr.Findings = slices.DeleteFunc(slices.Clone(wr.Findings), func(f checks.Finding) bool {
-			return f.IsRemediableNotPinned()
+			if isPendingFix(f) {
+				pending = true
+				return true
+			}
+			return false
 		})
+		if pending && wr.IsValid() && !wr.SkipCommit && !wr.BlockingResolverError && wr.Path != "" {
+			ready = append(ready, wr.Path)
+		}
 		out.Workflows[i] = wr
 	}
-	return &out
+	return &out, ready
+}
+
+// renderBlockedHint ends a run that wrote nothing. When some workflows were
+// only waiting on fixes this run would have made, it names the command that
+// locks them without the blocked ones.
+func renderBlockedHint(console *ui.UI, ready []string, fullScan bool) {
+	console.TermBlank()
+	console.TermError("Nothing was written: fix the errors above and re-run")
+	switch {
+	case len(ready) > 0:
+		console.TermDetail("To lock the %s without errors now: gh actions-lock %s",
+			ui.Pluralize(len(ready), "workflow", "workflows"), strings.Join(ready, " "))
+	case fullScan:
+		console.TermDetail("To lock only some workflows, pass their paths: gh actions-lock <workflow>...")
+	}
 }
 
 // reportHasNonInvestigatedUnfixableErrors is like reportHasUnfixableErrors

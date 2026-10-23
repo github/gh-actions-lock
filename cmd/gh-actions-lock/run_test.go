@@ -1145,3 +1145,71 @@ func TestRun_NarrowingNeverMergesEntriesIntoACycle(t *testing.T) {
 		})
 	}
 }
+
+// writeBumpedCleanWorkflow writes clean.yml after a `uses:` bump from
+// setup-go v4.0.0 to v5.0.0, with a lockfile that still records v4.0.0 for
+// it. blockedBody, when set, adds workflow.yml locked at checkout@v4.2.1.
+func writeBumpedCleanWorkflow(t *testing.T, reg *httpmock.Registry, blockedBody string) (clean, blocked string) {
+	t.Helper()
+	dir := t.TempDir()
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(wfDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(wfDir, "clean.yml"), []byte(cleanWorkflow), 0o600))
+	lock := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  'actions/setup-go@v4.0.0':\n    ref: 'v4.0.0'\n    commit: 'sha1-" + parityTestSHA + "'\n    owner_id: 1\n    repo_id: 2\n"
+	workflows := "workflows:\n  '.github/workflows/clean.yml':\n    - 'actions/setup-go@v4.0.0'\n"
+	if blockedBody != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(wfDir, "workflow.yml"), []byte(blockedBody), 0o600))
+		lock += "  'actions/checkout@v4.2.1':\n    ref: 'v4.2.1'\n    commit: 'sha1-" + parityTestSHA + "'\n    owner_id: 1\n    repo_id: 1\n"
+		workflows += "  '.github/workflows/workflow.yml':\n    - 'actions/checkout@v4.2.1'\n"
+		blocked = ".github/workflows/workflow.yml"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(wfDir, "actions.lock"), []byte(lock+workflows), 0o600))
+	registerSetupGo(reg)
+	t.Chdir(dir)
+	return ".github/workflows/clean.yml", blocked
+}
+
+// TestRun_BumpedUsesNeedsNoRelock: a plain run locks a `uses:` edit by itself.
+func TestRun_BumpedUsesNeedsNoRelock(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), parityOK)
+	clean, _ := writeBumpedCleanWorkflow(t, reg, "")
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-onboard", "--no-narrow", clean)
+	require.NoError(t, err, stderr)
+
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "'actions/setup-go@v5.0.0'")
+	assert.Contains(t, lock, parityTestMoved, "the bumped ref is locked at its commit")
+	assert.NotContains(t, lock, "setup-go@v4.0.0", "the old entry is pruned")
+}
+
+// TestRun_BlockedRunDoesNotBlameTheBump: when an unrelated error blocks the
+// run, the bump it would have locked isn't reported as a failure, and the
+// output names the command that locks it alone.
+func TestRun_BlockedRunDoesNotBlameTheBump(t *testing.T) {
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), repoIDMismatch{}.RoundTrip)
+	clean, blocked := writeBumpedCleanWorkflow(t, reg, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.1
+`)
+	before := snapshotWorkflows(t)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-onboard", "--no-narrow")
+	require.ErrorIs(t, err, errSilent)
+	assert.Equal(t, before, snapshotWorkflows(t), "no file may change")
+	assert.Contains(t, stderr, "different repository than the one locked", "the blocker is reported")
+	assert.Contains(t, stderr, "1 of 2 workflows failed", "only the blocked workflow failed")
+	assert.NotContains(t, stderr, "Ref changed", "the bump is not an error")
+	assert.NotContains(t, stderr, "Unused lockfile entry", "the entry the bump replaces is not an error")
+	assert.Contains(t, stderr, "To lock the workflow without errors now: gh actions-lock "+clean)
+	assert.NotContains(t, stderr, "gh actions-lock "+blocked)
+}

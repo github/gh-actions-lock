@@ -94,6 +94,8 @@ A workflow file can't be loaded, so none of its actions can be checked. The mess
 
 A `uses:` reference in a workflow was changed, for example from `v6.2.0` to `v6`, but the lockfile still records the old reference. If you meant to change the reference, run `gh actions-lock` to record it. Otherwise, revert the `uses:` line.
 
+This is how you bump an action: edit `uses:`, then run `gh actions-lock`. The run locks the new reference and leaves every other entry as it was. You don't need `--relock`, which also moves every floating reference such as `v4` or `main`. If the run reports another error and writes nothing, it lists the workflows that have no errors of their own and the command that locks just those.
+
 Don't edit the lockfile to match the workflow. The extension rejects lockfile entries that don't match their references.
 
 ### `stale`
