@@ -204,7 +204,7 @@ Fix it in one of these ways:
   gh actions-lock --migrate-local-actions
   ```
 
-  A `$/` reference always runs at the workflow's own commit, and the extension locks the actions it uses. Review the diff before you commit. See [Local actions](../README.md#local-actions) and [Self repository actions](../README.md#self-repository-actions-) in the README.
+  A `$/` reference always runs at the workflow's own commit, and the extension locks the actions it uses. Review the diff before you commit. For how `$/`, `owner/repo@ref`, and `./` references differ, see [Using an action in the same repository as the workflow](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended) in the GitHub Docs.
 
 * **Keep `./`.** Report the local action as a warning instead of an error:
 
