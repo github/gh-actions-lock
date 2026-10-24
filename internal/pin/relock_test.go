@@ -60,7 +60,7 @@ func TestPruneStaleInventory_Relock(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pruneStaleInventory(inventory, findings, tt.acceptMoved, tt.relock)
+			got := pruneStaleInventory(inventory, findings, tt.acceptMoved, func(*dep.Dependency) bool { return tt.relock })
 			if hasDep(got, "octo/branch") == tt.wantPrunedRef {
 				t.Errorf("ref-moved dep present=%v, want pruned=%v", hasDep(got, "octo/branch"), tt.wantPrunedRef)
 			}
@@ -84,7 +84,7 @@ func TestPruneStaleInventory_RefCase(t *testing.T) {
 	}
 	findings := []checks.Finding{movedFinding(checks.Stale, "Octo/A", "Main", "aaaa")}
 
-	got := pruneStaleInventory(inventory, findings, false, false)
+	got := pruneStaleInventory(inventory, findings, false, func(*dep.Dependency) bool { return false })
 	require.Len(t, got, 1)
 	assert.Equal(t, "main", got[0].Dep.Ref)
 }

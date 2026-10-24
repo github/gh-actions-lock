@@ -3,7 +3,7 @@ name: gh-actions-lock
 description: >
   Locks and verifies GitHub Actions workflow dependencies with gh-actions-lock.
   Use when onboarding a repository to .github/workflows/actions.lock, fixing or
-  relocking the lockfile, verifying it in CI, reading its findings, or whenever a
+  updating the lockfile, verifying it in CI, reading its findings, or whenever a
   user mentions actions.lock, gh actions-lock, or pinning workflow dependencies.
 license: MIT
 metadata:
@@ -34,14 +34,14 @@ then the repository remote, then github.com.
 | Command | Writes | Network | Use for |
 |---|---|---|---|
 | `gh actions-lock` | yes | yes | onboarding and fixing the lockfile |
-| `gh actions-lock --relock` | yes | yes | advancing moved refs to current upstream commits |
+| `gh actions-lock update [owner/repo[@ref]...]` | yes | yes | advancing moved refs to current upstream commits |
 | `gh actions-lock --verify` | no | yes | CI: same checks as a fix run, fails on anything blocking |
 | `gh actions-lock --verify-local` | no | no | pre-commit: every `uses:` has a lockfile entry |
 | `gh actions-lock --no-fix` | no | yes | read-only report |
 
 `--verify-local` only checks coverage, not that entries are trustworthy. Use `--verify` in CI.
 `--verify` and `--verify-local` are mutually exclusive, and `--verify-local` cannot be combined
-with `--relock` or `--accept-moved`.
+with `update` or `--accept-moved`.
 
 Pass workflow paths to scope a run: `gh actions-lock .github/workflows/ci.yml`. Only a
 full-directory run prunes entries for deleted workflows.
@@ -56,7 +56,7 @@ git add .github/workflows/
 
 - Rerun after adding a workflow or changing any `uses:`. Locked pins are sticky: a plain run only
   resolves refs the lockfile doesn't record yet. To bump an action, edit `uses:` and run
-  `gh actions-lock`; don't use `--relock`, which also moves every floating ref.
+  `gh actions-lock`; don't use `update`, which re-resolves locked entries.
 - Partial versions (`v4`) are narrowed to the highest matching full tag (`v4.2.1`) when first
   pinned. `--no-narrow` keeps them as written.
 - Writes are all or nothing. If any error remains that the run can't fix, it changes nothing,
@@ -76,16 +76,22 @@ gh actions-lock --ignore-local-actions    # keep ./… and downgrade it to a war
 `$/…` refers to the same repository at the running commit and needs no lockfile entry. A `./…`
 inside a remote composite can't be rewritten, so only `--ignore-local-actions` applies there.
 
-## Relocking and moved refs
+## Updating moved refs
 
 ```bash
-gh actions-lock --relock        # re-resolve every ref to its current upstream commit
+gh actions-lock update                        # re-resolve every entry to its ref's current commit
+gh actions-lock update actions/checkout@v4    # only this entry, wherever it is used
+gh actions-lock update actions/checkout       # every ref of this action
+gh actions-lock update .github/workflows/ci.yml   # every entry this workflow uses
 ```
 
-`--relock` advances floating refs (`main`, `v4`), fixes `tag-commit-mismatch`, and rebuilds each
-composite's dependencies from its manifest. It leaves `unreachable-pin` as an error: the locked
-commit is no longer in the ref's history, which is either an upstream force-push or an edited
-lockfile, and the CLI can't tell which.
+`update` advances floating refs (`main`, `v4`), fixes `tag-commit-mismatch`, and rebuilds a
+composite's dependencies from its manifest. Prefer naming the action a finding names over a bare
+`update`, which moves every floating ref. Entries are shared across workflows, so updating one
+moves it for every workflow that uses it; a run scoped to workflow paths names the others it
+moved. `update` leaves `unreachable-pin` as an error: the locked commit is no longer in the ref's
+history, which is either an upstream force-push or an edited lockfile, and the CLI can't tell
+which. `--relock` is a deprecated alias for `update`.
 
 `--accept-moved` accepts those pins at their current commit. **It is a human decision.** Only
 run it after the user has checked why the commit moved, and never in CI, scheduled jobs, or other
@@ -124,9 +130,9 @@ category name alone.
 | Category | Usual next step |
 |---|---|
 | `not-pinned`, `stale`, `ref-changed`, `repo-renamed` | `gh actions-lock` |
-| `ref-moved`, `tag-commit-mismatch`, `incomplete-lockfile` | `gh actions-lock --relock` |
+| `ref-moved`, `tag-commit-mismatch`, `incomplete-lockfile` | the `gh actions-lock update …` command in its remediation |
 | `unreachable-pin` | stop and ask the user; see `--accept-moved` above |
-| `misleading-sha`, `repo-replaced` | stop and ask the user; don't relock or accept |
+| `misleading-sha`, `repo-replaced` | stop and ask the user; don't update or accept |
 | `ref-missing`, `invalid-workflow`, `invalid-self-repository-ref` | fix the workflow source |
 | `repo-unavailable` | deleted, or the token can't read it; check access |
 | `ancestry-unknown`, `reachability-unknown` | retryable; rerun later |

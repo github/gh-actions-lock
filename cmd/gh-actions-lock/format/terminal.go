@@ -523,7 +523,7 @@ func renderWarnings(out *ui.UI, report *checks.Report, willRemediate bool) {
 				bareSHADeps = append(bareSHADeps, key)
 			}
 		case f.Category == checks.RefMoved && !f.TagMoved:
-			// Moved mutable refs are sticky; --relock advances them, so
+			// Moved mutable refs are sticky; update advances them, so
 			// there is nothing actionable to print here.
 		case f.Category.IsInconclusive() &&
 			strings.Contains(f.Remediation, "transitive dependency"):

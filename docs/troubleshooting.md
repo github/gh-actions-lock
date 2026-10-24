@@ -94,7 +94,7 @@ A workflow file can't be loaded, so none of its actions can be checked. The mess
 
 A `uses:` reference in a workflow was changed, for example from `v6.2.0` to `v6`, but the lockfile still records the old reference. If you meant to change the reference, run `gh actions-lock` to record it. Otherwise, revert the `uses:` line.
 
-This is how you bump an action: edit `uses:`, then run `gh actions-lock`. The run locks the new reference and leaves every other entry as it was. You don't need `--relock`, which also moves every floating reference such as `v4` or `main`. If the run reports another error and writes nothing, it lists the workflows that have no errors of their own and the command that locks just those.
+This is how you bump an action: edit `uses:`, then run `gh actions-lock`. The run locks the new reference and leaves every other entry as it was. You don't need `gh actions-lock update`, which re-resolves locked entries to their refs' current commits. If the run reports another error and writes nothing, it lists the workflows that have no errors of their own and the command that locks just those.
 
 Don't edit the lockfile to match the workflow. The extension rejects lockfile entries that don't match their references.
 
@@ -146,11 +146,13 @@ A lockfile entry for an exact release tag, such as `v4.2.1`, locks an older comm
 
 1. Check whether the lockfile was edited by hand, and restore it if it was. See [Restoring the lockfile](#restoring-the-lockfile).
 1. Look at what changed upstream between the two commits.
-1. To lock the tag's current commit, run the following command. `--relock` also fixes an entry that a composite action pins.
+1. To lock the tag's current commit, run the command that the finding names. For example:
 
    ```shell
-   gh actions-lock --relock
+   gh actions-lock update actions/checkout@v4.2.1
    ```
+
+   If a composite action pins the tag, the finding names the composite action instead, because updating it also re-reads its dependencies.
 
    To use a different release instead, change the `uses:` line and run `gh actions-lock`.
 
@@ -180,13 +182,8 @@ The extension can't find the action's repository. Either the repository was dele
 
 A locked action's `action.yml` at its locked commit doesn't match its lockfile entry. Either it uses an action the entry doesn't record, or the action file is missing at that commit. A plain run of `gh actions-lock` doesn't repair this.
 
-* If the entry is missing a dependency, restore the lockfile from version control, or rebuild the entry with the following command. To restore the lockfile, see [Restoring the lockfile](#restoring-the-lockfile).
-
-  ```shell
-  gh actions-lock --relock
-  ```
-
-* If the action file is missing, point `uses:` at a version of the action that exists at that commit, then run `gh actions-lock --relock`.
+* If the entry is missing a dependency, restore the lockfile from version control, or rebuild the entry with the `gh actions-lock update` command that the finding names, such as `gh actions-lock update octo-org/composite@v1`. To restore the lockfile, see [Restoring the lockfile](#restoring-the-lockfile).
+* If the action file is missing, point `uses:` at a version of the action that exists at that commit, then run `gh actions-lock update` with the workflow's path.
 
 ### `local-action`
 
@@ -258,11 +255,13 @@ These findings don't block the run, but you should read them.
 
 A tag or branch that your workflow uses now points to a different commit than the one in the lockfile.
 
-For a branch or a partial version, such as `main` or `v4`, a normal run keeps the locked commit. This warning appears only in `--json` output and doesn't change the exit code. To advance the reference, check what changed upstream between the two commits, then run:
+For a branch or a partial version, such as `main` or `v4`, a normal run keeps the locked commit. This warning appears only in `--json` output and doesn't change the exit code. To advance the reference, check what changed upstream between the two commits, then update that action:
 
 ```shell
-gh actions-lock --relock
+gh actions-lock update actions/checkout@v4
 ```
+
+`gh actions-lock update` with no arguments advances every locked reference. A lockfile entry is shared by every workflow that uses the same `owner/repo@ref`, so updating it moves it for all of them. When you pass workflow paths, the summary names any other workflow whose entries moved.
 
 **Headline:** Tag now points past locked commit
 

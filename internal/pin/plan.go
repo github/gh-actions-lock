@@ -11,6 +11,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/refresh"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/workflowfile"
@@ -39,6 +40,11 @@ type PlanOptions struct {
 	// current live SHA. Unlike AcceptMoved it leaves unreachable-pin
 	// findings untouched so possible tampering stays a hard error.
 	Relock bool
+
+	// Refresh re-pins only the entries it selects, as Relock would. A
+	// workflow that records one rebuilds its closure; its other entries
+	// resolve from the lockfile seed, so they keep their commits.
+	Refresh *refresh.Set
 
 	// PartialScan reports that explicit workflow paths, rather than the full
 	// workflow directory, define this run's mutation authority.
@@ -153,10 +159,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 	// Drop stale inventory entries so a re-pin converges: the orphan leaves
 	// workflows[path] and Save's GC removes its dependencies[] entry.
-	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.Relock)
+	inventory := pruneStaleInventory(wr.Inventory, wr.Findings, opts.AcceptMoved, opts.relocks)
 	// --relock and --accept-moved rebuild the workflow's whole closure from
 	// live manifests, even when no ref moved.
-	rebuild := repinsMoved(opts)
+	rebuild := repinsMoved(opts, wr)
 
 	if !wr.NeedsAttention() && !rebuild {
 		entries = verifiedEntries(inventory, wr.Path)
@@ -715,10 +721,10 @@ func partitionByInventory(inventory []checks.InventoryEntry, refs []parserlock.A
 
 // pruneStaleInventory drops inventory entries matching a pruning finding
 // (see checks.PrunesDependency), so a fix-mode re-pin converges.
-func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved, relock bool) []checks.InventoryEntry {
+func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Finding, acceptMoved bool, relocks func(*dep.Dependency) bool) []checks.InventoryEntry {
 	stale := make(map[string]bool)
 	for _, f := range findings {
-		if !checks.PrunesDependency(f, acceptMoved, relock) {
+		if !checks.PrunesDependency(f, acceptMoved, f.Dependency != nil && relocks(f.Dependency)) {
 			continue
 		}
 		d := f.Dependency
@@ -737,15 +743,26 @@ func pruneStaleInventory(inventory []checks.InventoryEntry, findings []checks.Fi
 	return out
 }
 
-// repinsMoved reports whether this run re-resolves benign ref-moved deps.
-func repinsMoved(opts PlanOptions) bool {
-	return opts.Relock || opts.AcceptMoved
+// relocks reports whether the run re-pins d's entry.
+func (opts PlanOptions) relocks(d *dep.Dependency) bool {
+	return opts.Relock || opts.Refresh.Has(d.NWO, d.Ref)
+}
+
+// relocksWorkflow reports whether the run rebuilds wr's closure to re-pin
+// its entries.
+func (opts PlanOptions) relocksWorkflow(wr checks.WorkflowReport) bool {
+	return opts.Relock || opts.Refresh.Workflow(workflowfile.KeyFromPath(wr.Path))
+}
+
+// repinsMoved reports whether this run re-resolves wr's benign ref-moved deps.
+func repinsMoved(opts PlanOptions, wr checks.WorkflowReport) bool {
+	return opts.relocksWorkflow(wr) || opts.AcceptMoved
 }
 
 // relockKeepsUnreachable reports whether a --relock leaves wr as recorded
 // because it carries an unreachable pin.
 func relockKeepsUnreachable(opts PlanOptions, wr checks.WorkflowReport) bool {
-	return opts.Relock && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0
+	return opts.relocksWorkflow(wr) && !opts.AcceptMoved && wr.CountByCategory(checks.UnreachablePin) > 0
 }
 
 // verifiedEntries builds Verified plan entries for every inventory item.

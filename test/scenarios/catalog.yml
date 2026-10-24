@@ -2128,6 +2128,25 @@ scenarios:
         - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
       lockfile_comment_excludes: "11bd71901bbe5b1630ceea73d27597364c9af683"
 
+  - name: update_selector_bumps_stale_branch_ref
+    category: security
+    description: "The real binary parses `update owner/repo@ref` and bumps that entry; Go command tests cover selection, so this covers only arg parsing and the emitter"
+    needs_stub: true
+    tags: [stub]
+    flags: ["update", "actions/checkout@main", "--no-narrow"]
+    fixtures:
+      workflows:
+        ci.yml:
+          name: CI
+          actions: ["actions/checkout@main"]
+      lockfile_template: pinned_checkout_main
+    expect:
+      exit: 0
+      lockfile_contains:
+        - "'actions/checkout@main':"
+        - "commit: 'sha1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+      lockfile_comment_excludes: "11bd71901bbe5b1630ceea73d27597364c9af683"
+
   - name: onboard_roundtrip_v003
     category: onboarding
     description: "Real-binary dotcom onboarding emits v0.0.3 without hostnames and a complete live transitive dependency graph"

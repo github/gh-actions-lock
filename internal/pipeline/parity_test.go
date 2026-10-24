@@ -266,9 +266,9 @@ func TestMovedTagFinding(t *testing.T) {
 		wantAdvice string
 	}{
 		{name: "direct tag pin", ref: "v6.1.0",
-			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock --relock` to lock the tag's current commit"},
+			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock update actions/checkout@v6.1.0` to lock the tag's current commit"},
 		{name: "transitive tag pin", ref: "v6.1.0", parent: "octo/composite@v1", wantParent: "octo/composite@v1",
-			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock --relock` to lock the tag's current commit"},
+			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock update actions/checkout@v6.1.0` to lock the tag's current commit"},
 		{name: "direct full-SHA pin", ref: sha,
 			wantAdvice: "the Actions backend accepts this pin; to follow the tag, change `uses:` to actions/checkout/sub@v6.1.0 and run `gh actions-lock`"},
 		{name: "transitive full-SHA pin", ref: sha, parent: "octo/composite@v1", wantParent: "octo/composite@v1",

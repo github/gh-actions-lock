@@ -141,7 +141,7 @@ structured results go to stdout and progress to stderr:
 ENVIRONMENT
 
 GH_ACTIONS_LOCK_REPO_ROOT names the repository root instead of
-searching parent directories for .git. Set it when relocking a
+searching parent directories for .git. Set it when locking a
 partial checkout without .git. $/ actions resolve against it, and
 the directory must exist and contain the workflows.
 
@@ -171,11 +171,17 @@ $ gh actions-lock --no-fix --json=valid,findings
 
 # All fields as JSON
 $ gh actions-lock --json
+
+# Advance a floating ref that moved upstream
+$ gh actions-lock update actions/checkout@v4
 `),
 		Version: cliVersion(),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.workflowPaths = args
+			}
+			if opts.relock {
+				fmt.Fprintln(cmd.ErrOrStderr(), "--relock is deprecated; use `gh actions-lock update`")
 			}
 			return opts.validateOutputFlags()
 		},
@@ -185,6 +191,9 @@ $ gh actions-lock --json
 	}
 
 	bindCheckFlags(cmd, opts)
+	_ = cmd.Flags().MarkHidden("relock")
+	cmd.AddCommand(newUpdateCmd(newResolver))
+	cmd.CompletionOptions.DisableDefaultCmd = true
 	// --no-onboard and --no-interactive are persistent so they apply to the
 	// root check invocation. --no-onboard refuses to onboard new workflows or
 	// actions (re-pinning already-tracked entries still happens); used by

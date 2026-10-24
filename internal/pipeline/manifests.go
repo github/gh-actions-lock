@@ -266,7 +266,7 @@ func manifestFindings(path string, n manifestNode, entry parserlock.Action, rd *
 		return []checks.Finding{f}
 	case rd.missing:
 		f.Detail = fmt.Sprintf("%s has no action.yml, action.yaml or Dockerfile at locked commit %s", nodeName(n), short)
-		f.Remediation = "point `uses:` at an action that exists at that commit, then run `gh actions-lock --relock`"
+		f.Remediation = fmt.Sprintf("point `uses:` at an action that exists at that commit, then run `gh actions-lock update %s`", path)
 		return []checks.Finding{f}
 	}
 	var out []checks.Finding
@@ -275,7 +275,7 @@ func manifestFindings(path string, n manifestNode, entry parserlock.Action, rd *
 			f.Dependency = &dep.Dependency{NWO: e.use.NWO(), Path: e.use.Path, Ref: e.use.Ref}
 			f.ParentNWO = p.NWO + "@" + p.Ref
 			f.Detail = fmt.Sprintf("%s at locked commit %s uses %s@%s, but its lockfile entry %s does not record it", nodeName(n), short, e.use.FullName(), e.use.Ref, n.key)
-			f.Remediation = "restore the edge from version control, or run `gh actions-lock --relock`"
+			f.Remediation = fmt.Sprintf("restore the edge from version control, or run `gh actions-lock update %s`", n.key)
 			out = append(out, f)
 		}
 	}

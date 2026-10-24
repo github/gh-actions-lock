@@ -150,11 +150,11 @@ func (f *Finding) MarkRefMoved() {
 	f.Confidence = ConfidenceHigh
 	f.Retryable, f.RetryReason, f.RetryAt, f.RateLimited, f.AnonymousLimited = false, "", time.Time{}, false, false
 	f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", f.Dependency.Ref, parserlock.ShortSHA(f.ObservedSHA), parserlock.ShortSHA(f.Dependency.SHA))
-	f.Remediation = "run `gh actions-lock --relock` to refresh the lock entry"
+	f.Remediation = fmt.Sprintf("run `gh actions-lock update %s@%s` to lock its current commit", f.Dependency.NWO, f.Dependency.Ref)
 }
 
 // AcceptMovedRemediation is the single next step for a pin the runner
-// can't trust: --relock refuses these, so the override must be explicit.
+// can't trust: update refuses these, so the override must be explicit.
 const AcceptMovedRemediation = "verify it, then run `gh actions-lock --accept-moved`"
 
 // UnreachableRemediation is the next step for a pin whose recorded ref no
@@ -169,16 +169,16 @@ func UnreachableRemediation(holder, nwo string) string {
 	return AcceptMovedRemediation
 }
 
-// TagCommitMismatchRemediation is the next step for an exact-tag entry
-// locked behind its tag. holder (NWO@ref) is the composite that pins it, or
-// "" for the workflow's own use. --relock rebuilds a composite's closure
-// from its manifest, so it repairs a held entry too; only the workflow's own
-// use can instead move to another release.
-func TagCommitMismatchRemediation(holder string) string {
+// TagCommitMismatchRemediation is the next step for the exact-tag entry key
+// (NWO@ref) locked behind its tag. holder (NWO@ref) is the composite that
+// pins it, or "" for the workflow's own use. Updating a composite rebuilds
+// its closure from its manifest, so it repairs a held entry too; only the
+// workflow's own use can instead move to another release.
+func TagCommitMismatchRemediation(holder, key string) string {
 	if holder != "" {
-		return "run `gh actions-lock --relock` to lock the tag's commit"
+		return fmt.Sprintf("run `gh actions-lock update %s` to lock the tag's commit", holder)
 	}
-	return "run `gh actions-lock --relock` to lock the tag's commit, or change `uses:` to the release you want"
+	return fmt.Sprintf("run `gh actions-lock update %s` to lock the tag's commit, or change `uses:` to the release you want", key)
 }
 
 // NotInHistoryDetail describes a locked commit missing from upstream

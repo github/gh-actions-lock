@@ -320,5 +320,5 @@ workflows:
 	assert.Equal(t, checks.IncompleteLockfile, f.Category)
 	assert.Equal(t, checks.SeverityError, f.Severity)
 	assert.Contains(t, f.Detail, "octo/comp@v1 uses octo/child@v2, which has no dependencies entry")
-	assert.Contains(t, f.Remediation, "gh actions-lock --relock")
+	assert.Contains(t, f.Remediation, "gh actions-lock update .github/workflows/ci.yml")
 }

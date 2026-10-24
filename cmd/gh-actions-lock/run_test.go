@@ -527,7 +527,7 @@ func TestRun_LockedManifestsTerminal(t *testing.T) {
 	require.ErrorIs(t, err, errSilent)
 	term := stdout + stderr
 	assert.Contains(t, term, "Lockfile doesn't match locked manifest acme/child@v2")
-	assert.Contains(t, term, "restore the edge from version control, or run `gh actions-lock --relock`")
+	assert.Contains(t, term, "restore the edge from version control, or run `gh actions-lock update acme/comp@v1`")
 	assert.NotContains(t, term, "Re-run without")
 }
 
@@ -570,7 +570,8 @@ func TestRun_LockedManifestsInconclusive(t *testing.T) {
 // TestRun_RelockRebuildsUnchangedComposite: octo/comp@v1 is locked at its
 // current commit with no recorded children, but its manifest uses
 // octo/child@v2. A plain run reports the missing edge and writes nothing;
-// --relock rebuilds the closure from the manifest even though no ref moved.
+// updating the composite rebuilds its closure from the manifest even though
+// no ref moved.
 func TestRun_RelockRebuildsUnchangedComposite(t *testing.T) {
 	const compSHA, childSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "cccccccccccccccccccccccccccccccccccccccc"
 	reg := &httpmock.Registry{}
@@ -587,10 +588,11 @@ func TestRun_RelockRebuildsUnchangedComposite(t *testing.T) {
 
 	_, stderr, err := runCommandWithHTTP(t, reg, "--no-narrow", "--no-interactive", path)
 	require.ErrorIs(t, err, errSilent, stderr)
-	assert.Contains(t, stderr, "gh actions-lock --relock")
+	assert.Contains(t, stderr, "gh actions-lock update octo/comp@v1")
 	assert.Equal(t, lock, readTempLockfilePins(t), "nothing is written")
 
-	_, stderr, err = runCommandWithHTTP(t, reg, "--relock", "--no-narrow", "--no-interactive", path)
+	// The advised command.
+	_, stderr, err = runCommandWithHTTP(t, reg, "update", "octo/comp@v1", "--no-narrow", "--no-interactive")
 	require.NoError(t, err, stderr)
 	after := readTempLockfilePins(t)
 	assert.Contains(t, after, "'octo/comp@v1':\n        ref: 'v1'\n        commit: 'sha1-"+compSHA+"'\n        owner_id: 1\n        repo_id: 1\n        uses:\n            - 'octo/child@v2'\n")
@@ -598,8 +600,8 @@ func TestRun_RelockRebuildsUnchangedComposite(t *testing.T) {
 }
 
 // TestRun_DanglingEdgeBlocksUntilRelock: a recorded edge with no entry
-// fails --verify-local and a plain run, which writes nothing; --relock
-// rebuilds the graph.
+// fails --verify-local and a plain run, which writes nothing; updating the
+// workflow rebuilds the graph.
 func TestRun_DanglingEdgeBlocksUntilRelock(t *testing.T) {
 	const compSHA, childSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "cccccccccccccccccccccccccccccccccccccccc"
 	reg := &httpmock.Registry{}
@@ -620,20 +622,21 @@ func TestRun_DanglingEdgeBlocksUntilRelock(t *testing.T) {
 		require.Len(t, p.Findings, 1, "%s: %+v", mode, p.Findings)
 		assert.Equal(t, "error", p.Findings[0].Severity)
 		assert.Contains(t, p.Findings[0].Detail, "octo/comp@v1 uses octo/child@v2, which has no dependencies entry")
-		assert.Contains(t, p.Findings[0].Remediation, "gh actions-lock --relock")
+		assert.Contains(t, p.Findings[0].Remediation, "gh actions-lock update "+path)
 		_, stderr, err := runCommandWithHTTP(t, reg, mode, path)
 		require.ErrorIs(t, err, errSilent, mode)
-		assert.Contains(t, stderr, "! run `gh actions-lock --relock`", mode)
+		assert.Contains(t, stderr, "! run `gh actions-lock update "+path+"`", mode)
 		assert.NotContains(t, stderr, "Run without", mode)
 		assert.NotContains(t, stderr, "Re-run without", mode)
 	}
 
 	_, stderr, err := runCommandWithHTTP(t, reg, "--no-narrow", "--no-interactive", path)
 	require.Error(t, err, stderr)
-	assert.Contains(t, err.Error(), "gh actions-lock --relock")
+	assert.Contains(t, err.Error(), "gh actions-lock update "+path)
 	assert.Equal(t, lock, readTempLockfilePins(t), "nothing is written")
 
-	_, stderr, err = runCommandWithHTTP(t, reg, "--relock", "--no-narrow", "--no-interactive", path)
+	// The advised command.
+	_, stderr, err = runCommandWithHTTP(t, reg, "update", path, "--no-narrow", "--no-interactive")
 	require.NoError(t, err, stderr)
 	assert.Contains(t, readTempLockfilePins(t), "'octo/child@v2':\n        ref: 'v2'\n        commit: 'sha1-"+childSHA+"'")
 	_, stderr, err = runCommandWithHTTP(t, reg, "--verify-local", path)

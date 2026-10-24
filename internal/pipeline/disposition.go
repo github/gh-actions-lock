@@ -5,6 +5,7 @@ import (
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
+	"github.com/github/gh-actions-lock/internal/refresh"
 )
 
 // parityMode is the run's flags as they bear on parity findings.
@@ -12,10 +13,17 @@ type parityMode struct {
 	verify bool
 	// relock re-resolves every ref.
 	relock bool
+	// refresh re-resolves the entries it selects, as relock does.
+	refresh *refresh.Set
 	// acceptMoved implies relock.
 	acceptMoved bool
 	// readOnly runs write nothing, so every recorded entry stays as is.
 	readOnly bool
+}
+
+// refreshes reports whether the run re-resolves the entry keyed nwo@ref.
+func (m parityMode) refreshes(nwo, ref string) bool {
+	return m.relock || m.refresh.Has(nwo, ref)
 }
 
 // paritySubject is the lock entry a parity finding is about.
@@ -100,7 +108,7 @@ func disposeParity(m parityMode, f *checks.Finding, s paritySubject) (parityVerd
 		}
 		return verdictAccept, blocking
 	}
-	excused := m.relock && (s.away || !fullSHA)
+	excused := m.refreshes(s.pin.NWO, s.pin.Ref) && (s.away || !fullSHA)
 	// An unfinished history check can't be excused for a full-SHA key: the
 	// commit is otherwise unproven.
 	if s.inconclusive && s.head != "" && (!excused || fullSHA) {

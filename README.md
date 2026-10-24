@@ -56,7 +56,7 @@ In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant,
 | Command | Writes | Network | Use for |
 |---|---|---|---|
 | `gh actions-lock` | yes | yes | Onboarding and fixing the lockfile |
-| `gh actions-lock --relock` | yes | yes | Advancing moved refs (`main`, `v4`) to current upstream commits |
+| `gh actions-lock update [owner/repo[@ref]...]` | yes | yes | Advancing moved refs (`main`, `v4`) to current upstream commits, for every action or only those named |
 | `gh actions-lock --verify` | no | yes | CI: the same checks as a fix run |
 | `gh actions-lock --verify-local` | no | no | Pre-commit: every `uses:` has a lockfile entry (coverage only, not provenance) |
 | `gh actions-lock --no-fix` | no | yes | Read-only report |

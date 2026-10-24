@@ -424,7 +424,7 @@ func TestCommitRefusesIncompleteLockGraph(t *testing.T) {
 	err = Commit(context.Background(), rec, store, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "o/child@v1 uses o/gone@v1, which has no dependencies entry")
-	assert.Contains(t, err.Error(), "gh actions-lock --relock")
+	assert.Contains(t, err.Error(), "gh actions-lock update .github/workflows/a.yml")
 	after, err := os.ReadFile(lockPath)
 	require.NoError(t, err)
 	assert.Equal(t, lock, string(after), "nothing is written")

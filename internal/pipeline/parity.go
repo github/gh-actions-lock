@@ -23,7 +23,7 @@ import (
 // vouching for it: the commit must be in the ref's history, since a
 // fork-network commit resolves under the upstream name, so existence alone
 // proves nothing (#174). A floating ref (v4, main) that has moved ahead is
-// fine: the lock is sticky until --relock. An exact release tag names one
+// fine: the lock is sticky until update. An exact release tag names one
 // commit, so an entry keyed by one that locks an older commit in the tag's
 // history blocks in every mode (tag-commit-mismatch); with verify, a
 // full-SHA key whose recorded tag moved ahead only warns, since its commit
@@ -121,10 +121,11 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		// these findings prunes it.
 		effects := map[string]checks.PruneEffect{}
 		for _, f := range report.Workflows[ri].Findings {
-			if checks.PrunesDependency(f, mode.acceptMoved, mode.relock) {
+			relock := f.Dependency != nil && mode.refreshes(f.Dependency.NWO, f.Dependency.Ref)
+			if checks.PrunesDependency(f, mode.acceptMoved, relock) {
 				k := checks.PruneKey(f.Dependency.NWO, f.Dependency.Ref, f.Dependency.SHA)
 				// A dropped use leaves the key behind: it wins.
-				if e := checks.PruneEffectOf(f, mode.acceptMoved, mode.relock); effects[k] != checks.Dropped {
+				if e := checks.PruneEffectOf(f, mode.acceptMoved, relock); effects[k] != checks.Dropped {
 					effects[k] = e
 				}
 			}
@@ -142,7 +143,7 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 				heldBy: heldBy(lp, edges[k]),
 			}
 			add(o)
-			if key := byKey[pinKey(lp.Pin.NWO, lp.Pin.Ref)]; key != "" && lp.Parent == "" && (mode.readOnly || !mode.relock && !o.away) {
+			if key := byKey[pinKey(lp.Pin.NWO, lp.Pin.Ref)]; key != "" && lp.Parent == "" && (mode.readOnly || !mode.refreshes(lp.Pin.NWO, lp.Pin.Ref) && !o.away) {
 				for _, path := range rootPaths(recorded, lp) {
 					roots[ri] = append(roots[ri], manifestNode{key: key, path: path})
 				}
@@ -373,7 +374,7 @@ func unanswered(err error) bool {
 // check answers the same question. A ref-moved check that couldn't compare
 // a pin's commit with the ref's takes parity's answer to that comparison
 // (in answered, by compareKey): confirmed makes it the ref-moved warning,
-// so --relock still re-pins it; anything else leaves parity's own finding.
+// so update still re-pins it; anything else leaves parity's own finding.
 // It also goes once parity reports its own error on the pin. A workflow's
 // resolver outage goes once a pin of the workflow blocks, now or should its
 // deferred finding be restored.
@@ -596,7 +597,7 @@ func exactTag(ref string) bool {
 // tagCommitMismatchFinding blocks a lock entry keyed by an exact release tag
 // whose locked commit is an older commit in the tag's history. The rollback
 // is invisible in the workflow, which names only the tag, so unlike a
-// floating ref the lock is not sticky. --relock and --accept-moved excuse it
+// floating ref the lock is not sticky. update and --accept-moved excuse it
 // (see disposeParity) and re-resolve the entry.
 func tagCommitMismatchFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfile.LockedPin, pc ghapi.PinCheck, st ghapi.PinState) checks.Finding {
 	nwo := pc.Owner + "/" + pc.Repo
@@ -614,7 +615,7 @@ func tagCommitMismatchFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef
 	if f.ParentNWO != "" {
 		f.Detail += fmt.Sprintf(" (used by %s)", f.ParentNWO)
 	}
-	f.Remediation = checks.TagCommitMismatchRemediation(f.ParentNWO)
+	f.Remediation = checks.TagCommitMismatchRemediation(f.ParentNWO, nwo+"@"+lp.Pin.Ref)
 	return f
 }
 
@@ -636,7 +637,7 @@ func movedTagFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lock
 		TagMoved:     true,
 		ParentNWO:    lockParent(lp),
 		Detail:       fmt.Sprintf("tag %s now points at %s; locked commit %s is still in its history", pc.Head, parserlock.ShortSHA(st.HeadOID), parserlock.ShortSHA(pc.SHA)),
-		Remediation:  "the Actions backend accepts this pin; run `gh actions-lock --relock` to lock the tag's current commit",
+		Remediation:  fmt.Sprintf("the Actions backend accepts this pin; run `gh actions-lock update %s@%s` to lock the tag's current commit", nwo, lp.Pin.Ref),
 	}
 	if f.ParentNWO != "" {
 		f.Detail += fmt.Sprintf(" (used by %s)", f.ParentNWO)

@@ -25,6 +25,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
+	"github.com/github/gh-actions-lock/internal/refresh"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
@@ -62,6 +63,8 @@ type checkOptions struct {
 	// Unlike acceptMoved it does NOT accept unreachable-pin findings
 	// (possible tampering), which stay hard errors.
 	relock bool
+	// refresh limits relocking to these actions (see newUpdateCmd).
+	refresh []refresh.Selector
 	// verify is the frozen mode: the default checks with --no-fix and a
 	// non-zero exit on any blocking finding.
 	verify bool
@@ -91,7 +94,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringSliceVar(&opts.allowRunners, "allow-runners", nil, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVarP(&opts.allowAllRunners, "allow-all-runners", "A", false, "Deprecated no-op: runner restrictions have been removed")
 	cmd.Flags().BoolVar(&opts.acceptMoved, "accept-moved", false, "Re-resolve deps flagged as ref-moved or unreachable-pin to their current live SHA")
-	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Re-resolve every ref and advance moved ones (e.g. main, v4) to their current upstream SHA; leaves unreachable pins as errors")
+	cmd.Flags().BoolVar(&opts.relock, "relock", false, "Deprecated: use `gh actions-lock update`")
 	cmd.Flags().BoolVar(&opts.verify, "verify", false, "Frozen check: run the same checks as the default without writing; fails if the lockfile is incomplete or the runner would reject a pin")
 	cmd.Flags().BoolVar(&opts.verifyLocal, "verify-local", false,
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
@@ -249,11 +252,22 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 	seedable := slices.DeleteFunc(recorded, func(d dep.Dependency) bool { return !lockfile.Seedable(d) })
 	r.SeedBranchHints(seedable)
+	var refreshSet *refresh.Set
+	if len(opts.refresh) > 0 {
+		if refreshSet, err = refresh.Expand(store, opts.refresh); err != nil {
+			return err
+		}
+	}
 	// Locked refs are sticky: resolve them from the lockfile. --accept-moved
-	// and --relock must see what moved, so they resolve everything live.
+	// and --relock must see what moved, so they resolve everything live, and
+	// update resolves the entries it selects live.
 	relock := opts.acceptMoved || opts.relock
 	if !relock {
-		r.SeedFromLockfile(seedable)
+		r.SeedFromLockfile(slices.DeleteFunc(seedable, func(d dep.Dependency) bool { return refreshSet.Has(d.NWO, d.Ref) }))
+	}
+	var shared sharedEntries
+	if !fullScan && !opts.noFix {
+		shared = snapshotSharedEntries(store, scope)
 	}
 	endSetup()
 
@@ -316,6 +330,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		Store:         store,
 		Pool:          pool,
 		Relock:        relock,
+		Refresh:       refreshSet,
 		// Accepting a moved pin relies on planning to re-record it, which a
 		// read-only run never does.
 		AcceptMoved: opts.acceptMoved && !opts.noFix,
@@ -457,6 +472,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		NoNarrow:    opts.noNarrow,
 		AcceptMoved: opts.acceptMoved,
 		Relock:      opts.relock,
+		Refresh:     refreshSet,
 		PartialScan: !fullScan,
 	})
 	endPlan()
@@ -568,7 +584,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	}
 
 	// Terminal summary.
-	return renderPinSummary(ctx, console, record, report, r, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
+	err = renderPinSummary(ctx, console, record, report, r, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
+	renderSharedMoves(console, store, shared)
+	return err
 }
 
 // postFixReport is report as a committed write left it. A run commits only

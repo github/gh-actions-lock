@@ -907,6 +907,7 @@ STUB_WIRING = {
     s.env("GH_TOKEN" => "gho_fake_relock_token")
   },
 }
+STUB_WIRING[:update_selector_bumps_stale_branch_ref] = STUB_WIRING[:relock_bumps_stale_branch_ref]
 
 # ── Custom assertion wiring ─────────────────────────────────────────────
 

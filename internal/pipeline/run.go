@@ -11,7 +11,9 @@ import (
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
+	"github.com/github/gh-actions-lock/internal/refresh"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // RunOptions configures the Run pipeline.
@@ -22,6 +24,9 @@ type RunOptions struct {
 	Pool          *pinpool.Pool
 	// Relock re-resolves every ref live instead of trusting the lockfile.
 	Relock bool
+	// Refresh re-resolves only the entries it selects, as Relock would;
+	// every other entry stays as recorded.
+	Refresh *refresh.Set
 	// AcceptMoved accepts recorded pins whose ref no longer vouches for
 	// them; it implies Relock.
 	AcceptMoved bool
@@ -73,7 +78,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			parsed[i].Resolved = true
 			continue
 		}
-		if opts.Relock {
+		if opts.Relock || opts.Refresh.Workflow(workflowfile.KeyFromPath(parsed[i].Path)) {
 			continue
 		}
 		if len(parsed[i].Refs) == 0 || parsed[i].IsFullyRecorded() {
@@ -82,7 +87,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		}
 		recorded, _ := parsed[i].PartitionRefs()
 		for _, d := range parsed[i].RecordedDeps(recorded) {
-			if lockfile.Seedable(d) {
+			if lockfile.Seedable(d) && !opts.Refresh.Has(d.NWO, d.Ref) {
 				seedDeps = append(seedDeps, d)
 			}
 		}
@@ -141,7 +146,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 	// Phase 4: Parity.
 	if r != nil {
-		mode := parityMode{verify: opts.Verify, relock: opts.Relock, acceptMoved: opts.AcceptMoved, readOnly: opts.ReadOnly}
+		mode := parityMode{verify: opts.Verify, relock: opts.Relock, refresh: opts.Refresh, acceptMoved: opts.AcceptMoved, readOnly: opts.ReadOnly}
 		endParity := prof.Phase("  parity check")
 		err := checkParity(ctx, r, parsed, opts.Store, report, recordedKeys, resolved, parents, mode)
 		endParity()

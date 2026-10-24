@@ -1261,7 +1261,7 @@ jobs:
 	for _, f := range payload.Findings {
 		if f.Category == "ref-moved" {
 			hasRefMoved = true
-			assert.Equal(t, "run `gh actions-lock --relock` to refresh the lock entry", f.Remediation)
+			assert.Equal(t, "run `gh actions-lock update example/action@v1` to lock its current commit", f.Remediation)
 		}
 	}
 	assert.True(t, hasRefMoved,

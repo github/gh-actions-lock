@@ -199,7 +199,7 @@ func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 
 // checkLockGraph emits an IncompleteLockfile error for each recorded edge
 // of the workflow's closure whose child has no dependencies entry. A plain
-// run keeps recorded edges as they are, so only --relock repairs it.
+// run keeps recorded edges as they are, so only update repairs it.
 func checkLockGraph(pw ParsedWorkflow, lf parserlock.File) []Finding {
 	use := lockfile.RootUse(pw.Refs)
 	live := func(p parserlock.Pin, a parserlock.Action) bool {
@@ -214,7 +214,7 @@ func checkLockGraph(pw ParsedWorkflow, lf parserlock.File) []Finding {
 			Severity:     SeverityError,
 			Confidence:   ConfidenceHigh,
 			Detail:       "lock graph is incomplete: " + fault.String(),
-			Remediation:  "run `gh actions-lock --relock` to rebuild the workflow's lock graph",
+			Remediation:  fmt.Sprintf("run `gh actions-lock update %s` to rebuild the workflow's lock graph", pw.Path),
 		}
 		// Name the entry whose edge can't be followed.
 		key := fault.Parent

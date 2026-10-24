@@ -146,7 +146,7 @@ func updateLockfile(ctx context.Context, rec *Record, workflows []WorkflowPlan, 
 	all := func(parserlock.Pin, parserlock.Action) bool { return true }
 	for _, wp := range workflows {
 		if faults := lockfile.GraphFaults(f, workflowfile.KeyFromPath(wp.Path), all); len(faults) > 0 {
-			return fmt.Errorf("refusing to write %s: its lock graph is incomplete: %s; run `gh actions-lock --relock` to rebuild it", wp.Path, faults[0])
+			return fmt.Errorf("refusing to write %s: its lock graph is incomplete: %s; run `gh actions-lock update %s` to rebuild it", wp.Path, faults[0], wp.Path)
 		}
 		if cycle := lockfile.UsesCycle(f, workflowfile.KeyFromPath(wp.Path)); cycle != nil {
 			return fmt.Errorf("refusing to write %s: %s; the lockfile can't record actions that use each other, so pin one of them to a different commit", wp.Path, describeCycle(cycle))

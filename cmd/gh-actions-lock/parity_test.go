@@ -592,7 +592,7 @@ jobs:
 		_, stderr, err := runCommandWithHTTP(t, reg, "--verify", path)
 		require.ErrorIs(t, err, errSilent, stderr)
 		assert.Contains(t, stderr, "tag v4.2.1 points at bbbbbbbbbbbb; the lockfile locks 9ddf35b71a48, an older commit in its history")
-		assert.Contains(t, stderr, "run `gh actions-lock --relock` to lock the tag's commit, or change `uses:` to the release you want")
+		assert.Contains(t, stderr, "run `gh actions-lock update actions/checkout@v4.2.1` to lock the tag's commit, or change `uses:` to the release you want")
 	})
 }
 
@@ -3148,7 +3148,7 @@ func TestParity_ExactTagBehindInCompositeRelocks(t *testing.T) {
 	require.ErrorIs(t, err, errSilent)
 	require.Len(t, p.Findings, 1, "%+v", p.Findings)
 	assert.Equal(t, "tag-commit-mismatch", p.Findings[0].Category)
-	assert.Equal(t, "run `gh actions-lock --relock` to lock the tag's commit", p.Findings[0].Remediation)
+	assert.Equal(t, "run `gh actions-lock update octo/root@v1` to lock the tag's commit", p.Findings[0].Remediation)
 
 	_, stderr, err := runCommandWithHTTP(t, reg, "--relock", "--no-interactive", path)
 	require.NoError(t, err, stderr)
