@@ -252,7 +252,8 @@ func TestParityFinding_FullSHAKey(t *testing.T) {
 
 // TestMovedTagFinding: a moved-ahead tag warning names the composite that
 // pins the commit, and its advice must be something that follows the tag:
-// --relock re-resolves a tag `uses:`, but never changes a full-SHA one.
+// update re-resolves a tag `uses:`, but never changes a full-SHA one; a
+// composite's pin moves only when the composite is updated.
 func TestMovedTagFinding(t *testing.T) {
 	const (
 		sha  = "373d742f768e37e4e68d84ada06be93fb2ce64d8"
@@ -268,7 +269,7 @@ func TestMovedTagFinding(t *testing.T) {
 		{name: "direct tag pin", ref: "v6.1.0",
 			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock update actions/checkout@v6.1.0` to lock the tag's current commit"},
 		{name: "transitive tag pin", ref: "v6.1.0", parent: "octo/composite@v1", wantParent: "octo/composite@v1",
-			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock update actions/checkout@v6.1.0` to lock the tag's current commit"},
+			wantAdvice: "the Actions backend accepts this pin; run `gh actions-lock update octo/composite@v1` to lock the tag's current commit"},
 		{name: "direct full-SHA pin", ref: sha,
 			wantAdvice: "the Actions backend accepts this pin; to follow the tag, change `uses:` to actions/checkout/sub@v6.1.0 and run `gh actions-lock`"},
 		{name: "transitive full-SHA pin", ref: sha, parent: "octo/composite@v1", wantParent: "octo/composite@v1",

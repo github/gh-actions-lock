@@ -34,9 +34,13 @@ func writeMovedWorkflows(t *testing.T, reg *httpmock.Registry, workflows map[str
 		lockWorkflows.WriteString("  '.github/workflows/" + name + "':\n")
 		for _, u := range uses {
 			body += "      - uses: " + u + "\n"
-			lockWorkflows.WriteString("    - '" + u + "'\n")
-			deps[u] = true
-			nwo, _, _ := strings.Cut(u, "@")
+			// A use with a subpath (owner/repo/sub@ref) is locked by repository.
+			full, ref, _ := strings.Cut(u, "@")
+			parts := strings.SplitN(full, "/", 3)
+			nwo := parts[0] + "/" + parts[1]
+			key := nwo + "@" + ref
+			lockWorkflows.WriteString("    - '" + key + "'\n")
+			deps[key] = true
 			commits[nwo], heads[nwo] = updateNewSHA, updateNewSHA
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(wfDir, name), []byte(body), 0o600))
@@ -76,6 +80,18 @@ func TestUpdate_SelectorMovesOnlyThatEntry(t *testing.T) {
 	require.NoError(t, err, stderr)
 	assert.Equal(t, updateNewSHA, lockedCommit(t, "octo/a@v1"), "the selected entry moves")
 	assert.Equal(t, updateOldSHA, lockedCommit(t, "octo/b@v1"), "an unselected moved ref stays locked")
+}
+
+// A use with a subpath resolves under its own cache key, so it must stay
+// seeded from the lockfile like any other unselected entry.
+func TestUpdate_UnselectedSubpathUseStays(t *testing.T) {
+	reg := &httpmock.Registry{}
+	writeMovedWorkflows(t, reg, map[string][]string{"ci.yml": {"octo/a@v1", "octo/b/sub@v1"}})
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "update", "octo/a@v1", "--no-narrow", "--no-interactive")
+	require.NoError(t, err, stderr)
+	assert.Equal(t, updateNewSHA, lockedCommit(t, "octo/a@v1"))
+	assert.Equal(t, updateOldSHA, lockedCommit(t, "octo/b@v1"), "an unselected subpath use stays locked")
 }
 
 func TestUpdate_ActionSelectorMatchesEveryRef(t *testing.T) {
@@ -170,4 +186,35 @@ func TestSplitUpdateArgs(t *testing.T) {
 
 	_, _, err = splitUpdateArgs([]string{"."})
 	assert.Error(t, err, "a directory is not a workflow file")
+}
+
+// An entry locked only beneath a composite is read from the composite's
+// manifest, so selecting it alone can't move it: update names the composite,
+// and updating the composite moves its child.
+func TestUpdate_CompositeChildNamesTheComposite(t *testing.T) {
+	reg := &httpmock.Registry{}
+	stubGraph(t, reg,
+		map[string]string{"octo/c": updateNewSHA, "octo/d": updateNewSHA},
+		map[string]string{"octo/c": updateNewSHA, "octo/d": updateNewSHA},
+		map[string]string{"octo/c": "name: c\nruns:\n  using: composite\n  steps:\n    - uses: octo/d@v1\n"})
+	reg.RegisterReusable(httpmock.REST("GET", `/compare/`), httpmock.JSONResponse(map[string]any{
+		"status": "ahead", "merge_base_commit": map[string]any{"sha": updateOldSHA},
+	}))
+	reg.RegisterReusable(httpmock.REST("GET", `^/repos/[^/]+/[^/]+$`), httpmock.JSONResponse(map[string]any{"id": 1, "owner": map[string]any{"id": 1}}))
+	useDefaultTransport(t, reg)
+	writeTempWorkflow(t, "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/c@v1\n")
+	lock := "version: 'v0.0.3'\nworkflows:\n  '.github/workflows/workflow.yml':\n    - 'octo/c@v1'\ndependencies:\n" +
+		"  'octo/c@v1':\n    ref: 'v1'\n    commit: 'sha1-" + updateOldSHA + "'\n    owner_id: 1\n    repo_id: 1\n    uses:\n      - 'octo/d@v1'\n" +
+		"  'octo/d@v1':\n    ref: 'v1'\n    commit: 'sha1-" + updateOldSHA + "'\n    owner_id: 1\n    repo_id: 1\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
+
+	_, _, err := runCommandWithHTTP(t, reg, "update", "octo/d@v1", "--no-narrow", "--no-interactive")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "octo/d@v1 is locked only for the composite actions that use it; run `gh actions-lock update octo/c@v1`")
+	assert.Equal(t, updateOldSHA, lockedCommit(t, "octo/d@v1"), "nothing is written")
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "update", "octo/c@v1", "--no-narrow", "--no-interactive")
+	require.NoError(t, err, stderr)
+	assert.Equal(t, updateNewSHA, lockedCommit(t, "octo/c@v1"))
+	assert.Equal(t, updateNewSHA, lockedCommit(t, "octo/d@v1"), "updating the composite moves its child")
 }

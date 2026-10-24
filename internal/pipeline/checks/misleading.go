@@ -150,7 +150,12 @@ func (f *Finding) MarkRefMoved() {
 	f.Confidence = ConfidenceHigh
 	f.Retryable, f.RetryReason, f.RetryAt, f.RateLimited, f.AnonymousLimited = false, "", time.Time{}, false, false
 	f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", f.Dependency.Ref, parserlock.ShortSHA(f.ObservedSHA), parserlock.ShortSHA(f.Dependency.SHA))
-	f.Remediation = fmt.Sprintf("run `gh actions-lock update %s@%s` to lock its current commit", f.Dependency.NWO, f.Dependency.Ref)
+	target := f.Dependency.NWO + "@" + f.Dependency.Ref
+	if f.ParentNWO != "" {
+		// Only re-resolving the composite re-reads its pin of the ref.
+		target = f.ParentNWO
+	}
+	f.Remediation = fmt.Sprintf("run `gh actions-lock update %s` to lock its current commit", target)
 }
 
 // AcceptMovedRemediation is the single next step for a pin the runner

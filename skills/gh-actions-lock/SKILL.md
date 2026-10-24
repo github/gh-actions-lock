@@ -87,7 +87,8 @@ gh actions-lock update .github/workflows/ci.yml   # every entry this workflow us
 
 `update` advances floating refs (`main`, `v4`), fixes `tag-commit-mismatch`, and rebuilds a
 composite's dependencies from its manifest. Prefer naming the action a finding names over a bare
-`update`, which moves every floating ref. Entries are shared across workflows, so updating one
+`update`, which moves every floating ref. An action locked only beneath a composite moves only when
+the composite is updated, and `update` says which composite to name. Entries are shared across workflows, so updating one
 moves it for every workflow that uses it; a run scoped to workflow paths names the others it
 moved. `update` leaves `unreachable-pin` as an error: the locked commit is no longer in the ref's
 history, which is either an upstream force-push or an edited lockfile, and the CLI can't tell

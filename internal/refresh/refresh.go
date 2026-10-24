@@ -4,6 +4,7 @@ package refresh
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -49,15 +50,31 @@ type Set struct {
 }
 
 // Expand selects the entries sels match, with every entry below them so a
-// refreshed composite's dependencies are read from its manifest too. A
-// selector that matches no entry is an error: there is nothing to update.
+// refreshed composite's dependencies are read from its manifest too.
+//
+// Only an entry some workflow uses directly can be selected: an entry locked
+// only beneath a composite is read from the composite's manifest, which a
+// run reads only when it re-resolves the composite. A selector that matches
+// no such entry is an error naming the composites to update instead.
 func Expand(store *lockfile.State, sels []Selector) (*Set, error) {
+	f := store.File()
+	direct := map[string]bool{}
+	for _, roots := range f.Workflows {
+		for _, k := range roots {
+			direct[k] = true
+		}
+	}
 	s := &Set{keys: map[string]bool{}, workflows: map[string]bool{}}
 	for _, sel := range sels {
+		var held []string
 		found := false
-		for k := range store.File().Dependencies {
+		for k := range f.Dependencies {
 			p, ok := parserlock.ParsePin(k)
 			if !ok || !sel.matches(p) {
+				continue
+			}
+			if !direct[k] {
+				held = append(held, k)
 				continue
 			}
 			found = true
@@ -66,7 +83,13 @@ func Expand(store *lockfile.State, sels []Selector) (*Set, error) {
 				s.keys[normalize(lp.Pin.NWO, lp.Pin.Ref)] = true
 			}
 		}
-		if !found {
+		switch {
+		case found:
+		case len(held) > 0:
+			roots := rootsHolding(store, direct, held)
+			return nil, fmt.Errorf("%s is locked only for the composite actions that use it; run `gh actions-lock update %s`",
+				sel, strings.Join(roots, " "))
+		default:
 			return nil, fmt.Errorf("no lockfile entry matches %s", sel)
 		}
 	}
@@ -80,6 +103,30 @@ func Expand(store *lockfile.State, sels []Selector) (*Set, error) {
 		}
 	}
 	return s, nil
+}
+
+// rootsHolding returns the directly used entries whose recorded closure
+// holds any of keys, sorted.
+func rootsHolding(store *lockfile.State, direct map[string]bool, keys []string) []string {
+	seen := map[string]bool{}
+	var roots []string
+	queue := slices.Clone(keys)
+	for len(queue) > 0 {
+		k := queue[0]
+		queue = queue[1:]
+		for _, parent := range store.UsedBy(k) {
+			if seen[parent] {
+				continue
+			}
+			seen[parent] = true
+			if direct[parent] {
+				roots = append(roots, parent)
+			}
+			queue = append(queue, parent)
+		}
+	}
+	slices.Sort(roots)
+	return roots
 }
 
 // Has reports whether the entry keyed nwo@ref is refreshed.

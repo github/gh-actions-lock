@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
@@ -69,6 +70,10 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// so the recursive walk stops at them; their recorded closure is
 	// covered by the parity check below instead.
 	var seedDeps []dep.Dependency
+	// The rebuild of an affected workflow resolves every use, and a use
+	// with a subpath resolves under its own cache key; Dedup would fold
+	// these into the repository's seed.
+	var pathSeeds []dep.Dependency
 	recordedKeys := make(map[string]bool)
 	for i := range parsed {
 		// Structural blockers are terminal at diagnose time. Do not perform
@@ -78,25 +83,36 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 			parsed[i].Resolved = true
 			continue
 		}
-		if opts.Relock || opts.Refresh.Workflow(workflowfile.KeyFromPath(parsed[i].Path)) {
+		if opts.Relock {
 			continue
 		}
-		if len(parsed[i].Refs) == 0 || parsed[i].IsFullyRecorded() {
+		// A workflow that records an entry update selects resolves again,
+		// but its other entries stay seeded, each under the path its use
+		// names, so only the selected ones move.
+		affected := opts.Refresh.Workflow(workflowfile.KeyFromPath(parsed[i].Path))
+		if !affected && (len(parsed[i].Refs) == 0 || parsed[i].IsFullyRecorded()) {
 			parsed[i].Resolved = true
 			continue
 		}
 		recorded, _ := parsed[i].PartitionRefs()
 		for _, d := range parsed[i].RecordedDeps(recorded) {
-			if lockfile.Seedable(d) && !opts.Refresh.Has(d.NWO, d.Ref) {
-				seedDeps = append(seedDeps, d)
+			if !lockfile.Seedable(d) || opts.Refresh.Has(d.NWO, d.Ref) {
+				continue
+			}
+			seedDeps = append(seedDeps, d)
+			if affected {
+				pathSeeds = append(pathSeeds, subpathSeeds(d, recorded)...)
 			}
 		}
 		for _, rr := range recorded {
-			recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
+			if !opts.Refresh.Has(rr.Owner+"/"+rr.Repo, rr.Ref) {
+				recordedKeys[strings.ToLower(rr.Owner+"/"+rr.Repo)+"@"+rr.Ref] = true
+			}
 		}
 	}
 	if r != nil && len(seedDeps) > 0 {
 		r.SeedFromLockfile(dep.Dedup(seedDeps))
+		r.SeedFromLockfile(pathSeeds)
 	}
 
 	// Collect unresolved workflows for network work.
@@ -164,4 +180,18 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		report.RetriedFor = r.GHClient().RetriedFor()
 	}
 	return &RunResult{Report: report, Valid: report.IsValid()}, nil
+}
+
+// subpathSeeds returns d once for each use in recorded that names it with a
+// subpath (owner/repo/sub@ref).
+func subpathSeeds(d dep.Dependency, recorded []parserlock.ActionRef) []dep.Dependency {
+	var out []dep.Dependency
+	for _, rr := range recorded {
+		if rr.Path != "" && rr.Ref == d.Ref && strings.EqualFold(rr.Owner+"/"+rr.Repo, d.NWO) {
+			pd := d
+			pd.Path = rr.Path
+			out = append(out, pd)
+		}
+	}
+	return out
 }

@@ -641,6 +641,8 @@ func movedTagFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lock
 	}
 	if f.ParentNWO != "" {
 		f.Detail += fmt.Sprintf(" (used by %s)", f.ParentNWO)
+		// Only re-resolving the composite re-reads its pin of the tag.
+		f.Remediation = fmt.Sprintf("the Actions backend accepts this pin; run `gh actions-lock update %s` to lock the tag's current commit", f.ParentNWO)
 	}
 	if parserlock.IsFullSha(lp.Pin.Ref) {
 		uses := nwo

@@ -41,6 +41,9 @@ limit what moves: only those entries and the actions they use are
 re-resolved. With no actions, every entry in the selected workflows is
 re-resolved.
 
+An action that only a composite action uses is read from the composite's
+action.yml, so update the composite to move it.
+
 Lock entries are shared: one owner/repo@ref entry serves every workflow
 that uses it, so updating it moves it for all of them. The summary names
 any such workflow the run didn't scan.

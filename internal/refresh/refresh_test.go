@@ -75,12 +75,6 @@ func TestExpand(t *testing.T) {
 			wantWorkflows: []string{".github/workflows/a.yml"},
 		},
 		{
-			name:          "a child alone marks the workflow that reaches it",
-			sels:          []Selector{{NWO: "octo/child", Ref: "v2"}},
-			wantKeys:      []string{"octo/child@v2"},
-			wantWorkflows: []string{".github/workflows/a.yml"},
-		},
-		{
 			name:          "owner/repo matches every ref, case-insensitively",
 			sels:          []Selector{{NWO: "Octo/Other"}},
 			wantKeys:      []string{"octo/other@v1", "octo/other@Main"},
@@ -102,6 +96,11 @@ func TestExpand(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExpand_ChildOnlyBeneathACompositeNamesTheComposite(t *testing.T) {
+	_, err := Expand(loadState(t), []Selector{{NWO: "octo/child", Ref: "v2"}})
+	assert.EqualError(t, err, "octo/child@v2 is locked only for the composite actions that use it; run `gh actions-lock update octo/comp@v1`")
 }
 
 func TestExpand_RefIsCaseSensitive(t *testing.T) {
