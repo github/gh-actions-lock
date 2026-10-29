@@ -36,9 +36,8 @@ When in doubt, fewer words. If a comment reads like marketing or a victory lap, 
 
 ### Where does a test belong?
 
-There are two test layers with different guarantees. Put a test in the
-cheapest layer that can actually prove the thing, and don't restate the same
-claim in both.
+Put a test in the cheapest layer that can actually prove the thing, and don't
+restate the same claim in multiple layers.
 
 - **Go unit** (`internal/**/*_test.go`) — internal logic: traversal, ref
   classification, error types, dedup. Fast, hermetic, no token. This is the
@@ -46,7 +45,7 @@ claim in both.
   here; it can't be expressed in the catalog.
 - **Go command test** (`cmd/**/*_test.go` with `httpmock`) — full CLI wiring
   end to end, but with a stubbed resolver so it stays deterministic. Runs in
-  the blocking `test` CI job with no token. Reach for this to prove the
+  the blocking `go-test` CI job with no token. Reach for this to prove the
   command plumbs its pieces together.
 - **Catalog scenario** (`test/scenarios/catalog.yml`, run by the Ruby
   harness) — the *real compiled binary* against the real API or a stub

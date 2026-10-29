@@ -16,6 +16,7 @@ These are one time installations required to be able to test your changes locall
 
 1. Install Go [through download](https://go.dev/doc/install) | [through Homebrew](https://formulae.brew.sh/formula/go). The required version is pinned in [`go.mod`](go.mod).
 1. Some integration tests use Ruby; install it [through download](https://www.ruby-lang.org/en/documentation/installation/) | [through Homebrew](https://formulae.brew.sh/formula/ruby) if you plan to run them.
+   To recover from Ruby integration-harness load errors for `reline` or `webrick`, use Ruby providing `reline` and install `webrick` in that Ruby's gem environment if missing.
 
 ## Submitting a pull request
 
