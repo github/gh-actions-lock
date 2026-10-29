@@ -162,6 +162,13 @@ func newClient(hostname string, opts ...ClientOption) (*Client, error) {
 		if token != "" {
 			apiOpts.AuthToken = token
 		}
+		if token == "" && !DependabotProxy() {
+			var err error
+			apiOpts.Transport, err = withPublicCache(apiOpts.Transport)
+			if err != nil {
+				return nil, err
+			}
+		}
 		apiOpts.Transport = publicTransport{inner: apiOpts.Transport, token: token}
 		c.restOnly = true
 	}
