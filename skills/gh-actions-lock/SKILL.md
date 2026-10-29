@@ -19,7 +19,7 @@ transitive action a repository's workflows use to a verified commit, recorded in
 
 ## Setup
 
-Requires an authenticated GitHub CLI. github.com and GitHub Enterprise Cloud with data residency
+github.com and GitHub Enterprise Cloud with data residency
 (`*.ghe.com`) are supported; GitHub Enterprise Server is not.
 
 ```bash
@@ -27,7 +27,7 @@ gh extension install github/gh-actions-lock
 ```
 
 Run every command from the repository checkout. The host comes from `--hostname`, then `GH_HOST`,
-then the repository remote, then github.com.
+then the current repository (`GH_REPO` or a remote), then github.com.
 
 ## Modes
 
@@ -103,7 +103,7 @@ gh actions-lock --verify --json 2>/dev/null
 
 JSON goes to stdout and progress to stderr; parse only stdout. `--json` alone selects
 `valid,findings,workflows`. Pass a list to choose from `valid`, `findings`, `workflows`,
-`dependencies`, and `pins`. Each finding has:
+`dependencies`, and `pins`. Finding fields include:
 
 ```
 workflow, category, severity ("error" | "warning" | "info"), confidence,
@@ -135,8 +135,8 @@ category name alone.
 
 Copy [`.github/workflows/verify-lockfile.yml`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/verify-lockfile.yml)
 into the repository, then run `gh actions-lock` once so the new workflow is locked too. It runs
-`gh actions-lock --verify` on pull requests, pushes to `main`, and a weekly schedule that catches
-re-pointed tags. The job's `GITHUB_TOKEN` reads public actions and the repository itself; actions
+`gh actions-lock --verify` on pull requests and pushes to `main`.
+The job's `GITHUB_TOKEN` reads public actions and the repository itself; actions
 from other private or internal repositories need a token that can read them.
 
 ## Limits
@@ -149,8 +149,8 @@ from other private or internal repositories need a token that can read them.
 
 ## Learn more
 
-`gh actions-lock --help` is authoritative for flags. Failed runs print the path of a saved run
-log; attach it to bug reports. Start from these, plus each finding's `doc_url`:
+`gh actions-lock --help` is authoritative for flags. Attach saved run logs to bug reports.
+Start from these, plus each finding's `doc_url`:
 
 - [Workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)
 - [Lock workflow dependencies](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies)
