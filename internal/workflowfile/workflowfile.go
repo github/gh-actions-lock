@@ -351,26 +351,53 @@ func FindRepoRoot(startPath string) (string, error) {
 
 // DiscoverCompositeActionFiles walks the repository rooted at root and returns
 // the paths of all action definition files (action.yml / action.yaml). The
-// .git directory is skipped. Non-composite action files are included; callers
-// migrate them with MigrateLocalActionsToSelfRepository, which no-ops when a file has
-// no local `./…` steps.
+// .git directory is skipped. When root is itself a checkout, so is any
+// subdirectory that is a separate checkout (worktree, submodule or nested
+// clone); see inNestedCheckout. A RepoRootEnv root without .git may hold the
+// real checkout below it, so nothing is skipped there. Non-composite action
+// files are included; callers migrate them with
+// MigrateLocalActionsToSelfRepository, which no-ops when a file has no local
+// `./…` steps.
 func DiscoverCompositeActionFiles(root string) ([]string, error) {
 	if root == "" {
 		return nil, nil
 	}
-	var paths []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
+	w := actionFileWalker{root: root, skipNested: isCheckout(root)}
+	if err := w.walk(root); err != nil {
+		return nil, fmt.Errorf("discovering action files under %s: %w", root, err)
+	}
+	sort.Strings(w.paths)
+	return w.paths, nil
+}
+
+type actionFileWalker struct {
+	root       string
+	skipNested bool
+	paths      []string
+}
+
+// walk reads each directory once and checks its listing for a .git entry,
+// so detecting nested checkouts costs no extra syscall per directory.
+func (w *actionFileWalker) walk(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if w.skipNested && dir != w.root && hasEntry(entries, ".git") && isCheckout(dir) {
+		return nil
+	}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		switch {
+		case e.IsDir():
+			if e.Name() == ".git" {
+				continue
 			}
-			return nil
-		}
-		if d.Name() == "action.yml" || d.Name() == "action.yaml" {
-			if err := ValidatePathWithinRoot(root, p); err != nil {
+			if err := w.walk(p); err != nil {
+				return err
+			}
+		case e.Name() == "action.yml" || e.Name() == "action.yaml":
+			if err := ValidatePathWithinRoot(w.root, p); err != nil {
 				return err
 			}
 			info, err := os.Stat(p)
@@ -380,15 +407,41 @@ func DiscoverCompositeActionFiles(root string) ([]string, error) {
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("action definition %s is not a regular file", p)
 			}
-			paths = append(paths, p)
+			w.paths = append(w.paths, p)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discovering action files under %s: %w", root, err)
 	}
-	sort.Strings(paths)
-	return paths, nil
+	return nil
+}
+
+func hasEntry(entries []fs.DirEntry, name string) bool {
+	return slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name })
+}
+
+// isCheckout reports whether dir is the top of a git checkout. A worktree or
+// submodule has a .git file and a clone has a .git directory. Stat follows
+// symlinks, so a dangling .git link does not count.
+func isCheckout(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// inNestedCheckout reports whether path lies in a separate checkout below
+// root. As in DiscoverCompositeActionFiles, this only applies when root is
+// itself a checkout.
+func inNestedCheckout(root, path string) bool {
+	if !isCheckout(root) {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return false
+	}
+	for dir := rel; dir != "."; dir = filepath.Dir(dir) {
+		if isCheckout(filepath.Join(root, dir)) {
+			return true
+		}
+	}
+	return false
 }
 
 // walkUses visits `uses:` values at the only places GitHub Actions honors
@@ -539,7 +592,7 @@ func findRepoRoot(startPath string) (string, error) {
 		return overrideRepoRoot(root, absPath)
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(absPath, ".git")); err == nil {
+		if isCheckout(absPath) {
 			return absPath, nil
 		}
 		parent := filepath.Dir(absPath)

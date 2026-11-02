@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -642,6 +643,28 @@ func TestMigrateLocalActionsToSelfRepository(t *testing.T) {
 	assert.Contains(t, string(out), "uses: ./missing-action")
 }
 
+func TestMigrateLocalActionsToSelfRepository_NestedCheckout(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
+	subAction := filepath.Join(repoRoot, "vendor", "sub", "action")
+	require.NoError(t, os.MkdirAll(subAction, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "vendor", "sub", ".git"), []byte("gitdir: ../../.git/modules/sub\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(subAction, "action.yml"), []byte("runs:\n  using: composite\n"), 0o644))
+
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+	content := []byte("jobs:\n  build:\n    steps:\n      - uses: ./vendor/sub/action\n")
+	require.NoError(t, os.WriteFile(workflowPath, content, 0o644))
+	f, err := Load(workflowPath)
+	require.NoError(t, err)
+
+	out, changed, err := f.MigrateLocalActionsToSelfRepository()
+
+	require.NoError(t, err)
+	assert.Zero(t, changed, "a submodule action isn't part of this repository")
+	assert.Equal(t, content, out)
+}
+
 func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
 	content := []byte("jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n")
 	f, err := Parse("ci.yml", content)
@@ -711,6 +734,51 @@ func TestDiscoverCompositeActionFiles(t *testing.T) {
 		filepath.Join(root, "nested/deep/action.yaml"),
 	}
 	assert.Equal(t, want, got)
+}
+
+func TestDiscoverCompositeActionFiles_NestedCheckouts(t *testing.T) {
+	gitFile := func(t *testing.T, dir string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /elsewhere\n"), 0o644))
+	}
+	gitDir := func(t *testing.T, dir string) {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	}
+	danglingGit := func(t *testing.T, dir string) {
+		require.NoError(t, os.Symlink("missing", filepath.Join(dir, ".git")))
+	}
+	tests := []struct {
+		name     string
+		markRoot func(*testing.T, string)
+		nested   string
+		markDir  func(*testing.T, string)
+		wantSeen bool
+	}{
+		{name: "skips nested worktree", markRoot: gitDir, nested: ".gwt/some-wt", markDir: gitFile},
+		{name: "skips nested clone", markRoot: gitDir, nested: "vendor/clone", markDir: gitDir},
+		{name: "walks root that is itself a worktree", markRoot: gitFile, nested: "sub", wantSeen: true},
+		{name: "walks checkout below a root without .git", nested: "src", markDir: gitDir, wantSeen: true},
+		{name: "walks dir whose .git is a dangling symlink", markRoot: gitDir, nested: "fixture", markDir: danglingGit, wantSeen: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.markRoot != nil {
+				tt.markRoot(t, root)
+			}
+			dir := filepath.Join(root, tt.nested)
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			if tt.markDir != nil {
+				tt.markDir(t, dir)
+			}
+			action := filepath.Join(dir, "action.yml")
+			require.NoError(t, os.WriteFile(action, []byte("runs:\n  using: composite\n"), 0o644))
+
+			got, err := DiscoverCompositeActionFiles(root)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSeen, slices.Contains(got, action))
+		})
+	}
 }
 
 func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
