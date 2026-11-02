@@ -351,7 +351,7 @@ func TestMigrateLocalActions_UnparseableWorkflowIsAFinding(t *testing.T) {
 			loadErrors = append(loadErrors, f.Workflow)
 		}
 	}
-	assert.Equal(t, []string{".github/workflows/bad.yml"}, loadErrors)
+	assert.Equal(t, []string{filepath.FromSlash(".github/workflows/bad.yml")}, loadErrors)
 	got, readErr := os.ReadFile(filepath.Join(dir, ".github", "workflows", "good.yml"))
 	require.NoError(t, readErr)
 	assert.Equal(t, good, string(got), "a blocked run rolls back the migration")

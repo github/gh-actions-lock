@@ -103,7 +103,7 @@ func withStoredLogin(t *testing.T, token string) ClientOption {
 		hosts = "hosts:\n  github.com:\n    oauth_token: " + token + "\n"
 	}
 	stubGhConfig(t, hosts)
-	fakeGh(t, "")
+	t.Setenv("GH_PATH", filepath.Join(t.TempDir(), "missing-gh"))
 	return func(c *clientConfig) { c.noStoredLogin = false }
 }
 
@@ -154,7 +154,8 @@ func TestPublicFallbackTokenOnlyForTenants(t *testing.T) {
 	t.Setenv(DotcomTokenEnv, "ci-dotcom")
 	for _, host := range []string{"github.com", "github.example.com"} {
 		stubGhConfig(t, "")
-		calls := fakeGh(t, "keyring-dotcom")
+		calls := filepath.Join(t.TempDir(), "calls")
+		t.Setenv("GH_PATH", filepath.Join(t.TempDir(), "missing-gh"))
 		c, err := New(host, WithClientTransport(&httpmock.Registry{}), func(c *clientConfig) { c.noStoredLogin = false })
 		require.NoError(t, err)
 		assert.Nil(t, c.public, host)
