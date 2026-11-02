@@ -347,7 +347,14 @@ func (r *Resolver) resolveWithActionYMLParallel(ctx context.Context, refs []Nest
 	var uncachedIdx []int
 	for i, request := range refs {
 		if entry, ok := r.cache.Get(cacheKey(request.Ref)); ok {
-			results[i] = resolveResult{dep: entry.dep, yml: entry.actionYML, ok: true}
+			d := entry.dep
+			// The cache folds owner/repo case, but parentMap is keyed by the
+			// spelling the composite wrote. Answer under that spelling so a
+			// lockfile-seeded (lowercased) entry still finds its parent.
+			if want := request.Ref.NWO(); d.NWO != want && strings.EqualFold(d.NWO, want) {
+				d.NWO = want
+			}
+			results[i] = resolveResult{dep: d, yml: entry.actionYML, ok: true}
 		} else {
 			uncachedIdx = append(uncachedIdx, i)
 		}

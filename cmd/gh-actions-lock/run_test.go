@@ -1145,3 +1145,34 @@ func TestRun_NarrowingNeverMergesEntriesIntoACycle(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_BumpedCompositeKeepsMixedCaseChild: a default run bumping a
+// composite reuses its unchanged child from the lockfile, which stores
+// owner/repo lowercased, while the new manifest spells the child in mixed
+// case. The child keeps its entry and edge, and --verify passes.
+func TestRun_BumpedCompositeKeepsMixedCaseChild(t *testing.T) {
+	const oldSHA, newSHA, childSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "dddddddddddddddddddddddddddddddddddddddd", "cccccccccccccccccccccccccccccccccccccccc"
+	reg := &httpmock.Registry{}
+	stubGraph(t, reg, nil,
+		map[string]string{"octo/comp": newSHA, "MixedCase/Child": childSHA, "mixedcase/child": childSHA},
+		map[string]string{"octo/comp": composite("MixedCase/Child@v1.3")})
+	reg.RegisterReusable(httpmock.REST("GET", `/(tags|releases)$`), httpmock.JSONResponse([]any{}))
+	useDefaultTransport(t, reg)
+	path := writeTempWorkflow(t, "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/comp@v2\n")
+	childKey := "mixedcase/child@v1.3"
+	lock := "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/workflow.yml':\n        - 'octo/comp@v1'\n" +
+		"dependencies:\n" +
+		"    '" + childKey + "':\n        ref: 'v1.3'\n        commit: 'sha1-" + childSHA + "'\n        owner_id: 1\n        repo_id: 1\n" +
+		"    'octo/comp@v1':\n        ref: 'v1'\n        commit: 'sha1-" + oldSHA + "'\n        owner_id: 1\n        repo_id: 1\n        uses:\n            - '" + childKey + "'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-onboard", "--no-narrow", "--ignore-local-actions", "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	after := readTempLockfilePins(t)
+	assert.Contains(t, after, "'octo/comp@v2':\n        ref: 'v2'\n        commit: 'sha1-"+newSHA+"'\n        owner_id: 1\n        repo_id: 1\n        uses:\n            - '"+childKey+"'\n")
+	assert.Contains(t, after, "'"+childKey+"':\n")
+	assert.NotContains(t, after, "'octo/comp@v1'")
+
+	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
+	require.NoError(t, err, stderr)
+}
