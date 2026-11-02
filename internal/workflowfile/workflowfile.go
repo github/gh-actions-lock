@@ -407,6 +407,11 @@ func (w *actionFileWalker) walk(dir string) error {
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("action definition %s is not a regular file", p)
 			}
+			// The walk already skipped nested checkouts, so only a symlinked
+			// action file can still point into one.
+			if w.skipNested && e.Type()&fs.ModeSymlink != 0 && inNestedCheckout(w.root, p) {
+				continue
+			}
 			w.paths = append(w.paths, p)
 		}
 	}
@@ -425,19 +430,30 @@ func isCheckout(dir string) bool {
 	return err == nil
 }
 
-// inNestedCheckout reports whether path lies in a separate checkout below
-// root. As in DiscoverCompositeActionFiles, this only applies when root is
-// itself a checkout.
-func inNestedCheckout(root, path string) bool {
+// inNestedCheckout reports whether file, after resolving symlinks, lies in a
+// separate checkout below root. Resolving matters because a symlink outside
+// the nested checkout can point into it. As in DiscoverCompositeActionFiles,
+// this only applies when root is itself a checkout. Callers have already
+// validated file with ValidatePathWithinRoot, so a resolution error here
+// means the tree changed underneath us; treat it as nested to stay safe.
+func inNestedCheckout(root, file string) bool {
 	if !isCheckout(root) {
 		return false
 	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || !filepath.IsLocal(rel) {
-		return false
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return true
 	}
-	for dir := rel; dir != "."; dir = filepath.Dir(dir) {
-		if isCheckout(filepath.Join(root, dir)) {
+	resolvedFile, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return true
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedFile)
+	if err != nil || !filepath.IsLocal(rel) {
+		return true
+	}
+	for dir := filepath.Dir(rel); dir != "."; dir = filepath.Dir(dir) {
+		if isCheckout(filepath.Join(resolvedRoot, dir)) {
 			return true
 		}
 	}

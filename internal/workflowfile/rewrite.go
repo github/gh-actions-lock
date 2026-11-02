@@ -185,12 +185,15 @@ func (f *File) validateSelfRepositoryMigration(scan RefScan) error {
 func localActionExists(repoRoot, localPath string) bool {
 	relPath := strings.TrimPrefix(localPath, "./")
 	actionDir := filepath.Join(repoRoot, relPath)
-	if !isWithinRoot(repoRoot, actionDir) || inNestedCheckout(repoRoot, actionDir) {
+	if !isWithinRoot(repoRoot, actionDir) {
 		return false
 	}
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := filepath.Join(actionDir, name)
 		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
+			continue
+		}
+		if inNestedCheckout(repoRoot, actionPath) {
 			continue
 		}
 		info, err := os.Stat(actionPath)

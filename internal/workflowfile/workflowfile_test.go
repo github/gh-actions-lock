@@ -644,25 +644,55 @@ func TestMigrateLocalActionsToSelfRepository(t *testing.T) {
 }
 
 func TestMigrateLocalActionsToSelfRepository_NestedCheckout(t *testing.T) {
-	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
-	subAction := filepath.Join(repoRoot, "vendor", "sub", "action")
-	require.NoError(t, os.MkdirAll(subAction, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "vendor", "sub", ".git"), []byte("gitdir: ../../.git/modules/sub\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(subAction, "action.yml"), []byte("runs:\n  using: composite\n"), 0o644))
+	tests := []struct {
+		name  string
+		uses  string
+		setup func(t *testing.T, repoRoot string)
+	}{
+		{name: "leaves action inside submodule", uses: "./vendor/sub/action"},
+		{
+			name: "leaves symlinked dir pointing into submodule",
+			uses: "./alias",
+			setup: func(t *testing.T, repoRoot string) {
+				require.NoError(t, os.Symlink(filepath.Join("vendor", "sub", "action"), filepath.Join(repoRoot, "alias")))
+			},
+		},
+		{
+			name: "leaves action.yml symlinked into submodule",
+			uses: "./shim",
+			setup: func(t *testing.T, repoRoot string) {
+				shim := filepath.Join(repoRoot, "shim")
+				require.NoError(t, os.Mkdir(shim, 0o755))
+				require.NoError(t, os.Symlink(filepath.Join("..", "vendor", "sub", "action", "action.yml"), filepath.Join(shim, "action.yml")))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".github", "workflows"), 0o755))
+			subAction := filepath.Join(repoRoot, "vendor", "sub", "action")
+			require.NoError(t, os.MkdirAll(subAction, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "vendor", "sub", ".git"), []byte("gitdir: ../../.git/modules/sub\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(subAction, "action.yml"), []byte("runs:\n  using: composite\n"), 0o644))
+			if tt.setup != nil {
+				tt.setup(t, repoRoot)
+			}
 
-	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
-	content := []byte("jobs:\n  build:\n    steps:\n      - uses: ./vendor/sub/action\n")
-	require.NoError(t, os.WriteFile(workflowPath, content, 0o644))
-	f, err := Load(workflowPath)
-	require.NoError(t, err)
+			workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ci.yml")
+			content := []byte("jobs:\n  build:\n    steps:\n      - uses: " + tt.uses + "\n")
+			require.NoError(t, os.WriteFile(workflowPath, content, 0o644))
+			f, err := Load(workflowPath)
+			require.NoError(t, err)
 
-	out, changed, err := f.MigrateLocalActionsToSelfRepository()
+			out, changed, err := f.MigrateLocalActionsToSelfRepository()
 
-	require.NoError(t, err)
-	assert.Zero(t, changed, "a submodule action isn't part of this repository")
-	assert.Equal(t, content, out)
+			require.NoError(t, err)
+			assert.Zero(t, changed, "a submodule action isn't part of this repository")
+			assert.Equal(t, content, out)
+		})
+	}
 }
 
 func TestMigrateLocalActionsToSelfRepository_NoLocalPaths(t *testing.T) {
@@ -779,6 +809,30 @@ func TestDiscoverCompositeActionFiles_NestedCheckouts(t *testing.T) {
 			assert.Equal(t, tt.wantSeen, slices.Contains(got, action))
 		})
 	}
+}
+
+func TestDiscoverCompositeActionFiles_SymlinkIntoNestedCheckout(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	sub := filepath.Join(root, "vendor", "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, ".git"), []byte("gitdir: /elsewhere\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "action.yml"), []byte("runs:\n  using: composite\n"), 0o644))
+	own := filepath.Join(root, "own")
+	require.NoError(t, os.Mkdir(own, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(own, "action.yml"), []byte("runs:\n  using: composite\n"), 0o644))
+	shim := filepath.Join(root, "shim")
+	require.NoError(t, os.Mkdir(shim, 0o755))
+	require.NoError(t, os.Symlink(filepath.Join("..", "vendor", "sub", "action.yml"), filepath.Join(shim, "action.yml")))
+	inRepo := filepath.Join(root, "alias")
+	require.NoError(t, os.Mkdir(inRepo, 0o755))
+	require.NoError(t, os.Symlink(filepath.Join("..", "own", "action.yml"), filepath.Join(inRepo, "action.yml")))
+
+	got, err := DiscoverCompositeActionFiles(root)
+
+	require.NoError(t, err)
+	assert.NotContains(t, got, filepath.Join(shim, "action.yml"), "symlink into a nested checkout")
+	assert.Contains(t, got, filepath.Join(inRepo, "action.yml"), "symlink within this checkout")
 }
 
 func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
