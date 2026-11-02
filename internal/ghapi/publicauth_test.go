@@ -154,12 +154,10 @@ func TestPublicFallbackTokenOnlyForTenants(t *testing.T) {
 	t.Setenv(DotcomTokenEnv, "ci-dotcom")
 	for _, host := range []string{"github.com", "github.example.com"} {
 		stubGhConfig(t, "")
-		calls := filepath.Join(t.TempDir(), "calls")
 		t.Setenv("GH_PATH", filepath.Join(t.TempDir(), "missing-gh"))
 		c, err := New(host, WithClientTransport(&httpmock.Registry{}), func(c *clientConfig) { c.noStoredLogin = false })
 		require.NoError(t, err)
 		assert.Nil(t, c.public, host)
-		assert.Empty(t, readCalls(t, calls), host)
 	}
 
 	reg := &httpmock.Registry{}
