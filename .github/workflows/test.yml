@@ -30,6 +30,9 @@ jobs:
           fi
       - run: go vet ./...
       - run: make test
+        if: runner.os == 'Linux'
+      - run: go test -count=1 ./...
+        if: runner.os == 'Windows'
 
   integration-stub:
     runs-on: ${{ matrix.os }}

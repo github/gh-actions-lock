@@ -514,8 +514,11 @@ module ActionsPin
         if @needs_token || @live_repo
           token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
           if token.nil? || token.empty?
-            gh_token, = Open3.capture2("gh", "auth", "token", err: File::NULL)
-            gh_token = gh_token.strip
+            gh_token = begin
+              Open3.capture2("gh", "auth", "token", err: File::NULL).first.strip
+            rescue Errno::ENOENT
+              ""
+            end
             raise SkipScenario, "no GH_TOKEN or gh auth" if gh_token.empty?
           end
         end

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -25,23 +26,27 @@ func stubGhConfig(t *testing.T, hosts string) {
 	config.Read = func(*config.Config) (*config.Config, error) { return config.ReadFromString(hosts), nil }
 }
 
-// fakeGh points GH_PATH at a script that records its arguments in the
-// returned file and prints out, or fails when out is empty.
-func fakeGh(t *testing.T, out string) string {
+func buildFakeGh(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script stub")
-	}
 	dir := t.TempDir()
-	calls := filepath.Join(dir, "calls")
-	script := "#!/bin/sh\necho \"$@\" >> " + calls + "\n"
-	if out == "" {
-		script += "exit 1\n"
-	} else {
-		script += "echo " + out + "\n"
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
 	}
-	gh := filepath.Join(dir, "gh")
-	require.NoError(t, os.WriteFile(gh, []byte(script), 0o755))
+	gh := filepath.Join(dir, "gh"+exe)
+	cmd := exec.Command("go", "build", "-o", gh, "./testdata/ghstub")
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	return gh
+}
+
+// fakeGh points GH_PATH at a helper executable that records its arguments
+// and prints out, or fails when out is empty.
+func fakeGh(t *testing.T, gh, out string) string {
+	t.Helper()
+	calls := filepath.Join(t.TempDir(), "calls")
+	t.Setenv("FAKE_GH_CALLS", calls)
+	t.Setenv("FAKE_GH_OUTPUT", out)
 	t.Setenv("GH_PATH", gh)
 	return calls
 }
@@ -82,12 +87,13 @@ func TestStoredDotcomToken(t *testing.T) {
 			wantCalls: "auth token --secure-storage --hostname github.com\n",
 		},
 	} {
+		gh := buildFakeGh(t)
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("GH_TOKEN", "env-gh-token")
 			t.Setenv("GITHUB_TOKEN", "env-github-token")
 			t.Setenv("GH_ENTERPRISE_TOKEN", "env-enterprise-token")
 			stubGhConfig(t, tt.hosts)
-			calls := fakeGh(t, tt.keyring)
+			calls := fakeGh(t, gh, tt.keyring)
 			assert.Equal(t, tt.want, storedDotcomToken())
 			assert.Equal(t, tt.wantCalls, readCalls(t, calls))
 		})
@@ -152,12 +158,14 @@ func TestPublicFallbackCredential(t *testing.T) {
 
 func TestPublicFallbackTokenOnlyForTenants(t *testing.T) {
 	t.Setenv(DotcomTokenEnv, "ci-dotcom")
+	gh := buildFakeGh(t)
 	for _, host := range []string{"github.com", "github.example.com"} {
 		stubGhConfig(t, "")
-		t.Setenv("GH_PATH", filepath.Join(t.TempDir(), "missing-gh"))
+		calls := fakeGh(t, gh, "keyring-dotcom")
 		c, err := New(host, WithClientTransport(&httpmock.Registry{}), func(c *clientConfig) { c.noStoredLogin = false })
 		require.NoError(t, err)
 		assert.Nil(t, c.public, host)
+		assert.Empty(t, readCalls(t, calls), host)
 	}
 
 	reg := &httpmock.Registry{}
