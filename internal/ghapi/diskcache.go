@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -26,13 +27,19 @@ func withPublicCache(inner http.RoundTripper) (http.RoundTripper, error) {
 			return nil, fmt.Errorf("GH_ACTIONS_LOCK_CACHE_TTL must be a positive duration, got %q", value)
 		}
 	}
-	return publicCacheTransport{inner: inner, dir: filepath.Join(dir, "v1"), ttl: ttl}, nil
+	return publicCacheTransport{
+		inner:   inner,
+		dir:     filepath.Join(dir, "v1"),
+		ttl:     ttl,
+		refresh: func() bool { return rand.IntN(100) == 0 },
+	}, nil
 }
 
 type publicCacheTransport struct {
-	inner http.RoundTripper
-	dir   string
-	ttl   time.Duration
+	inner   http.RoundTripper
+	dir     string
+	ttl     time.Duration
+	refresh func() bool
 }
 
 func (t publicCacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -42,16 +49,41 @@ func (t publicCacheTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	}
 	key := sha256.Sum256([]byte(req.URL.String() + "\n" + req.Header.Get("Accept") + "\n" + req.Header.Get("X-GitHub-Api-Version")))
 	path := filepath.Join(t.dir, fmt.Sprintf("%x", key))
+	var cached *http.Response
 	if info, err := os.Stat(path); err == nil {
 		age := time.Since(info.ModTime())
 		if age >= 0 && age < t.ttl {
 			if data, err := os.ReadFile(path); err == nil {
 				if resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(data)), req); err == nil && resp.StatusCode == http.StatusOK {
-					return resp, nil
+					if age < t.ttl/2 || t.refresh == nil || !t.refresh() {
+						return resp, nil
+					}
+					cached = resp
 				}
 			}
 		}
 	}
+	resp, err := t.fetch(req, path)
+	if cached != nil {
+		retryable := err != nil
+		if resp != nil {
+			_, retryable = retryableResponse(resp, time.Now())
+		}
+		if retryable && req.Context().Err() == nil {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			return cached, nil
+		}
+		cached.Body.Close()
+		if err == nil && resp.StatusCode != http.StatusOK {
+			os.Remove(path)
+		}
+	}
+	return resp, err
+}
+
+func (t publicCacheTransport) fetch(req *http.Request, path string) (*http.Response, error) {
 	resp, err := t.inner.RoundTrip(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return resp, err

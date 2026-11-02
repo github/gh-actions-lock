@@ -80,6 +80,107 @@ func TestPublicCacheRefreshesInvalidEntries(t *testing.T) {
 	}
 }
 
+func TestPublicCacheEarlyRefresh(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		age        time.Duration
+		selected   bool
+		code       int
+		header     http.Header
+		err        error
+		incomplete bool
+		cancel     bool
+		wantBody   string
+		wantError  error
+		wantCalls  int
+	}{
+		{name: "fresh", age: time.Hour, selected: true, code: 200, wantBody: "cached", wantCalls: 0},
+		{name: "not selected", age: 20 * time.Hour, code: 200, wantBody: "cached", wantCalls: 0},
+		{name: "refreshed", age: 20 * time.Hour, selected: true, code: 200, wantBody: "updated", wantCalls: 1},
+		{name: "primary rate limit", age: 20 * time.Hour, selected: true, code: 403, header: http.Header{"X-Ratelimit-Remaining": {"0"}}, wantBody: "cached", wantCalls: 1},
+		{name: "secondary rate limit", age: 20 * time.Hour, selected: true, code: 403, header: http.Header{"Retry-After": {"60"}}, wantBody: "cached", wantCalls: 1},
+		{name: "too many requests", age: 20 * time.Hour, selected: true, code: 429, wantBody: "cached", wantCalls: 1},
+		{name: "server error", age: 20 * time.Hour, selected: true, code: 503, wantBody: "cached", wantCalls: 1},
+		{name: "network error", age: 20 * time.Hour, selected: true, err: io.ErrUnexpectedEOF, wantBody: "cached", wantCalls: 1},
+		{name: "incomplete body", age: 20 * time.Hour, selected: true, code: 200, incomplete: true, wantBody: "cached", wantCalls: 1},
+		{name: "deleted", age: 20 * time.Hour, selected: true, code: 404, wantBody: "updated", wantCalls: 1},
+		{name: "forbidden", age: 20 * time.Hour, selected: true, code: 403, wantBody: "updated", wantCalls: 1},
+		{name: "expired", age: 25 * time.Hour, selected: true, err: io.ErrUnexpectedEOF, wantError: io.ErrUnexpectedEOF, wantCalls: 1},
+		{name: "canceled", age: 20 * time.Hour, selected: true, cancel: true, err: context.Canceled, wantError: context.Canceled, wantCalls: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cache := publicCacheTransport{dir: dir, ttl: 24 * time.Hour, inner: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("cached"))}, nil
+			})}
+			req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/ocean/actions", nil)
+			require.NoError(t, err)
+			resp, err := cache.RoundTrip(req)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			files, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			path := filepath.Join(dir, files[0].Name())
+			old := time.Now().Add(-scenario.age)
+			require.NoError(t, os.Chtimes(path, old, old))
+			before, err := os.Stat(path)
+			require.NoError(t, err)
+			calls := 0
+			cache.refresh = func() bool { return scenario.selected }
+			cache.inner = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				if scenario.err != nil {
+					return nil, scenario.err
+				}
+				var body io.ReadCloser = io.NopCloser(strings.NewReader("updated"))
+				if scenario.incomplete {
+					body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
+				}
+				return &http.Response{StatusCode: scenario.code, Header: scenario.header, Body: body}, nil
+			})
+			if scenario.cancel {
+				ctx, cancel := context.WithCancel(req.Context())
+				cancel()
+				req = req.WithContext(ctx)
+			}
+			resp, err = cache.RoundTrip(req)
+			assert.Equal(t, scenario.wantCalls, calls)
+			if scenario.wantError != nil {
+				require.ErrorIs(t, err, scenario.wantError)
+				return
+			}
+			require.NoError(t, err)
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			assert.Equal(t, scenario.wantBody, string(body))
+			if scenario.wantBody == "cached" {
+				assert.Equal(t, http.StatusOK, resp.StatusCode)
+				after, err := os.Stat(path)
+				require.NoError(t, err)
+				assert.Equal(t, before.ModTime(), after.ModTime())
+			} else if scenario.code == http.StatusOK {
+				after, err := os.Stat(path)
+				require.NoError(t, err)
+				assert.True(t, after.ModTime().After(before.ModTime()))
+				cache.refresh = nil
+				resp, err = cache.RoundTrip(req)
+				require.NoError(t, err)
+				body, err = io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				assert.Equal(t, "updated", string(body))
+				assert.Equal(t, scenario.wantCalls, calls)
+			} else {
+				assert.Equal(t, scenario.code, resp.StatusCode)
+				_, err := os.Stat(path)
+				assert.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
+}
+
 func TestPublicCacheSkipsOtherRequests(t *testing.T) {
 	for _, scenario := range []string{"authorization", "cookie", "http", "tenant", "graphql", "post", "accept", "api-version"} {
 		t.Run(scenario, func(t *testing.T) {
