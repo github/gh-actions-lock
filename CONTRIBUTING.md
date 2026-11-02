@@ -16,7 +16,7 @@ Install the tools for the checks you plan to run:
 
 - **Go**: required for builds and Go tests. Install it [from go.dev](https://go.dev/doc/install); the minimum version is specified in [`go.mod`](go.mod).
 - **Git**: required by the integration test harness.
-- **GNU Make**: required for the `make` targets below. CMake is a different tool and does not provide `make`.
+- **GNU Make**: required for the `make` targets below.
 - **Bash and a C compiler**: required by `make test` on Linux. That target runs the Bash `script/release-test` and Go's race-enabled tests (which need cgo and a C toolchain).
 - **Ruby, WEBrick, and jq**: required for integration tests. Install Ruby [from ruby-lang.org](https://www.ruby-lang.org/en/documentation/installation/), then install WEBrick with `gem install webrick`. The integration scenarios use `jq` for JSON assertions.
 - **GitHub CLI and a token**: needed only for live integration scenarios; stub scenarios do not require authentication.
@@ -31,7 +31,7 @@ Install Go separately from [go.dev](https://go.dev/doc/install) to get the versi
 
 ### Windows
 
-Install Go, Git, GNU Make, Ruby, and `jq`, and ensure their commands are available on `PATH`. Install WEBrick with `gem install webrick`. The Windows CI runs `go test -count=1 ./...` instead of `make test`, because `make test` invokes the Bash-only `script/release-test`; use WSL to run the full Linux `make test` target.
+Install Go, Git, GNU Make, Ruby, and `jq`, and ensure their commands are available on `PATH`. Install WEBrick with `gem install webrick`. 
 
 Run the Windows checks with:
 
