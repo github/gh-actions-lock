@@ -56,6 +56,24 @@ func TestSubpathRewriteLookup(t *testing.T) {
 			want:   "actions/cache/restore/deep/nested@v5.0.5",
 			wantOK: true,
 		},
+		{
+			name:   "reusable workflow call does not match",
+			input:  "actions/cache/.github/workflows/build.yml@27d5ce7",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "nested workflow file does not match",
+			input:  "actions/cache/.github/workflows/sub/build.yml@27d5ce7",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "non-workflow path under .github matches",
+			input:  "actions/cache/.github/actions/foo@27d5ce7",
+			want:   "actions/cache/.github/actions/foo@v5.0.5",
+			wantOK: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -234,6 +252,95 @@ func TestRewriteActionRefs_SubPathActions(t *testing.T) {
 	assert.Contains(t, out, "actions/cache/save@v5.0.5")
 	assert.Contains(t, out, "actions/cache@v5.0.5")
 	assert.Contains(t, out, "actions/checkout@v3")
+}
+
+func TestRewriteActionRefs_SkipsReusableWorkflowCalls(t *testing.T) {
+	const sha = "e03acd0c9d3d230019ebb7bd4a62507431fe4316"
+	tests := []struct {
+		name     string
+		content  string
+		wantKept string
+		wantNew  string
+	}{
+		{
+			name: "reusable workflow call keeps its ref and comment",
+			content: `jobs:
+  gomodule:
+    uses: owner/repo/.github/workflows/build.yml@` + sha + ` # v1
+  test:
+    needs: [gomodule]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/repo/restore@` + sha + ` # v1
+`,
+			wantKept: "uses: owner/repo/.github/workflows/build.yml@" + sha + " # v1\n",
+			wantNew:  "uses: owner/repo/restore@v1\n",
+		},
+		{
+			name: "workflow-shaped with input keeps its value",
+			content: `jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/repo/restore@` + sha + `
+      - uses: owner/other@v2
+        with:
+          uses: owner/repo/.github/workflows/build.yml@` + sha + `
+`,
+			wantKept: "uses: owner/repo/.github/workflows/build.yml@" + sha + "\n",
+			wantNew:  "uses: owner/repo/restore@v1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Parse("ci.yml", []byte(tt.content))
+			require.NoError(t, err)
+
+			output, changed, err := f.RewriteActionRefs(map[string]string{
+				"owner/repo@" + sha: "owner/repo@v1",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 1, changed)
+
+			out := string(output)
+			assert.Contains(t, out, tt.wantKept)
+			assert.Contains(t, out, tt.wantNew)
+		})
+	}
+}
+
+func TestValidateRequiredActionRefRewrites(t *testing.T) {
+	const sha = "e03acd0c9d3d230019ebb7bd4a62507431fe4316"
+	tests := []struct {
+		name        string
+		content     string
+		rewrites    map[string]string
+		wantMatches map[string]int
+	}{
+		{
+			name: "reusable workflow call is not counted as a rewrite",
+			content: `jobs:
+  build:
+    uses: old/repo/.github/workflows/build.yml@` + sha + `
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: old/repo@` + sha + `
+`,
+			rewrites:    map[string]string{"old/repo@" + sha: "new/repo@v1"},
+			wantMatches: map[string]int{"old/repo@" + sha: 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Parse("ci.yml", []byte(tt.content))
+			require.NoError(t, err)
+
+			matches, err := f.ValidateRequiredActionRefRewrites(tt.rewrites)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMatches, matches)
+		})
+	}
 }
 
 func TestUsesValuesListsActionFileSteps(t *testing.T) {

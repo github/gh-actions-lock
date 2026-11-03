@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -200,6 +201,10 @@ func localActionExists(repoRoot, localPath string) bool {
 
 // LookupRewrite returns the replacement for a `uses:` value: an exact key,
 // else, for a sub-path action owner/repo/path@ref, a key owner/repo@ref.
+// The fallback applies only to values parserlock.ParseActionRef parses, so
+// a reusable workflow call never picks up an action's rewrite through it.
+// An exact key still matches any value, so planners must not key a rewrite
+// by a reusable workflow call unless it should be rewritten.
 func LookupRewrite(usesValue string, replacements map[string]string) (string, bool) {
 	if v, ok := replacements[usesValue]; ok {
 		return v, true
@@ -209,6 +214,11 @@ func LookupRewrite(usesValue string, replacements map[string]string) (string, bo
 
 // subpathRewriteLookup handles sub-path actions like actions/cache/restore@ref.
 func subpathRewriteLookup(usesValue string, replacements map[string]string) (string, bool) {
+	// A reusable workflow call isn't an action and isn't locked, so it
+	// mustn't pick up the rewrite of an action from the same repository.
+	if parserlock.ParseActionRef(usesValue) == nil {
+		return "", false
+	}
 	atIdx := strings.LastIndex(usesValue, "@")
 	if atIdx < 0 {
 		return "", false
