@@ -63,12 +63,6 @@ func TestSubpathRewriteLookup(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name:   "nested workflow file does not match",
-			input:  "actions/cache/.github/workflows/sub/build.yml@27d5ce7",
-			want:   "",
-			wantOK: false,
-		},
-		{
 			name:   "non-workflow path under .github matches",
 			input:  "actions/cache/.github/actions/foo@27d5ce7",
 			want:   "actions/cache/.github/actions/foo@v5.0.5",

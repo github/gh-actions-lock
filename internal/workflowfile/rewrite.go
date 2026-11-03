@@ -214,11 +214,6 @@ func LookupRewrite(usesValue string, replacements map[string]string) (string, bo
 
 // subpathRewriteLookup handles sub-path actions like actions/cache/restore@ref.
 func subpathRewriteLookup(usesValue string, replacements map[string]string) (string, bool) {
-	// A reusable workflow call isn't an action and isn't locked, so it
-	// mustn't pick up the rewrite of an action from the same repository.
-	if parserlock.ParseActionRef(usesValue) == nil {
-		return "", false
-	}
 	atIdx := strings.LastIndex(usesValue, "@")
 	if atIdx < 0 {
 		return "", false
@@ -235,7 +230,7 @@ func subpathRewriteLookup(usesValue string, replacements map[string]string) (str
 
 	nwoKey := nwo + "@" + ref
 	newNWOValue, ok := replacements[nwoKey]
-	if !ok {
+	if !ok || parserlock.ParseActionRef(usesValue) == nil {
 		return "", false
 	}
 
