@@ -284,6 +284,19 @@ func TestRewriteActionRefs_SkipsReusableWorkflowCalls(t *testing.T) {
 			wantKept: "uses: owner/repo/.github/workflows/build.yml@" + sha + "\n",
 			wantNew:  "uses: owner/repo/restore@v1\n",
 		},
+		{
+			name: "action-shaped with input keeps its value",
+			content: `jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/repo/restore@` + sha + `
+        with:
+          uses: owner/repo/restore@` + sha + `
+`,
+			wantKept: "          uses: owner/repo/restore@" + sha + "\n",
+			wantNew:  "      - uses: owner/repo/restore@v1\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -324,6 +337,19 @@ func TestValidateRequiredActionRefRewrites(t *testing.T) {
 			rewrites:    map[string]string{"old/repo@" + sha: "new/repo@v1"},
 			wantMatches: map[string]int{"old/repo@" + sha: 1},
 		},
+		{
+			name: "with input is not counted as a rewrite",
+			content: `jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: old/repo@` + sha + `
+        with:
+          uses: old/repo@` + sha + `
+`,
+			rewrites:    map[string]string{"old/repo@" + sha: "new/repo@v1"},
+			wantMatches: map[string]int{"old/repo@" + sha: 1},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -341,4 +367,10 @@ func TestUsesValuesListsActionFileSteps(t *testing.T) {
 	f, err := Parse("action.yml", []byte("runs:\n  using: composite\n  steps:\n    - uses: octo/cache/restore@v2 # pinned\n    - run: echo\n    - uses: $/actions/setup\n"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"octo/cache/restore@v2", "$/actions/setup"}, f.UsesValues())
+}
+
+func TestUsesValuesListsOnlyStepUses(t *testing.T) {
+	f, err := Parse("ci.yml", []byte("jobs:\n  call:\n    uses: octo/repo/.github/workflows/x.yml@v1\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/repo/restore@v1\n        with:\n          uses: octo/other@v2\n"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"octo/repo/restore@v1"}, f.UsesValues())
 }

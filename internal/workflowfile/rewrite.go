@@ -10,8 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RewriteActionRefs rewrites targeted uses: refs in the original workflow
-// content while preserving the surrounding formatting and comments.
+// RewriteActionRefs rewrites targeted step-level uses: refs in the original
+// workflow content while preserving the surrounding formatting and comments.
+// Reusable workflow calls (jobs.<id>.uses) are never rewritten: the lockfile
+// doesn't lock them, so their written ref is their only pin.
 func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, error) {
 	if len(replacements) == 0 {
 		return append([]byte(nil), f.Content...), 0, nil
@@ -19,9 +21,13 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 
 	lines := strings.Split(string(f.Content), "\n")
 	changed := 0
+	steps := stepUsesNodes(&f.root)
 
 	walkYAMLNodes(&f.root, func(keyNode, valueNode *yaml.Node) {
 		if keyNode == nil || valueNode == nil || keyNode.Value != "uses" || valueNode.Kind != yaml.ScalarNode {
+			return
+		}
+		if !steps[valueNode] {
 			return
 		}
 		// Skip aliases / nodes that came from anchors. Replacing one
@@ -78,6 +84,7 @@ func (f *File) RewriteActionRefs(replacements map[string]string) ([]byte, int, e
 func (f *File) ValidateRequiredActionRefRewrites(replacements map[string]string) (map[string]int, error) {
 	matches := make(map[string]int)
 	blocked := ""
+	steps := stepUsesNodes(&f.root)
 	var walk func(*yaml.Node, bool, int)
 	walk = func(node *yaml.Node, anchored bool, depth int) {
 		if node == nil || depth > maxYAMLWalkDepth {
@@ -93,7 +100,7 @@ func (f *File) ValidateRequiredActionRefRewrites(replacements map[string]string)
 			for i := 0; i < len(node.Content)-1; i += 2 {
 				keyNode := node.Content[i]
 				valueNode := node.Content[i+1]
-				if keyNode.Value == "uses" {
+				if keyNode.Value == "uses" && steps[valueNode] {
 					target := valueNode
 					if valueNode.Kind == yaml.AliasNode && valueNode.Alias != nil {
 						target = valueNode.Alias
@@ -252,11 +259,13 @@ func stripTrailingComment(tail string) string {
 	return strings.TrimRight(tail[:idx], " \t")
 }
 
-// UsesValues returns every scalar `uses:` value in the file, as written.
+// UsesValues returns every scalar step-level `uses:` value in the file, as
+// written.
 func (f *File) UsesValues() []string {
 	var out []string
+	steps := stepUsesNodes(&f.root)
 	walkYAMLNodes(&f.root, func(keyNode, valueNode *yaml.Node) {
-		if keyNode != nil && valueNode != nil && keyNode.Value == "uses" && valueNode.Kind == yaml.ScalarNode {
+		if keyNode != nil && valueNode != nil && keyNode.Value == "uses" && valueNode.Kind == yaml.ScalarNode && steps[valueNode] {
 			out = append(out, strings.TrimSpace(valueNode.Value))
 		}
 	})
