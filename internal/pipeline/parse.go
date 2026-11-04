@@ -70,9 +70,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 
 		pw.SHASpellings = lowercaseSHAs(scan.Refs, selfScan.Refs)
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
-		// Refs inside `$/…` actions are rewritable too: their action file is
-		// rewritten alongside the workflow, so narrowing stays in sync.
-		pw.RewriteRefs = pw.Refs
+		pw.RewriteRefs = rewritableRefs(pw.Refs, selfScan.Refs)
 		pw.SelfActionFiles = selfScan.ActionFiles
 		pw.SelfActionRefs = selfScan.Refs
 		pw.LocalPaths = scan.LocalPaths
@@ -106,6 +104,32 @@ func lowercaseSHAs(groups ...[]parserlock.ActionRef) map[string]string {
 		}
 	}
 	return spellings
+}
+
+// rewritableRefs drops from refs every repository commit a `$/…` action
+// pins by full SHA. A `$/…` action is also used from other repositories,
+// which run it without this lockfile, so its SHA is its only pin (#264).
+// The commit then keeps that spelling everywhere it's written and locks
+// under it. Other refs inside `$/…` actions stay rewritable: their action
+// file is rewritten alongside the workflow, so narrowing stays in sync.
+func rewritableRefs(refs, selfRefs []parserlock.ActionRef) []parserlock.ActionRef {
+	pinned := make(map[string]bool)
+	for _, ref := range selfRefs {
+		if parserlock.IsFullSha(ref.Ref) {
+			pinned[strings.ToLower(ref.NWO())+"@"+ref.Ref] = true
+		}
+	}
+	if len(pinned) == 0 {
+		return refs
+	}
+	// Non-nil even when empty: a nil RewriteRefs means every ref.
+	out := make([]parserlock.ActionRef, 0, len(refs))
+	for _, ref := range refs {
+		if !pinned[strings.ToLower(ref.NWO())+"@"+ref.Ref] {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func mergeActionRefs(groups ...[]parserlock.ActionRef) []parserlock.ActionRef {

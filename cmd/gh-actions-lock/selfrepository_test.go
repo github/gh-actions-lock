@@ -123,7 +123,10 @@ jobs:
 	assert.ErrorIs(t, readErr, os.ErrNotExist)
 }
 
-func TestExistingSHARefRewritesSelfRepositoryAction(t *testing.T) {
+// TestExistingSHARefKeepsSelfRepositoryActionPin: a `$/…` action's SHA pin
+// stays as written and locked under ci.yml, even though other.yml locks the
+// same commit by tag (#264).
+func TestExistingSHARefKeepsSelfRepositoryActionPin(t *testing.T) {
 	const sha = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
 	transport := &requestCountingTransport{parity: true, tags: map[string]string{"v3.2.0": sha}}
 
@@ -193,34 +196,22 @@ dependencies:
 	require.NoError(t, os.WriteFile(lockPath, originalLock, 0o600))
 	t.Chdir(dir)
 
-	_, _, err := runCommandWithHTTP(t, transport, "--no-narrow", filepath.Join(".github", "workflows", "ci.yml"))
-	require.NoError(t, err)
-	lockAfterNoNarrow, err := os.ReadFile(lockPath)
+	originalAction, err := os.ReadFile(actionPath)
 	require.NoError(t, err)
 
-	_, _, err = runCommandWithHTTP(t, transport, filepath.Join(".github", "workflows", "ci.yml"))
-	require.ErrorContains(t, err, "partial workflow scan")
-	action, readErr := os.ReadFile(actionPath)
-	require.NoError(t, readErr)
-	assert.Contains(t, string(action), "uses: actions/create-github-app-token@"+sha)
-	lock, readErr := os.ReadFile(lockPath)
-	require.NoError(t, readErr)
-	assert.Equal(t, lockAfterNoNarrow, lock)
+	for _, args := range [][]string{{filepath.Join(".github", "workflows", "ci.yml")}, nil} {
+		_, _, err = runCommandWithHTTP(t, transport, args...)
+		require.NoError(t, err)
+		assert.Zero(t, transport.calls.Load())
 
-	_, _, err = runCommandWithHTTP(t, transport)
-	require.NoError(t, err)
-	assert.Zero(t, transport.calls.Load())
+		action, err := os.ReadFile(actionPath)
+		require.NoError(t, err)
+		assert.Equal(t, originalAction, action)
 
-	action, err = os.ReadFile(actionPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(action), "uses: actions/create-github-app-token@v3.2.0")
-
-	lock, err = os.ReadFile(lockPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(lock), "'actions/create-github-app-token@v3.2.0'")
-	assert.Contains(t, string(lock), "'actions/checkout@v4'")
-	assert.Contains(t, string(lock), "'actions/setup-go@v5'")
-	assert.Contains(t, string(lock), "uses:\n            - 'actions/checkout@v4'")
-	assert.Contains(t, string(lock), "- 'actions/setup-go@v5'")
-	assert.NotContains(t, string(lock), "'actions/create-github-app-token@"+sha+"'")
+		lock, err := os.ReadFile(lockPath)
+		require.NoError(t, err)
+		assert.Contains(t, string(lock), "    '.github/workflows/ci.yml':\n        - 'actions/create-github-app-token@"+sha+"'\n")
+		assert.Contains(t, string(lock), "    'actions/create-github-app-token@"+sha+"':\n        ref: 'v3.2.0'\n")
+		assert.Contains(t, string(lock), "uses:\n            - 'actions/checkout@v4'")
+	}
 }
