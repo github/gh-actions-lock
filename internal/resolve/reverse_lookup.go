@@ -11,18 +11,18 @@ import (
 	"github.com/github/gh-actions-lock/internal/ghapi"
 )
 
-// DiscoverContaining returns (tag, branch) for sha in owner/repo, using
-// the documented REST APIs: list-branches (with compare for ancestry) and
-// list-tags. Results are cached for the lifetime of the resolver.
+// DiscoverContaining returns (tag, branch) for sha in owner/repo. Results
+// are cached for the lifetime of the resolver.
 //
-// Selection rules:
-//   - If hintRef is one of the discovered tags it wins; otherwise the first
-//     tag (lexicographic) is picked. tag may be empty when no tag points at sha.
-//   - Protected branches are searched first (hintRef → default → lex).
-//     If no protected branch contains sha, the search falls back to all
-//     branches in the same tier order.
-//   - branch is REQUIRED to be non-empty; an error is returned otherwise
-
+// Tags are checked first: when a recordable tag points at sha, it is
+// returned with an empty branch and no branch search runs. The tag is what
+// gets recorded, and the branch search can cost one compare call per branch
+// (see #267). If hintRef is one of the tags it wins; otherwise the first tag
+// (lexicographic) is picked.
+//
+// With no tag, a containing branch is searched for (hintRef → default →
+// protected → all). Both are empty when neither exists.
+//
 // hintRef may be empty (e.g. for bare-SHA pins). The repo's default branch
 // is discovered automatically via GET /repos/{owner}/{repo} (cached).
 func (r *Resolver) DiscoverContaining(ctx context.Context, owner, repo, sha, hintRef string) (tag, branch string, err error) {
@@ -33,25 +33,26 @@ func (r *Resolver) DiscoverContaining(ctx context.Context, owner, repo, sha, hin
 // the repository's default branch (e.g. "main"). When the discovered branch
 // set contains defaultBranch it is preferred over lexicographic ordering.
 //
-// Branch search is two-phase. Phase 1 validates the likely/canonical set
-// directly (literal ref, recorded hint branch, default branch, protected
-// branches, release/v* branches) so a relevant branch is never missed because
-// it sorts beyond the paginated listing cap. Phase 2 — a full protected-first
-// then all-branches scan — runs only when phase 1 finds nothing. An orphan
-// error is returned only if both phases fail to place the commit.
+// The branch search, run only when no tag points at sha, is two-phase.
+// Phase 1 validates the likely/canonical set directly (literal ref, recorded
+// hint branch, default branch, protected branches, release/v* branches) so a
+// relevant branch is never missed because it sorts beyond the paginated
+// listing cap. Phase 2 — a full protected-first then all-branches scan — runs
+// only when phase 1 finds nothing.
 func (r *Resolver) DiscoverContainingDefault(ctx context.Context, owner, repo, sha, hintRef, defaultBranch string) (tag, branch string, err error) {
 	c := refCandidates{r: r, owner: owner, repo: repo}
+	tags, err := c.tagsAt(ctx, sha)
+	if err != nil {
+		return "", "", err
+	}
+	if len(tags) > 0 {
+		return pickPreferredTag(tags, hintRef), "", nil
+	}
 	branch, err = c.containingBranch(ctx, sha, hintRef, defaultBranch)
 	if err != nil {
 		return "", "", err
 	}
-	// No branch found — proceed without one. The commit may exist only
-	// on refs/tags (lightweight repos, GitHub Releases, etc.).
-	tags, err := c.tagsAt(ctx, sha, branch == "")
-	if err != nil {
-		return "", "", err
-	}
-	return pickPreferredTag(tags, hintRef), branch, nil
+	return "", branch, nil
 }
 
 // refCandidates answers "which tag or branch could the lockfile record for
@@ -64,9 +65,9 @@ type refCandidates struct {
 }
 
 // tagsAt returns the recordable tags pointing at sha. The listing's first
-// page is cached and shared; when exhaustive is set and it has none of
-// them, every later page is read, since the commit may have no other ref.
-func (c refCandidates) tagsAt(ctx context.Context, sha string, exhaustive bool) ([]string, error) {
+// page is cached and shared; when it has none of them, every later page is
+// read before falling back to the slower branch search.
+func (c refCandidates) tagsAt(ctx context.Context, sha string) ([]string, error) {
 	first, err := c.r.ListTagsForRepo(ctx, c.owner, c.repo)
 	if err != nil {
 		return nil, err
@@ -83,7 +84,7 @@ func (c refCandidates) tagsAt(ctx context.Context, sha string, exhaustive bool) 
 	// Filter before deciding to read more: an unrecordable tag on the first
 	// page must not stop the search for a recordable one.
 	names = recordable(names)
-	if exhaustive && len(names) == 0 && len(first) >= 100 {
+	if len(names) == 0 && len(first) >= 100 {
 		all, err := c.r.gh.TagsAtCommit(ctx, c.owner, c.repo, sha)
 		if err != nil {
 			return nil, err

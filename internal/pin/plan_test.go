@@ -669,10 +669,14 @@ func TestPlanNormalizationRespectsLockedTarget(t *testing.T) {
 			defer reg.Verify(t)
 			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`$`),
 				httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
-			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`/git/ref/heads/main`),
-				httpmock.JSONResponse(map[string]any{
-					"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
-				}))
+			wantBranch := ""
+			if tt.tag == "" {
+				wantBranch = "main"
+				reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`/git/ref/heads/main`),
+					httpmock.JSONResponse(map[string]any{
+						"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
+					}))
+			}
 			tags := httpmock.TagListResponse()
 			if tt.tag != "" {
 				tags = httpmock.TagListResponse(tt.tag, headSHA)
@@ -708,7 +712,7 @@ func TestPlanNormalizationRespectsLockedTarget(t *testing.T) {
 			assert.Equal(t, tt.lockedSHA, record.Entries[0].SHA)
 			assert.Equal(t, tt.wantRef, record.Entries[1].Ref)
 			assert.Equal(t, headSHA, record.Entries[1].SHA)
-			assert.Equal(t, "main", record.Entries[1].OnBranch)
+			assert.Equal(t, wantBranch, record.Entries[1].OnBranch)
 			assert.Equal(t, tt.tag, record.Entries[1].Tag)
 			require.Len(t, record.Workflows, 2)
 			assert.Empty(t, record.Workflows[0].Rewrites)

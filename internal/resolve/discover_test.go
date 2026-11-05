@@ -16,20 +16,10 @@ import (
 )
 
 func TestDiscoverContaining_PrefersHintTag(t *testing.T) {
-	// sha="abc", hintRef="v4.2.2" (a tag, not a branch name)
-	// Neither branch HEAD matches "abc", so compare is needed.
-	// orderedBranches with hintRef="v4.2.2" (not a branch) and no default:
-	// lex order → main first → compare(abc...m000) matches.
+	// Several tags point at sha; the hint wins and no branch is searched.
 	reg := &httpmock.Registry{}
-	httpmock.NoTagsNamed(reg, "actions", "checkout")
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(httpmock.BranchListResponse("main", "m000", "releases/v4", "rv4000")),
-	)
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/compare/abc`),
-		httpmock.JSONResponse(httpmock.CompareAncestorResponse("abc")),
-	)
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
 		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc", "v4.2.1", "abc", "v4.2.2", "abc")),
@@ -47,8 +37,8 @@ func TestDiscoverContaining_PrefersHintTag(t *testing.T) {
 	if tag != "v4.2.2" {
 		t.Fatalf("expected tag=v4.2.2 (hint match), got %q", tag)
 	}
-	if branch != "main" {
-		t.Fatalf("expected branch=main (lex-first via compare), got %q", branch)
+	if branch != "" {
+		t.Fatalf("expected no branch search when a tag points at sha, got branch %q", branch)
 	}
 	reg.Verify(t)
 }
@@ -277,14 +267,10 @@ func TestDiscoverContaining_CommitOnlyOnUnprotectedBranchFallsBack(t *testing.T)
 	reg.Verify(t)
 }
 
-func TestReverseLookup_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) {
-	// SHA pin: dep.SHA="abc123", dep.Ref=full-sha. main HEAD=="abc123" → exact match.
+func TestReverseLookup_PopulatesTagAndRewritesSHAPins(t *testing.T) {
 	reg := &httpmock.Registry{}
-	httpmock.NoTagsNamed(reg, "actions", "checkout")
-	reg.Register(
-		httpmock.REST("GET", `repos/actions/checkout/branches`),
-		httpmock.JSONResponse(httpmock.BranchListResponse("main", "abc123")),
-	)
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
 	reg.Register(
 		httpmock.REST("GET", `repos/actions/checkout/tags`),
 		httpmock.JSONResponse(httpmock.TagListResponse("v4", "abc123")),
@@ -306,8 +292,8 @@ func TestReverseLookup_PopulatesTagBranchAndRewritesSHAPins(t *testing.T) {
 	if got := deps[0].Tag; got != "v4" {
 		t.Errorf("expected Tag=v4, got %q", got)
 	}
-	if got := deps[0].Branch; got != "main" {
-		t.Errorf("expected Branch=main, got %q", got)
+	if got := deps[0].Branch; got != "" {
+		t.Errorf("expected no Branch when a tag points at the SHA, got %q", got)
 	}
 	if got := deps[0].Ref; got != "v4" {
 		t.Errorf("expected Ref rewritten to v4, got %q", got)
