@@ -46,7 +46,7 @@ claim in both.
   here; it can't be expressed in the catalog.
 - **Go command test** (`cmd/**/*_test.go` with `httpmock`) — full CLI wiring
   end to end, but with a stubbed resolver so it stays deterministic. Runs in
-  the blocking `test` CI job with no token. Reach for this to prove the
+  the blocking `go-test` CI job with no token. Reach for this to prove the
   command plumbs its pieces together.
 - **Catalog scenario** (`test/scenarios/catalog.yml`, run by the Ruby
   harness) — the *real compiled binary* against the real API or a stub
