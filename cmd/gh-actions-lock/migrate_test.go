@@ -56,6 +56,34 @@ func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 	assert.Contains(t, read("my-action/action.yml"), "uses: ./nonexistent")
 }
 
+// TestMigrateLocalActions_RepoRootEnvAboveCheckout covers a RepoRootEnv root
+// without .git that holds the real checkout in a subdirectory, as with
+// actions/checkout `path: src`. That checkout must not be skipped as nested.
+func TestMigrateLocalActions_RepoRootEnvAboveCheckout(t *testing.T) {
+	workspace := t.TempDir()
+	write := func(rel, content string) {
+		full := filepath.Join(workspace, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "src", ".git"), 0o755))
+	write("src/.github/workflows/ci.yml",
+		"name: CI\non: push\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n")
+	write("src/my-action/action.yml",
+		"name: My Action\nruns:\n  using: composite\n  steps:\n    - uses: ./src/helper\n")
+	write("src/helper/action.yml",
+		"name: Helper\nruns:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n")
+	t.Setenv("GH_ACTIONS_LOCK_REPO_ROOT", workspace)
+
+	total, _, err := migrateLocalActions([]string{filepath.Join(workspace, "src", ".github", "workflows", "ci.yml")})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	b, err := os.ReadFile(filepath.Join(workspace, "src", "my-action", "action.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "uses: $/src/helper")
+}
+
 func TestMigrateLocalActions_StructuralErrorPreventsAllWrites(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel, content string) string {

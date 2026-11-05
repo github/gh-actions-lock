@@ -179,7 +179,10 @@ func (f *File) validateSelfRepositoryMigration(scan RefScan) error {
 }
 
 // localActionExists reports whether a `./…` path resolves to an action file
-// (action.yml or action.yaml) within the repo root.
+// (action.yml or action.yaml) within the repo root. An action inside a
+// submodule or other nested checkout doesn't count: it isn't part of this
+// repository, so a `$/` ref can't reach it, and DiscoverCompositeActionFiles
+// doesn't migrate its own `./…` steps.
 func localActionExists(repoRoot, localPath string) bool {
 	relPath := strings.TrimPrefix(localPath, "./")
 	actionDir := filepath.Join(repoRoot, relPath)
@@ -189,6 +192,9 @@ func localActionExists(repoRoot, localPath string) bool {
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := filepath.Join(actionDir, name)
 		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
+			continue
+		}
+		if inNestedCheckout(repoRoot, actionPath) {
 			continue
 		}
 		info, err := os.Stat(actionPath)
