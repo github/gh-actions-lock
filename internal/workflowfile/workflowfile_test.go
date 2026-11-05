@@ -3,7 +3,9 @@ package workflowfile
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -654,7 +656,7 @@ func TestMigrateLocalActionsToSelfRepository_NestedCheckout(t *testing.T) {
 			name: "leaves symlinked dir pointing into submodule",
 			uses: "./alias",
 			setup: func(t *testing.T, repoRoot string) {
-				require.NoError(t, os.Symlink(filepath.Join("vendor", "sub", "action"), filepath.Join(repoRoot, "alias")))
+				symlinkOrSkip(t, filepath.Join("vendor", "sub", "action"), filepath.Join(repoRoot, "alias"))
 			},
 		},
 		{
@@ -663,7 +665,14 @@ func TestMigrateLocalActionsToSelfRepository_NestedCheckout(t *testing.T) {
 			setup: func(t *testing.T, repoRoot string) {
 				shim := filepath.Join(repoRoot, "shim")
 				require.NoError(t, os.Mkdir(shim, 0o755))
-				require.NoError(t, os.Symlink(filepath.Join("..", "vendor", "sub", "action", "action.yml"), filepath.Join(shim, "action.yml")))
+				symlinkOrSkip(t, filepath.Join("..", "vendor", "sub", "action", "action.yml"), filepath.Join(shim, "action.yml"))
+			},
+		},
+		{
+			name: "leaves junction pointing into submodule",
+			uses: "./alias",
+			setup: func(t *testing.T, repoRoot string) {
+				junction(t, filepath.Join(repoRoot, "vendor", "sub", "action"), filepath.Join(repoRoot, "alias"))
 			},
 		},
 	}
@@ -774,7 +783,7 @@ func TestDiscoverCompositeActionFiles_NestedCheckouts(t *testing.T) {
 		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 	}
 	danglingGit := func(t *testing.T, dir string) {
-		require.NoError(t, os.Symlink("missing", filepath.Join(dir, ".git")))
+		symlinkOrSkip(t, "missing", filepath.Join(dir, ".git"))
 	}
 	tests := []struct {
 		name     string
@@ -823,16 +832,39 @@ func TestDiscoverCompositeActionFiles_SymlinkIntoNestedCheckout(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(own, "action.yml"), []byte("runs:\n  using: composite\n"), 0o644))
 	shim := filepath.Join(root, "shim")
 	require.NoError(t, os.Mkdir(shim, 0o755))
-	require.NoError(t, os.Symlink(filepath.Join("..", "vendor", "sub", "action.yml"), filepath.Join(shim, "action.yml")))
+	symlinkOrSkip(t, filepath.Join("..", "vendor", "sub", "action.yml"), filepath.Join(shim, "action.yml"))
 	inRepo := filepath.Join(root, "alias")
 	require.NoError(t, os.Mkdir(inRepo, 0o755))
-	require.NoError(t, os.Symlink(filepath.Join("..", "own", "action.yml"), filepath.Join(inRepo, "action.yml")))
+	symlinkOrSkip(t, filepath.Join("..", "own", "action.yml"), filepath.Join(inRepo, "action.yml"))
 
 	got, err := DiscoverCompositeActionFiles(root)
 
 	require.NoError(t, err)
 	assert.NotContains(t, got, filepath.Join(shim, "action.yml"), "symlink into a nested checkout")
 	assert.Contains(t, got, filepath.Join(inRepo, "action.yml"), "symlink within this checkout")
+}
+
+// symlinkOrSkip skips on Windows, where creating a symlink needs a privilege
+// the user may lack (Developer Mode or admin). Elsewhere a failure is a bug in
+// the test setup.
+func symlinkOrSkip(t *testing.T, oldname, newname string) {
+	t.Helper()
+	err := os.Symlink(oldname, newname)
+	if err != nil && runtime.GOOS == "windows" {
+		t.Skipf("creating symlink: %v", err)
+	}
+	require.NoError(t, err)
+}
+
+// junction creates a Windows directory junction: unlike a symlink it needs no
+// privilege, and filepath.EvalSymlinks doesn't resolve it.
+func junction(t *testing.T, target, link string) {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		t.Skip("junctions are Windows-only")
+	}
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+	require.NoError(t, err, string(out))
 }
 
 func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {

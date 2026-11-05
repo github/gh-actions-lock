@@ -436,6 +436,11 @@ func isCheckout(dir string) bool {
 // this only applies when root is itself a checkout. Callers have already
 // validated file with ValidatePathWithinRoot, so a resolution error here
 // means the tree changed underneath us; treat it as nested to stay safe.
+//
+// EvalSymlinks doesn't resolve Windows junctions (Go reports them as
+// ModeIrregular), so a junction on the path hides where it leads. Those
+// count as nested too, at the cost of not migrating a junction that stays
+// inside this checkout.
 func inNestedCheckout(root, file string) bool {
 	if !isCheckout(root) {
 		return false
@@ -453,11 +458,18 @@ func inNestedCheckout(root, file string) bool {
 		return true
 	}
 	for dir := filepath.Dir(rel); dir != "."; dir = filepath.Dir(dir) {
-		if isCheckout(filepath.Join(resolvedRoot, dir)) {
+		p := filepath.Join(resolvedRoot, dir)
+		if !isPlainDir(p) || isCheckout(p) {
 			return true
 		}
 	}
 	return false
+}
+
+// isPlainDir uses Lstat so a junction, which Stat would follow, doesn't count.
+func isPlainDir(p string) bool {
+	info, err := os.Lstat(p)
+	return err == nil && info.IsDir()
 }
 
 // walkUses visits `uses:` values at the only places GitHub Actions honors
