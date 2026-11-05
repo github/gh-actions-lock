@@ -151,6 +151,12 @@ login. A GHE.com job's GITHUB_TOKEN is issued by the tenant and doesn't
 work on github.com. Use a fine-grained token with no permissions. It is
 never sent to the tenant, or used when github.com is the selected host.
 
+GH_ACTIONS_LOCK_CACHE_DIR enables a persistent cache of successful anonymous
+public github.com API responses on *.ghe.com. GH_ACTIONS_LOCK_CACHE_TTL sets
+the maximum age (default 24h). Cached identity and reachability checks can
+be stale until expiry; GitHub still validates pins when a workflow starts.
+Authenticated and tenant responses are never cached.
+
 RUN LOGS
 
 Every run except --verify-local saves its full --json output, plus the

@@ -48,6 +48,14 @@ In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant,
     GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ secrets.ACTIONS_LOCK_GITHUB_COM_TOKEN }}
 ```
 
+### Persisting anonymous public lookups
+
+Set `GH_ACTIONS_LOCK_CACHE_DIR` to cache successful anonymous github.com API responses across runs on a `*.ghe.com` tenant. Entries are keyed by API URL and representation, so changing one dependency reuses the other dependencies' cached resources. Successful responses are saved immediately, even if other lookups hit the rate limit and the command fails. Errors, authenticated requests, and tenant responses are never cached.
+
+`GH_ACTIONS_LOCK_CACHE_TTL` sets the maximum age of an entry (default `24h`). Cached repository identity and ref reachability can be stale for that long; GitHub still validates the lockfile at execution time. Unset the cache directory for fresh online checks. Cache read or write failures fall back to online requests.
+
+In CI, restore this directory before verification and save it even when verification fails, using a new cache key each run so partial progress accumulates. Restore only caches from trusted workflows; cache contents are verification inputs, not independently authenticated evidence. Do not share a writable cache across trust boundaries. A cold run can still be rate-limited and fail until enough responses have been collected.
+
 ## Modes
 
 | Command | Writes | Network | Use for |
