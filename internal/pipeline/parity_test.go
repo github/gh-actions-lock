@@ -106,7 +106,13 @@ func TestParityFinding(t *testing.T) {
 			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", OwnerID: 77, RepoID: 2, CommitFound: true, HeadOID: sha},
 			want:  checks.RepoRenamed, wantWarn: true,
 		},
-		{name: "owner ID change alone is not identity", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 77, RepoID: 2, CommitFound: true, HeadOID: sha}},
+		{
+			name: "owner ID change under the same name blocks", ref: "v2",
+			state:      ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 77, RepoID: 2, CommitFound: true, HeadOID: sha},
+			want:       checks.OwnerIDChanged,
+			wantDetail: "krzema12/github-actions-typing owner ID changed (77, locked 1); verify the owner before updating the lockfile",
+			wantRemedy: "verify the owner of krzema12/github-actions-typing, then run `gh actions-lock` to update the lockfile",
+		},
 		{name: "repo ID changed", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", OwnerID: 1, RepoID: 99, CommitFound: true, HeadOID: sha}, want: checks.RepoReplaced},
 		{
 			name: "replaced transitive dependency points at its parent", ref: "v2", parent: "octo/composite@v1",

@@ -54,6 +54,10 @@ const (
 	// repo ID. The runner rejects the pin, and re-locking under the old name
 	// cannot fix it.
 	RepoReplaced Category = "repo-replaced"
+	// OwnerIDChanged means the repository name still resolves to the same repo,
+	// but its owner ID differs from the lockfile. A transfer changes the name
+	// too and is reported as RepoRenamed instead.
+	OwnerIDChanged Category = "owner-id-changed"
 	// RepoUnavailable means a locked dependency's repository returned 404.
 	// That covers both deleted repositories and ones the token can't see.
 	RepoUnavailable Category = "repo-unavailable"
