@@ -59,3 +59,33 @@ func TestReadManifests_Batching(t *testing.T) {
 		assert.Equal(t, batchActionFileSize, size)
 	})
 }
+
+// TestResolveAllRecursiveSeededChildKeepsWrittenSpelling: a lockfile seed
+// stores owner/repo lowercased. When a composite names that child in mixed
+// case, the child must come back under the composite's spelling so its
+// Key() finds the parent edge; otherwise the child is pruned as an orphan.
+func TestResolveAllRecursiveSeededChildKeepsWrittenSpelling(t *testing.T) {
+	r := seedCache(&Resolver{MaxRecursionDepth: DefaultMaxRecursionDepth}, map[ghapi.ActionRef]resolvedEntry{
+		ghapi.ForActionRef("owner", "composite", "", "v2"): {
+			dep:       dep.Dependency{NWO: "owner/composite", Ref: "v2", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			actionYML: "name: C\nruns:\n  using: composite\n  steps:\n    - uses: MixedCase/Child@v1\n",
+		},
+	})
+	r.SeedFromLockfile([]dep.Dependency{{Hostname: "github.com", NWO: "mixedcase/child", Ref: "v1", SHA: "cccccccccccccccccccccccccccccccccccccccc"}})
+
+	deps, parentMap, err := r.ResolveAllRecursive(context.Background(), []parserlock.ActionRef{
+		{Owner: "owner", Repo: "composite", Ref: "v2"},
+	})
+	require.NoError(t, err)
+
+	var child *dep.Dependency
+	for i := range deps {
+		if strings.EqualFold(deps[i].NWO, "mixedcase/child") {
+			child = &deps[i]
+		}
+	}
+	require.NotNil(t, child, "child missing from %+v", deps)
+	assert.Equal(t, "MixedCase/Child", child.NWO)
+	assert.Equal(t, "cccccccccccccccccccccccccccccccccccccccc", child.SHA)
+	assert.Equal(t, []string{"owner/composite@v2"}, parentMap[child.Key()])
+}
