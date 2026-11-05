@@ -34,7 +34,7 @@ func availableCredentials(t *testing.T) string {
 	t.Helper()
 	t.Setenv(DotcomTokenEnv, "ci-dotcom")
 	stubGhConfig(t, "hosts:\n  github.com:\n    oauth_token: stored-dotcom\n")
-	return fakeGh(t, "keyring-dotcom")
+	return fakeGh(t, buildFakeGh(t), "keyring-dotcom")
 }
 
 func TestDependabotContract(t *testing.T) {

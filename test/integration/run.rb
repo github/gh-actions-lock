@@ -333,7 +333,13 @@ def golden_json_diff(expected, actual, path)
       diffs.concat(golden_json_diff(expected[i], actual[i], "#{path}[#{i}]"))
     end
   else
-    if expected != actual
+    expected_value = expected
+    actual_value = actual
+    if path.end_with?(".workflow", ".path") && expected.is_a?(String) && actual.is_a?(String)
+      expected_value = expected.tr("\\", "/")
+      actual_value = actual.tr("\\", "/")
+    end
+    if expected_value != actual_value
       diffs << "#{path}: expected #{expected.inspect}, got #{actual.inspect}"
     end
   end
@@ -913,7 +919,7 @@ STUB_WIRING = {
 CUSTOM_ASSERTIONS = {
   self_repository_shared_dependency: ->(s) {
     s.assert_custom do |r|
-      binary = File.expand_path("../../gh-actions-lock", __dir__)
+      binary = File.expand_path("../../gh-actions-lock#{RbConfig::CONFIG["EXEEXT"]}", __dir__)
       stdout, stderr, status = Open3.capture3(binary, "--verify-local", chdir: r.dir)
       unless status.success?
         s.failures << "second-pass --verify-local failed (lockfile did not converge):\n#{stdout}#{stderr}"
