@@ -17,8 +17,8 @@ import (
 // Tags are checked first: when a recordable tag points at sha, it is
 // returned with an empty branch and no branch search runs. The tag is what
 // gets recorded, and the branch search can cost one compare call per branch
-// (see #267). If hintRef is one of the tags it wins; otherwise the first tag
-// (lexicographic) is picked.
+// (see #267). If hintRef is one of the tags it wins; otherwise
+// pickPreferredTag prefers the highest full semver tag.
 //
 // With no tag, a containing branch is searched for (hintRef → default →
 // protected → all). Both are empty when neither exists.
