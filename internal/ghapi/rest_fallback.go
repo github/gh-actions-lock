@@ -162,11 +162,13 @@ func (c *Client) orgPolicyFallback(ctx context.Context, owner string, err error)
 	return true
 }
 
-// repoFallbackEligible reports whether owner/repo can be read anonymously
-// after err blocked the authenticated path: a policy block or a GraphQL 401.
-// The anonymous repository read is also the eligibility test. The policy is
-// recorded here too: metadata that already answered leaves no REST denial to
-// record it.
+// repoFallbackEligible reports whether owner/repo may be readable through a
+// fallback after err blocked the authenticated path: a policy block or a
+// GraphQL 401. The repository metadata read is also the eligibility test, but
+// it answers with the token where that is allowed, so metadata success alone
+// does not prove the anonymous fallback can read the repo; the fallback's own
+// requests still have to succeed. The policy is recorded here too: metadata
+// that already answered leaves no REST denial to record it.
 func (c *Client) repoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
 	if IsProxima(c.Hostname) {
 		return false
