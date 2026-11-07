@@ -57,14 +57,6 @@ func TestBrief(t *testing.T) {
 			want: "GitHub returned 403 Forbidden: " + ipAllowListDeniedMessage("acme"),
 		},
 		{
-			name: "rate-limited IP allow list fallback names that policy, not SAML",
-			err: fmt.Errorf("fetching commit: %w", &SSORateLimitedError{
-				Host: "github.com", Owner: "acme", policy: ipAllowList,
-				Err: &api.HTTPError{StatusCode: http.StatusTooManyRequests, RequestURL: requestURL},
-			}),
-			want: ipAllowListGuidance("acme") + " (the anonymous fallback for public repositories was rate-limited)",
-		},
-		{
 			name: "GraphQL SSO guidance is unchanged",
 			err:  errors.New(ssoRequiredMessage("github.com", "acme")),
 			want: ssoRequiredMessage("github.com", "acme"),

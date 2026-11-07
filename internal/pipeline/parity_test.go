@@ -450,9 +450,6 @@ func (ipAllowListTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}, nil
 }
 
-// TestParityFinding_RateLimitedIPAllowListFallback: the block that forced a
-// rate-limited anonymous fallback decides the remedy, so an IP allow list does
-// not get SSO guidance.
 func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
 	orig := http.DefaultTransport
 	http.DefaultTransport = ipAllowListTransport{}
