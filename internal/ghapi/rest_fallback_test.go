@@ -575,6 +575,10 @@ func TestIsIPAllowListDenial(t *testing.T) {
 		{"a 404 carrying the message", &api.HTTPError{StatusCode: http.StatusNotFound, Message: message}, false},
 		{"the SAML 403 is a different policy", forbidden("Resource protected by organization SAML enforcement."), false},
 		{"a bare message with no HTTP status", errors.New(message), false},
+		{"GraphQL forbidden with IP policy", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "FORBIDDEN", Message: message, Path: []any{"a5"}}}}, true},
+		{"GraphQL forbidden without IP policy", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "FORBIDDEN", Message: "Resource not accessible by integration"}}}, false},
+		{"GraphQL message on the wrong error type", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "NOT_FOUND", Message: message}, {Type: "FORBIDDEN", Message: "ordinary denial"}}}, false},
+		{"GraphQL policy and rate limit", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "FORBIDDEN", Message: message}, {Type: "RATE_LIMITED", Message: "rate limit"}}}, false},
 		{"no error", nil, false},
 	}
 	for _, tt := range tests {

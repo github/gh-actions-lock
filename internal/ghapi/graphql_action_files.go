@@ -284,6 +284,10 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 
 	for alias, idx := range aliasMap {
 		ref := refs[idx]
+		if policyErr := ipAllowListAliasError(gqlErr, alias); policyErr != nil {
+			results[idx].Err = policyErr
+			continue
+		}
 		raw, ok := data[alias]
 		if !ok {
 			switch {

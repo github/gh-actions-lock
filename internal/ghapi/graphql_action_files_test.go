@@ -627,6 +627,37 @@ func TestSplittable(t *testing.T) {
 	}
 }
 
+func TestParsersPreserveAliasIPPolicy(t *testing.T) {
+	refs := []ActionFileRequest{{Owner: "acme", Repo: "widget"}, {Owner: "acme", Repo: "other"}}
+	pins := []PinCheck{{Owner: "acme", Repo: "widget"}, {Owner: "acme", Repo: "other"}}
+	gqlErr := &api.GraphQLError{Errors: []api.GraphQLErrorItem{
+		{Type: "FORBIDDEN", Message: ipAllowListDeniedMessage("acme"), Path: []any{"a0"}},
+		{Type: "FORBIDDEN", Message: "ordinary denial", Path: []any{"a1"}},
+	}}
+	for _, tt := range []struct {
+		name string
+		raw  json.RawMessage
+	}{{"missing repository", nil}, {"null repository", json.RawMessage("null")}} {
+		t.Run(tt.name, func(t *testing.T) {
+			data := map[string]json.RawMessage{"a1": json.RawMessage("null")}
+			if tt.raw != nil {
+				data["a0"] = tt.raw
+			}
+			actions := parseActionFileResponse(data, refs, map[string]int{"a0": 0, "a1": 1}, gqlErr, "github.com")
+			states := parsePinCheckResponse(data, pins, gqlErr, "github.com")
+			for _, err := range []error{actions[0].Err, states[0].Err} {
+				var policy *api.GraphQLError
+				require.ErrorAs(t, err, &policy)
+				require.Len(t, policy.Errors, 1)
+				assert.Equal(t, []any{"a0"}, policy.Errors[0].Path)
+				assert.True(t, isIPAllowListDenial(err))
+			}
+			assert.False(t, isIPAllowListDenial(actions[1].Err))
+			assert.False(t, isIPAllowListDenial(states[1].Err))
+		})
+	}
+}
+
 func TestResolveActionFiles_SingleRefBatchErrorSurfaced(t *testing.T) {
 	// A single-ref batch can't be split further, so a batch-level cost error
 	// must surface on the ref rather than being mislabeled "not found".

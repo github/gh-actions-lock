@@ -211,21 +211,46 @@ func organizationDenied(err error) bool {
 //	not permitted to access this resource.
 const ipAllowListDenial = "organization has an IP allow list enabled"
 
-// isIPAllowListDenial reports whether err is that 403. Only a 403 that is not
-// a rate limit and carries GitHub's message counts: a general 403, a rate
-// limit, or a bare message with no HTTP status (a per-alias GraphQL error)
-// stays an ordinary failure.
+// GitHub also reports this policy in HTTP-200 GraphQL FORBIDDEN items.
+// Require structured evidence; a bare error message is not sufficient.
 func isIPAllowListDenial(err error) bool {
-	if code, ok := StatusCode(err); !ok || code != http.StatusForbidden || IsRateLimited(err) {
+	if rateLimited(err) {
 		return false
 	}
-	return strings.Contains(err.Error(), ipAllowListDenial)
+	var gqlErr *api.GraphQLError
+	if errors.As(err, &gqlErr) {
+		for _, item := range gqlErr.Errors {
+			if item.Type == "FORBIDDEN" && strings.Contains(item.Message, ipAllowListDenial) {
+				return true
+			}
+		}
+		return false
+	}
+	code, ok := StatusCode(err)
+	return ok && code == http.StatusForbidden && strings.Contains(err.Error(), ipAllowListDenial)
+}
+
+// Keep only the matching alias's policy evidence, never the whole envelope.
+func ipAllowListAliasError(gqlErr *api.GraphQLError, alias string) error {
+	if gqlErr == nil || graphQLRateLimited(gqlErr) {
+		return nil
+	}
+	for _, item := range gqlErr.Errors {
+		if len(item.Path) == 0 || item.Path[0] != alias {
+			continue
+		}
+		scoped := &api.GraphQLError{Errors: []api.GraphQLErrorItem{item}}
+		if isIPAllowListDenial(scoped) {
+			return scoped
+		}
+	}
+	return nil
 }
 
 // IPAllowListBlocked reports whether err says this IP address is outside an
-// organization's IP allow list: GitHub's 403, or a rate-limited anonymous
-// fallback for that block. Only the 403 opens the fallback; this answers what
-// to tell the user.
+// organization's IP allow list, including a rate-limited anonymous fallback
+// for a structured policy denial. This answers what to tell the user, not
+// whether another fallback attempt is eligible.
 func IPAllowListBlocked(err error) bool {
 	if isIPAllowListDenial(err) {
 		return true
