@@ -485,6 +485,8 @@ func TestResolveActionFiles_OutageIsNotSplit(t *testing.T) {
 // A batch-wide denial must not force unrelated private refs onto anonymous REST.
 func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
 	const (
 		publicOwner  = "blocked-org"
 		publicRepo   = "widget"
@@ -494,70 +496,49 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 		privateYML   = "name: secret"
 	)
 
-	jsonStatus := func(req *http.Request, status int, body any) (*http.Response, error) {
-		resp, err := httpmock.JSONResponse(body)(req)
-		resp.StatusCode = status
-		resp.Status = fmt.Sprintf("%d %s", status, http.StatusText(status))
-		return resp, err
-	}
-
-	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if strings.EqualFold(req.Method, http.MethodPost) && req.URL.Path == "/graphql" {
-			var payload struct {
-				Variables map[string]any `json:"variables"`
-			}
-			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
-				return nil, err
-			}
-			if payload.Variables["owner1"] != nil || payload.Variables["owner0"] == publicOwner {
-				return jsonStatus(req, http.StatusForbidden, map[string]any{"message": ipAllowListDeniedMessage(publicOwner)})
-			}
-			if req.Header.Get("Authorization") == "" {
-				t.Error("private GraphQL request was sent without credentials")
-				return jsonStatus(req, http.StatusUnauthorized, nil)
-			}
-			return jsonStatus(req, http.StatusOK, map[string]any{"data": map[string]any{
-				"a0": map[string]any{
-					"nameWithOwner": privateOwner + "/" + privateRepo,
-					"object": map[string]any{
-						"oid":  parityMoved,
-						"file": map[string]any{"object": map[string]any{"text": privateYML}},
-					},
-				},
-			}})
+	publicAPI := ipAllowListAPI(publicOwner, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orgs/" + publicOwner:
+			w.WriteHeader(http.StatusOK)
+		case "/repos/" + publicOwner + "/" + publicRepo:
+			writeJSON(w, map[string]any{"full_name": publicOwner + "/" + publicRepo})
+		case "/repos/" + publicOwner + "/" + publicRepo + "/commits/v1":
+			writeJSON(w, map[string]any{"sha": paritySHA})
+		case "/repos/" + publicOwner + "/" + publicRepo + "/contents/action.yml":
+			fmt.Fprint(w, publicYML)
+		default:
+			t.Errorf("unexpected anonymous request: %s", r.URL.Path)
+			http.NotFound(w, r)
 		}
-
-		if req.URL.Path == "/orgs/"+publicOwner {
-			return jsonStatus(req, http.StatusOK, nil)
-		}
-		anonymous := req.Header.Get("Authorization") == ""
-		if strings.HasPrefix(req.URL.Path, "/repos/"+privateOwner+"/") {
-			if anonymous {
-				t.Error("private REST request was sent without credentials")
-				return jsonStatus(req, http.StatusNotFound, nil)
-			}
-			return jsonStatus(req, http.StatusOK, map[string]any{"full_name": privateOwner + "/" + privateRepo})
-		}
-		if anonymous {
-			switch req.URL.Path {
-			case "/repos/" + publicOwner + "/" + publicRepo:
-				return jsonStatus(req, http.StatusOK, map[string]any{"full_name": publicOwner + "/" + publicRepo})
-			case "/repos/" + publicOwner + "/" + publicRepo + "/commits/v1":
-				return jsonStatus(req, http.StatusOK, map[string]any{"sha": paritySHA})
-			case "/repos/" + publicOwner + "/" + publicRepo + "/contents/action.yml":
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(publicYML)), Request: req}, nil
-			}
-		}
-		if req.URL.Path == "/repos/"+publicOwner+"/"+publicRepo {
-			return jsonStatus(req, http.StatusForbidden, map[string]any{"message": ipAllowListDeniedMessage(publicOwner)})
-		}
-		return nil, fmt.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
 	})
+	reg.RegisterReusable(httpmock.GraphQLForRepo(publicOwner, publicRepo), publicAPI)
+	reg.Register(httpmock.GraphQLForRepo(privateOwner, privateRepo), func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") == "" {
+			t.Error("private GraphQL request was sent without credentials")
+			return httpmock.StatusResponse(http.StatusUnauthorized)(req)
+		}
+		return httpmock.JSONResponse(map[string]any{"data": map[string]any{
+			"a0": map[string]any{
+				"nameWithOwner": privateOwner + "/" + privateRepo,
+				"object": map[string]any{
+					"oid":  parityMoved,
+					"file": map[string]any{"object": map[string]any{"text": privateYML}},
+				},
+			},
+		}})(req)
+	})
+	reg.RegisterReusable(httpmock.REST("GET", "^/repos/"+privateOwner+"/"+privateRepo+"$"),
+		httpmock.JSONResponse(map[string]any{"full_name": privateOwner + "/" + privateRepo}))
+	reg.RegisterReusable(anyRequest, publicAPI)
 
-	c, err := New("github.com", WithClientTransport(tr))
-	require.NoError(t, err)
-	c.anonHTTP = &http.Client{Transport: tr}
-
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(req.URL.Path, "/repos/"+privateOwner+"/") {
+			t.Error("private REST request was sent without credentials")
+			return httpmock.StatusResponse(http.StatusNotFound)(req)
+		}
+		return reg.RoundTrip(req)
+	})}
 	results := c.ResolveActionFiles(context.Background(), []ActionFileRequest{
 		{Owner: publicOwner, Repo: publicRepo, Ref: "v1"},
 		{Owner: privateOwner, Repo: privateRepo, Ref: "v1"},
@@ -565,11 +546,9 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.Equal(t, publicRepo, results[0].Repo)
 	assert.Equal(t, privateRepo, results[1].Repo, "input order survives the split")
-
 	assert.NoError(t, results[0].Err)
 	assert.Equal(t, paritySHA, results[0].CommitOID)
 	assert.Equal(t, publicYML, results[0].ActionYML)
-
 	assert.NoError(t, results[1].Err)
 	assert.Equal(t, parityMoved, results[1].CommitOID)
 	assert.Equal(t, privateYML, results[1].ActionYML)

@@ -3,8 +3,6 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +16,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
@@ -427,35 +426,22 @@ func TestDropSuperseded(t *testing.T) {
 	}
 }
 
-// ipAllowListTransport serves a token an organization IP allow list refuses,
-// and rate-limits every anonymous request.
-type ipAllowListTransport struct{}
-
-func (ipAllowListTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	status := http.StatusForbidden
-	body := `{"message":"Although you appear to have the correct authorization credentials, the ` + "`krzema12`" +
-		` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."}`
-	if req.Header.Get("Authorization") == "" {
-		status, body = http.StatusOK, ""
-		if req.Method != http.MethodHead {
-			status = http.StatusTooManyRequests
-		}
-	}
-	return &http.Response{
-		StatusCode: status,
-		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
-		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Request:    req,
-	}, nil
-}
-
 func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(func(req *http.Request) bool { return req.Header.Get("Authorization") != "" },
+		func(req *http.Request) (*http.Response, error) {
+			resp, err := httpmock.JSONResponse(map[string]string{"message": "Although you appear to have the correct authorization credentials, the `krzema12` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."})(req)
+			resp.StatusCode, resp.Status = http.StatusForbidden, "403 Forbidden"
+			return resp, err
+		})
+	reg.RegisterReusable(httpmock.REST("HEAD", "^/orgs/krzema12$"), httpmock.StatusResponse(http.StatusOK))
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/v2\.2\.2$`), httpmock.StatusResponse(http.StatusTooManyRequests))
 	orig := http.DefaultTransport
-	http.DefaultTransport = ipAllowListTransport{}
+	http.DefaultTransport = reg
 	t.Cleanup(func() { http.DefaultTransport = orig })
 
-	c, err := ghapi.New("github.com", ghapi.WithClientTransport(ipAllowListTransport{}))
+	c, err := ghapi.New("github.com", ghapi.WithClientTransport(reg))
 	require.NoError(t, err)
 	_, err = c.CommitSHA(context.Background(), "krzema12", "github-actions-typing", "v2.2.2")
 	var rateLimited *ghapi.SSORateLimitedError
