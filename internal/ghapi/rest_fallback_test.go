@@ -7,9 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSSOFallbackEligible(t *testing.T) {
@@ -508,4 +514,229 @@ func TestCompareRefs_SSOFallback(t *testing.T) {
 	if status != "ahead" || base != "aaa" {
 		t.Fatalf("got status=%q base=%q", status, base)
 	}
+}
+
+// resetAnonFallbackState clears the per-owner state the anonymous fallback
+// keeps across calls.
+func resetAnonFallbackState() {
+	anonProbeCache = sync.Map{}
+	anonRateLimited = sync.Map{}
+	anonBlockedBy = sync.Map{}
+}
+
+// ipAllowListDeniedMessage is the 403 message GitHub returns when the
+// request's IP address is outside an organization's IP allow list.
+func ipAllowListDeniedMessage(owner string) string {
+	return "Although you appear to have the correct authorization credentials, the `" + owner + "` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."
+}
+
+// ipAllowListHTTPError is that 403 from the REST path.
+func ipAllowListHTTPError(owner string) *api.HTTPError {
+	return &api.HTTPError{
+		StatusCode: http.StatusForbidden,
+		Message:    ipAllowListDeniedMessage(owner),
+		RequestURL: &url.URL{Scheme: "https", Host: "api.github.com", Path: "/repos/" + owner + "/widget"},
+	}
+}
+
+// anyRequest matches every request.
+func anyRequest(*http.Request) bool { return true }
+
+// ipAllowListAPI answers token-bearing requests with the organization IP
+// allow list 403 and hands anonymous ones to anon.
+func ipAllowListAPI(owner string, anon http.HandlerFunc) httpmock.Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") == "" {
+			rec := httptest.NewRecorder()
+			anon(rec, req)
+			return rec.Result(), nil
+		}
+		resp, err := httpmock.JSONResponse(map[string]any{"message": ipAllowListDeniedMessage(owner)})(req)
+		resp.StatusCode = http.StatusForbidden
+		resp.Status = "403 Forbidden"
+		return resp, err
+	}
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// TestIsIPAllowListDenial: only the explicit 403, and only a non-rate-limited
+// one, is the eligibility signal.
+func TestIsIPAllowListDenial(t *testing.T) {
+	message := ipAllowListDeniedMessage("acme")
+	forbidden := func(msg string) *api.HTTPError {
+		return &api.HTTPError{StatusCode: http.StatusForbidden, Message: msg}
+	}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"the organization IP allow list 403", ipAllowListHTTPError("acme"), true},
+		{"wrapped in the request that failed", fmt.Errorf("fetching acme/widget: %w", ipAllowListHTTPError("acme")), true},
+		{"a general 403", forbidden("Resource not accessible by integration"), false},
+		{"a 403 rate limit carrying the message", &api.HTTPError{StatusCode: http.StatusForbidden, Message: message, Headers: http.Header{"X-Ratelimit-Remaining": {"0"}}}, false},
+		{"a secondary rate limit carrying the message", &api.HTTPError{StatusCode: http.StatusForbidden, Message: message, Headers: http.Header{"Retry-After": {"60"}}}, false},
+		{"a 429 carrying the message", &api.HTTPError{StatusCode: http.StatusTooManyRequests, Message: message}, false},
+		{"a 404 carrying the message", &api.HTTPError{StatusCode: http.StatusNotFound, Message: message}, false},
+		{"the SAML 403 is a different policy", forbidden("Resource protected by organization SAML enforcement."), false},
+		{"a bare message with no HTTP status", errors.New(message), false},
+		{"no error", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isIPAllowListDenial(tt.err))
+		})
+	}
+}
+
+func TestIPAllowListBlocked(t *testing.T) {
+	rateLimited := func(policy organizationPolicy) error {
+		return fmt.Errorf("anonymous branch reachability: all compare calls failed: %w", &SSORateLimitedError{
+			Host: "github.com", Owner: "acme", policy: policy,
+			Err: &api.HTTPError{StatusCode: http.StatusTooManyRequests},
+		})
+	}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"the 403", ipAllowListHTTPError("acme"), true},
+		{"a rate-limited fallback for the 403", rateLimited(ipAllowList), true},
+		{"a rate-limited SAML fallback", rateLimited(samlEnforcement), false},
+		{"a rate-limited fallback that recorded no policy", rateLimited(noOrganizationPolicy), false},
+		{"a plain rate limit", &api.HTTPError{StatusCode: http.StatusTooManyRequests}, false},
+		{"an ordinary 403", &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource not accessible by integration"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IPAllowListBlocked(tt.err))
+		})
+	}
+}
+
+func TestOrganizationPolicyOf(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want organizationPolicy
+	}{
+		{"SAML REST 403", &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource protected by organization SAML enforcement."}, samlEnforcement},
+		{"SAML GraphQL message with no status", errors.New(ssoRequiredMessage("github.com", "acme")), samlEnforcement},
+		{"IP allow list 403", ipAllowListHTTPError("acme"), ipAllowList},
+		{"IP allow list message with no status", errors.New(ipAllowListDeniedMessage("acme")), noOrganizationPolicy},
+		{"an ordinary 403", &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource not accessible by integration"}, noOrganizationPolicy},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := organizationPolicyOf(tt.err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, got != noOrganizationPolicy, organizationDenied(tt.err))
+		})
+	}
+}
+
+// TestResolveActionFiles_IPAllowListFallback: a public action in an
+// organization whose IP allow list refuses the token still resolves through
+// anonymous REST reads.
+func TestResolveActionFiles_IPAllowListFallback(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	var anonReads int
+	anon := func(w http.ResponseWriter, r *http.Request) {
+		anonReads++
+		assert.Empty(t, r.Header.Get("Authorization"), "the fallback sent the token")
+		switch r.URL.Path {
+		case "/orgs/actions":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/actions/checkout":
+			writeJSON(w, map[string]any{"full_name": "actions/checkout"})
+		case "/repos/actions/checkout/commits/v4":
+			writeJSON(w, map[string]any{"sha": paritySHA})
+		case "/repos/actions/checkout/contents/action.yml":
+			fmt.Fprint(w, "name: checkout")
+		default:
+			http.NotFound(w, r)
+		}
+	}
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("actions", anon))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	results := c.ResolveActionFiles(context.Background(), []ActionFileRequest{
+		{Owner: "actions", Repo: "checkout", Ref: "v4"},
+	})
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+	assert.Equal(t, paritySHA, results[0].CommitOID)
+	assert.Equal(t, "name: checkout", results[0].ActionYML)
+	assert.Positive(t, anonReads, "the fallback never ran")
+}
+
+// TestSSOFallback_IPAllowListRateLimitedGuidance: a rate-limited fallback names
+// the organization IP allow list, not SAML.
+func TestSSOFallback_IPAllowListRateLimitedGuidance(t *testing.T) {
+	rateLimited := func(w http.ResponseWriter) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+	}
+	tests := []struct {
+		name string
+		anon func(w http.ResponseWriter, r *http.Request)
+	}{
+		{"probe rate-limited", func(w http.ResponseWriter, r *http.Request) {
+			rateLimited(w)
+		}},
+		{"anonymous request rate-limited", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAnonFallbackState()
+			srv := httptest.NewServer(http.HandlerFunc(tt.anon))
+			defer srv.Close()
+			blocked := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				resp, _ := jsonHTTP(map[string]any{"message": ipAllowListDeniedMessage("acme")})
+				resp.StatusCode = http.StatusForbidden
+				resp.Request = req
+				return resp, nil
+			})
+			c, err := New("github.com", WithClientTransport(blocked))
+			require.NoError(t, err)
+			c.anonBaseURL = srv.URL
+			c.anonHTTP = srv.Client()
+
+			_, err = c.CommitSHA(context.Background(), "acme", "widget", "v1")
+			var rl *SSORateLimitedError
+			require.ErrorAs(t, err, &rl)
+			assert.Equal(t, ipAllowList, rl.policy)
+			assert.Equal(t, ipAllowListGuidance("acme")+" (the anonymous fallback for public repositories was rate-limited)", rl.Error())
+			for _, unwanted := range []string{"SAML", "SSO authorization required", "/orgs/acme/sso"} {
+				assert.NotContains(t, rl.Error(), unwanted)
+			}
+		})
+	}
+}
+
+// TestOrganizationPolicyFallback_Proxima: a *.ghe.com tenant never falls back
+// to public github.com reads, whatever the block.
+func TestOrganizationPolicyFallback_Proxima(t *testing.T) {
+	resetAnonFallbackState()
+	c := &Client{Hostname: "acme.ghe.com"}
+	ctx := context.Background()
+
+	assert.False(t, c.SSOFallbackEligible(ctx, "acme"))
+	assert.False(t, c.orgPolicyFallback(ctx, "acme", ipAllowListHTTPError("acme")))
+	assert.False(t, c.repoFallbackEligible(ctx, "acme", "widget", ipAllowListHTTPError("acme")))
 }

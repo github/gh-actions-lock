@@ -227,7 +227,7 @@ func (c *Client) restGet(ctx context.Context, owner, path string, dest any) (boo
 		err = c.anonGet(ctx, path, dest)
 	} else {
 		err = c.rest.DoWithContext(ctx, http.MethodGet, path, nil, dest)
-		if err != nil && IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+		if err != nil && c.orgPolicyFallback(ctx, owner, err) {
 			err = c.anonGet(ctx, path, dest)
 		}
 	}

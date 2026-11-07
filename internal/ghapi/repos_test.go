@@ -358,3 +358,57 @@ func TestCompareRefs_SkipsChangedFiles(t *testing.T) {
 	assert.Equal(t, "ahead", status)
 	assert.Equal(t, "old", base)
 }
+
+// TestCompareCommits_IPAllowListFallback: a public repository whose
+// organization IP allow list refuses the token is still compared anonymously.
+func TestCompareCommits_IPAllowListFallback(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	var anonReads int
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		anonReads++
+		assert.Empty(t, r.Header.Get("Authorization"), "the fallback sent the token")
+		switch r.URL.Path {
+		case "/orgs/acme":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widget/compare/" + paritySHA + "..." + parityMoved:
+			writeJSON(w, httpmock.CompareAncestorResponse(paritySHA))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	contains, err := c.CompareCommits(context.Background(), "acme", "widget", paritySHA, parityMoved)
+	require.NoError(t, err)
+	assert.True(t, contains)
+	assert.Positive(t, anonReads, "the fallback never ran")
+}
+
+// TestCompareCommits_IPAllowListFallbackFailsClosed: an anonymous comparison
+// that answers nothing is an error, not an ancestry verdict.
+func TestCompareCommits_IPAllowListFallbackFailsClosed(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/orgs/acme" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	contains, err := c.CompareCommits(context.Background(), "acme", "widget", paritySHA, parityMoved)
+	require.Error(t, err)
+	assert.False(t, contains)
+	code, ok := StatusCode(err)
+	require.True(t, ok, "want the anonymous HTTP failure, got %v", err)
+	assert.Equal(t, http.StatusNotFound, code)
+}

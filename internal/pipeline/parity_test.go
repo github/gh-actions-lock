@@ -1,7 +1,10 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -144,6 +147,12 @@ func TestParityFinding(t *testing.T) {
 		{
 			name: "a definitive error is not retryable", ref: "v2", state: ghapi.PinState{Err: errors.New("Resource not accessible by integration")}, want: checks.RepoUnavailable,
 			wantRemedy: "use a token that can read krzema12/github-actions-typing or authorize SSO for krzema12, then re-run",
+		},
+		{
+			name: "an IP allow list refusal points at the network, not SSO", ref: "v2",
+			state:      ghapi.PinState{Err: &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Although you appear to have the correct authorization credentials, the `krzema12` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."}},
+			want:       checks.RepoUnavailable,
+			wantRemedy: "use a token from an IP address the krzema12 organization's IP allow list permits, then re-run",
 		},
 	}
 	for _, tt := range tests {
@@ -416,4 +425,57 @@ func TestDropSuperseded(t *testing.T) {
 			assert.Equal(t, tt.wantKept, got)
 		})
 	}
+}
+
+// ipAllowListTransport serves a token an organization IP allow list refuses,
+// and rate-limits every anonymous request.
+type ipAllowListTransport struct{}
+
+func (ipAllowListTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	status := http.StatusForbidden
+	body := `{"message":"Although you appear to have the correct authorization credentials, the ` + "`krzema12`" +
+		` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."}`
+	if req.Header.Get("Authorization") == "" {
+		status, body = http.StatusOK, ""
+		if req.Method != http.MethodHead {
+			status = http.StatusTooManyRequests
+		}
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+// TestParityFinding_RateLimitedIPAllowListFallback: the block that forced a
+// rate-limited anonymous fallback decides the remedy, so an IP allow list does
+// not get SSO guidance.
+func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
+	orig := http.DefaultTransport
+	http.DefaultTransport = ipAllowListTransport{}
+	t.Cleanup(func() { http.DefaultTransport = orig })
+
+	c, err := ghapi.New("github.com", ghapi.WithClientTransport(ipAllowListTransport{}))
+	require.NoError(t, err)
+	_, err = c.CommitSHA(context.Background(), "krzema12", "github-actions-typing", "v2.2.2")
+	var rateLimited *ghapi.SSORateLimitedError
+	require.ErrorAs(t, err, &rateLimited, "want a rate-limited fallback error, got %v", err)
+
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lp := lockfile.LockedPin{
+		Pin:    parserlock.Pin{NWO: "krzema12/github-actions-typing", Owner: "krzema12", Repo: "github-actions-typing", Ref: "v2.2.2"},
+		Action: parserlock.Action{Ref: "v2.2.2", Commit: "sha1-" + sha, OwnerID: 1, RepoID: 2},
+	}
+	ref := parserlock.ActionRef{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, Ref: lp.Pin.Ref}
+	f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp,
+		ghapi.PinCheck{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, SHA: sha, Head: "v2.2.2"},
+		ghapi.PinState{Err: err})
+	require.True(t, ok)
+	assert.Equal(t, checks.RepoUnavailable, f.Category)
+	assert.False(t, f.Retryable)
+	assert.Contains(t, f.Detail, "IP allow list")
+	assert.Equal(t, "use a token from an IP address the krzema12 organization's IP allow list permits, then re-run", f.Remediation)
 }

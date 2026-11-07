@@ -476,3 +476,149 @@ func TestCheckPins_Batching(t *testing.T) {
 		assert.Equal(t, 1, workers)
 	})
 }
+
+// TestCheckPins_IPAllowListFallback: an organization IP allow list refuses the
+// token, so the lock's repos, IDs, commits, and refs are verified over
+// anonymous REST reads of the public repository.
+func TestCheckPins_IPAllowListFallback(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	var probes, anonReads int
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		anonReads++
+		assert.Empty(t, r.Header.Get("Authorization"), "the fallback sent the token")
+		switch r.URL.Path {
+		case "/orgs/acme":
+			probes++
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widget":
+			writeJSON(w, map[string]any{"full_name": "acme/widget", "id": 7, "owner": map[string]any{"id": 6}})
+		case "/repos/acme/old":
+			writeJSON(w, map[string]any{"full_name": "acme/renamed", "id": 9, "owner": map[string]any{"id": 8}})
+		case "/repos/acme/widget/git/ref/tags/v1.0.0":
+			writeJSON(w, httpmock.GitRefResponse("refs/tags/v1.0.0", paritySHA))
+		case "/repos/acme/widget/commits/" + parityMoved:
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/old/commits/" + paritySHA:
+			writeJSON(w, map[string]any{"sha": paritySHA})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	states := c.CheckPins(context.Background(), []PinCheck{
+		{Owner: "acme", Repo: "widget", SHA: paritySHA, Head: "v1.0.0"},
+		{Owner: "acme", Repo: "widget", SHA: parityMoved},
+		{Owner: "acme", Repo: "old", SHA: paritySHA},
+	})
+	require.Len(t, states, 3)
+
+	graphqlCalls := 0
+	for _, req := range reg.Requests {
+		if strings.HasSuffix(req.URL.Path, "/graphql") {
+			graphqlCalls++
+		}
+	}
+	assert.Equal(t, 1, graphqlCalls, "the refused batch is not retried per pin")
+	assert.Equal(t, 1, probes, "one accessibility probe per owner")
+	assert.Positive(t, anonReads, "the fallback never ran")
+
+	assert.Equal(t, PinState{NameWithOwner: "acme/widget", OwnerID: 6, RepoID: 7, CommitFound: true, HeadOID: paritySHA, HeadIsTag: true}, states[0])
+	assert.Equal(t, PinState{NameWithOwner: "acme/widget", OwnerID: 6, RepoID: 7}, states[1], "a missing commit is a verdict, not an error")
+	assert.Equal(t, PinState{NameWithOwner: "acme/renamed", OwnerID: 8, RepoID: 9, CommitFound: true}, states[2], "the canonical name is reported")
+}
+
+// TestCheckPins_IPAllowListFallbackFailsClosed: an organization visible
+// anonymously does not make every repository in it readable, so an
+// unreachable one stays an error rather than a verdict.
+func TestCheckPins_IPAllowListFallbackFailsClosed(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	var probes int
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/orgs/acme" {
+			probes++
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	states := c.CheckPins(context.Background(), []PinCheck{
+		{Owner: "acme", Repo: "private", SHA: paritySHA},
+	})
+	require.Len(t, states, 1)
+	assert.Equal(t, 1, probes, "the probe ran and the repository read anonymously failed")
+	code, ok := StatusCode(states[0].Err)
+	require.True(t, ok, "want the policy refusal, got %v", states[0].Err)
+	assert.Equal(t, http.StatusForbidden, code)
+	assert.False(t, states[0].RepoMissing, "an unreadable repository is not a verdict")
+	assert.False(t, states[0].CommitFound)
+	assert.Empty(t, states[0].NameWithOwner)
+}
+
+// TestCheckPins_NoFallbackForOrdinaryForbidden: only an organization policy
+// block opens the anonymous fallback.
+func TestCheckPins_NoFallbackForOrdinaryForbidden(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), func(req *http.Request) (*http.Response, error) {
+		resp, err := httpmock.JSONResponse(map[string]any{"message": "Resource not accessible by integration"})(req)
+		resp.StatusCode = http.StatusForbidden
+		resp.Status = "403 Forbidden"
+		return resp, err
+	})
+	reg.RegisterReusable(anyRequest, unexpectedAnonRequest(t))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	states := c.CheckPins(context.Background(), []PinCheck{
+		{Owner: "acme", Repo: "widget", SHA: paritySHA},
+	})
+	require.Len(t, states, 1)
+	code, ok := StatusCode(states[0].Err)
+	require.True(t, ok, "want the 403, got %v", states[0].Err)
+	assert.Equal(t, http.StatusForbidden, code)
+}
+
+// TestCheckPins_NoFallbackForStatuslessIPAllowListError: a per-alias GraphQL
+// error carries no HTTP status, so its message alone is not a policy block.
+func TestCheckPins_NoFallbackForStatuslessIPAllowListError(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.JSONResponse(map[string]any{
+		"data":   map[string]any{"a0": nil},
+		"errors": []map[string]any{{"message": ipAllowListDeniedMessage("acme"), "path": []any{"a0"}}},
+	}))
+	reg.RegisterReusable(anyRequest, unexpectedAnonRequest(t))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	states := c.CheckPins(context.Background(), []PinCheck{
+		{Owner: "acme", Repo: "widget", SHA: paritySHA},
+	})
+	require.Len(t, states, 1)
+	require.Error(t, states[0].Err)
+	_, ok := StatusCode(states[0].Err)
+	assert.False(t, ok, "a per-alias error has no HTTP status")
+	assert.False(t, states[0].RepoMissing)
+}
+
+// unexpectedAnonRequest fails the test if anything reads anonymously.
+func unexpectedAnonRequest(t *testing.T) httpmock.Responder {
+	t.Helper()
+	return func(req *http.Request) (*http.Response, error) {
+		t.Errorf("unexpected anonymous request: %s %s", req.Method, req.URL.Path)
+		return nil, fmt.Errorf("unexpected anonymous request")
+	}
+}
