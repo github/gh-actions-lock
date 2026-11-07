@@ -194,6 +194,10 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 	states := make([]PinState, len(pins))
 	for alias, i := range aliasMap {
 		p := pins[i]
+		if policyErr := ipAllowListAliasError(gqlErr, alias); policyErr != nil {
+			states[i].Err = policyErr
+			continue
+		}
 		raw, ok := data[alias]
 		switch {
 		case samlOwners[p.Owner] && (!ok || string(raw) == "null"):

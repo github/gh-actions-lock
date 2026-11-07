@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -513,6 +514,49 @@ func TestCheckPins_IPAllowListFallback(t *testing.T) {
 	assert.False(t, states[1].CommitFound, "a missing commit is a verdict, not an error")
 }
 
+func TestCheckPins_GraphQLIPAllowListFallback(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.GraphQL(`commit: object\(oid`), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{
+			"a0": nil,
+			"a1": map[string]any{"nameWithOwner": "acme/private", "commit": map[string]any{"oid": parityMoved}},
+		},
+		"errors": []api.GraphQLErrorItem{{Type: "FORBIDDEN", Message: ipAllowListDeniedMessage("acme"), Path: []any{"a0"}}},
+	}))
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orgs/acme":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widget":
+			writeJSON(w, map[string]any{"full_name": "acme/widget", "id": 7, "owner": map[string]any{"id": 6}})
+		case "/repos/acme/widget/git/ref/tags/v1":
+			writeJSON(w, httpmock.GitRefResponse("refs/tags/v1", paritySHA))
+		default:
+			t.Errorf("unexpected anonymous read: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+	states := c.CheckPins(context.Background(), []PinCheck{
+		{Owner: "acme", Repo: "widget", SHA: paritySHA, Head: "v1"},
+		{Owner: "acme", Repo: "private", SHA: parityMoved},
+	})
+	require.Len(t, states, 2)
+	require.NoError(t, states[0].Err)
+	assert.Equal(t, "acme/widget", states[0].NameWithOwner)
+	assert.Equal(t, int64(7), states[0].RepoID)
+	assert.Equal(t, int64(6), states[0].OwnerID)
+	assert.True(t, states[0].CommitFound)
+	assert.Equal(t, paritySHA, states[0].HeadOID)
+	require.NoError(t, states[1].Err)
+	assert.Equal(t, "acme/private", states[1].NameWithOwner)
+	assert.True(t, states[1].CommitFound)
+	assert.NotEmpty(t, reg.Requests[0].Header.Get("Authorization"))
+}
+
 // A publicly visible organization does not make every repository readable.
 func TestCheckPins_IPAllowListFallbackFailsClosed(t *testing.T) {
 	resetAnonFallbackState()
@@ -551,7 +595,7 @@ func TestCheckPins_NoFallbackForOtherDenials(t *testing.T) {
 		hasStatus bool
 	}{
 		{"ordinary forbidden", httpmock.StatusResponse(http.StatusForbidden), true},
-		{"statusless IP allow list", httpmock.JSONResponse(map[string]any{
+		{"untyped IP-like GraphQL message", httpmock.JSONResponse(map[string]any{
 			"data":   map[string]any{"a0": nil},
 			"errors": []map[string]any{{"message": ipAllowListDeniedMessage("acme"), "path": []any{"a0"}}},
 		}), false},
