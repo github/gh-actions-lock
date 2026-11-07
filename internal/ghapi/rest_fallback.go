@@ -23,61 +23,27 @@ var anonProbeCache sync.Map // map[string]bool
 // because the unauthenticated rate limit was exhausted.
 var anonRateLimited sync.Map // map[string]struct{}
 
-// anonBlockedBy records, per owner, the organization policy that forced the
-// anonymous fallback, so a rate-limited fallback can name the policy that
-// blocked the token rather than assume SAML.
-var anonBlockedBy sync.Map // map[string]organizationPolicy
-
-// blockedPolicy returns the organization policy anonBlockedBy recorded for the
-// owner key, or noOrganizationPolicy.
-func blockedPolicy(key string) organizationPolicy {
-	if p, ok := anonBlockedBy.Load(key); ok {
-		return p.(organizationPolicy)
-	}
-	return noOrganizationPolicy
-}
-
-// organizationPolicy is an organization policy that answers an authenticated
-// request with a 403 while the repository stays publicly readable.
-type organizationPolicy int
-
-const (
-	noOrganizationPolicy organizationPolicy = iota
-	samlEnforcement
-	ipAllowList
-)
+// anonIPBlocked remembers the denial behind a fallback's later rate limit.
+var anonIPBlocked sync.Map // map[string]bool
 
 // SSORateLimitedError reports a token blocked by an organization policy whose
 // anonymous fallback was rate-limited. The message names that policy so
 // callers render the matching fix.
 type SSORateLimitedError struct {
 	Host, Owner string
-	// policy is the block that forced the anonymous fallback;
-	// noOrganizationPolicy when none was recorded, which keeps the SAML
-	// guidance.
-	policy organizationPolicy
-	Err    error
+	Err         error
+	ipPolicy    bool
 }
 
 func (e *SSORateLimitedError) Error() string {
-	return policyGuidance(e.Host, e.Owner, e.policy) + " (the anonymous fallback for public repositories was rate-limited)"
+	message := ssoRequiredMessage(e.Host, e.Owner)
+	if e.ipPolicy {
+		message = fmt.Sprintf("GitHub refused the token for the %q organization: this IP address is not on the organization's IP allow list. Retry from an allowed IP address, or add this one to the allow list", e.Owner)
+	}
+	return message + " (the anonymous fallback for public repositories was rate-limited)"
 }
 
 func (e *SSORateLimitedError) Unwrap() error { return e.Err }
-
-// policyGuidance words the fix for an organization policy block.
-func policyGuidance(hostname, owner string, policy organizationPolicy) string {
-	if policy == ipAllowList {
-		return ipAllowListGuidance(owner)
-	}
-	return ssoRequiredMessage(hostname, owner)
-}
-
-// ipAllowListGuidance tells the user how to unblock a token an organization's
-// IP allow list refused: authorizing it for SSO does not help.
-func ipAllowListGuidance(owner string) string {
-	return fmt.Sprintf("GitHub refused the token for the %q organization: this IP address is not on the organization's IP allow list. Retry from an allowed IP address, or add this one to the allow list", owner)
-}
 
 // SSOFallbackEligible reports whether the given owner's repos can be
 // accessed anonymously when an organization policy (SAML enforcement or an IP
@@ -138,77 +104,46 @@ func isRateLimited(resp *http.Response) bool {
 // ssoErr upgrades an organization policy block to SSORateLimitedError when
 // the anonymous fallback for owner was skipped because of a rate limit.
 func (c *Client) ssoErr(owner string, err error) error {
-	policy := organizationPolicyOf(err)
-	if _, limited := anonRateLimited.Load(c.anonBase() + "/" + owner); !limited || policy == noOrganizationPolicy {
-		return err
+	if _, limited := anonRateLimited.Load(c.anonBase() + "/" + owner); limited && organizationDenied(err) {
+		return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: err, ipPolicy: isIPAllowListDenial(err)}
 	}
-	return &SSORateLimitedError{Host: c.Hostname, Owner: owner, policy: policy, Err: err}
+	return err
 }
 
-// recordPolicy notes which policy blocked the token for owner, so a fallback
-// that is then rate-limited names the right one.
-func (c *Client) recordPolicy(owner string, policy organizationPolicy) {
-	anonBlockedBy.Store(c.anonBase()+"/"+owner, policy)
+func (c *Client) recordPolicy(owner string, err error) {
+	anonIPBlocked.Store(c.anonBase()+"/"+owner, isIPAllowListDenial(err))
 }
 
-// orgPolicyFallback reports whether err is an organization policy block whose
-// owner's public repositories are anonymously readable.
 func (c *Client) orgPolicyFallback(ctx context.Context, owner string, err error) bool {
-	policy := organizationPolicyOf(err)
-	if policy == noOrganizationPolicy || !c.SSOFallbackEligible(ctx, owner) {
+	if !organizationDenied(err) || !c.SSOFallbackEligible(ctx, owner) {
 		return false
 	}
-	c.recordPolicy(owner, policy)
+	c.recordPolicy(owner, err)
 	return true
 }
 
-// repoFallbackEligible reports whether owner/repo may be readable through a
-// fallback after err blocked the authenticated path: a policy block or a
-// GraphQL 401. The repository metadata read is also the eligibility test, but
-// it answers with the token where that is allowed, so metadata success alone
-// does not prove the anonymous fallback can read the repo; the fallback's own
-// requests still have to succeed. The policy is recorded here too: metadata
-// that already answered leaves no REST denial to record it.
+// Metadata may succeed authenticated; the fallback's own reads must still succeed.
+// Record the policy even when metadata is cached and supplies no REST denial.
 func (c *Client) repoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
 	if IsProxima(c.Hostname) {
 		return false
 	}
-	policy := organizationPolicyOf(err)
-	if policy == noOrganizationPolicy {
+	if !organizationDenied(err) {
 		if code, _ := StatusCode(err); code != http.StatusUnauthorized {
 			return false
 		}
 	} else {
-		c.recordPolicy(owner, policy)
+		c.recordPolicy(owner, err)
 	}
 	_, metaErr := c.repoMetadata(ctx, owner, repo)
 	return metaErr == nil
 }
 
-// organizationPolicyOf names the organization policy err reports, or
-// noOrganizationPolicy for anything else.
-func organizationPolicyOf(err error) organizationPolicy {
-	switch {
-	case IsSAMLEnforcement(err):
-		return samlEnforcement
-	case isIPAllowListDenial(err):
-		return ipAllowList
-	}
-	return noOrganizationPolicy
-}
-
-// organizationDenied reports whether err is an organization policy block
-// rather than an ordinary permission failure.
 func organizationDenied(err error) bool {
-	return organizationPolicyOf(err) != noOrganizationPolicy
+	return IsSAMLEnforcement(err) || isIPAllowListDenial(err)
 }
 
-// ipAllowListDenial is the clause GitHub's 403 carries when the request's IP
-// address is outside an organization's IP allow list:
-//
-//	Although you appear to have the correct authorization credentials, the
-//	`ORG` organization has an IP allow list enabled, and your IP address is
-//	not permitted to access this resource.
+// GitHub interpolates the organization name before this stable denial clause.
 const ipAllowListDenial = "organization has an IP allow list enabled"
 
 // GitHub also reports this policy in HTTP-200 GraphQL FORBIDDEN items.
@@ -247,16 +182,14 @@ func ipAllowListAliasError(gqlErr *api.GraphQLError, alias string) error {
 	return nil
 }
 
-// IPAllowListBlocked reports whether err says this IP address is outside an
-// organization's IP allow list, including a rate-limited anonymous fallback
-// for a structured policy denial. This answers what to tell the user, not
-// whether another fallback attempt is eligible.
+// IPAllowListBlocked includes rate-limited fallbacks caused by an IP denial,
+// unlike isIPAllowListDenial which determines retry eligibility.
 func IPAllowListBlocked(err error) bool {
 	if isIPAllowListDenial(err) {
 		return true
 	}
 	var rateLimited *SSORateLimitedError
-	return errors.As(err, &rateLimited) && rateLimited.policy == ipAllowList
+	return errors.As(err, &rateLimited) && rateLimited.ipPolicy
 }
 
 // IsSAMLEnforcement reports whether err represents a SAML/SSO enforcement
@@ -331,7 +264,9 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 		herr := &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
 		if isRateLimited(resp) && !c.restOnly && ownerKey != "" {
 			anonRateLimited.Store(ownerKey, struct{}{})
-			return &SSORateLimitedError{Host: c.Hostname, Owner: parts[1], policy: blockedPolicy(ownerKey), Err: herr}
+			blocked, _ := anonIPBlocked.Load(ownerKey)
+			ipPolicy, _ := blocked.(bool)
+			return &SSORateLimitedError{Host: c.Hostname, Owner: parts[1], Err: herr, ipPolicy: ipPolicy}
 		}
 		return c.publicErr(herr)
 	}

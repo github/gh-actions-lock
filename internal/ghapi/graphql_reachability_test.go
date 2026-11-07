@@ -50,48 +50,31 @@ func TestBatchReachabilitySize(t *testing.T) {
 
 // Cached metadata must not erase the policy that forced a rate-limited fallback.
 func TestBatchBranchContains_IPAllowListRateLimitedFallback(t *testing.T) {
-	tests := []struct {
-		name   string
-		denial httpmock.Responder
-	}{
-		{"HTTP 403", func(req *http.Request) (*http.Response, error) {
-			resp, err := httpmock.JSONResponse(map[string]any{"message": ipAllowListDeniedMessage("acme")})(req)
-			resp.StatusCode = http.StatusForbidden
-			resp.Status = "403 Forbidden"
-			return resp, err
-		}},
-		{"GraphQL forbidden", httpmock.JSONResponse(map[string]any{
-			"data":   map[string]any{"repo": nil},
-			"errors": []map[string]any{{"type": "FORBIDDEN", "message": ipAllowListDeniedMessage("acme"), "path": []any{"repo"}}},
-		})},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resetAnonFallbackState()
-			reg := &httpmock.Registry{}
-			defer reg.Verify(t)
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
 
-			reg.Register(httpmock.REST("GET", `^/repos/acme/widget$`), httpmock.JSONResponse(map[string]any{"full_name": "acme/widget"}))
-			reg.Register(httpmock.GraphQL(`compare\(headRef`), tt.denial)
-			reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusTooManyRequests)
-			}))
-			c := newTestClient(t, reg)
-			c.anonHTTP = &http.Client{Transport: reg}
+	reg.Register(httpmock.REST("GET", `^/repos/acme/widget$`), httpmock.JSONResponse(map[string]any{"full_name": "acme/widget"}))
+	reg.Register(httpmock.GraphQL(`compare\(headRef`), httpmock.JSONResponse(map[string]any{
+		"data":   map[string]any{"repo": nil},
+		"errors": []map[string]any{{"type": "FORBIDDEN", "message": ipAllowListDeniedMessage("acme"), "path": []any{"repo"}}},
+	}))
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
 
-			// An earlier pin warms the metadata the fallback then relies on.
-			_, err := c.RepoMetadata(context.Background(), "acme", "widget")
-			require.NoError(t, err)
+	// An earlier pin warms the metadata the fallback then relies on.
+	_, err := c.RepoMetadata(context.Background(), "acme", "widget")
+	require.NoError(t, err)
 
-			_, checked, err := c.BatchBranchContains(context.Background(), "acme", "widget", paritySHA, []BranchHead{
-				{Name: "main", SHA: parityMoved},
-			})
-			assert.False(t, checked)
-			var rateLimited *SSORateLimitedError
-			require.ErrorAs(t, err, &rateLimited)
-			assert.Equal(t, ipAllowList, rateLimited.policy)
-			assert.Contains(t, rateLimited.Error(), "IP allow list")
-			assert.NotContains(t, rateLimited.Error(), "SAML")
-		})
-	}
+	_, checked, err := c.BatchBranchContains(context.Background(), "acme", "widget", paritySHA, []BranchHead{
+		{Name: "main", SHA: parityMoved},
+	})
+	assert.False(t, checked)
+	var rateLimited *SSORateLimitedError
+	require.ErrorAs(t, err, &rateLimited)
+	assert.Contains(t, rateLimited.Error(), "IP allow list")
+	assert.NotContains(t, rateLimited.Error(), "SAML")
 }

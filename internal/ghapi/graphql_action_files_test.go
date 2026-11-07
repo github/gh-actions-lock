@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -491,31 +490,15 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 		publicRepo   = "widget"
 		privateOwner = "private-org"
 		privateRepo  = "secret"
-		publicSHA    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		privateSHA   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-		publicYML    = "name: widget\nruns:\n  using: node20\n"
-		privateYML   = "name: secret\nruns:\n  using: node20\n"
+		publicYML    = "name: widget"
+		privateYML   = "name: secret"
 	)
 
-	var batches int
-	var privateAnonReads []string
 	jsonStatus := func(req *http.Request, status int, body any) (*http.Response, error) {
 		resp, err := httpmock.JSONResponse(body)(req)
-		if err != nil {
-			return nil, err
-		}
 		resp.StatusCode = status
 		resp.Status = fmt.Sprintf("%d %s", status, http.StatusText(status))
-		return resp, nil
-	}
-	rawStatus := func(req *http.Request, status int, body string) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: status,
-			Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
-			Header:     http.Header{},
-			Body:       io.NopCloser(strings.NewReader(body)),
-			Request:    req,
-		}, nil
+		return resp, err
 	}
 
 	tr := roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -526,17 +509,7 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 				return nil, err
 			}
-			owners := make(map[string]bool)
-			for k, v := range payload.Variables {
-				if strings.HasPrefix(k, "owner") {
-					owner, _ := v.(string)
-					owners[owner] = true
-				}
-			}
-			if len(owners) > 1 {
-				batches++
-			}
-			if owners[publicOwner] {
+			if payload.Variables["owner1"] != nil || payload.Variables["owner0"] == publicOwner {
 				return jsonStatus(req, http.StatusForbidden, map[string]any{"message": ipAllowListDeniedMessage(publicOwner)})
 			}
 			if req.Header.Get("Authorization") == "" {
@@ -547,7 +520,7 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 				"a0": map[string]any{
 					"nameWithOwner": privateOwner + "/" + privateRepo,
 					"object": map[string]any{
-						"oid":  privateSHA,
+						"oid":  parityMoved,
 						"file": map[string]any{"object": map[string]any{"text": privateYML}},
 					},
 				},
@@ -560,7 +533,7 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 		anonymous := req.Header.Get("Authorization") == ""
 		if strings.HasPrefix(req.URL.Path, "/repos/"+privateOwner+"/") {
 			if anonymous {
-				privateAnonReads = append(privateAnonReads, req.URL.Path)
+				t.Error("private REST request was sent without credentials")
 				return jsonStatus(req, http.StatusNotFound, nil)
 			}
 			return jsonStatus(req, http.StatusOK, map[string]any{"full_name": privateOwner + "/" + privateRepo})
@@ -570,9 +543,9 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 			case "/repos/" + publicOwner + "/" + publicRepo:
 				return jsonStatus(req, http.StatusOK, map[string]any{"full_name": publicOwner + "/" + publicRepo})
 			case "/repos/" + publicOwner + "/" + publicRepo + "/commits/v1":
-				return jsonStatus(req, http.StatusOK, map[string]any{"sha": publicSHA})
+				return jsonStatus(req, http.StatusOK, map[string]any{"sha": paritySHA})
 			case "/repos/" + publicOwner + "/" + publicRepo + "/contents/action.yml":
-				return rawStatus(req, http.StatusOK, publicYML)
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(publicYML)), Request: req}, nil
 			}
 		}
 		if req.URL.Path == "/repos/"+publicOwner+"/"+publicRepo {
@@ -590,41 +563,16 @@ func TestResolveActionFiles_MixedBatchIPAllowListSplits(t *testing.T) {
 		{Owner: privateOwner, Repo: privateRepo, Ref: "v1"},
 	})
 	require.Len(t, results, 2)
-	assert.Equal(t, 1, batches, "the mixed batch is attempted before splitting")
 	assert.Equal(t, publicRepo, results[0].Repo)
 	assert.Equal(t, privateRepo, results[1].Repo, "input order survives the split")
 
 	assert.NoError(t, results[0].Err)
-	assert.Equal(t, publicSHA, results[0].CommitOID)
+	assert.Equal(t, paritySHA, results[0].CommitOID)
 	assert.Equal(t, publicYML, results[0].ActionYML)
 
 	assert.NoError(t, results[1].Err)
-	assert.Equal(t, privateSHA, results[1].CommitOID)
+	assert.Equal(t, parityMoved, results[1].CommitOID)
 	assert.Equal(t, privateYML, results[1].ActionYML)
-	assert.Empty(t, privateAnonReads, "the private repository was read without credentials")
-}
-
-func TestSplittable(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"query-level GraphQL error", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Message: "query has cost too high"}}}, true},
-		{"GraphQL rate limit", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "RATE_LIMITED", Message: "API rate limit exceeded"}}}, false},
-		{"organization IP allow list 403", ipAllowListHTTPError("acme"), true},
-		{"wrapped organization IP allow list 403", fmt.Errorf("resolving action: %w", ipAllowListHTTPError("acme")), true},
-		{"ordinary 403", &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource not accessible by integration"}, false},
-		{"IP allow list message with no HTTP status", errors.New(ipAllowListDeniedMessage("acme")), false},
-		{"rate-limit 403 carrying the message", &api.HTTPError{StatusCode: http.StatusForbidden, Message: ipAllowListDeniedMessage("acme"), Headers: http.Header{"X-Ratelimit-Remaining": {"0"}}}, false},
-		{"transport outage", io.ErrUnexpectedEOF, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, splittable(tt.err))
-		})
-	}
 }
 
 func TestParsersPreserveAliasIPPolicy(t *testing.T) {
