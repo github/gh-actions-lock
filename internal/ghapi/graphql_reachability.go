@@ -67,7 +67,7 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 			if c.repoFallbackEligible(ctx, owner, repo, gqlErr) {
 				return c.anonBatchBranchContains(ctx, owner, repo, sha, branches)
 			}
-			return "", false, gqlErr
+			return "", false, c.ssoErr(owner, gqlErr)
 		}
 		if data == nil {
 			return "", false, gqlErr
