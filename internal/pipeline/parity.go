@@ -705,6 +705,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		// GitHub answered, but not with the pin: a re-run won't change that.
 		f.Category = checks.RepoUnavailable
 		f.Remediation = fmt.Sprintf("use a token that can read %s or authorize SSO for %s, then re-run", nwo, pc.Owner)
+		if ghapi.IPAllowListBlocked(st.Err) {
+			// Authorizing the token for SSO doesn't lift an IP allow list.
+			f.Remediation = fmt.Sprintf("use a token from an IP address the %s organization's IP allow list permits, then re-run", pc.Owner)
+		}
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable
 		f.Detail = fmt.Sprintf("%s is missing or not visible to this token%s", nwo, via)

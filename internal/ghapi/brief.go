@@ -24,7 +24,7 @@ func Brief(err error) string {
 	if code, ok := StatusCode(err); ok {
 		msg := fmt.Sprintf("GitHub returned %d %s", code, http.StatusText(code))
 		var httpErr *api.HTTPError
-		if IsSAMLEnforcement(err) && errors.As(err, &httpErr) {
+		if organizationDenied(err) && errors.As(err, &httpErr) {
 			msg += ": " + httpErr.Message
 		}
 		return msg

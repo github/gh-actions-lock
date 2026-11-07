@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
@@ -144,6 +146,12 @@ func TestParityFinding(t *testing.T) {
 		{
 			name: "a definitive error is not retryable", ref: "v2", state: ghapi.PinState{Err: errors.New("Resource not accessible by integration")}, want: checks.RepoUnavailable,
 			wantRemedy: "use a token that can read krzema12/github-actions-typing or authorize SSO for krzema12, then re-run",
+		},
+		{
+			name: "an IP allow list refusal points at the network, not SSO", ref: "v2",
+			state:      ghapi.PinState{Err: &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Although you appear to have the correct authorization credentials, the `krzema12` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."}},
+			want:       checks.RepoUnavailable,
+			wantRemedy: "use a token from an IP address the krzema12 organization's IP allow list permits, then re-run",
 		},
 	}
 	for _, tt := range tests {
@@ -416,4 +424,41 @@ func TestDropSuperseded(t *testing.T) {
 			assert.Equal(t, tt.wantKept, got)
 		})
 	}
+}
+
+func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(func(req *http.Request) bool { return req.Header.Get("Authorization") != "" },
+		func(req *http.Request) (*http.Response, error) {
+			resp, err := httpmock.JSONResponse(map[string]string{"message": "Although you appear to have the correct authorization credentials, the `krzema12` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."})(req)
+			resp.StatusCode, resp.Status = http.StatusForbidden, "403 Forbidden"
+			return resp, err
+		})
+	reg.RegisterReusable(httpmock.REST("HEAD", "^/orgs/krzema12$"), httpmock.StatusResponse(http.StatusOK))
+	reg.Register(httpmock.REST("GET", `^/repos/krzema12/github-actions-typing/commits/v2\.2\.2$`), httpmock.StatusResponse(http.StatusTooManyRequests))
+	orig := http.DefaultTransport
+	http.DefaultTransport = reg
+	t.Cleanup(func() { http.DefaultTransport = orig })
+
+	c, err := ghapi.New("github.com", ghapi.WithClientTransport(reg))
+	require.NoError(t, err)
+	_, err = c.CommitSHA(context.Background(), "krzema12", "github-actions-typing", "v2.2.2")
+	var rateLimited *ghapi.SSORateLimitedError
+	require.ErrorAs(t, err, &rateLimited, "want a rate-limited fallback error, got %v", err)
+
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lp := lockfile.LockedPin{
+		Pin:    parserlock.Pin{NWO: "krzema12/github-actions-typing", Owner: "krzema12", Repo: "github-actions-typing", Ref: "v2.2.2"},
+		Action: parserlock.Action{Ref: "v2.2.2", Commit: "sha1-" + sha, OwnerID: 1, RepoID: 2},
+	}
+	ref := parserlock.ActionRef{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, Ref: lp.Pin.Ref}
+	f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp,
+		ghapi.PinCheck{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, SHA: sha, Head: "v2.2.2"},
+		ghapi.PinState{Err: err})
+	require.True(t, ok)
+	assert.Equal(t, checks.RepoUnavailable, f.Category)
+	assert.False(t, f.Retryable)
+	assert.Contains(t, f.Detail, "IP allow list")
+	assert.Equal(t, "use a token from an IP address the krzema12 organization's IP allow list permits, then re-run", f.Remediation)
 }

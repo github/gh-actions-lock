@@ -51,7 +51,7 @@ func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoReleas
 		Immutable   bool   `json:"immutable"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &releases); err != nil {
-		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+		if c.orgPolicyFallback(ctx, owner, err) {
 			if anonErr := c.anonGet(ctx, path, &releases); anonErr != nil {
 				return nil, fmt.Errorf("anonymous fallback fetching releases for %s/%s: %w", owner, repo, anonErr)
 			}
@@ -104,7 +104,7 @@ func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string
 		SHA string `json:"sha"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
-		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+		if c.orgPolicyFallback(ctx, owner, err) {
 			if anonErr := c.anonGet(ctx, path, &result); anonErr != nil {
 				return "", fmt.Errorf("anonymous fallback resolving %s/%s@%s: %w", owner, repo, ref, anonErr)
 			}

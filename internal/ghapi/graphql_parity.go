@@ -117,8 +117,13 @@ func (c *Client) checkPinBatch(ctx context.Context, pins []PinCheck) []PinState 
 	states, batchErr := c.checkPinsOnce(ctx, pins)
 	if !splittable(batchErr) || len(pins) == 1 || ctx.Err() != nil {
 		for i, s := range states {
-			if s.Err != nil && ctx.Err() == nil && c.repoFallbackEligible(ctx, pins[i].Owner, pins[i].Repo, s.Err) {
+			if s.Err == nil || ctx.Err() != nil {
+				continue
+			}
+			if c.repoFallbackEligible(ctx, pins[i].Owner, pins[i].Repo, s.Err) {
 				states[i] = c.checkPinREST(ctx, pins[i])
+			} else {
+				states[i].Err = c.ssoErr(pins[i].Owner, s.Err)
 			}
 		}
 		return states
@@ -194,6 +199,10 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 	states := make([]PinState, len(pins))
 	for alias, i := range aliasMap {
 		p := pins[i]
+		if policyErr := ipAllowListAliasError(gqlErr, alias); policyErr != nil {
+			states[i].Err = policyErr
+			continue
+		}
 		raw, ok := data[alias]
 		switch {
 		case samlOwners[p.Owner] && (!ok || string(raw) == "null"):
