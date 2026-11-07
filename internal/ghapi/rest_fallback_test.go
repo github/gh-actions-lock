@@ -570,19 +570,69 @@ func TestIsIPAllowListDenial(t *testing.T) {
 	}
 }
 
-func TestIPAllowListProbeRateLimitedGuidance(t *testing.T) {
-	resetAnonFallbackState()
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	c := newTestClient(t, reg)
-	c.anonHTTP = &http.Client{Transport: reg}
+func TestIPAllowListRateLimitedGuidance(t *testing.T) {
+	ctx := context.Background()
+	pins := func(c *Client) error {
+		return c.CheckPins(ctx, []PinCheck{{Owner: "acme", Repo: "widget", SHA: paritySHA}})[0].Err
+	}
+	ancestry := func(c *Client) error {
+		_, _, err := c.BatchBranchContains(ctx, "acme", "widget", paritySHA, []BranchHead{{Name: "main", SHA: parityMoved}})
+		return err
+	}
+	action := func(c *Client) error {
+		return c.ResolveActionFiles(ctx, []ActionFileRequest{{Owner: "acme", Repo: "widget", Ref: "v1"}})[0].Err
+	}
+	tests := []struct {
+		name, limitedPath  string
+		check              func(*Client) error
+		wantRateLimitCause bool
+	}{
+		{"REST commit probe", "/orgs/acme", func(c *Client) error {
+			_, err := c.CommitSHA(ctx, "acme", "widget", "v1")
+			return err
+		}, false},
+		{"pin probe", "/orgs/acme", pins, false},
+		{"pin metadata", "/repos/acme/widget", pins, false},
+		{"ancestry probe", "/orgs/acme", ancestry, false},
+		{"ancestry metadata", "/repos/acme/widget", ancestry, false},
+		{"action commit", "/repos/acme/widget/commits/v1", action, true},
+		{"action contents", "/repos/acme/widget/contents/action.yml", action, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAnonFallbackState()
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == tt.limitedPath {
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				switch r.URL.Path {
+				case "/orgs/acme":
+					w.WriteHeader(http.StatusOK)
+				case "/repos/acme/widget":
+					writeJSON(w, map[string]any{"full_name": "acme/widget"})
+				case "/repos/acme/widget/commits/v1":
+					writeJSON(w, map[string]any{"sha": paritySHA})
+				default:
+					t.Errorf("unexpected anonymous request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			c := newTestClient(t, reg)
+			c.anonHTTP = &http.Client{Transport: reg}
 
-	_, err := c.CommitSHA(context.Background(), "acme", "widget", "v1")
-	var limited *SSORateLimitedError
-	require.ErrorAs(t, err, &limited)
-	assert.Contains(t, err.Error(), "IP allow list")
-	assert.NotContains(t, err.Error(), "SSO")
+			err := tt.check(c)
+			var limited *SSORateLimitedError
+			require.ErrorAs(t, err, &limited)
+			assert.True(t, IPAllowListBlocked(err))
+			assert.Contains(t, Brief(err), "IP allow list")
+			assert.Contains(t, Brief(err), "anonymous fallback for public repositories was rate-limited")
+			assert.NotContains(t, Brief(err), "SSO")
+			if tt.wantRateLimitCause {
+				assert.True(t, IsRateLimited(err), "the anonymous rate-limit cause must survive")
+			}
+		})
+	}
 }

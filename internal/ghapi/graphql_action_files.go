@@ -144,6 +144,9 @@ func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileReques
 			continue
 		}
 		results[i] = c.resolveAnonymous(ctx, refs[i])
+		if rateLimited(results[i].Err) && organizationDenied(r.Err) {
+			results[i].Err = &SSORateLimitedError{Host: c.Hostname, Owner: refs[i].Owner, Err: results[i].Err, ipPolicy: isIPAllowListDenial(r.Err)}
+		}
 	}
 	return results
 }
