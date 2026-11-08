@@ -563,7 +563,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// succeeded, so machine consumers never see findings for a run that
 	// then failed to write. The run log keeps the pre-fix diagnosis.
 	if opts.jsonFields != "" {
-		fixed := postFixReport(report)
+		fixed := postFixReport(report, record)
 		return format.WriteJSON(out, fixed, record, fixed.IsValid(), opts.jsonFields, cliVersion(), store.File().Version, r.Hostname())
 	}
 
@@ -573,21 +573,60 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 // postFixReport is report as a committed write left it. A run commits only
 // when it can fix every error it found (see runHasBlockingErrors), so no error
-// stands afterwards; warnings and info findings remain.
-func postFixReport(report *checks.Report) *checks.Report {
-	unfixed := func(ff []checks.Finding) []checks.Finding {
+// stands afterwards; warnings and info findings remain, except a sha-as-ref
+// for a bare-SHA `uses:` the commit replaced with a symbolic ref: that line
+// no longer exists.
+func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
+	rewrites := map[string]map[string]string{}
+	if record != nil {
+		for _, wp := range record.Workflows {
+			rewrites[wp.Path] = wp.Rewrites
+		}
+	}
+	committed := map[string]map[string]bool{}
+	unfixed := func(path string, ff []checks.Finding) []checks.Finding {
 		return slices.DeleteFunc(slices.Clone(ff), func(f checks.Finding) bool {
-			return f.Severity == checks.SeverityError
+			if f.Severity == checks.SeverityError {
+				return true
+			}
+			if f.Category != checks.ShaAsRef || f.ActionRef == nil {
+				return false
+			}
+			use := f.ActionRef.FullName() + "@" + f.ActionRef.Ref
+			target, ok := workflowfile.LookupRewrite(use, rewrites[path])
+			if !ok || parserlock.IsFullSha(target[strings.LastIndex(target, "@")+1:]) {
+				return false
+			}
+			if _, scanned := committed[path]; !scanned {
+				committed[path] = committedUses(path)
+			}
+			return committed[path] != nil && !committed[path][use]
 		})
 	}
 	out := *report
-	out.RepoFindings = unfixed(report.RepoFindings)
+	out.RepoFindings = unfixed("", report.RepoFindings)
 	out.Workflows = make([]checks.WorkflowReport, len(report.Workflows))
 	for i, wr := range report.Workflows {
-		wr.Findings = unfixed(wr.Findings)
+		wr.Findings = unfixed(wr.Path, wr.Findings)
 		out.Workflows[i] = wr
 	}
 	return &out
+}
+
+// committedUses reads the `uses:` values the workflow has after Commit. A
+// planned rewrite alone doesn't prove the old value is gone: RewriteActionRefs
+// skips anchored and aliased scalars. nil means the file couldn't be read, and
+// the caller keeps every warning.
+func committedUses(path string) map[string]bool {
+	wf, err := workflowfile.Load(path)
+	if err != nil {
+		return nil
+	}
+	uses := map[string]bool{}
+	for _, ref := range wf.ExtractActionRefs().Refs {
+		uses[ref.FullName()+"@"+ref.Ref] = true
+	}
+	return uses
 }
 
 // injectVersionRefFindings appends info-severity findings for entries pinned

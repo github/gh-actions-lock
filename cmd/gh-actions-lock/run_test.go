@@ -14,6 +14,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1006,7 +1007,7 @@ func TestPostFixReport(t *testing.T) {
 	}
 	require.False(t, report.IsValid())
 
-	got := postFixReport(report)
+	got := postFixReport(report, nil)
 
 	assert.True(t, got.IsValid())
 	var cats []checks.Category
@@ -1018,6 +1019,78 @@ func TestPostFixReport(t *testing.T) {
 	assert.Equal(t, checks.StaleWorkflow, got.RepoFindings[0].Category)
 	assert.Len(t, report.Workflows[0].Findings, 3, "the run log keeps the pre-fix report")
 	assert.Len(t, report.RepoFindings, 2)
+}
+
+// TestPostFixReport_DropsShaAsRefTheCommitReplaced: the committed workflow is
+// what decides. Rewritten to a tag (full name and sub-path key) drops the
+// warning; a planned rewrite the writer skipped (anchored scalar), a rename
+// that keeps the SHA, and an untouched bare SHA all keep it.
+func TestPostFixReport_DropsShaAsRefTheCommitReplaced(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	const other = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	committed := fmt.Sprintf(`
+name: ci
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/cache/restore@v4.3.0
+      - uses: &pinned octo/anchored@%[1]s
+      - uses: *pinned
+      - uses: new/action@%[1]s
+      - uses: octo/kept@%[2]s
+`, sha, other)
+	require.NoError(t, os.WriteFile(path, []byte(committed), 0o600))
+
+	shaAsRef := func(owner, repo, subpath, ref string) checks.Finding {
+		return checks.Finding{
+			WorkflowPath: path,
+			Category:     checks.ShaAsRef,
+			Severity:     checks.SeverityWarning,
+			ActionRef:    &parserlock.ActionRef{Owner: owner, Repo: repo, Path: subpath, Ref: ref},
+		}
+	}
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: path,
+			Findings: []checks.Finding{
+				shaAsRef("actions", "checkout", "", sha),
+				shaAsRef("actions", "cache", "restore", sha),
+				shaAsRef("octo", "anchored", "", sha),
+				shaAsRef("old", "action", "", sha),
+				shaAsRef("octo", "kept", "", other),
+			},
+		}},
+	}
+	record := &pin.Record{Workflows: []pin.WorkflowPlan{{
+		Path: path,
+		Rewrites: map[string]string{
+			"actions/checkout@" + sha: "actions/checkout@v7.0.1",
+			"actions/cache@" + sha:    "actions/cache@v4.3.0",
+			"octo/anchored@" + sha:    "octo/anchored@v1.0.0",
+			"old/action@" + sha:       "new/action@" + sha,
+		},
+	}}}
+
+	got := postFixReport(report, record)
+
+	var kept []string
+	for _, f := range got.Workflows[0].Findings {
+		kept = append(kept, f.ActionRef.FullName())
+	}
+	assert.Equal(t, []string{"octo/anchored", "old/action", "octo/kept"}, kept)
+	assert.Len(t, report.Workflows[0].Findings, 5, "the run log keeps the pre-fix report")
+
+	unchanged := postFixReport(report, &pin.Record{})
+	assert.Len(t, unchanged.Workflows[0].Findings, 5, "--no-narrow writes nothing, so every warning stands")
+
+	report.Workflows[0].Path = filepath.Join(t.TempDir(), "missing.yml")
+	record.Workflows[0].Path = report.Workflows[0].Path
+	unreadable := postFixReport(report, record)
+	assert.Len(t, unreadable.Workflows[0].Findings, 5, "a workflow that can't be re-read keeps every warning")
 }
 
 func TestRun_FixJSONReportsPostFixState(t *testing.T) {
