@@ -574,7 +574,8 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 // postFixReport is report as a committed write left it. A run commits only
 // when it can fix every error it found (see runHasBlockingErrors), so no error
 // stands afterwards; warnings and info findings remain, except a sha-as-ref
-// for a `uses:` the commit rewrote to a tag: that line no longer exists.
+// for a bare-SHA `uses:` the commit replaced with a symbolic ref: that line
+// no longer exists.
 func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
 	rewrites := map[string]map[string]string{}
 	if record != nil {
@@ -582,6 +583,7 @@ func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
 			rewrites[wp.Path] = wp.Rewrites
 		}
 	}
+	committed := map[string]map[string]bool{}
 	unfixed := func(path string, ff []checks.Finding) []checks.Finding {
 		return slices.DeleteFunc(slices.Clone(ff), func(f checks.Finding) bool {
 			if f.Severity == checks.SeverityError {
@@ -590,8 +592,15 @@ func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
 			if f.Category != checks.ShaAsRef || f.ActionRef == nil {
 				return false
 			}
-			_, rewritten := workflowfile.LookupRewrite(f.ActionRef.FullName()+"@"+f.ActionRef.Ref, rewrites[path])
-			return rewritten
+			use := f.ActionRef.FullName() + "@" + f.ActionRef.Ref
+			target, ok := workflowfile.LookupRewrite(use, rewrites[path])
+			if !ok || parserlock.IsFullSha(target[strings.LastIndex(target, "@")+1:]) {
+				return false
+			}
+			if _, scanned := committed[path]; !scanned {
+				committed[path] = committedUses(path)
+			}
+			return committed[path] != nil && !committed[path][use]
 		})
 	}
 	out := *report
@@ -602,6 +611,22 @@ func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
 		out.Workflows[i] = wr
 	}
 	return &out
+}
+
+// committedUses reads the `uses:` values the workflow has after Commit. A
+// planned rewrite alone doesn't prove the old value is gone: RewriteActionRefs
+// skips anchored and aliased scalars. nil means the file couldn't be read, and
+// the caller keeps every warning.
+func committedUses(path string) map[string]bool {
+	wf, err := workflowfile.Load(path)
+	if err != nil {
+		return nil
+	}
+	uses := map[string]bool{}
+	for _, ref := range wf.ExtractActionRefs().Refs {
+		uses[ref.FullName()+"@"+ref.Ref] = true
+	}
+	return uses
 }
 
 // injectVersionRefFindings appends info-severity findings for entries pinned
