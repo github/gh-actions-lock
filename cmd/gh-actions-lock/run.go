@@ -563,7 +563,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// succeeded, so machine consumers never see findings for a run that
 	// then failed to write. The run log keeps the pre-fix diagnosis.
 	if opts.jsonFields != "" {
-		fixed := postFixReport(report)
+		fixed := postFixReport(report, record)
 		return format.WriteJSON(out, fixed, record, fixed.IsValid(), opts.jsonFields, cliVersion(), store.File().Version, r.Hostname())
 	}
 
@@ -573,18 +573,32 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 // postFixReport is report as a committed write left it. A run commits only
 // when it can fix every error it found (see runHasBlockingErrors), so no error
-// stands afterwards; warnings and info findings remain.
-func postFixReport(report *checks.Report) *checks.Report {
-	unfixed := func(ff []checks.Finding) []checks.Finding {
+// stands afterwards; warnings and info findings remain, except a sha-as-ref
+// for a `uses:` the commit rewrote to a tag: that line no longer exists.
+func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
+	rewrites := map[string]map[string]string{}
+	if record != nil {
+		for _, wp := range record.Workflows {
+			rewrites[wp.Path] = wp.Rewrites
+		}
+	}
+	unfixed := func(path string, ff []checks.Finding) []checks.Finding {
 		return slices.DeleteFunc(slices.Clone(ff), func(f checks.Finding) bool {
-			return f.Severity == checks.SeverityError
+			if f.Severity == checks.SeverityError {
+				return true
+			}
+			if f.Category != checks.ShaAsRef || f.ActionRef == nil {
+				return false
+			}
+			_, rewritten := workflowfile.LookupRewrite(f.ActionRef.FullName()+"@"+f.ActionRef.Ref, rewrites[path])
+			return rewritten
 		})
 	}
 	out := *report
-	out.RepoFindings = unfixed(report.RepoFindings)
+	out.RepoFindings = unfixed("", report.RepoFindings)
 	out.Workflows = make([]checks.WorkflowReport, len(report.Workflows))
 	for i, wr := range report.Workflows {
-		wr.Findings = unfixed(wr.Findings)
+		wr.Findings = unfixed(wr.Path, wr.Findings)
 		out.Workflows[i] = wr
 	}
 	return &out

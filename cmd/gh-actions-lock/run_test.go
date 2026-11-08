@@ -14,6 +14,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1006,7 +1007,7 @@ func TestPostFixReport(t *testing.T) {
 	}
 	require.False(t, report.IsValid())
 
-	got := postFixReport(report)
+	got := postFixReport(report, nil)
 
 	assert.True(t, got.IsValid())
 	var cats []checks.Category
@@ -1018,6 +1019,45 @@ func TestPostFixReport(t *testing.T) {
 	assert.Equal(t, checks.StaleWorkflow, got.RepoFindings[0].Category)
 	assert.Len(t, report.Workflows[0].Findings, 3, "the run log keeps the pre-fix report")
 	assert.Len(t, report.RepoFindings, 2)
+}
+
+func TestPostFixReport_DropsShaAsRefTheCommitRewrote(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	const other = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	shaAsRef := func(owner, repo, path, ref string) checks.Finding {
+		return checks.Finding{
+			WorkflowPath: ".github/workflows/ci.yml",
+			Category:     checks.ShaAsRef,
+			Severity:     checks.SeverityWarning,
+			ActionRef:    &parserlock.ActionRef{Owner: owner, Repo: repo, Path: path, Ref: ref},
+		}
+	}
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{
+				shaAsRef("actions", "checkout", "", sha),
+				shaAsRef("actions", "cache", "restore", sha),
+				shaAsRef("octo", "kept", "", other),
+			},
+		}},
+	}
+	record := &pin.Record{Workflows: []pin.WorkflowPlan{{
+		Path: ".github/workflows/ci.yml",
+		Rewrites: map[string]string{
+			"actions/checkout@" + sha: "actions/checkout@v7.0.1",
+			"actions/cache@" + sha:    "actions/cache@v4.3.0",
+		},
+	}}}
+
+	got := postFixReport(report, record)
+
+	require.Len(t, got.Workflows[0].Findings, 1, "rewritten bare-SHA uses lose their sha-as-ref, by full and sub-path key")
+	assert.Equal(t, "octo/kept", got.Workflows[0].Findings[0].ActionRef.FullName(), "a bare SHA the commit left alone keeps its warning")
+	assert.Len(t, report.Workflows[0].Findings, 3, "the run log keeps the pre-fix report")
+
+	unchanged := postFixReport(report, &pin.Record{})
+	assert.Len(t, unchanged.Workflows[0].Findings, 3, "--no-narrow writes nothing, so every warning stands")
 }
 
 func TestRun_FixJSONReportsPostFixState(t *testing.T) {
