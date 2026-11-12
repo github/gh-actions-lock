@@ -27,7 +27,7 @@ gh extension install github/gh-actions-lock
 ```
 
 Run every command from the repository checkout. The host comes from `--hostname`, then `GH_HOST`,
-then the repository remote, then github.com.
+then `GH_REPO` or the repository remote, then github.com.
 
 ## Modes
 
@@ -39,7 +39,7 @@ then the repository remote, then github.com.
 | `gh actions-lock --verify-local` | no | no | pre-commit: every `uses:` has a lockfile entry |
 | `gh actions-lock --no-fix` | no | yes | read-only report |
 
-`--verify-local` only checks coverage, not that entries are trustworthy. Use `--verify` in CI.
+`--verify-local` only checks coverage, not that entries are trustworthy.
 `--verify` and `--verify-local` are mutually exclusive, and `--verify-local` cannot be combined
 with `--relock` or `--accept-moved`.
 
@@ -58,8 +58,6 @@ git add .github/workflows/
   resolves refs the lockfile doesn't record yet.
 - Partial versions (`v4`) are narrowed to the highest matching full tag (`v4.2.1`) when first
   pinned. `--no-narrow` keeps them as written.
-- Writes are all or nothing. If any error remains that the run can't fix, it changes nothing,
-  not even for workflows that are otherwise fine.
 - Commit `actions.lock` together with any workflow edits the run made.
 
 **Local `./…` actions.** The CLI never follows, locks or rewrites a workspace path. When a local
@@ -103,7 +101,7 @@ gh actions-lock --verify --json 2>/dev/null
 
 JSON goes to stdout and progress to stderr; parse only stdout. `--json` alone selects
 `valid,findings,workflows`. Pass a list to choose from `valid`, `findings`, `workflows`,
-`dependencies`, and `pins`. Each finding has:
+`dependencies`, and `pins`. Finding fields:
 
 ```
 workflow, category, severity ("error" | "warning" | "info"), confidence,
@@ -135,9 +133,9 @@ category name alone.
 
 Copy [`.github/workflows/verify-lockfile.yml`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/verify-lockfile.yml)
 into the repository, then run `gh actions-lock` once so the new workflow is locked too. It runs
-`gh actions-lock --verify` on pull requests, pushes to `main`, and a weekly schedule that catches
-re-pointed tags. The job's `GITHUB_TOKEN` reads public actions and the repository itself; actions
-from other private or internal repositories need a token that can read them.
+`gh actions-lock --verify` on pull requests and pushes to `main`. The job's `GITHUB_TOKEN` reads
+public actions and the repository itself; actions from other private or internal repositories
+need a token that can read them.
 
 ## Limits
 
@@ -149,8 +147,8 @@ from other private or internal repositories need a token that can read them.
 
 ## Learn more
 
-`gh actions-lock --help` is authoritative for flags. Failed runs print the path of a saved run
-log; attach it to bug reports. Start from these, plus each finding's `doc_url`:
+`gh actions-lock --help` is authoritative for flags. Attach saved run logs to bug reports.
+Start from these, plus each finding's `doc_url`:
 
 - [Workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)
 - [Lock workflow dependencies](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies)
