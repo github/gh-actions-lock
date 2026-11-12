@@ -36,9 +36,9 @@ When in doubt, fewer words. If a comment reads like marketing or a victory lap, 
 
 ### Where does a test belong?
 
-There are two test layers with different guarantees. Put a test in the
+Put a test in the
 cheapest layer that can actually prove the thing, and don't restate the same
-claim in both.
+claim across layers.
 
 - **Go unit** (`internal/**/*_test.go`) — internal logic: traversal, ref
   classification, error types, dedup. Fast, hermetic, no token. This is the
