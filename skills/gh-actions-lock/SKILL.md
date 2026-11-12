@@ -101,7 +101,7 @@ gh actions-lock --verify --json 2>/dev/null
 
 JSON goes to stdout and progress to stderr; parse only stdout. `--json` alone selects
 `valid,findings,workflows`. Pass a list to choose from `valid`, `findings`, `workflows`,
-`dependencies`, and `pins`. Each finding has:
+`dependencies`, and `pins`. Finding fields:
 
 ```
 workflow, category, severity ("error" | "warning" | "info"), confidence,
