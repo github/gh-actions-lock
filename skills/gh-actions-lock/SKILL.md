@@ -133,9 +133,9 @@ category name alone.
 
 Copy [`.github/workflows/verify-lockfile.yml`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/verify-lockfile.yml)
 into the repository, then run `gh actions-lock` once so the new workflow is locked too. It runs
-`gh actions-lock --verify` on pull requests, pushes to `main`, and a weekly schedule that catches
-re-pointed tags. The job's `GITHUB_TOKEN` reads public actions and the repository itself; actions
-from other private or internal repositories need a token that can read them.
+`gh actions-lock --verify` on pull requests and pushes to `main`. The job's `GITHUB_TOKEN` reads
+public actions and the repository itself; actions from other private or internal repositories
+need a token that can read them.
 
 ## Limits
 
