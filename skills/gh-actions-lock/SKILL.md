@@ -27,7 +27,7 @@ gh extension install github/gh-actions-lock
 ```
 
 Run every command from the repository checkout. The host comes from `--hostname`, then `GH_HOST`,
-then the repository remote, then github.com.
+then `GH_REPO` or the repository remote, then github.com.
 
 ## Modes
 
