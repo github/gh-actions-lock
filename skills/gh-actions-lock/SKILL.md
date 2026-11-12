@@ -39,7 +39,7 @@ then `GH_REPO` or the repository remote, then github.com.
 | `gh actions-lock --verify-local` | no | no | pre-commit: every `uses:` has a lockfile entry |
 | `gh actions-lock --no-fix` | no | yes | read-only report |
 
-`--verify-local` only checks coverage, not that entries are trustworthy. Use `--verify` in CI.
+`--verify-local` only checks coverage, not that entries are trustworthy.
 `--verify` and `--verify-local` are mutually exclusive, and `--verify-local` cannot be combined
 with `--relock` or `--accept-moved`.
 
