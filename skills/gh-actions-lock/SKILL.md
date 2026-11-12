@@ -58,8 +58,6 @@ git add .github/workflows/
   resolves refs the lockfile doesn't record yet.
 - Partial versions (`v4`) are narrowed to the highest matching full tag (`v4.2.1`) when first
   pinned. `--no-narrow` keeps them as written.
-- Writes are all or nothing. If any error remains that the run can't fix, it changes nothing,
-  not even for workflows that are otherwise fine.
 - Commit `actions.lock` together with any workflow edits the run made.
 
 **Local `./…` actions.** The CLI never follows, locks or rewrites a workspace path. When a local
