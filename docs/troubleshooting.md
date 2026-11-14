@@ -280,6 +280,8 @@ The action's repository was renamed or transferred, but it's still the same repo
 
 A `uses:` line pins a full-length commit SHA instead of a tag. The lockfile still pins the commit, but the workflow doesn't show which release it is. To clear the warning, change the `uses:` line to the release tag for that commit, then run `gh actions-lock`.
 
+A full SHA inside a same-repo `$/…` action doesn't get this warning. Other repositories that use the action don't have your lockfile, so the SHA is the only pin they get.
+
 ### `container-image`
 
 **Headline:** container image NAME is not pinned by digest
