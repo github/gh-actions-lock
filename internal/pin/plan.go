@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -341,26 +340,6 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
 	}
 
-	// A composite read this run can use a dep the workflow already has
-	// recorded. buildPinnedEntries skips that dep, so its inventory entry
-	// must carry the new edge.
-	for i := range entries {
-		e := &entries[i]
-		if e.Resolution != Verified || !inventorySHA[checks.PruneKey(e.NWO, e.Ref, e.SHA)] {
-			continue
-		}
-		for _, d := range deps {
-			if !strings.EqualFold(d.NWO, e.NWO) || d.Ref != e.Ref || d.SHA != e.SHA {
-				continue
-			}
-			for _, p := range parentMap[d.Key()] {
-				if !slices.Contains(e.RequiredBy, p) {
-					e.RequiredBy = append(slices.Clone(e.RequiredBy), p)
-				}
-			}
-		}
-	}
-
 	// Build entries for all pinned deps (skip any already emitted from inventory).
 	for _, e := range buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA) {
 		e.ReRecorded = reRecorded[e.NWO+"@"+e.Ref]
@@ -614,7 +593,9 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 
 // buildPinnedEntries emits an entry for every resolved dep, marking it Verified
 // when the lockfile already records the same SHA and Pinned otherwise. Deps
-// already emitted from inventory under the same key and commit are skipped.
+// already emitted from inventory under the same key and commit are skipped
+// unless a composite read this run uses them: the inventory entry doesn't
+// carry that edge, and narrowing may rename it away from the composite's key.
 func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap, directTracker lockfile.DirectTracker, inventorySHA map[string]bool) []Entry {
 	// Load existing lockfile state so re-runs are noops for unchanged deps.
 	existingSHA := make(map[string]string) // NWO@Ref -> SHA
@@ -647,11 +628,11 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 	for _, dep := range deps {
 		// Each key needs its own entry: a ref that moved onto a commit a
 		// sibling ref is locked at must still be written.
-		if inventorySHA[checks.PruneKey(dep.NWO, dep.Ref, dep.SHA)] {
-			continue // already emitted as Verified from inventory
-		}
 		depKey := dep.Key()
 		parents := parentMap[depKey]
+		if inventorySHA[checks.PruneKey(dep.NWO, dep.Ref, dep.SHA)] && len(parents) == 0 {
+			continue // already emitted as Verified from inventory
+		}
 		res := Pinned
 		if sha, ok := existingSHA[depKey]; ok && sha == dep.SHA {
 			res = Verified

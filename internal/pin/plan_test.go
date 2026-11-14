@@ -341,24 +341,19 @@ func TestPlanWorkflow_NewCompositeEdgeToRecordedDirectDep(t *testing.T) {
 		}},
 		ActionRefs: []parserlock.ActionRef{{Owner: "comp", Repo: "action", Ref: "v1.0.0"}, direct},
 		Inventory: []checks.InventoryEntry{{
-			Dep:    dep.Dependency{NWO: "trans/dep", Ref: "v2", SHA: transSHA},
-			Direct: true,
+			Dep:     dep.Dependency{NWO: "trans/dep", Ref: "v2", SHA: transSHA},
+			Direct:  true,
+			Parents: []string{"old/composite@v1"},
 		}},
 	}
 
 	result, err := planWorkflow(context.Background(), wr, PlanOptions{Resolver: resolver, Pool: pool, Tagger: tagger}, func(string) {})
 	require.NoError(t, err)
 
-	var trans []Entry
-	for _, e := range result.entries {
-		if e.NWO == "trans/dep" {
-			trans = append(trans, e)
-		}
-	}
-	require.Len(t, trans, 1)
-	assert.Equal(t, Verified, trans[0].Resolution)
-	assert.True(t, trans[0].Direct)
-	assert.Contains(t, trans[0].RequiredBy, "comp/action@v1.0.0", "the composite's edge to the recorded dep must survive")
+	rec := &Record{Entries: result.entries}
+	assert.ElementsMatch(t, []string{"old/composite@v1", "comp/action@v1.0.0"}, buildParentMap(rec, wr.Path)["trans/dep@v2"],
+		"the new composite's edge to the recorded dep must survive alongside its recorded edges")
+	assert.True(t, buildDirectKeys(rec, wr.Path)["trans/dep@v2"], "the recorded dep stays a direct root")
 }
 
 // TestNarrowVerifiedEntries_StickyPrecision locks the fast-path narrowing
