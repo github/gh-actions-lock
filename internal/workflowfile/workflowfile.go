@@ -635,7 +635,7 @@ func ValidatePathWithinRoot(root, candidate string) error {
 	if err != nil {
 		return fmt.Errorf("resolving repository root %s: %w", root, err)
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	resolvedRoot, err := evalSymlinks(absRoot)
 	if err != nil {
 		return fmt.Errorf("resolving repository root %s: %w", root, err)
 	}
@@ -643,7 +643,7 @@ func ValidatePathWithinRoot(root, candidate string) error {
 	if err != nil {
 		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
 	}
-	resolvedCandidate, err := filepath.EvalSymlinks(absCandidate)
+	resolvedCandidate, err := evalSymlinks(absCandidate)
 	if err != nil {
 		return fmt.Errorf("resolving repository path %s: %w", candidate, err)
 	}
