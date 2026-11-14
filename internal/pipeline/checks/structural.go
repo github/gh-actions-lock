@@ -74,7 +74,7 @@ func checkSHARecordedRef(pw ParsedWorkflow, wfEntry []string, deps map[string]pa
 		if !ok || !found || !lockfile.RecordsOwnSHA(pin, action.Ref) {
 			continue
 		}
-		ref, ok := use(pin, action.Commit)
+		ref, ok := use(pin)
 		if !ok {
 			continue
 		}
@@ -163,9 +163,8 @@ func checkRefChanged(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 }
 
 // checkStale emits Stale for lockfile dep entries that no uses:
-// ref in the workflow references. If the workflow has already been
-// rewritten to pin by SHA, the lockfile entry (keyed by the original tag)
-// is still valid — surface keys both ways so we don't false-flag.
+// ref in the workflow references by key. A tag-keyed entry does not cover a
+// use naming its commit (see lockfile.RootUse).
 // Stale is an error: a frozen check requires the lockfile to match the
 // workflows exactly, and a fix run prunes the entry.
 func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
@@ -175,7 +174,7 @@ func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 	used := lockfile.UsedRoot(pw.Refs)
 	var out []Finding
 	for _, p := range depPins {
-		if used(p.Pin, p.Commit) {
+		if used(p.Pin) {
 			continue
 		}
 		f := Finding{
@@ -202,7 +201,7 @@ func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 func checkLockGraph(pw ParsedWorkflow, lf parserlock.File) []Finding {
 	use := lockfile.RootUse(pw.Refs)
 	live := func(p parserlock.Pin, a parserlock.Action) bool {
-		_, ok := use(p, a.Commit)
+		_, ok := use(p)
 		return ok
 	}
 	var out []Finding

@@ -209,13 +209,13 @@ func TestRunChecks(t *testing.T) {
 		},
 		{
 			// The backend looks the use up by its SHA key, not the tag's.
-			name: "not-pinned: bare SHA locked only under its tag blocks",
+			name: "not-pinned + stale: bare SHA locked only under its tag blocks",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
 			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
 			noResolver:     true,
-			wantCategories: []Category{NotPinned, ShaAsRef},
+			wantCategories: []Category{NotPinned, ShaAsRef, Stale},
 		},
 		{
 			name: "ref-changed + stale: lockfile pins v4, workflow uses v3",

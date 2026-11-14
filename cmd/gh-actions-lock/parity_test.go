@@ -86,9 +86,9 @@ func TestParity_TransferredRepoWarns(t *testing.T) {
 }
 
 // TestParity_TransferredRepoNamesTheKeyUse: a tag-keyed entry the workflow
-// also uses by its commit SHA, earlier in the file, is still checked as
-// the tag use, so the rename advice rewrites that use. The SHA use has no
-// key of its own, so verify still fails on it.
+// also uses by its commit SHA, earlier in the file, is checked as the tag
+// use, so the rename advice rewrites that use. The SHA use has no key of its
+// own, so verify still fails on it.
 func TestParity_TransferredRepoNamesTheKeyUse(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(1))
