@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -338,6 +339,26 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
 		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+	}
+
+	// A composite read this run can use a dep the workflow already has
+	// recorded. buildPinnedEntries skips that dep, so its inventory entry
+	// must carry the new edge.
+	for i := range entries {
+		e := &entries[i]
+		if e.Resolution != Verified || !inventorySHA[checks.PruneKey(e.NWO, e.Ref, e.SHA)] {
+			continue
+		}
+		for _, d := range deps {
+			if !strings.EqualFold(d.NWO, e.NWO) || d.Ref != e.Ref || d.SHA != e.SHA {
+				continue
+			}
+			for _, p := range parentMap[d.Key()] {
+				if !slices.Contains(e.RequiredBy, p) {
+					e.RequiredBy = append(slices.Clone(e.RequiredBy), p)
+				}
+			}
+		}
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
