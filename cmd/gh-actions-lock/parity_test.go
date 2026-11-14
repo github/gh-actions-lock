@@ -3192,6 +3192,35 @@ func TestParity_ExactTagBehindSeededCompositeChildBlocks(t *testing.T) {
 	assert.Equal(t, lock, string(after), "nothing is written")
 }
 
+// TestParity_SHAUseOfTagRootChecksClosure: a full-SHA use whose commit is
+// locked only under its tag is resolved fresh, so a child locked behind its
+// exact tag blocks the fix run instead of moving to the SHA key unchecked.
+func TestParity_SHAUseOfTagRootChecksClosure(t *testing.T) {
+	const rootSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	reg := exactTagBehindRegistry(t, rootSHA)
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/root/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", rootSHA)))
+	httpmock.NoTagsNamed(reg, "octo", "root")
+	path := writeTempWorkflow(t, "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/root@"+rootSHA+"\n")
+	lock := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  'octo/root@v1':\n    ref: 'v1'\n    commit: 'sha1-" + rootSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"    uses:\n      - 'actions/checkout@v7.0.1'\n" +
+		"  'actions/checkout@v7.0.1':\n    ref: 'v7.0.1'\n    commit: 'sha1-" + parityTestSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"workflows:\n  '.github/workflows/workflow.yml':\n    - 'octo/root@v1'\n"
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+
+	p, err := runParity(t, reg, "--no-narrow", "--no-interactive", path)
+	require.ErrorIs(t, err, errSilent)
+	var cats []string
+	for _, f := range p.Findings {
+		cats = append(cats, f.Category)
+	}
+	assert.Contains(t, cats, "tag-commit-mismatch")
+	after, rerr := os.ReadFile(lockPath)
+	require.NoError(t, rerr)
+	assert.Equal(t, lock, string(after), "nothing is written")
+}
+
 // exactTagBehindRegistry answers parity with actions/checkout@v7.0.1 at
 // parityTestMoved, a descendant of the locked parityTestSHA, and resolves
 // octo/root (a composite using actions/checkout@v7.0.1) at rootSHA.
