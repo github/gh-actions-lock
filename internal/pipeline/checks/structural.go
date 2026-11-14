@@ -31,30 +31,24 @@ func checkUntracked(pw ParsedWorkflow, tracked bool) []Finding {
 
 // checkNotPinned emits NotPinned for any uses: ref that has no
 // matching lockfile entry. When the lockfile has an entry for the same
-// action at a different ref, RefChanged wins, except for bare SHAs: an
-// unlocked SHA was never history-checked (it may be a fork commit served
-// under the upstream name), so it is NotPinned even if a sibling ref of
-// the same repo is locked.
+// action at a different ref, RefChanged wins, except for bare SHAs. The
+// Actions backend looks up a SHA use by its own key, so a SHA locked only
+// under its tag is still missing; an unlocked SHA was also never
+// history-checked (it may be a fork commit served under the upstream name).
 func checkNotPinned(pw ParsedWorkflow, depPins []lockedPin, depIndex map[string]lockedPin) []Finding {
 	if len(pw.Refs) == 0 {
 		return nil
 	}
 	knownAction := make(map[string]bool, len(depPins))
-	lockedSHA := make(map[string]bool, len(depPins))
 	for _, p := range depPins {
 		knownAction[nwoLower(p.Owner, p.Repo)] = true
-		lockedSHA[nwoLower(p.Owner, p.Repo)+"@"+strings.ToLower(p.SHA())] = true
 	}
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if _, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
+		if _, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, lockfile.CanonicalRef(ref.Ref))]; ok {
 			continue
 		}
-		if parserlock.IsFullSha(ref.Ref) {
-			if lockedSHA[nwoLower(ref.Owner, ref.Repo)+"@"+strings.ToLower(ref.Ref)] {
-				continue
-			}
-		} else if knownAction[nwoLower(ref.Owner, ref.Repo)] {
+		if !parserlock.IsFullSha(ref.Ref) && knownAction[nwoLower(ref.Owner, ref.Repo)] {
 			continue
 		}
 		f := newRefFinding(pw, ref, NotPinned, SeverityError, ConfidenceHigh)

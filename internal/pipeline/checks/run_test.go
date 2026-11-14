@@ -208,13 +208,14 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: []Category{NotPinned, ShaAsRef},
 		},
 		{
-			name: "sha-as-ref: bare SHA locked under its tag stays a warning",
+			// The backend looks the use up by its SHA key, not the tag's.
+			name: "not-pinned: bare SHA locked only under its tag blocks",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
 			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
 			noResolver:     true,
-			wantCategories: []Category{ShaAsRef},
+			wantCategories: []Category{NotPinned, ShaAsRef},
 		},
 		{
 			name: "ref-changed + stale: lockfile pins v4, workflow uses v3",
@@ -660,6 +661,22 @@ func TestRunChecks(t *testing.T) {
 				tc.extra(t, got)
 			}
 		})
+	}
+}
+
+func TestRunChecks_SHAUseLockedUnderItsOwnKey(t *testing.T) {
+	const wfPath = ".github/workflows/ci.yml"
+	key := "actions/checkout@" + shaCheckoutV4
+	lf := checkNewLockfile(
+		map[string][]string{wfPath: {key}},
+		map[string]parserlock.Action{key: {Ref: "v4", Commit: "sha1-" + shaCheckoutV4}},
+	)
+	pw := checkParsedWF(wfPath, checkRef("actions", "checkout", strings.ToUpper(shaCheckoutV4)))
+
+	got := RunChecks(context.Background(), pw, lf, nil)
+
+	if cats := findingCategories(got); len(cats) != 1 || cats[0] != string(ShaAsRef) {
+		t.Fatalf("an upper-case SHA use must match its lower-case key: got %v", cats)
 	}
 }
 
