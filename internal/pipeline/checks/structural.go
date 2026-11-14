@@ -100,10 +100,15 @@ func checkSHARecordedRef(pw ParsedWorkflow, wfEntry []string, deps map[string]pa
 // checkShaAsRef emits ShaAsRef for any uses: ref that is a bare
 // commit SHA — both bare-SHA uses with no lock entry and bare-SHA uses
 // whose lock entry just mirrors the same SHA. The anti-pattern (no
-// human-readable ref) is the same in both cases.
+// human-readable ref) is the same in both cases. A SHA a `$/…` action
+// pins is exempt: pinning keeps it on purpose (#264).
 func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]lockedPin) []Finding {
 	var out []Finding
-	for _, ref := range pw.Refs {
+	refs := pw.RewriteRefs
+	if refs == nil {
+		refs = pw.Refs
+	}
+	for _, ref := range refs {
 		if !parserlock.IsFullSha(ref.Ref) {
 			continue
 		}
