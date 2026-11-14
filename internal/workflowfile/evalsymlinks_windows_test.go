@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -107,6 +108,45 @@ func TestValidateInRepo_RepoBehindJunction(t *testing.T) {
 	mkJunction(t, repoLink, repo)
 
 	assert.NoError(t, ValidateInRepo(filepath.Join(repoLink, ".github", "workflows", "ci.yml")))
+}
+
+func TestEvalSymlinks_LongPath(t *testing.T) {
+	dir := t.TempDir()
+	rel := filepath.Join(strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, rel), 0o755))
+	wantDir, err := evalSymlinks(dir)
+	require.NoError(t, err)
+
+	got, err := evalSymlinks(filepath.Join(dir, rel))
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(wantDir, rel), got, "no extended prefix in the result")
+	assert.Greater(t, len(got), 260)
+	assert.NoError(t, ValidatePathWithinRoot(dir, filepath.Join(dir, rel)))
+}
+
+func TestExtendedPath(t *testing.T) {
+	long := strings.Repeat("a", 250)
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"short drive path", `C:\a\b`, `C:\a\b`},
+		{"long drive path", `C:\` + long, `\\?\C:\` + long},
+		{"long UNC path", `\\srv\share\` + long, `\\?\UNC\srv\share\` + long},
+		{"long path needing cleaning", `C:\a\..\` + long, `\\?\C:\` + long},
+		{"already extended", `\\?\C:\` + long, `\\?\C:\` + long},
+		{"device path", `\\.\pipe\` + long, `\\.\pipe\` + long},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := extendedPath(tt.in)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestTrimExtendedPrefix(t *testing.T) {

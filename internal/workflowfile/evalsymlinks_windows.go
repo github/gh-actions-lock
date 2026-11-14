@@ -2,6 +2,7 @@ package workflowfile
 
 import (
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -13,7 +14,11 @@ import (
 // as non-directories, so it fails with ERROR_PATH_NOT_FOUND below one and
 // returns a trailing one unresolved (golang/go#61893).
 func evalSymlinks(path string) (string, error) {
-	p, err := windows.UTF16PtrFromString(path)
+	long, err := extendedPath(path)
+	if err != nil {
+		return "", &fs.PathError{Op: "evalsymlinks", Path: path, Err: err}
+	}
+	p, err := windows.UTF16PtrFromString(long)
 	if err != nil {
 		return "", &fs.PathError{Op: "evalsymlinks", Path: path, Err: err}
 	}
@@ -32,6 +37,26 @@ func evalSymlinks(path string) (string, error) {
 		return "", &fs.PathError{Op: "evalsymlinks", Path: path, Err: err}
 	}
 	return trimExtendedPrefix(final), nil
+}
+
+// extendedPath returns path as an absolute `\\?\` path once it is too long for
+// CreateFile without long-path opt-in, as os.Open does. 248 is Go's cutoff for
+// directories, which must leave room for an 8.3 file name.
+func extendedPath(path string) (string, error) {
+	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\\.\`) {
+		return path, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case len(abs) < 248:
+		return abs, nil
+	case strings.HasPrefix(abs, `\\`):
+		return `\\?\UNC\` + abs[2:], nil
+	}
+	return `\\?\` + abs, nil
 }
 
 func finalPath(h windows.Handle) (string, error) {
