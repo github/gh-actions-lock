@@ -439,13 +439,9 @@ func buildParentMap(rec *Record, wfPath string) map[string][]string {
 			if wf != wfPath {
 				continue
 			}
-			// A key can have both an inventory entry and one carrying a
-			// composite edge found this run; keep both entries' edges.
-			key := e.NWO + "@" + e.Ref
-			for _, p := range e.RequiredBy {
-				if !slices.Contains(pm[key], p) {
-					pm[key] = append(pm[key], p)
-				}
+			if len(e.RequiredBy) > 0 {
+				key := e.NWO + "@" + e.Ref
+				pm[key] = e.RequiredBy
 			}
 		}
 	}

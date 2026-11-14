@@ -341,9 +341,8 @@ func TestPlanWorkflow_NewCompositeEdgeToRecordedDirectDep(t *testing.T) {
 		}},
 		ActionRefs: []parserlock.ActionRef{{Owner: "comp", Repo: "action", Ref: "v1.0.0"}, direct},
 		Inventory: []checks.InventoryEntry{{
-			Dep:     dep.Dependency{NWO: "trans/dep", Ref: "v2", SHA: transSHA},
-			Direct:  true,
-			Parents: []string{"old/composite@v1"},
+			Dep:    dep.Dependency{NWO: "trans/dep", Ref: "v2", SHA: transSHA},
+			Direct: true,
 		}},
 	}
 
@@ -351,8 +350,8 @@ func TestPlanWorkflow_NewCompositeEdgeToRecordedDirectDep(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := &Record{Entries: result.entries}
-	assert.ElementsMatch(t, []string{"old/composite@v1", "comp/action@v1.0.0"}, buildParentMap(rec, wr.Path)["trans/dep@v2"],
-		"the new composite's edge to the recorded dep must survive alongside its recorded edges")
+	assert.Equal(t, []string{"comp/action@v1.0.0"}, buildParentMap(rec, wr.Path)["trans/dep@v2"],
+		"the new composite's edge to the recorded dep must survive")
 	assert.True(t, buildDirectKeys(rec, wr.Path)["trans/dep@v2"], "the recorded dep stays a direct root")
 }
 
