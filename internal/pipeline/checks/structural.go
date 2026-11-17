@@ -2,6 +2,7 @@ package checks
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
@@ -51,7 +52,12 @@ func checkNotPinned(pw ParsedWorkflow, depPins []lockedPin, depIndex map[string]
 			continue
 		}
 		if parserlock.IsFullSha(ref.Ref) {
-			if lockedSHA[nwoLower(ref.Owner, ref.Repo)+"@"+strings.ToLower(ref.Ref)] {
+			// A nested composite use needs its own key: the runner does not
+			// match it to a tag-keyed entry by commit.
+			nested := slices.ContainsFunc(pw.SelfActionRefs, func(self parserlock.ActionRef) bool {
+				return self.FullName() == ref.FullName() && self.Ref == ref.Ref
+			})
+			if !nested && lockedSHA[nwoLower(ref.Owner, ref.Repo)+"@"+strings.ToLower(ref.Ref)] {
 				continue
 			}
 		} else if knownAction[nwoLower(ref.Owner, ref.Repo)] {
