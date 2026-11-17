@@ -348,7 +348,7 @@ func TestMigrateLocalActions_UnparseableWorkflowIsAFinding(t *testing.T) {
 	var loadErrors []string
 	for _, f := range payload.Findings {
 		if strings.Contains(f.Detail, "failed to load workflow") {
-			loadErrors = append(loadErrors, f.Workflow)
+			loadErrors = append(loadErrors, filepath.ToSlash(f.Workflow))
 		}
 	}
 	assert.Equal(t, []string{".github/workflows/bad.yml"}, loadErrors)
