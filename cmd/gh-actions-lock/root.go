@@ -35,6 +35,10 @@ func execute() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	defer ui.CloseProgressTrace()
+	if err := enterRepoRoot(os.Args[1:]); err != nil {
+		ui.New().Error("%s", err)
+		return 2
+	}
 	err := newRootCmd(nil).ExecuteContext(ctx)
 	switch {
 	case err == nil:
@@ -57,6 +61,50 @@ func execute() int {
 		ui.New().Error("%s", err)
 		return 2
 	}
+}
+
+// enterRepoRoot changes into the repository root when the command is run from
+// .github or .github/workflows, since all workflow paths are repo-relative.
+// Arguments that name existing files are rewritten to stay valid after the move.
+func enterRepoRoot(args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	root := repoRootFromGitHubDir(cwd)
+	if root == "" {
+		return nil
+	}
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if _, err := os.Stat(a); err != nil {
+			continue
+		}
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(root, abs); err == nil {
+			args[i] = rel
+		}
+	}
+	if err := os.Chdir(root); err != nil {
+		return fmt.Errorf("changing to repository root %s: %w", root, err)
+	}
+	return nil
+}
+
+func repoRootFromGitHubDir(dir string) string {
+	dir = filepath.Clean(dir)
+	if strings.EqualFold(filepath.Base(dir), "workflows") && strings.EqualFold(filepath.Base(filepath.Dir(dir)), ".github") {
+		return filepath.Dir(filepath.Dir(dir))
+	}
+	if filepath.Base(dir) == ".github" {
+		return filepath.Dir(dir)
+	}
+	return ""
 }
 
 // printedError is a tool failure the run already printed; it still exits 2.

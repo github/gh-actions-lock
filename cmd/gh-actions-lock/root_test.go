@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,5 +47,50 @@ func TestNewRootCmd_Version(t *testing.T) {
 	version := strings.TrimSuffix(strings.TrimPrefix(out, prefix), "\n")
 	if version == "" {
 		t.Fatalf("expected non-empty version in stdout: %q", out)
+	}
+}
+
+func TestEnterRepoRootRewritesArgs(t *testing.T) {
+	root := t.TempDir()
+	wfDir := filepath.Join(root, ".github", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wfDir, "ci.yml"), []byte("on: push\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(wfDir); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{"--no-fix", "ci.yml", "missing.yml"}
+	if err := enterRepoRoot(args); err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(".github", "workflows", "ci.yml"); args[1] != want {
+		t.Errorf("args[1] = %q, want %q", args[1], want)
+	}
+	if args[0] != "--no-fix" || args[2] != "missing.yml" {
+		t.Errorf("unrelated args modified: %v", args)
+	}
+	if _, err := os.Stat(args[1]); err != nil {
+		t.Errorf("rewritten path not valid from new cwd: %v", err)
+	}
+}
+
+func TestRepoRootFromGitHubDir(t *testing.T) {
+	for in, want := range map[string]string{
+		filepath.Join("r", ".github", "workflows"): "r",
+		filepath.Join("r", ".github"): "r",
+		filepath.Join("r", "src"): "",
+	} {
+		if got := repoRootFromGitHubDir(in); got != want {
+			t.Errorf("repoRootFromGitHubDir(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
