@@ -701,6 +701,19 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 	}
 }
 
+// TestRunChecks_SelfActionSHAPinIsNotShaAsRef: pinning keeps a SHA a `$/…`
+// action pins (#264), so suggesting a tag instead would be wrong.
+func TestRunChecks_SelfActionSHAPinIsNotShaAsRef(t *testing.T) {
+	const wfPath = ".github/workflows/ci.yml"
+	lf := checkNewLockfile(map[string][]string{wfPath: {}})
+	pw := checkParsedWF(wfPath, checkRef("actions", "checkout", shaCheckoutV4))
+	pw.RewriteRefs = []parserlock.ActionRef{}
+	got := RunChecks(context.Background(), pw, lf, nil)
+	if cats := findingCategories(got); strings.Join(cats, ",") != string(NotPinned) {
+		t.Fatalf("categories: got %v, want [%s]", cats, NotPinned)
+	}
+}
+
 // TestRunChecks_UntrackedWorkflow: enforcement requires every workflow to be
 // listed, so a workflow with no uses: still needs an entry.
 func TestRunChecks_UntrackedWorkflow(t *testing.T) {

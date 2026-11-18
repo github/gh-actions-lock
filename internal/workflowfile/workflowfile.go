@@ -397,8 +397,18 @@ func DiscoverCompositeActionFiles(root string) ([]string, error) {
 // anywhere else (an env var, a `with:` input) is ordinary data, not a
 // reference.
 func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
+	walkUsesNodes(node, func(valueNode *yaml.Node, stepLevel bool) {
+		if use := scalarValue(resolveAlias(valueNode)); use != "" {
+			fn(use, stepLevel)
+		}
+	})
+}
+
+// walkUsesNodes is walkUses over the `uses:` value nodes as written: an
+// aliased value is passed as its alias node, not the anchored target.
+func walkUsesNodes(node *yaml.Node, fn func(valueNode *yaml.Node, stepLevel bool)) {
 	root := resolveAlias(documentRoot(node))
-	walkStepUses(mapValue(root, "runs"), compositeSteps, fn)
+	walkStepUsesNodes(mapValue(root, "runs"), compositeSteps, fn)
 
 	jobs := mapValue(root, "jobs")
 	if jobs == nil || jobs.Kind != yaml.MappingNode {
@@ -409,11 +419,25 @@ func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
 		if job == nil || job.Kind != yaml.MappingNode {
 			continue
 		}
-		if use := scalarValue(mapValue(job, "uses")); use != "" {
+		if use := rawMapValue(job, "uses"); use != nil {
 			fn(use, false)
 		}
-		walkStepUses(job, jobSteps, fn)
+		walkStepUsesNodes(job, jobSteps, fn)
 	}
+}
+
+// stepUsesNodes returns the step-level `uses:` value nodes: the only `uses:`
+// values a lockfile rewrite may touch. Job-level `uses:` calls a reusable
+// workflow, which the lockfile doesn't lock (#179), and a `uses` key anywhere
+// else is data.
+func stepUsesNodes(node *yaml.Node) map[*yaml.Node]bool {
+	nodes := make(map[*yaml.Node]bool)
+	walkUsesNodes(node, func(valueNode *yaml.Node, stepLevel bool) {
+		if stepLevel {
+			nodes[valueNode] = true
+		}
+	})
+	return nodes
 }
 
 // stepsContext is where a `steps:` sequence appears.
@@ -429,15 +453,23 @@ const (
 // walkStepUses visits the `uses:` of each step in owner's `steps:` sequence.
 // A `parallel:` group is a flat list of steps; it is not walked recursively.
 func walkStepUses(owner *yaml.Node, ctx stepsContext, fn func(value string, stepLevel bool)) {
+	walkStepUsesNodes(owner, ctx, func(valueNode *yaml.Node, stepLevel bool) {
+		if use := scalarValue(resolveAlias(valueNode)); use != "" {
+			fn(use, stepLevel)
+		}
+	})
+}
+
+func walkStepUsesNodes(owner *yaml.Node, ctx stepsContext, fn func(valueNode *yaml.Node, stepLevel bool)) {
 	for _, step := range stepMappings(mapValue(owner, "steps")) {
-		if use := scalarValue(mapValue(step, "uses")); use != "" {
+		if use := rawMapValue(step, "uses"); use != nil {
 			fn(use, true)
 		}
 		if ctx != jobSteps {
 			continue
 		}
 		for _, inner := range stepMappings(mapValue(step, "parallel")) {
-			if use := scalarValue(mapValue(inner, "uses")); use != "" {
+			if use := rawMapValue(inner, "uses"); use != nil {
 				fn(use, true)
 			}
 		}
@@ -474,12 +506,16 @@ func resolveAlias(node *yaml.Node) *yaml.Node {
 }
 
 func mapValue(node *yaml.Node, key string) *yaml.Node {
+	return resolveAlias(rawMapValue(node, key))
+}
+
+func rawMapValue(node *yaml.Node, key string) *yaml.Node {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i < len(node.Content)-1; i += 2 {
 		if node.Content[i].Kind == yaml.ScalarNode && node.Content[i].Value == key {
-			return resolveAlias(node.Content[i+1])
+			return node.Content[i+1]
 		}
 	}
 	return nil

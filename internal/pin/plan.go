@@ -324,7 +324,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
-	required := transferRewrites(deps, rootTracker, wr.RewriteRefs, rewrites)
+	required := transferRewrites(deps, rootTracker, wr.ActionRefs, rewrites)
 	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
 		return planResult{}, err
 	}

@@ -123,7 +123,10 @@ jobs:
 	assert.ErrorIs(t, readErr, os.ErrNotExist)
 }
 
-func TestExistingSHARefRewritesSelfRepositoryAction(t *testing.T) {
+// TestExistingSHARefKeepsSelfRepositoryActionPin: a `$/…` action's SHA pin
+// stays as written and locked under ci.yml, even though other.yml locks the
+// same commit by tag (#264).
+func TestExistingSHARefKeepsSelfRepositoryActionPin(t *testing.T) {
 	const sha = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
 	transport := &requestCountingTransport{parity: true, tags: map[string]string{"v3.2.0": sha}}
 
@@ -193,34 +196,108 @@ dependencies:
 	require.NoError(t, os.WriteFile(lockPath, originalLock, 0o600))
 	t.Chdir(dir)
 
-	_, _, err := runCommandWithHTTP(t, transport, "--no-narrow", filepath.Join(".github", "workflows", "ci.yml"))
-	require.NoError(t, err)
-	lockAfterNoNarrow, err := os.ReadFile(lockPath)
+	originalAction, err := os.ReadFile(actionPath)
 	require.NoError(t, err)
 
-	_, _, err = runCommandWithHTTP(t, transport, filepath.Join(".github", "workflows", "ci.yml"))
-	require.ErrorContains(t, err, "partial workflow scan")
-	action, readErr := os.ReadFile(actionPath)
-	require.NoError(t, readErr)
-	assert.Contains(t, string(action), "uses: actions/create-github-app-token@"+sha)
-	lock, readErr := os.ReadFile(lockPath)
-	require.NoError(t, readErr)
-	assert.Equal(t, lockAfterNoNarrow, lock)
+	for _, args := range [][]string{{filepath.Join(".github", "workflows", "ci.yml")}, nil} {
+		_, _, err = runCommandWithHTTP(t, transport, args...)
+		require.NoError(t, err)
+		assert.Zero(t, transport.calls.Load())
 
-	_, _, err = runCommandWithHTTP(t, transport)
-	require.NoError(t, err)
-	assert.Zero(t, transport.calls.Load())
+		action, err := os.ReadFile(actionPath)
+		require.NoError(t, err)
+		assert.Equal(t, originalAction, action)
 
-	action, err = os.ReadFile(actionPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(action), "uses: actions/create-github-app-token@v3.2.0")
+		lock, err := os.ReadFile(lockPath)
+		require.NoError(t, err)
+		assert.Contains(t, string(lock), "    '.github/workflows/ci.yml':\n        - 'actions/create-github-app-token@"+sha+"'\n")
+		assert.Contains(t, string(lock), "    'actions/create-github-app-token@"+sha+"':\n        ref: 'v3.2.0'\n")
+		assert.Contains(t, string(lock), "uses:\n            - 'actions/checkout@v4'")
+	}
+}
 
-	lock, err = os.ReadFile(lockPath)
+// TestSelfRepositoryActionSHAPinFollowsRename: a `$/…` action pins a
+// renamed repository by SHA. The pin moves to the new name and keeps its
+// SHA, and the lockfile covers it.
+func TestSelfRepositoryActionSHAPinFollowsRename(t *testing.T) {
+	const (
+		oldName = "krzema12/github-actions-typing"
+		newName = "typesafegithub/github-actions-typing"
+	)
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+	reg.RegisterReusable(httpmock.GraphQLForRepo("krzema12", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+		"data": map[string]any{"a0": withRepoID(testRepoResponse(newName, parityTestSHA, nodeActionYAML), 1)},
+	}))
+	for _, nwo := range []string{oldName, newName} {
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`$`), httpmock.JSONResponse(map[string]any{
+			"full_name": newName, "id": 1, "default_branch": "main", "owner": map[string]any{"id": 42},
+		}))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/releases`), httpmock.JSONResponse([]map[string]any{}))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", parityTestSHA)))
+	}
+	httpmock.NoTagsNamed(reg, "typesafegithub", "github-actions-typing")
+	isolateRunLogs(t)
+	path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n")
+	require.NoError(t, os.Mkdir(".git", 0o755))
+	action := filepath.Join(".github", "actions", "typing", "action.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+	require.NoError(t, os.WriteFile(action, []byte(composite(oldName+"@"+parityTestSHA)), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
+	require.NoError(t, err, stderr)
+	got, err := os.ReadFile(action)
 	require.NoError(t, err)
-	assert.Contains(t, string(lock), "'actions/create-github-app-token@v3.2.0'")
-	assert.Contains(t, string(lock), "'actions/checkout@v4'")
-	assert.Contains(t, string(lock), "'actions/setup-go@v5'")
-	assert.Contains(t, string(lock), "uses:\n            - 'actions/checkout@v4'")
-	assert.Contains(t, string(lock), "- 'actions/setup-go@v5'")
-	assert.NotContains(t, string(lock), "'actions/create-github-app-token@"+sha+"'")
+	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
+	require.NoError(t, err, "%s\n%s", stderr, lock)
+}
+
+// TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings: a workflow
+// uses a renamed repository's new name at the commit a `$/…` action pins
+// under the old name. Both spellings resolve to one dependency, and the
+// action's pin still moves to the new name with its SHA, not a tag.
+func TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings(t *testing.T) {
+	const (
+		oldName = "krzema12/github-actions-typing"
+		newName = "typesafegithub/github-actions-typing"
+	)
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+	for _, owner := range []string{"krzema12", "typesafegithub"} {
+		reg.RegisterReusable(httpmock.GraphQLForRepo(owner, "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": withRepoID(testRepoResponse(newName, parityTestSHA, nodeActionYAML), 1)},
+		}))
+	}
+	for _, nwo := range []string{oldName, newName} {
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`$`), httpmock.JSONResponse(map[string]any{
+			"full_name": newName, "id": 1, "default_branch": "main", "owner": map[string]any{"id": 42},
+		}))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/releases`), httpmock.JSONResponse([]map[string]any{}))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/tags/v2\.2\.2$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/tags/v2.2.2", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/heads/main$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/heads/main", parityTestSHA)))
+	}
+	httpmock.NoTagsNamed(reg, "krzema12", "github-actions-typing")
+	httpmock.NoTagsNamed(reg, "typesafegithub", "github-actions-typing")
+	isolateRunLogs(t)
+	path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+newName+"@"+parityTestSHA+"\n")
+	require.NoError(t, os.Mkdir(".git", 0o755))
+	action := filepath.Join(".github", "actions", "typing", "action.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+	require.NoError(t, os.WriteFile(action, []byte(composite(oldName+"@"+parityTestSHA)), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
+	require.NoError(t, err, stderr)
+	got, err := os.ReadFile(action)
+	require.NoError(t, err)
+	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
+	require.NoError(t, err, "%s\n%s", stderr, lock)
 }

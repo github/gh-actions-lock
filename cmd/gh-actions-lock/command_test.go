@@ -1807,3 +1807,62 @@ jobs:
 	_, stderr, err := runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
 	require.NoError(t, err, stderr)
 }
+
+func TestCheck_ReusableWorkflowCallKeepsSHAFromSameRepositoryStep(t *testing.T) {
+	const sha = "b6e2e70617bc3265edd6dab6c906732b2f1ae151"
+
+	reg := &httpmock.Registry{}
+	httpmock.NoTagsNamed(reg, "dawidd6", "action-download-artifact")
+	reg.Register(
+		httpmock.GraphQLForRepo("dawidd6", "action-download-artifact"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("dawidd6/action-download-artifact", sha, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact$`),
+		httpmock.JSONResponse(map[string]any{
+			"default_branch": "main",
+			"id":             2,
+			"owner":          map[string]any{"id": 1},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{
+			"ref": "refs/heads/main", "object": map[string]any{"sha": sha, "type": "commit"},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v21", sha)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	call := "uses: dawidd6/action-download-artifact/.github/workflows/build.yml@" + sha + " # v21"
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  call:
+    `+call+`
+  test:
+    needs: [call]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dawidd6/action-download-artifact@`+sha+` # v21
+`)
+
+	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+
+	workflow, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(workflow), "      - uses: dawidd6/action-download-artifact@v21\n")
+	assert.Contains(t, string(workflow), "    "+call+"\n")
+}

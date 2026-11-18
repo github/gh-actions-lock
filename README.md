@@ -71,6 +71,7 @@ Other flags:
 
 - Reusable workflows called at `jobs.<id>.uses` from another repository are not locked ([#179](https://github.com/github/gh-actions-lock/issues/179)).
 - Local `./…` actions are never followed or locked, so one that uses remote actions is a blocking error until you pass `--migrate-local-actions` (rewrites same-repo `./…` to `$/…`) or `--ignore-local-actions`.
+- A full commit SHA in a same-repo `$/…` action is never rewritten to a tag, since other repositories that use that action don't have your lockfile. It's locked under the SHA in every workflow that reaches it ([#264](https://github.com/github/gh-actions-lock/issues/264)).
 - Container images are not locked, and any image without an `@sha256:` digest, including one chosen by a `${{ }}` expression, is a warning ([#236](https://github.com/github/gh-actions-lock/issues/236)).
 - `--verify-local` is an offline coverage check that doesn't verify provenance; `--verify` checks provenance before merge, and the runner checks it again at job start.
 - A lockfile change that moves a floating ref (`v4`, `main`) back to an older commit in its history isn't detected, so review lockfile diffs or pin exact tags.

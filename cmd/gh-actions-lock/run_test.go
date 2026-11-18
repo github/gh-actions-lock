@@ -817,27 +817,19 @@ func TestRun_SelfRepositoryLocalActionNamesItsParent(t *testing.T) {
 	assert.Contains(t, stderr, "./helper (in $/actions/build), ./helper (in $/actions/test)")
 }
 
-// TestRun_SharedSelfActionRewriteIsLockedForEveryWorkflow: ci.yml and
+// TestRun_SharedSelfActionSHAPinIsLockedForEveryWorkflow: ci.yml and
 // deploy.yml share $/.github/actions/restore, which uses
-// octo/cache/restore by SHA. ci.yml keeps that SHA, since octo/apt
-// declares it too; deploy.yml rewrites it to v2.0.0 in the shared file.
-// ci.yml then runs v2.0.0, so the lockfile must cover it. The SHA stays a
-// ci.yml root only while ci.yml still uses it directly; otherwise it is
-// locked only as octo/apt's child.
-func TestRun_SharedSelfActionRewriteIsLockedForEveryWorkflow(t *testing.T) {
+// octo/cache/restore by SHA. Other repositories run that action without
+// this lockfile, so the SHA stays as written (#264), and every workflow
+// that reaches it locks it under its SHA, wherever else it's written.
+func TestRun_SharedSelfActionSHAPinIsLockedForEveryWorkflow(t *testing.T) {
 	const cacheSHA, aptSHA = "cccccccccccccccccccccccccccccccccccccccc", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	byCommit := "octo/cache/restore@" + strings.ToUpper(cacheSHA)
 	for name, tc := range map[string]struct {
 		steps string
-		roots []string
 	}{
-		"used directly too": {
-			steps: "      - uses: " + byCommit + "\n",
-			roots: []string{"octo/apt@v1.0.0", "octo/cache@" + cacheSHA, "octo/cache@v2.0.0"},
-		},
-		"used only in the shared action": {
-			roots: []string{"octo/apt@v1.0.0", "octo/cache@v2.0.0"},
-		},
+		"used directly too":              {steps: "      - uses: " + byCommit + "\n"},
+		"used only in the shared action": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			manifests := map[string]string{"octo/apt": composite("octo/cache@" + cacheSHA)}
@@ -871,12 +863,15 @@ func TestRun_SharedSelfActionRewriteIsLockedForEveryWorkflow(t *testing.T) {
 			lock := readTempLockfilePins(t)
 			action, err := os.ReadFile(restore)
 			require.NoError(t, err)
-			assert.Contains(t, string(action), "uses: octo/cache/restore@v2.0.0\n")
-			want := "'" + filepath.ToSlash(ci) + "':\n"
-			for _, root := range tc.roots {
-				want += "        - '" + root + "'\n"
-			}
-			assert.Contains(t, lock, want+"dependencies:")
+			assert.Equal(t, composite(byCommit), string(action))
+			workflow, err := os.ReadFile(ci)
+			require.NoError(t, err)
+			assert.Equal(t, steps+"      - uses: octo/apt@v1.0.0\n"+tc.steps+"      - uses: $/.github/actions/restore\n", string(workflow))
+			assert.Contains(t, lock, "workflows:\n"+
+				"    '.github/workflows/deploy.yml':\n        - 'octo/cache@"+cacheSHA+"'\n"+
+				"    '"+filepath.ToSlash(ci)+"':\n        - 'octo/apt@v1.0.0'\n        - 'octo/cache@"+cacheSHA+"'\n"+
+				"dependencies:")
+			assert.NotContains(t, lock, "'octo/cache@v2.0.0'")
 			assert.Contains(t, lock, "        uses:\n            - 'octo/cache@"+cacheSHA+"'\n")
 			for _, mode := range []string{"--verify-local", "--verify"} {
 				_, stderr, err := runCommandWithHTTP(t, reg, mode)
