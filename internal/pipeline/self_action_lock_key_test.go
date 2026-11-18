@@ -24,6 +24,7 @@ func TestVerifyLocalCoverage_SelfActionRequiresExactLockKey(t *testing.T) {
 		{name: "SHA use with only tag key", use: sha, key: "v4", valid: false},
 		{name: "SHA use with SHA key", use: sha, key: sha, valid: true},
 		{name: "tag use with tag key", use: "v4", key: "v4", valid: true},
+		{name: "workflow SHA with tag key and different nested ref", use: "v4", key: "v4", direct: sha, valid: true},
 		{name: "uppercase workflow SHA and lowercase nested SHA", use: sha, key: "v4", direct: strings.ToUpper(sha), valid: false},
 		{name: "lowercase workflow SHA and uppercase nested SHA", use: strings.ToUpper(sha), key: "v4", direct: sha, valid: false},
 	} {
