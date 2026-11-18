@@ -255,3 +255,49 @@ func TestSelfRepositoryActionSHAPinFollowsRename(t *testing.T) {
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 	require.NoError(t, err, "%s\n%s", stderr, lock)
 }
+
+// TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings: a workflow
+// uses a renamed repository's new name at the commit a `$/…` action pins
+// under the old name. Both spellings resolve to one dependency, and the
+// action's pin still moves to the new name with its SHA, not a tag.
+func TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings(t *testing.T) {
+	const (
+		oldName = "krzema12/github-actions-typing"
+		newName = "typesafegithub/github-actions-typing"
+	)
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+	for _, owner := range []string{"krzema12", "typesafegithub"} {
+		reg.RegisterReusable(httpmock.GraphQLForRepo(owner, "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{"a0": withRepoID(testRepoResponse(newName, parityTestSHA, nodeActionYAML), 1)},
+		}))
+	}
+	for _, nwo := range []string{oldName, newName} {
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`$`), httpmock.JSONResponse(map[string]any{
+			"full_name": newName, "id": 1, "default_branch": "main", "owner": map[string]any{"id": 42},
+		}))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/releases`), httpmock.JSONResponse([]map[string]any{}))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/tags/v2\.2\.2$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/tags/v2.2.2", parityTestSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/heads/main$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/heads/main", parityTestSHA)))
+	}
+	httpmock.NoTagsNamed(reg, "krzema12", "github-actions-typing")
+	httpmock.NoTagsNamed(reg, "typesafegithub", "github-actions-typing")
+	isolateRunLogs(t)
+	path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+newName+"@"+parityTestSHA+"\n")
+	require.NoError(t, os.Mkdir(".git", 0o755))
+	action := filepath.Join(".github", "actions", "typing", "action.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+	require.NoError(t, os.WriteFile(action, []byte(composite(oldName+"@"+parityTestSHA)), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
+	require.NoError(t, err, stderr)
+	got, err := os.ReadFile(action)
+	require.NoError(t, err)
+	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
+	require.NoError(t, err, "%s\n%s", stderr, lock)
+}
