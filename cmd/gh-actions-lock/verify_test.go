@@ -499,3 +499,53 @@ func TestFailOnWarning(t *testing.T) {
 		}
 	}
 }
+
+// An explicit action-file path is refused in every mode before anything is
+// read or written, as a tool failure even under --fail-on-warning, but a
+// workflow that happens to be named action.yml is not.
+func TestActionFilePathRejected(t *testing.T) {
+	const action = "name: foo\nruns:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n"
+	for _, mode := range []string{"", "--verify", "--verify-local", "--verify --fail-on-warning", "--no-fix --fail-on-warning"} {
+		for _, arg := range []string{".github/actions/foo/action.yml", ".github/actions/foo"} {
+			t.Run(mode+" "+arg, func(t *testing.T) {
+				writeTempWorkflow(t, "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/foo\n")
+				actionPath := filepath.Join(".github", "actions", "foo", "action.yml")
+				require.NoError(t, os.MkdirAll(filepath.Dir(actionPath), 0o755))
+				require.NoError(t, os.WriteFile(actionPath, []byte(action), 0o600))
+
+				args := append([]string{"--no-interactive", arg}, strings.Fields(mode)...)
+				_, _, err := runCommandWithHTTP(t, &httpmock.Registry{}, args...)
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, errSilent, "a refused path is a tool failure, not a finding")
+				assert.Contains(t, err.Error(), "is an action file, not a workflow")
+				assert.Contains(t, err.Error(), "can't carry their own lockfile")
+				assert.NoFileExists(t, parserlock.Path)
+				after, err := os.ReadFile(actionPath)
+				require.NoError(t, err)
+				assert.Equal(t, action, string(after))
+			})
+		}
+	}
+
+	t.Run("other spellings of an action file", func(t *testing.T) {
+		writeTempWorkflow(t, "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+		dir := filepath.Join(".github", "actions", "foo")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Action.YML"), []byte(action), 0o600))
+		require.NoError(t, os.Symlink("Action.YML", filepath.Join(dir, "alias.yml")))
+		for _, name := range []string{"Action.YML", "alias.yml"} {
+			_, err := discoverWorkflowPaths([]string{filepath.Join(dir, name)}, "", false)
+			require.Error(t, err, name)
+			assert.Contains(t, err.Error(), "is an action file, not a workflow", name)
+		}
+	})
+
+	t.Run("workflow named action.yml", func(t *testing.T) {
+		writeTempWorkflow(t, "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+		path := filepath.Join(".github", "workflows", "action.yml")
+		require.NoError(t, os.Rename(filepath.Join(".github", "workflows", "workflow.yml"), path))
+		paths, err := discoverWorkflowPaths([]string{path}, "", false)
+		require.NoError(t, err)
+		assert.Equal(t, []string{path}, paths)
+	})
+}

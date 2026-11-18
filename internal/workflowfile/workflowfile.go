@@ -342,6 +342,24 @@ func DiscoverWorkflowsIn(dir string) ([]string, error) {
 	return paths, nil
 }
 
+// IsActionFile reports whether path is an action definition rather than a
+// workflow: a top-level runs key and no jobs key. It goes by content, not
+// name, so a workflow named action.yml passes and a case variant or symlink
+// of an action file doesn't.
+func IsActionFile(path string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return false
+	}
+	_, runs := doc["runs"]
+	_, jobs := doc["jobs"]
+	return runs && !jobs
+}
+
 // FindRepoRoot returns the repository root containing startPath, or "" when
 // startPath is not inside a git repository. RepoRootEnv overrides discovery;
 // an unusable override is an error.

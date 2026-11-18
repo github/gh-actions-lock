@@ -108,10 +108,10 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		recorded, _ := pw.PartitionRefs()
 		// rootRef is the workflow ref that still uses a recorded root, by
 		// the same rule as the stale check (lockfile.RootUse): the use
-		// naming its key, else one naming its commit.
+		// naming its key.
 		use := lockfile.RootUse(recorded)
 		rootRef := func(p parserlock.Pin, a parserlock.Action) (parserlock.ActionRef, bool) {
-			return use(p, a.Commit)
+			return use(p)
 		}
 		live := func(p parserlock.Pin, a parserlock.Action) bool {
 			_, ok := rootRef(p, a)
@@ -350,12 +350,11 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 // uses reach the root entry lp, matched as lockfile.RootUse matches them.
 func rootPaths(recorded []parserlock.ActionRef, lp lockfile.LockedPin) []string {
 	var out []string
-	sha := lockedSHA(lp.Action.Commit)
 	for _, ref := range recorded {
 		if !strings.EqualFold(ref.NWO(), lp.Pin.NWO) || slices.Contains(out, ref.Path) {
 			continue
 		}
-		if ref.Ref == lp.Pin.Ref || parserlock.IsFullSha(ref.Ref) && strings.EqualFold(ref.Ref, sha) {
+		if ref.Ref == lp.Pin.Ref {
 			out = append(out, ref.Path)
 		}
 	}

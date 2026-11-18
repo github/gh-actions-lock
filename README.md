@@ -60,7 +60,7 @@ In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant,
 
 Other flags:
 
-- `<workflow-path>...` scopes a run to specific workflows. Only a full-directory run prunes entries for deleted workflows.
+- `<workflow-path>...` scopes a run to specific workflows. Only a full-directory run prunes entries for deleted workflows. An action file (`action.yml` or `action.yaml`) isn't accepted: composite actions can't carry their own lockfile yet, so lock the workflows that call it.
 - `--json [fields]` prints machine-readable output to stdout.
 - `--accept-moved` accepts pins whose locked commit is no longer upstream. Check why it moved first; never use it in automation.
 - `--no-narrow` keeps partial versions (`v4`) as written instead of narrowing to a full tag.
