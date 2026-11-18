@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -185,8 +186,17 @@ func (r *Resolver) KeepWrittenNames(refs []parserlock.ActionRef) {
 	}
 }
 
-func (r *Resolver) keepsWrittenName(ref parserlock.ActionRef) bool {
-	return r.writtenNames[cacheKey(ref)]
+// keepsWrittenName reports whether ref, written as orig and resolving to
+// the canonical name, stays as written. That holds when an action file
+// writes either spelling: redirecting an alias onto the action file's name
+// would merge the two, and narrowing the merged ref would drop the key the
+// action file needs.
+func (r *Resolver) keepsWrittenName(orig parserlock.ActionRef, canonical string) bool {
+	if r.writtenNames[cacheKey(orig)] {
+		return true
+	}
+	owner, repo, ok := strings.Cut(canonical, "/")
+	return ok && r.writtenNames[ghapi.ForActionRef(owner, repo, orig.Path, orig.Ref)]
 }
 
 // Redirect re-labels the entry seeded for owner/repo under its canonical
@@ -194,7 +204,7 @@ func (r *Resolver) keepsWrittenName(ref parserlock.ActionRef) bool {
 // reason to advance. orig is the ref as written, which the rewrite must
 // match exactly. Unseeded refs are left to live resolution.
 func (r *Resolver) Redirect(owner, repo string, orig parserlock.ActionRef, canonical string) {
-	if r.keepsWrittenName(orig) {
+	if r.keepsWrittenName(orig, canonical) {
 		return
 	}
 	for _, key := range []ghapi.ActionRef{ghapi.ForActionRef(owner, repo, "", orig.Ref), ghapi.ForActionRef(owner, repo, orig.Path, orig.Ref)} {

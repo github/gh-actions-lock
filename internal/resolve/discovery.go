@@ -259,7 +259,7 @@ func (r *Resolver) ResolveAllRecursive(ctx context.Context, refs []parserlock.Ac
 			if len(deps[i].OriginalRefs) == 0 {
 				continue
 			}
-			if depth > 0 || ghapi.DependabotProxy() || r.keepsWrittenName(deps[i].OriginalRefs[0]) {
+			if depth > 0 || ghapi.DependabotProxy() || r.keepsWrittenName(deps[i].OriginalRefs[0], deps[i].NWO) {
 				deps[i].NWO = deps[i].OriginalRefs[0].NWO()
 				deps[i].OriginalRefs = nil
 			}
