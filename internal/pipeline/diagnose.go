@@ -152,8 +152,9 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 
 	depByKey := indexDeps(pw.ExistingDeps)
 	liveByKey := indexDeps(liveDeps)
+	locked := lockedChildren(store.File().Dependencies)
 	for _, f := range rawFindings {
-		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap) {
+		if f.Category == checks.Stale && isTransitivePin(f, depByKey, parentMap, locked) {
 			continue
 		}
 		attachParent(&f, depByKey, directNWOs, parentMap)

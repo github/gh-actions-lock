@@ -1171,3 +1171,85 @@ func TestRun_BumpedCompositeKeepsMixedCaseChild(t *testing.T) {
 	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
 	require.NoError(t, err, stderr)
 }
+
+// TestRun_BumpedDirectUseDropsStaleRootACompositeStillUses: the workflow
+// bumps its direct use of a dep a composite it calls still uses at the old
+// ref. The old ref leaves the workflow's roots but keeps its entry and the
+// composite's edge. A sub-path use makes the run read the composite's
+// manifest, so its edge to the old ref is live (#296).
+func TestRun_BumpedDirectUseDropsStaleRootACompositeStillUses(t *testing.T) {
+	const compSHA, oldSHA, newSHA = "cccccccccccccccccccccccccccccccccccccccc", "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"
+	shas := map[string]string{"octo/comp@v1": compSHA, "octo/java@v6.2.0": oldSHA, "octo/java@v6.3.0": newSHA}
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), func(req *http.Request) (*http.Response, error) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+		data := map[string]any{}
+		for k, v := range body.Variables {
+			if i, ok := strings.CutPrefix(k, "oid"); ok {
+				nwo := body.Variables["owner"+i].(string) + "/" + body.Variables["name"+i].(string)
+				data["a"+i] = map[string]any{"nameWithOwner": nwo, "databaseId": 1, "commit": map[string]any{"oid": v},
+					"tag": map[string]any{"oid": v}, "tagRef": map[string]any{"oid": v}}
+			}
+		}
+		return httpmock.JSONResponse(map[string]any{"data": data})(req)
+	})
+	reg.RegisterReusable(httpmock.GraphQL(`.`), func(req *http.Request) (*http.Response, error) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+		data := map[string]any{}
+		for k, v := range body.Variables {
+			i, ok := strings.CutPrefix(k, "owner")
+			if !ok {
+				continue
+			}
+			nwo := v.(string) + "/" + body.Variables["name"+i].(string)
+			ref, _ := body.Variables["expr"+i].(string)
+			if r, ok := body.Variables["ref"+i].(string); ok {
+				ref = r
+			}
+			ref = strings.TrimSuffix(ref, "^{commit}")
+			sha, ok := shas[nwo+"@"+ref]
+			if !ok {
+				sha = ref
+			}
+			manifest := nodeActionYAML
+			if nwo == "octo/comp" {
+				manifest = composite("octo/java@v6.2.0")
+			}
+			data["a"+i] = testRepoResponse(nwo, sha, manifest)
+		}
+		return httpmock.JSONResponse(map[string]any{"data": data})(req)
+	})
+	reg.RegisterReusable(httpmock.REST("GET", `/(tags|releases)$`), httpmock.JSONResponse([]any{}))
+	useDefaultTransport(t, reg)
+
+	path := writeTempWorkflow(t, "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/java@v6.3.0\n      - uses: octo/comp/setup@v1\n")
+	entry := func(key, ref, sha string, uses ...string) string {
+		s := "    '" + key + "':\n        ref: '" + ref + "'\n        commit: 'sha1-" + sha + "'\n        owner_id: 1\n        repo_id: 1\n"
+		if len(uses) > 0 {
+			s += "        uses:\n"
+			for _, u := range uses {
+				s += "            - '" + u + "'\n"
+			}
+		}
+		return s
+	}
+	lock := "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/workflow.yml':\n        - 'octo/comp@v1'\n        - 'octo/java@v6.2.0'\n" +
+		"dependencies:\n" + entry("octo/comp@v1", "v1", compSHA, "octo/java@v6.2.0") + entry("octo/java@v6.2.0", "v6.2.0", oldSHA)
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-onboard", "--no-narrow", "--ignore-local-actions", "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	after := readTempLockfilePins(t)
+	assert.Contains(t, after, "'.github/workflows/workflow.yml':\n        - 'octo/comp@v1'\n        - 'octo/java@v6.3.0'\ndependencies:")
+	assert.Contains(t, after, entry("octo/comp@v1", "v1", compSHA, "octo/java@v6.2.0"))
+	assert.Contains(t, after, entry("octo/java@v6.2.0", "v6.2.0", oldSHA))
+
+	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
+	require.NoError(t, err, stderr)
+}
