@@ -23,6 +23,9 @@ type ParsedWorkflow struct {
 	// SelfActionRefs are the remote refs found inside the in-repo action
 	// files reached through step-level `$/…` refs.
 	SelfActionRefs []parserlock.ActionRef
+	// SelfActionFiles maps workflowfile.RefFileKey of each SelfActionRefs
+	// entry to the repo-relative action files that use it.
+	SelfActionFiles map[string][]string
 	// SHASpellings maps each `uses:` value that spells a full SHA in
 	// uppercase, as the source has it, to its lowercase form, which Refs
 	// carry so lockfile lookups see one spelling.

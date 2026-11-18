@@ -344,6 +344,7 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 			Severity:        checks.SeverityWarning,
 			Confidence:      checks.ConfidenceHigh,
 			ParentNWO:       lu.Parent,
+			ParentFile:      lu.File,
 			LocalPath:       lu.Path,
 			LocalRemoteUses: workflowfile.LocalActionRemoteUses(pw.Path, lu.Path),
 			Detail:          fmt.Sprintf("cannot follow workspace-local action %s used by %s", lu.Path, lu.Parent),

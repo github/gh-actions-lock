@@ -202,9 +202,13 @@ func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 		scan.SelfRepositoryRefErrs,
 	)
 	assert.Equal(t, []LocalUse{
-		{Path: "./workspace-relative", Parent: "$/actions/root"},
-		{Path: "./workspace-relative", Parent: "$/actions/child"},
+		{Path: "./workspace-relative", Parent: "$/actions/root", File: "actions/root/action.yml"},
+		{Path: "./workspace-relative", Parent: "$/actions/child", File: "actions/child/action.yml"},
 	}, scan.LocalUses, "one entry per containing action")
+	assert.Equal(t, map[string][]string{
+		"vendor/tool@v1":      {"actions/root/action.yml"},
+		"actions/checkout@v4": {"actions/child/action.yml"},
+	}, scan.RefFiles)
 	assert.Empty(t, scan.Errors)
 	assert.Equal(t, []uses.Image{{Name: "alpine:3.18", Where: "$/actions/child"}}, scan.Images)
 }
@@ -715,4 +719,22 @@ func TestLoadReadErrorIsNotASyntaxError(t *testing.T) {
 	require.Error(t, err)
 	var syntaxErr *SyntaxError
 	assert.False(t, errors.As(err, &syntaxErr))
+}
+
+func TestRefFileKey(t *testing.T) {
+	const upper = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	tests := []struct {
+		name string
+		ref  parserlock.ActionRef
+		want string
+	}{
+		{"folds owner and repo, keeps tag case", parserlock.ActionRef{Owner: "Octo", Repo: "Tool", Ref: "V1"}, "octo/tool@V1"},
+		{"keeps sub-action paths apart", parserlock.ActionRef{Owner: "github", Repo: "codeql-action", Path: "analyze", Ref: "v3"}, "github/codeql-action/analyze@v3"},
+		{"spells a full SHA in lowercase", parserlock.ActionRef{Owner: "octo", Repo: "tool", Ref: upper}, "octo/tool@" + strings.ToLower(upper)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, RefFileKey(tt.ref))
+		})
+	}
 }

@@ -935,16 +935,17 @@ func TestRun_LocalActionUsingRemoteActionsBlocks(t *testing.T) {
 }
 
 // TestRun_LocalActionErrorNamesTheFix: inside a `$/…` action the rewrite is
-// left to the user, since action files are never edited; inside a remote
+// left to the user, since action files are never edited, so the message names
+// the file; inside a remote
 // composite only the flag applies.
 func TestRun_LocalActionErrorNamesTheFix(t *testing.T) {
-	for _, tc := range []struct{ parent, want string }{
-		{"", "./x runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
-		{"$/actions/build", "./x (in $/actions/build) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Change it to $/x in $/actions/build, or pass --ignore-local-actions to keep ./."},
-		{"octo/tool@v2", "./x (in octo/tool@v2) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --ignore-local-actions to keep ./."},
+	for _, tc := range []struct{ parent, file, want string }{
+		{"", "", "./x runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
+		{"$/actions/build", "actions/build/action.yml", "./x (in actions/build/action.yml) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Change it to $/x in actions/build/action.yml, or pass --ignore-local-actions to keep ./."},
+		{"octo/tool@v2", "", "./x (in octo/tool@v2) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --ignore-local-actions to keep ./."},
 	} {
 		report := &checks.Report{Workflows: []checks.WorkflowReport{{Findings: []checks.Finding{{
-			Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: "./x", ParentNWO: tc.parent, LocalRemoteUses: []string{"a/b@v1"},
+			Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: "./x", ParentNWO: tc.parent, ParentFile: tc.file, LocalRemoteUses: []string{"a/b@v1"},
 		}}}}}
 		assert.True(t, blockLocalActions(report, false))
 		assert.Equal(t, tc.want, report.Workflows[0].Findings[0].Detail)

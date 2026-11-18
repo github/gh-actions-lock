@@ -809,12 +809,13 @@ func blockLocalActions(report *checks.Report, ignore bool) bool {
 			}
 			subject := f.LocalPath
 			fix := "Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."
-			if f.ParentNWO != "" {
+			switch {
+			case f.ParentFile != "":
+				subject += " (in " + f.ParentFile + ")"
+				fix = "Change it to $/" + strings.TrimPrefix(f.LocalPath, "./") + " in " + f.ParentFile + ", or pass --ignore-local-actions to keep ./."
+			case f.ParentNWO != "":
 				subject += " (in " + f.ParentNWO + ")"
 				fix = "Pass --ignore-local-actions to keep ./."
-				if strings.HasPrefix(f.ParentNWO, "$/") {
-					fix = "Change it to $/" + strings.TrimPrefix(f.LocalPath, "./") + " in " + f.ParentNWO + ", or pass --ignore-local-actions to keep ./."
-				}
 			}
 			cause := subject + " runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced."
 			f.Severity = checks.SeverityError

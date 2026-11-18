@@ -757,14 +757,17 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			uses += "/" + ref.Path
 		}
 		f.Remediation = fmt.Sprintf("run `gh actions-lock` to rewrite it as `uses: %s@%s`", uses, ref.Ref)
-		switch {
-		case inActionFile(pw.SelfActionRefs, ref.NWO(), ref.Ref):
-			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in the same-repository action that uses it, then run `gh actions-lock`", uses, ref.Ref)
+		switch files := pw.SelfActionFiles[workflowfile.RefFileKey(ref)]; {
+		case len(files) > 0:
+			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, strings.Join(files, ", "))
+			f.KeptName = true
 		case inActionFile(held, ref.NWO(), ref.Ref) || inActionFile(held, st.NameWithOwner, ref.Ref):
 			// An action file's spelling anywhere in the run keeps this one as written.
-			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in the workflow, then run `gh actions-lock`", uses, ref.Ref)
+			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, pw.Path)
+			f.KeptName = true
 		}
 		if f.ParentNWO != "" {
+			f.KeptName = false
 			f.Remediation = fmt.Sprintf("upgrade %s to a version that uses %s", f.ParentNWO, st.NameWithOwner)
 		}
 	default:

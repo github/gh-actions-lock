@@ -32,6 +32,9 @@ type Finding struct {
 	ParentNWO string
 	// LocalPath is the `./…` value a LocalAction warning names.
 	LocalPath string
+	// ParentFile is the repo-relative action file of an in-repo `$/…`
+	// ParentNWO.
+	ParentFile string
 	// LocalRemoteUses are the remote actions the LocalPath composite uses in
 	// the checkout. The runner needs a pin for each, which the lockfile
 	// can't record, so the CLI blocks on them.
@@ -71,6 +74,10 @@ type Finding struct {
 	// sticky mutable ref, the terminal shows it; the JSON category is
 	// unchanged.
 	TagMoved bool
+	// KeptName marks a repo-renamed warning a fix run leaves as written,
+	// because an in-repo action file holds the name. The terminal shows it
+	// on fix runs too.
+	KeptName bool
 	// RecordedRef is the lock entry ref a parity finding on a recorded pin
 	// checked; empty for a ref this run resolved. FreshRef marks the
 	// latter, which the lockfile never recorded.

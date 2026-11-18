@@ -292,7 +292,7 @@ func discoverWorkflowPaths(existing []string, workflowsDir string, allowEmpty bo
 	}
 	for _, p := range paths {
 		if workflowfile.IsActionFile(p) {
-			return nil, fmt.Errorf("%s is an action file, not a workflow. Composite actions can't carry their own lockfile yet, so locking one doesn't protect the workflows that call it. Run gh actions-lock on those workflows instead", p)
+			return nil, fmt.Errorf("%s is an action file, not a workflow: composite actions can't carry their own lockfile yet, so lock the workflows that use it instead", p)
 		}
 	}
 	return paths, nil

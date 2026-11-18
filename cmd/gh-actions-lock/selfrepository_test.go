@@ -256,7 +256,7 @@ func TestSelfRepositoryActionSHAPinKeepsRenamedName(t *testing.T) {
 	require.NoError(t, err, "%s\n%s", stderr, lock)
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
 	require.NoError(t, err, stderr)
-	assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in the same-repository action that uses it")
+	assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in .github/actions/typing/action.yml, then run")
 }
 
 // TestSelfRepositoryActionSHAPinKeepsRenamedNameAcrossSpellings: a workflow
@@ -365,7 +365,7 @@ func TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName(t *testing.T) {
 				// The workflow still shares the action file's ref, so no
 				// rerun will rewrite it.
 				_, stderr, _ = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
-				assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in the workflow, then run")
+				assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in .github/workflows/workflow.yml, then run")
 			}
 		})
 	}

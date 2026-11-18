@@ -276,7 +276,7 @@ An exact release tag that moved for a dependency your workflow references by tag
 
 **Headline:** WORKFLOW: OLD-NAME was renamed or transferred to NEW-NAME
 
-The action's repository was renamed or transferred, but it's still the same repository, and GitHub Actions follows the redirect. Run `gh actions-lock` to update the `uses:` name. The run reports **Rewrote OLD-NAME → NEW-NAME** and doesn't change the locked commit. The extension never edits action files, so if one of your repository's `$/` actions uses the old name, change it there yourself. If a composite action uses it, upgrade the composite action to a version that uses the new name.
+The action's repository was renamed or transferred, but it's still the same repository, and GitHub Actions follows the redirect. Run `gh actions-lock` to update the `uses:` name. The run reports **Rewrote OLD-NAME → NEW-NAME** and doesn't change the locked commit. The extension never edits action files, so if one of your repository's `$/` actions uses the old name, the warning names that file, even on a fix run: change it there yourself. If a composite action uses it, upgrade the composite action to a version that uses the new name.
 
 ### `sha-as-ref`
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -185,12 +186,31 @@ type SelfRepositoryActionScan struct {
 	Errors        []string
 	// Images are the mutable `docker://` steps in the visited actions.
 	Images []uses.Image
+	// RefFiles maps RefFileKey of each ref in Refs to the repo-relative
+	// action files that use it.
+	RefFiles map[string][]string
+}
+
+// RefFileKey keys a remote ref by owner/repo (case-insensitive), sub-action
+// path and ref, with a full SHA in lowercase as lockfile lookups spell it.
+func RefFileKey(a parserlock.ActionRef) string {
+	key := strings.ToLower(a.NWO())
+	if a.Path != "" {
+		key += "/" + a.Path
+	}
+	ref := a.Ref
+	if parserlock.IsFullSha(ref) {
+		ref = strings.ToLower(ref)
+	}
+	return key + "@" + ref
 }
 
 // LocalUse is a `./…` use and the `$/…` action whose steps contain it.
 type LocalUse struct {
 	Path   string
 	Parent string
+	// File is Parent's repo-relative action file.
+	File string
 }
 
 // ScanSelfRepositoryActions recursively reads in-repo actions reached through
@@ -255,11 +275,12 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 			continue
 		}
 
-		actionUses, err := readActionUses(repoRoot, actionDir)
+		actionUses, name, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
 		}
+		file := path.Join(filepath.ToSlash(relPath), name)
 		for _, rawUse := range actionUses {
 			use := strings.TrimSpace(rawUse)
 			switch {
@@ -275,7 +296,7 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 				}
 				pending = append(pending, pendingAction{ref: use, depth: current.depth + 1})
 			case strings.HasPrefix(use, "./"):
-				if lu := (LocalUse{Path: use, Parent: current.ref}); !seenLocal[lu] {
+				if lu := (LocalUse{Path: use, Parent: current.ref, File: file}); !seenLocal[lu] {
 					seenLocal[lu] = true
 					scan.LocalUses = append(scan.LocalUses, lu)
 				}
@@ -297,6 +318,13 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 					if !seenRefs[key] {
 						seenRefs[key] = true
 						scan.Refs = append(scan.Refs, c.Action)
+					}
+					fk := RefFileKey(c.Action)
+					if !slices.Contains(scan.RefFiles[fk], file) {
+						if scan.RefFiles == nil {
+							scan.RefFiles = map[string][]string{}
+						}
+						scan.RefFiles[fk] = append(scan.RefFiles[fk], file)
 					}
 				}
 			}
@@ -610,7 +638,7 @@ func LocalActionRemoteUses(workflowPath, localPath string) []string {
 			continue
 		}
 		seen[actionDir] = true
-		actionUses, err := readActionUses(root, actionDir)
+		actionUses, _, err := readActionUses(root, actionDir)
 		if err != nil {
 			continue
 		}
@@ -707,13 +735,13 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 }
 
 // readActionUses returns the `uses:` values of an in-repo action definition.
-func readActionUses(repoRoot, actionDir string) ([]string, error) {
+func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := filepath.Join(actionDir, name)
 		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
 			if errors.Is(err, errPathOutsideRoot) {
-				return nil, err
+				return nil, "", err
 			}
 			lastErr = err
 			continue
@@ -725,11 +753,11 @@ func readActionUses(repoRoot, actionDir string) ([]string, error) {
 		}
 		uses, err := parseActionYAMLForUses(content)
 		if err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", name, err)
+			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
 		}
-		return uses, nil
+		return uses, name, nil
 	}
-	return nil, fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
+	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
 }
 
 // KeyFromPath converts a workflow path discovered on disk (relative to the
