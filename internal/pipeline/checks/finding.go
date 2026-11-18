@@ -154,15 +154,13 @@ type WorkflowReport struct {
 	// ActionRefs are all remote dependency roots attributed to the workflow,
 	// including refs found inside in-repo `$/…` actions.
 	ActionRefs []parserlock.ActionRef
-	// RewriteRefs are the refs eligible for source rewriting: workflow YAML
-	// plus the in-repo `$/…` action files listed in SelfActionFiles.
+	// RewriteRefs are the refs eligible for rewriting in the workflow file:
+	// those no in-repo `$/…` action file also holds.
 	RewriteRefs []parserlock.ActionRef
 	// SHASpellings are the source spellings of uppercase full-SHA refs
 	// (see ParsedWorkflow).
 	SHASpellings map[string]string
-	// SelfActionFiles are in-repo action definition files reached via `$/…`.
-	SelfActionFiles []string
-	// SelfActionRefs are the remote refs found specifically inside SelfActionFiles.
+	// SelfActionRefs are the remote refs found inside in-repo `$/…` action files.
 	SelfActionRefs []parserlock.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []dep.Dependency

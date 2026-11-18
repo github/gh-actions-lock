@@ -1101,19 +1101,6 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			"rewrite map should record the original SHA ref")
 	})
 
-	t.Run("partial scan rejects unrecorded shared action rewrite", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t)
-		wr.SelfActionRefs = append([]parserlock.ActionRef(nil), wr.ActionRefs...)
-
-		_, err := planWorkflow(context.Background(), wr, PlanOptions{
-			Resolver:    resolver,
-			Tagger:      tagger,
-			Pool:        pinpool.New(2, nil),
-			PartialScan: true,
-		}, func(string) {})
-
-		require.ErrorContains(t, err, "shared local action during a partial workflow scan")
-	})
 }
 
 // TestPlanWorkflow_CrossRefTransitiveClosure verifies that a composite at

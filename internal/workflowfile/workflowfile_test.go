@@ -687,55 +687,6 @@ func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.
 	}
 }
 
-func TestDiscoverCompositeActionFiles(t *testing.T) {
-	root := t.TempDir()
-	write := func(rel string) {
-		full := filepath.Join(root, rel)
-		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
-		require.NoError(t, os.WriteFile(full, []byte("runs:\n  using: composite\n"), 0o644))
-	}
-	write("action.yml")
-	write("nested/deep/action.yaml")
-	write(".github/actions/thing/action.yml")
-	write("not-an-action.yml")
-	// A stray file inside .git must be skipped.
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "action.yml"), []byte("x"), 0o644))
-
-	got, err := DiscoverCompositeActionFiles(root)
-	require.NoError(t, err)
-
-	want := []string{
-		filepath.Join(root, ".github/actions/thing/action.yml"),
-		filepath.Join(root, "action.yml"),
-		filepath.Join(root, "nested/deep/action.yaml"),
-	}
-	assert.Equal(t, want, got)
-}
-
-func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
-	got, err := DiscoverCompositeActionFiles("")
-	require.NoError(t, err)
-	assert.Nil(t, got)
-}
-
-func TestDiscoverCompositeActionFiles_RejectsSymlinkEscape(t *testing.T) {
-	root := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "action.yml")
-	require.NoError(t, os.WriteFile(outside, []byte("runs:\n  using: composite\n"), 0o644))
-	actionDir := filepath.Join(root, "actions", "escape")
-	require.NoError(t, os.MkdirAll(actionDir, 0o755))
-	if err := os.Symlink(outside, filepath.Join(actionDir, "action.yml")); err != nil {
-		t.Skipf("creating symlink: %v", err)
-	}
-
-	paths, err := DiscoverCompositeActionFiles(root)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outside repository root")
-	assert.Empty(t, paths)
-}
-
 func TestParseErrorKinds(t *testing.T) {
 	tests := []struct {
 		name       string

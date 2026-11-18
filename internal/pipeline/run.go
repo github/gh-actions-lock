@@ -54,6 +54,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	endParse := prof.Phase("  parse workflows")
 	parsed := ParseAll(opts.WorkflowPaths, opts.Store)
 	endParse()
+	keepActionFileNames(r, parsed)
 
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

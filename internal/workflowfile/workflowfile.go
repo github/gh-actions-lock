@@ -7,7 +7,6 @@ package workflowfile
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -183,10 +182,7 @@ type SelfRepositoryActionScan struct {
 	// `$/…` action that contains it.
 	LocalUses     []LocalUse
 	MalformedRefs []string
-	// ActionFiles are the in-repo action definition files visited, in visit
-	// order. Refs in these files are rewritable source, unlike `$/…` itself.
-	ActionFiles []string
-	Errors      []string
+	Errors        []string
 	// Images are the mutable `docker://` steps in the visited actions.
 	Images []uses.Image
 }
@@ -259,12 +255,11 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 			continue
 		}
 
-		actionUses, actionPath, err := readActionUses(repoRoot, actionDir)
+		actionUses, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
 		}
-		scan.ActionFiles = append(scan.ActionFiles, actionPath)
 		for _, rawUse := range actionUses {
 			use := strings.TrimSpace(rawUse)
 			switch {
@@ -365,48 +360,6 @@ func IsActionFile(path string) bool {
 // an unusable override is an error.
 func FindRepoRoot(startPath string) (string, error) {
 	return findRepoRoot(startPath)
-}
-
-// DiscoverCompositeActionFiles walks the repository rooted at root and returns
-// the paths of all action definition files (action.yml / action.yaml). The
-// .git directory is skipped. Non-composite action files are included; callers
-// migrate them with MigrateLocalActionsToSelfRepository, which no-ops when a file has
-// no local `./…` steps.
-func DiscoverCompositeActionFiles(root string) ([]string, error) {
-	if root == "" {
-		return nil, nil
-	}
-	var paths []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Name() == "action.yml" || d.Name() == "action.yaml" {
-			if err := ValidatePathWithinRoot(root, p); err != nil {
-				return err
-			}
-			info, err := os.Stat(p)
-			if err != nil {
-				return err
-			}
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("action definition %s is not a regular file", p)
-			}
-			paths = append(paths, p)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discovering action files under %s: %w", root, err)
-	}
-	sort.Strings(paths)
-	return paths, nil
 }
 
 // walkUses visits `uses:` values at the only places GitHub Actions honors
@@ -649,7 +602,7 @@ func LocalActionRemoteUses(workflowPath, localPath string) []string {
 	if !isWithinRoot(root, actionDir) {
 		return nil
 	}
-	actionUses, _, err := readActionUses(root, actionDir)
+	actionUses, err := readActionUses(root, actionDir)
 	if err != nil {
 		return nil
 	}
@@ -740,15 +693,14 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 	return uses, nil
 }
 
-// readActionUses returns the `uses:` values of an in-repo action definition
-// along with the file they were read from, so callers can rewrite that file.
-func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
+// readActionUses returns the `uses:` values of an in-repo action definition.
+func readActionUses(repoRoot, actionDir string) ([]string, error) {
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
 		actionPath := filepath.Join(actionDir, name)
 		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
 			if errors.Is(err, errPathOutsideRoot) {
-				return nil, "", err
+				return nil, err
 			}
 			lastErr = err
 			continue
@@ -760,11 +712,11 @@ func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
 		}
 		uses, err := parseActionYAMLForUses(content)
 		if err != nil {
-			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
+			return nil, fmt.Errorf("parsing %s: %w", name, err)
 		}
-		return uses, actionPath, nil
+		return uses, nil
 	}
-	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
+	return nil, fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
 }
 
 // KeyFromPath converts a workflow path discovered on disk (relative to the

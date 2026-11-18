@@ -202,13 +202,13 @@ A `./` path resolves against the runner's workspace, which checkouts, downloads,
 
 Fix it in one of these ways:
 
-* **Lock the action as `$/`.** If the action is in your repository, rewrite `./` references to `$/`, in your workflows and in your repository's action files:
+* **Lock the action as `$/`.** If the action is in your repository, rewrite your workflows' `./` references to `$/`:
 
   ```shell
   gh actions-lock --migrate-local-actions
   ```
 
-  A `$/` reference always runs at the workflow's own commit, and the extension locks the actions it uses. Review the diff before you commit. For how `$/`, `owner/repo@ref`, and `./` references differ, see [Using an action in the same repository as the workflow](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended) in the GitHub Docs.
+  A `$/` reference always runs at the workflow's own commit, and the extension locks the actions it uses. The extension never edits action files, so change any `./` inside your repository's action files to `$/` yourself. Review the diff before you commit. For how `$/`, `owner/repo@ref`, and `./` references differ, see [Using an action in the same repository as the workflow](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended) in the GitHub Docs.
 
 * **Keep `./`.** Report the local action as a warning instead of an error:
 
@@ -316,7 +316,7 @@ Your Dependabot cooldown settings include options that the extension doesn't use
 
 **Headline:** N actions pinned without a full semver tag
 
-A workflow uses a partial version, such as `v4` or `v3.1`. A full version tag, such as `v4.2.1`, names one commit. Consider changing the `uses:` line to a full version tag. When you first lock a workflow, the extension narrows partial versions to full version tags; to keep partial versions, pass `--no-narrow`.
+A workflow uses a partial version, such as `v4` or `v3.1`. A full version tag, such as `v4.2.1`, names one commit. Consider changing the `uses:` line to a full version tag. When you first lock a workflow, the extension narrows partial versions to full version tags; to keep partial versions, pass `--no-narrow`. Partial versions inside your repository's `$/` actions are locked as written, because the extension never edits action files.
 
 ### `stale-workflow`
 

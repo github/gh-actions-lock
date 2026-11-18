@@ -244,7 +244,6 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 		wr.RewriteRefs = pw.Refs
 	}
 	wr.SHASpellings = pw.SHASpellings
-	wr.SelfActionFiles = pw.SelfActionFiles
 	wr.SelfActionRefs = pw.SelfActionRefs
 	for _, img := range pw.Images {
 		checks.AddContainerImage(&wr, img)

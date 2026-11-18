@@ -13,12 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigrateLocalActions_CompositeActionFiles verifies that migration
-// rewrites `./…` not just in workflow files but also inside in-repo composite
-// action definitions (action.yml), including ones nested a few directories deep.
-// A `./…` whose target does not resolve to an in-repo action file is left
-// untouched — that is the equivalence guard that keeps `$/` a safe replacement.
-func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
+// TestMigrateLocalActions_LeavesActionFilesUntouched checks that migration
+// rewrites `./…` only in workflow files, never inside in-repo action files.
+func TestMigrateLocalActions_LeavesActionFilesUntouched(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel, content string) {
 		full := filepath.Join(dir, rel)
@@ -29,20 +26,21 @@ func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 	write(".github/workflows/ci.yml",
 		"name: CI\non: push\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./my-action\n")
-	write("my-action/action.yml",
-		"name: My Action\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n    - uses: ./nonexistent\n")
-	write("helper/action.yml",
-		"name: Helper\nruns:\n  using: composite\n  steps:\n    - uses: ./nested/deep\n")
-	write("nested/deep/action.yml",
-		"name: Deep\nruns:\n  using: composite\n  steps:\n    - run: echo deep\n      shell: bash\n")
+	actionFiles := map[string]string{
+		"my-action/action.yml":   "name: My Action\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n",
+		"helper/action.yml":      "name: Helper\nruns:\n  using: composite\n  steps:\n    - uses: ./nested/deep\n",
+		"nested/deep/action.yml": "name: Deep\nruns:\n  using: composite\n  steps:\n    - run: echo deep\n      shell: bash\n",
+	}
+	for rel, content := range actionFiles {
+		write(rel, content)
+	}
 
 	t.Chdir(dir)
 
 	total, _, err := migrateLocalActions([]string{filepath.Join(".github", "workflows", "ci.yml")})
 	require.NoError(t, err)
 
-	// workflow ./my-action, composite ./helper, composite ./nested/deep = 3.
-	assert.Equal(t, 3, total)
+	assert.Equal(t, 1, total)
 
 	read := func(rel string) string {
 		b, err := os.ReadFile(filepath.Join(dir, rel))
@@ -50,10 +48,9 @@ func TestMigrateLocalActions_CompositeActionFiles(t *testing.T) {
 		return string(b)
 	}
 	assert.Contains(t, read(".github/workflows/ci.yml"), "uses: $/my-action")
-	assert.Contains(t, read("my-action/action.yml"), "uses: $/helper")
-	assert.Contains(t, read("helper/action.yml"), "uses: $/nested/deep")
-	// Unresolvable local path stays put — nothing at repo-root/nonexistent.
-	assert.Contains(t, read("my-action/action.yml"), "uses: ./nonexistent")
+	for rel, want := range actionFiles {
+		assert.Equal(t, want, read(rel), rel)
+	}
 }
 
 func TestMigrateLocalActions_StructuralErrorPreventsAllWrites(t *testing.T) {
@@ -83,7 +80,7 @@ func TestMigrateLocalActions_StructuralErrorPreventsAllWrites(t *testing.T) {
 	assert.Equal(t, firstBefore, firstAfter)
 }
 
-func TestMigrateLocalActions_RejectsActionFileSymlinkEscape(t *testing.T) {
+func TestMigrateLocalActions_SkipsActionFileSymlinkEscape(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 	workflowPath := filepath.Join(dir, ".github", "workflows", "ci.yml")
@@ -102,9 +99,8 @@ func TestMigrateLocalActions_RejectsActionFileSymlinkEscape(t *testing.T) {
 
 	total, _, err := migrateLocalActions([]string{workflowPath})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outside repository root")
-	assert.Zero(t, total)
+	require.NoError(t, err)
+	assert.Zero(t, total, "a `./` whose action file escapes the repository stays as written")
 	gotWorkflow, readErr := os.ReadFile(workflowPath)
 	require.NoError(t, readErr)
 	assert.Equal(t, workflow, gotWorkflow)
@@ -114,15 +110,10 @@ func TestMigrateLocalActions_RejectsActionFileSymlinkEscape(t *testing.T) {
 }
 
 // TestMigrateLocalActions_EndToEnd runs the real command with
-// --migrate-local-actions against a scratch repo whose local composite chain
-// reaches a pinnable remote action, then asserts on BOTH sides of
-// the mutation: the rewritten workflow/action files AND the generated
-// lockfile. It proves the two behaviours compose correctly in one pass:
-//   - `./…` same-repo refs are rewritten to `$/…` in the workflow and in the
-//     in-repo composite action.yml files (including nested ones);
-//   - `$/…` self refs are inherently pinned, so they never appear in the
-//     lockfile, while the genuine remote dep (actions/setup-go) is pinned to
-//     its resolved commit.
+// --migrate-local-actions against a scratch repo whose `$/…` composite chain
+// reaches a remote action. Only the workflow's `./…` is rewritten; every
+// action file stays byte-identical, so the remote ref is locked as written
+// rather than narrowed.
 func TestMigrateLocalActions_EndToEnd(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -168,10 +159,14 @@ jobs:
     steps:
       - uses: ./my-action
 `)+"\n")
-	// In-repo composite chain, all same-repo local refs.
-	write("my-action/action.yml", "name: My Action\nruns:\n  using: composite\n  steps:\n    - uses: ./helper\n")
-	write("helper/action.yml", "name: Helper\nruns:\n  using: composite\n  steps:\n    - uses: ./nested/deep\n")
-	write("nested/deep/action.yml", "name: Deep\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-go@v6\n")
+	actionFiles := map[string]string{
+		"my-action/action.yml":   "name: My Action\nruns:\n  using: composite\n  steps:\n    - uses: $/helper\n",
+		"helper/action.yml":      "name: Helper\nruns:\n  using: composite\n  steps:\n    - uses: $/nested/deep\n",
+		"nested/deep/action.yml": "name: Deep\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-go@v6\n",
+	}
+	for rel, content := range actionFiles {
+		write(rel, content)
+	}
 
 	t.Chdir(dir)
 
@@ -190,16 +185,14 @@ jobs:
 	assert.NotContains(t, wf, "uses: ./my-action")
 	assert.NotContains(t, wf, "actions/setup-go")
 
-	// In-repo composite action files migrated, including the nested one.
-	assert.Contains(t, read("my-action/action.yml"), "uses: $/helper")
-	assert.Contains(t, read("helper/action.yml"), "uses: $/nested/deep")
-	assert.Contains(t, read("nested/deep/action.yml"), "uses: actions/setup-go@v6.0.0",
-		"remote refs inside $/ actions are narrowed in their action file")
+	for rel, want := range actionFiles {
+		assert.Equal(t, want, read(rel), rel)
+	}
 
 	// Lockfile: pins the remote dep, records nothing for the self refs.
 	lock := readTempLockfilePins(t)
 	assert.Contains(t, lock, "actions/setup-go", "remote dep should be pinned")
-	assert.Contains(t, lock, "'actions/setup-go@v6.0.0':", "narrowed ref matches the rewritten action file")
+	assert.Contains(t, lock, "'actions/setup-go@v6':", "locked as the action file spells it")
 	assert.Contains(t, lock, setupGoSHA)
 	assert.NotContains(t, lock, "$/", "self refs are inherently pinned; no lockfile entry")
 	assert.NotContains(t, lock, "my-action", "in-repo composite must not be pinned")

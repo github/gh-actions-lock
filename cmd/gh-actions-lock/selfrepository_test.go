@@ -216,10 +216,10 @@ dependencies:
 	}
 }
 
-// TestSelfRepositoryActionSHAPinFollowsRename: a `$/…` action pins a
-// renamed repository by SHA. The pin moves to the new name and keeps its
-// SHA, and the lockfile covers it.
-func TestSelfRepositoryActionSHAPinFollowsRename(t *testing.T) {
+// TestSelfRepositoryActionSHAPinKeepsRenamedName: a `$/…` action pins a
+// renamed repository by SHA. The action file is left alone and the lockfile
+// covers the pin under the name it's written with.
+func TestSelfRepositoryActionSHAPinKeepsRenamedName(t *testing.T) {
 	const (
 		oldName = "krzema12/github-actions-typing"
 		newName = "typesafegithub/github-actions-typing"
@@ -249,18 +249,18 @@ func TestSelfRepositoryActionSHAPinFollowsRename(t *testing.T) {
 	require.NoError(t, err, stderr)
 	got, err := os.ReadFile(action)
 	require.NoError(t, err)
-	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	assert.Equal(t, composite(oldName+"@"+parityTestSHA), string(got))
 	lock := readTempLockfilePins(t)
-	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+oldName+"@"+parityTestSHA+"'\n")
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 	require.NoError(t, err, "%s\n%s", stderr, lock)
 }
 
-// TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings: a workflow
+// TestSelfRepositoryActionSHAPinKeepsRenamedNameAcrossSpellings: a workflow
 // uses a renamed repository's new name at the commit a `$/…` action pins
-// under the old name. Both spellings resolve to one dependency, and the
-// action's pin still moves to the new name with its SHA, not a tag.
-func TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings(t *testing.T) {
+// under the old name. The action file is left alone and the lockfile covers
+// both spellings.
+func TestSelfRepositoryActionSHAPinKeepsRenamedNameAcrossSpellings(t *testing.T) {
 	const (
 		oldName = "krzema12/github-actions-typing"
 		newName = "typesafegithub/github-actions-typing"
@@ -295,9 +295,10 @@ func TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings(t *testing.T) {
 	require.NoError(t, err, stderr)
 	got, err := os.ReadFile(action)
 	require.NoError(t, err)
-	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	assert.Equal(t, composite(oldName+"@"+parityTestSHA), string(got))
 	lock := readTempLockfilePins(t)
-	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+oldName+"@"+parityTestSHA+"'\n")
+	assert.Contains(t, lock, "        - '"+newName+"@"+parityTestSHA+"'\n")
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 	require.NoError(t, err, "%s\n%s", stderr, lock)
 }

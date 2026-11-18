@@ -67,11 +67,12 @@ action in the checkout uses remote actions, every mode reports a blocking `local
 Fix it with one of:
 
 ```bash
-gh actions-lock --migrate-local-actions   # rewrite same-repo ./… to $/… so they get locked
+gh actions-lock --migrate-local-actions   # rewrite workflows' same-repo ./… to $/… so they get locked
 gh actions-lock --ignore-local-actions    # keep ./… and downgrade it to a warning
 ```
 
-`$/…` refers to the same repository at the running commit and needs no lockfile entry. A `./…`
+`$/…` refers to the same repository at the running commit and needs no lockfile entry. Action files
+are never edited; change a `./…` inside one to `$/…` by hand. A `./…`
 inside a remote composite can't be rewritten, so only `--ignore-local-actions` applies there.
 
 ## Relocking and moved refs

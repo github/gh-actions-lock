@@ -161,10 +161,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if !wr.NeedsAttention() && !rebuild {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
-		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
-			return planResult{}, err
-		}
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -178,7 +175,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// --accept-moved deliberately accepts these, so it is exempt.
 	if relockKeepsUnreachable(opts, wr) {
 		entries = verifiedEntries(wr.Inventory, wr.Path)
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -199,10 +196,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
-		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
-			return planResult{}, err
-		}
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -324,20 +318,16 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
-	required := transferRewrites(deps, rootTracker, wr.ActionRefs, rewrites)
-	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
-		return planResult{}, err
-	}
+	required := transferRewrites(deps, rootTracker, rewriteRefs, rewrites)
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
 			Path:             wr.Path,
 			Rewrites:         rewrites,
 			RequiredRewrites: required,
-			SelfActionFiles:  wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 	}
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
@@ -395,24 +385,6 @@ func transferRewrites(deps []dep.Dependency, rootTracker lockfile.DirectTracker,
 		}
 	}
 	return required
-}
-
-func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlock.ActionRef, rewrites map[string]string) error {
-	if !opts.PartialScan || len(rewrites) == 0 {
-		return nil
-	}
-	selfKeys := actionRefKeys(selfActionRefs)
-	for oldUses := range rewrites {
-		ref := parserlock.ParseActionRef(oldUses)
-		if ref == nil {
-			continue
-		}
-		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
-		if selfKeys[key] {
-			return fmt.Errorf("cannot rewrite %s in a shared local action during a partial workflow scan; scan all workflows", key)
-		}
-	}
-	return nil
 }
 
 // preserveReRecorded keeps the `uses:` of each full-SHA pin whose entry

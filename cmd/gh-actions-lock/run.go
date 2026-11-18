@@ -106,7 +106,7 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().BoolVar(&opts.ignoreLocalActions, "ignore-local-actions", false,
 		"Warn instead of failing when a local `./…` action uses remote actions the lockfile can't cover")
 	cmd.Flags().BoolVar(&opts.migrateLocalActions, "migrate-local-actions", false,
-		"Rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form, in workflows and in-repo action files")
+		"Rewrite same-repo `uses: ./…` actions in workflows to the inherently-pinned `uses: $/…` form")
 	// Older releases spelled the opt-out this way; keep those commands working.
 	cmd.Flags().BoolVar(&opts.ignoreLocalActions, "no-migrate-local-actions", false, "Alias for --ignore-local-actions")
 	_ = cmd.Flags().MarkHidden("no-migrate-local-actions")
@@ -713,13 +713,10 @@ func cliVersion() string {
 	return "unknown"
 }
 
-// migrateLocalActions rewrites same-repo `./…` action refs to `$/…` and writes
-// changes to disk. It covers two kinds of files: the discovered workflow files,
-// and every in-repo composite action definition file (action.yml/action.yaml)
-// found under the repository root. The latter is why a composite action that
-// internally uses `uses: ./helper` gets fixed too, not just the workflow that
-// calls it. Returns the total number of `uses:` lines rewritten and an undo
-// func that restores the original contents; undo is never nil.
+// migrateLocalActions rewrites same-repo `./…` action refs in the workflow
+// files to `$/…` and writes changes to disk. Action files are never written.
+// Returns the total number of `uses:` lines rewritten and an undo func that
+// restores the original contents; undo is never nil.
 func migrateLocalActions(paths []string) (int, func(), error) {
 	var written []plannedMigration
 	undo := func() {
@@ -727,28 +724,10 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 			_ = os.WriteFile(m.path, m.original, 0o644)
 		}
 	}
-	files := append([]string(nil), paths...)
-
-	// Also sweep in-repo composite action files. The repo root is derived from
-	// a workflow path (they live under .github/workflows/); onboarding only
-	// runs when workflows exist, so an empty paths list means nothing to do.
-	if len(paths) > 0 {
-		root, err := workflowfile.FindRepoRoot(paths[0])
-		if err != nil {
-			return 0, undo, err
-		}
-		if root != "" {
-			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
-			if err != nil {
-				return 0, undo, err
-			}
-			files = append(files, actionFiles...)
-		}
-	}
 
 	var migrations []plannedMigration
 	seen := make(map[string]bool)
-	for _, path := range files {
+	for _, path := range paths {
 		absPath, err := filepath.Abs(path)
 		if err != nil {
 			return 0, undo, fmt.Errorf("resolving migration path %s: %w", path, err)
