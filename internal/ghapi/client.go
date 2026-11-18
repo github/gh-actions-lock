@@ -54,6 +54,8 @@ type Client struct {
 	branchListSF         singleflight.Group
 	tagListCache         syncmap.Map[Repo, []TagEntry]
 	tagListSF            singleflight.Group
+	allTagsCache         syncmap.Map[Repo, []TagEntry]
+	allTagsSF            singleflight.Group
 	namedBranchCache     syncmap.Map[NWOName, BranchHead]
 	namedBranchSF        singleflight.Group
 	protectedBranchCache syncmap.Map[Repo, []BranchHead]
