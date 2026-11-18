@@ -52,7 +52,7 @@ func TestParityFinding_RetryWording(t *testing.T) {
 			}
 			ref := parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: "v4"}
 			pc := ghapi.PinCheck{Owner: "actions", Repo: "checkout", SHA: sha, Head: "v4"}
-			f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp, pc, ghapi.PinState{Err: tt.err})
+			f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp, pc, ghapi.PinState{Err: tt.err}, nil)
 			require.True(t, ok)
 			assert.Equal(t, checks.ReachabilityUnknown, f.Category)
 			assert.Equal(t, checks.SeverityError, f.Severity)
@@ -85,6 +85,7 @@ func TestParityFinding(t *testing.T) {
 		wantRemedy  string
 		wantDetail  string
 		wantObserve string
+		held        []parserlock.ActionRef
 	}{
 		{name: "intact exact tag", ref: "v2.2.2", state: intact},
 		{name: "intact mutable ref", ref: "v2", state: ghapi.PinState{NameWithOwner: "krzema12/github-actions-typing", CommitFound: true, HeadOID: sha}},
@@ -94,6 +95,20 @@ func TestParityFinding(t *testing.T) {
 			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true, HeadOID: sha},
 			want:  checks.RepoRenamed, wantWarn: true,
 			wantRemedy: "run `gh actions-lock` to rewrite it as `uses: typesafegithub/github-actions-typing@v2.2.2`",
+		},
+		{
+			name: "an action file elsewhere in the run keeps the old name", ref: "v2.2.2",
+			held:  []parserlock.ActionRef{{Owner: "typesafegithub", Repo: "github-actions-typing", Ref: "v2.2.2"}},
+			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true, HeadOID: sha},
+			want:  checks.RepoRenamed, wantWarn: true,
+			wantRemedy: "change it to `uses: typesafegithub/github-actions-typing@v2.2.2` in the workflow, then run `gh actions-lock`",
+		},
+		{
+			name: "an action file elsewhere in the run with the same old name means a workflow edit", ref: "v2.2.2",
+			held:  []parserlock.ActionRef{{Owner: "krzema12", Repo: "github-actions-typing", Ref: "v2.2.2"}},
+			state: ghapi.PinState{NameWithOwner: "typesafegithub/github-actions-typing", CommitFound: true, HeadOID: sha},
+			want:  checks.RepoRenamed, wantWarn: true,
+			wantRemedy: "change it to `uses: typesafegithub/github-actions-typing@v2.2.2` in the workflow, then run `gh actions-lock`",
 		},
 		{
 			name: "transferred transitive dependency points at its parent", ref: "v2", parent: "octo/composite@v1",
@@ -154,7 +169,7 @@ func TestParityFinding(t *testing.T) {
 				Parent: tt.parent,
 			}
 			ref := parserlock.ActionRef{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, Ref: tt.ref}
-			f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp, pin(tt.ref), tt.state)
+			f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp, pin(tt.ref), tt.state, tt.held)
 			if tt.want == "" {
 				assert.False(t, ok, "unexpected finding: %+v", f)
 				return
@@ -233,7 +248,7 @@ func TestParityFinding_FullSHAKey(t *testing.T) {
 			}
 			ref := parserlock.ActionRef{Owner: "actions", Repo: "checkout", Ref: sha}
 			pc := ghapi.PinCheck{Owner: "actions", Repo: "checkout", SHA: sha, Head: tt.head}
-			f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp, pc, tt.state)
+			f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp, pc, tt.state, nil)
 			if tt.want == "" {
 				assert.False(t, ok, "unexpected finding: %+v", f)
 				return

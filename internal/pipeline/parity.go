@@ -52,6 +52,12 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	for i, wr := range report.Workflows {
 		reportIdx[wr.Path] = i
 	}
+	// A fix run keeps names run-wide, so whether a rename is manual is decided
+	// run-wide; where to make it follows this workflow's own action files.
+	var held []parserlock.ActionRef
+	for _, pw := range parsed {
+		held = append(held, pw.SelfActionRefs...)
+	}
 	var pins []ghapi.PinCheck
 	pinIdx := map[string]int{}
 	owners := map[int][]parityOwner{}
@@ -272,7 +278,7 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	}()
 	for i, st := range states {
 		for _, o := range owners[i] {
-			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st)
+			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st, held)
 			// A pin parity blocks or can't check is not worth reading.
 			if ok && (f.Severity == checks.SeverityError || st.Err != nil) {
 				unhealthy[pinKey(pins[i].Owner+"/"+pins[i].Repo, pins[i].SHA)] = true
@@ -672,7 +678,7 @@ func freshEntryRef(d dep.Dependency) string {
 	return d.Ref
 }
 
-func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfile.LockedPin, pc ghapi.PinCheck, st ghapi.PinState) (checks.Finding, bool) {
+func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfile.LockedPin, pc ghapi.PinCheck, st ghapi.PinState, held []parserlock.ActionRef) (checks.Finding, bool) {
 	nwo := pc.Owner + "/" + pc.Repo
 	f := checks.Finding{
 		WorkflowPath: pw.Path,
@@ -752,10 +758,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		}
 		f.Remediation = fmt.Sprintf("run `gh actions-lock` to rewrite it as `uses: %s@%s`", uses, ref.Ref)
 		switch {
-		case inActionFile(pw, ref.NWO(), ref.Ref):
+		case inActionFile(pw.SelfActionRefs, ref.NWO(), ref.Ref):
 			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in the same-repository action that uses it, then run `gh actions-lock`", uses, ref.Ref)
-		case inActionFile(pw, st.NameWithOwner, ref.Ref):
-			// The action file's spelling keeps this one as written.
+		case inActionFile(held, ref.NWO(), ref.Ref) || inActionFile(held, st.NameWithOwner, ref.Ref):
+			// An action file's spelling anywhere in the run keeps this one as written.
 			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in the workflow, then run `gh actions-lock`", uses, ref.Ref)
 		}
 		if f.ParentNWO != "" {
@@ -767,11 +773,11 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 	return f, true
 }
 
-// inActionFile reports whether an in-repo `$/…` action file uses nwo at
-// ref. Runs never rewrite those files.
-func inActionFile(pw checks.ParsedWorkflow, nwo, ref string) bool {
-	for _, held := range pw.SelfActionRefs {
-		if strings.EqualFold(held.NWO(), nwo) && held.Ref == ref {
+// inActionFile reports whether any in-repo `$/…` action file in the run
+// uses nwo at ref. Runs never rewrite those files.
+func inActionFile(held []parserlock.ActionRef, nwo, ref string) bool {
+	for _, h := range held {
+		if strings.EqualFold(h.NWO(), nwo) && h.Ref == ref {
 			return true
 		}
 	}
