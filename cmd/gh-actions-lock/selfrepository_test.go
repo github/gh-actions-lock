@@ -254,6 +254,9 @@ func TestSelfRepositoryActionSHAPinKeepsRenamedName(t *testing.T) {
 	assert.Contains(t, lock, "    '"+path+"':\n        - '"+oldName+"@"+parityTestSHA+"'\n")
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 	require.NoError(t, err, "%s\n%s", stderr, lock)
+	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in the same-repository action that uses it")
 }
 
 // TestSelfRepositoryActionSHAPinKeepsRenamedNameAcrossSpellings: a workflow
