@@ -48,9 +48,11 @@ A finding with `"retryable": true` is an `error` because GitHub didn't answer th
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | No errors remain. Warnings and notices don't change the exit code. |
-| `1` | One or more findings block the run. With `--json`, the output on `stdout` is complete. |
+| `0` | No errors remain. Warnings and notices don't change the exit code, unless you pass `--fail-on-warning`. |
+| `1` | One or more findings block the run, or with `--fail-on-warning`, a read-only run reported a warning. With `--json`, the output on `stdout` is complete. |
 | `2` | The tool failed, for example because of an invalid option, a lockfile it can't read, a lockfile version newer than the extension, or a rejected token. Read the message on `stderr`. |
+
+`--fail-on-warning` counts every finding that `--json` reports with `"severity": "warning"`, including ones the terminal summary leaves out, such as a moved `main` or `v4`. It changes only the exit code: `valid` in `--json` still reports whether any finding is an error.
 
 When a run that updates the lockfile succeeds, `--json` reports the state the run left: `valid` is `true`, and errors that the run fixed aren't listed. When a run exits with code `1`, `--json` reports the problems it found.
 
@@ -256,7 +258,7 @@ These findings don't block the run, but you should read them.
 
 A tag or branch that your workflow uses now points to a different commit than the one in the lockfile.
 
-For a branch or a partial version, such as `main` or `v4`, a normal run keeps the locked commit. This warning appears only in `--json` output and doesn't change the exit code. To advance the reference, check what changed upstream between the two commits, then run:
+For a branch or a partial version, such as `main` or `v4`, a normal run keeps the locked commit. This warning appears only in `--json` output and doesn't change the exit code unless you pass `--fail-on-warning`. To advance the reference, check what changed upstream between the two commits, then run:
 
 ```shell
 gh actions-lock --relock

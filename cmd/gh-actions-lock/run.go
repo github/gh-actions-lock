@@ -75,6 +75,9 @@ type checkOptions struct {
 	// migrateLocalActions rewrites same-repo `./…` action refs to the
 	// inherently-pinned `$/…` form on fix runs. Opt-in.
 	migrateLocalActions bool
+	// failOnWarning makes a read-only run exit 1 when it reports any
+	// warning. Opt-in; the default exit code ignores warnings.
+	failOnWarning bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -97,6 +100,8 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication, no file writes — ideal for pre-commit hooks.\n"+
 			"It does not check that the entries are trustworthy; use --verify in CI for that.")
+	cmd.Flags().BoolVar(&opts.failOnWarning, "fail-on-warning", false,
+		"With --verify, --verify-local or --no-fix, exit 1 when any warning is reported")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 	cmd.Flags().BoolVar(&opts.ignoreLocalActions, "ignore-local-actions", false,
 		"Warn instead of failing when a local `./…` action uses remote actions the lockfile can't cover")
@@ -118,6 +123,9 @@ func (opts *checkOptions) validateOutputFlags() error {
 	}
 	if opts.verifyLocal && (opts.acceptMoved || opts.relock) {
 		return fmt.Errorf("--verify-local cannot be combined with --accept-moved or --relock because it runs offline")
+	}
+	if opts.failOnWarning && !opts.verify && !opts.verifyLocal && !opts.noFix {
+		return fmt.Errorf("--fail-on-warning requires --verify, --verify-local or --no-fix")
 	}
 	return nil
 }
@@ -428,6 +436,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 			}
 			return errSilent
 		}
+		if err := failOnWarnings(opts, report, console); err != nil {
+			return err
+		}
 		if opts.jsonFields == "" {
 			n := len(report.Workflows)
 			console.TermSuccess("All %d %s valid", n, ui.Pluralize(n, "workflow", "workflows"))
@@ -569,6 +580,24 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 
 	// Terminal summary.
 	return renderPinSummary(ctx, console, record, report, r, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
+}
+
+// failOnWarnings returns errSilent when --fail-on-warning is set and the
+// run reported a warning. It counts what --json reports, which includes
+// warnings the terminal summary leaves out (such as a moved branch ref).
+func failOnWarnings(opts *checkOptions, report *checks.Report, console *ui.UI) error {
+	if !opts.failOnWarning {
+		return nil
+	}
+	n := format.CountWarnings(report)
+	if n == 0 {
+		return nil
+	}
+	if opts.jsonFields == "" {
+		console.TermError("%d %s reported and --fail-on-warning is set", n, ui.Pluralize(n, "warning", "warnings"))
+		console.TermDetail("Run with --json=findings to list every warning.")
+	}
+	return errSilent
 }
 
 // postFixReport is report as a committed write left it. A run commits only

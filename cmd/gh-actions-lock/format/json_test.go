@@ -101,3 +101,32 @@ func TestPinsFromRecordBlockedWorkflow(t *testing.T) {
 	assert.Equal(t, "verified", got["o/shared"], "pin also used by a healthy workflow was checked")
 	assert.Equal(t, "pinned", got["o/fresh"])
 }
+
+func TestCountWarningsMatchesJSON(t *testing.T) {
+	report := &checks.Report{
+		RepoFindings: []checks.Finding{{Category: checks.Stale, Severity: checks.SeverityWarning}},
+		Workflows: []checks.WorkflowReport{{
+			Path: "ci.yml",
+			Findings: []checks.Finding{
+				{Category: checks.LocalAction, Severity: checks.SeverityWarning},
+				{Category: checks.RefMoved, Severity: checks.SeverityWarning},
+				{Category: checks.NotPinned, Severity: checks.SeverityError},
+				{Category: checks.SelfRepositoryAction, Severity: checks.SeverityWarning},
+			},
+		}},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, WriteJSON(&buf, report, nil, true, "findings", "test", "1", "github.com"))
+	var out struct {
+		Findings []Finding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+	want := 0
+	for _, f := range out.Findings {
+		if f.Severity == string(checks.SeverityWarning) {
+			want++
+		}
+	}
+	assert.Equal(t, 3, want)
+	assert.Equal(t, want, CountWarnings(report))
+}

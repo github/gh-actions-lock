@@ -64,6 +64,7 @@ Other flags:
 - `--json [fields]` prints machine-readable output to stdout.
 - `--accept-moved` accepts pins whose locked commit is no longer upstream. Check why it moved first; never use it in automation.
 - `--no-narrow` keeps partial versions (`v4`) as written instead of narrowing to a full tag.
+- `--fail-on-warning` makes `--verify`, `--verify-local` and `--no-fix` exit `1` when any warning is reported.
 
 `gh actions-lock --help` is authoritative.
 

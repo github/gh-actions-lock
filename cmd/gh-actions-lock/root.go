@@ -26,8 +26,9 @@ import (
 //
 //   - 0: nothing to fix, or every finding was auto-fixed.
 //   - 1: blocking findings remain (errSilent sentinel) — any invalid finding
-//     under --no-fix, otherwise findings needing manual review; stdout JSON
-//     is well-formed when --json was requested.
+//     under --no-fix, or any warning with --fail-on-warning; otherwise
+//     findings needing manual review. stdout JSON is well-formed when
+//     --json was requested.
 //   - 2: tool failure (bad flag, IO error, network failure, malformed
 //     lockfile, future-version refusal, panic, etc.). stdout may be empty
 //     or partial; consumers should rely on stderr for diagnosis.
