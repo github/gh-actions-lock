@@ -74,6 +74,8 @@ The same fix applies when the message says `workflow has no lockfile entry`, whi
 
 A `uses:` line that pins a full-length commit SHA needs an entry keyed by that SHA. An entry for the matching tag doesn't cover it, because GitHub Actions looks the action up by the SHA as written. This includes SHA pins inside a same-repository composite action that a workflow calls with `$/`.
 
+Use `gh actions-lock --no-narrow` to add the SHA key while preserving workflow `uses:` pins. By default, the extension can rewrite a SHA in a workflow to a matching tag. SHA pins inside `$/` actions are preserved by default.
+
 The extension also reports `not-pinned` for a lockfile entry that's keyed by a full-length commit SHA and records that same SHA as its `ref`. Run `gh actions-lock` to record the tag or branch for that commit.
 
 ### `ref-missing`
@@ -105,6 +107,8 @@ Don't edit the lockfile to match the workflow. The extension rejects lockfile en
 **Headline:** Unused lockfile entry
 
 The lockfile records a dependency for a workflow that no longer uses it. Run `gh actions-lock` to remove the entry.
+
+If a workflow pins a full SHA and its lockfile lists both the SHA and a tag for that commit, the tag root is stale unless the workflow references the tag directly or through a `$/` action. Run `gh actions-lock --no-narrow` to remove the stale root while preserving the workflow's SHA pin.
 
 ### `unreachable-pin`
 

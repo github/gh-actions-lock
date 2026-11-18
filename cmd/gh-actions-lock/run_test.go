@@ -882,6 +882,50 @@ func TestRun_SharedSelfActionSHAPinIsLockedForEveryWorkflow(t *testing.T) {
 	}
 }
 
+func TestRun_RepairsSelfActionSHAPinLockedByTag(t *testing.T) {
+	const (
+		repo  = "octo/cache"
+		tag   = "v2.0.0"
+		sha   = "cccccccccccccccccccccccccccccccccccccccc"
+		byTag = repo + "@" + tag
+		bySHA = repo + "@" + sha
+	)
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/cache/tags`), httpmock.JSONResponse(httpmock.TagListResponse(tag, sha)))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/cache$`), httpmock.JSONResponse(map[string]any{"id": 1, "owner": map[string]any{"id": 1}, "default_branch": "main"}))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/cache/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", sha)))
+	httpmock.NoTagsNamed(reg, "octo", "cache")
+	commits := map[string]string{repo: sha}
+	registerLockedManifests(reg, nil)
+	registerLive(reg, nil, commits)
+	stubGraph(t, reg, nil, commits, nil)
+	useDefaultTransport(t, reg)
+
+	workflow := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/restore\n", byTag+"=sha1-"+sha)
+	require.NoError(t, os.Mkdir(".git", 0o755))
+	action := filepath.Join(".github", "actions", "restore", "action.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+	require.NoError(t, os.WriteFile(action, []byte(composite(bySHA)), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--verify")
+	require.ErrorIs(t, err, errSilent, stderr)
+	assert.Contains(t, stderr, bySHA)
+
+	_, stderr, err = runCommandWithHTTP(t, reg, "--no-interactive")
+	require.NoError(t, err, stderr)
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "    '"+workflow+"':\n        - '"+bySHA+"'\n")
+	assert.NotContains(t, lock, "'"+byTag+"'")
+	got, err := os.ReadFile(action)
+	require.NoError(t, err)
+	assert.Equal(t, composite(bySHA), string(got))
+
+	for _, mode := range []string{"--verify", "--verify-local"} {
+		_, stderr, err := runCommandWithHTTP(t, reg, mode)
+		require.NoError(t, err, "%s: %s", mode, stderr)
+	}
+}
+
 // TestRun_LocalActionUsingRemoteActionsBlocks: a `./…` composite in the
 // checkout that uses remote actions fails every mode, since the runner would
 // reject its unlocked uses; --ignore-local-actions (or the old
