@@ -94,7 +94,7 @@ automation, where it would silently accept a tampered pin.
 | Code | Meaning |
 |---|---|
 | 0 | Nothing to fix, or every finding was fixed |
-| 1 | Blocking findings remain; the report is well-formed |
+| 1 | Blocking findings remain, or `--fail-on-warning` is set and a read-only run reported a warning; the report is well-formed |
 | 2 | The tool itself failed (bad flag, IO, auth, malformed lockfile); read stderr |
 
 ```bash

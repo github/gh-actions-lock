@@ -98,6 +98,11 @@ func TestValidateOutputFlags_VerifyConflicts(t *testing.T) {
 			name: "neither is valid",
 			opts: checkOptions{},
 		},
+		{
+			name:    "fail-on-warning needs a read-only mode",
+			opts:    checkOptions{failOnWarning: true},
+			wantErr: "--fail-on-warning requires",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -449,4 +454,48 @@ func TestVerify_PassesWithLocalActions(t *testing.T) {
 	require.Len(t, p.Findings, 1, "%+v", p.Findings)
 	assert.Equal(t, string(checks.LocalAction), p.Findings[0].Category)
 	assert.Equal(t, string(checks.SeverityWarning), p.Findings[0].Severity)
+}
+
+// TestFailOnWarning: --fail-on-warning turns a warning-only read-only run
+// into exit 1 without changing the report, in both renderers, and leaves a
+// clean run passing.
+func TestFailOnWarning(t *testing.T) {
+	for _, mode := range []string{"--verify", "--verify-local", "--no-fix"} {
+		for _, jsonOut := range []bool{true, false} {
+			for _, local := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s json=%v local-action=%v", mode, jsonOut, local), func(t *testing.T) {
+					reg := &httpmock.Registry{}
+					if mode != "--verify-local" {
+						reg.Register(httpmock.GraphQL(`commit: object\(oid`), parityOK)
+					}
+					body := "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n" +
+						"      - uses: actions/checkout@v4.2.1\n"
+					if local {
+						body += "      - uses: ./my-action\n"
+					}
+					path := writeTempWorkflow(t, body, "actions/checkout@v4.2.1=sha1-"+parityTestSHA)
+
+					args := []string{mode, "--fail-on-warning", "--no-interactive"}
+					if jsonOut {
+						args = append(args, "--json=valid,findings")
+					}
+					stdout, stderr, err := runCommandWithHTTP(t, reg, append(args, path)...)
+
+					if !local {
+						require.NoError(t, err, stderr)
+						return
+					}
+					assert.ErrorIs(t, err, errSilent)
+					if jsonOut {
+						assert.Contains(t, stdout, `"valid": true`, "the flag changes only the exit code")
+						assert.Contains(t, stdout, `"severity": "warning"`)
+					} else {
+						assert.Contains(t, stderr, "Cannot follow 1 workspace-local action")
+						assert.Contains(t, stderr, "1 warning reported and --fail-on-warning is set")
+						assert.NotContains(t, stderr, "workflow valid")
+					}
+				})
+			}
+		}
+	}
 }
