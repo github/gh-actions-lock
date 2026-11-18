@@ -3,6 +3,7 @@ package pipeline
 import (
 	"testing"
 
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
@@ -15,24 +16,31 @@ func TestIsTransitivePin(t *testing.T) {
 
 	t.Run("transitive when indexed and has parents", func(t *testing.T) {
 		f := checks.Finding{Dependency: &d}
-		assert.True(t, isTransitivePin(f, depByKey, withParents))
+		assert.True(t, isTransitivePin(f, depByKey, withParents, nil))
 	})
 
 	t.Run("not transitive without a dependency", func(t *testing.T) {
 		f := checks.Finding{}
-		assert.False(t, isTransitivePin(f, depByKey, withParents))
+		assert.False(t, isTransitivePin(f, depByKey, withParents, nil))
 	})
 
 	t.Run("not transitive when absent from the index", func(t *testing.T) {
 		other := dep.Dependency{NWO: "actions/checkout", Ref: "v4"}
 		f := checks.Finding{Dependency: &other}
-		assert.False(t, isTransitivePin(f, depByKey, withParents))
+		assert.False(t, isTransitivePin(f, depByKey, withParents, nil))
+	})
+
+	t.Run("not transitive when a locked entry lists it", func(t *testing.T) {
+		f := checks.Finding{Dependency: &d}
+		// The live parent was bumped, so only its old locked entry records the edge.
+		locked := lockedChildren(map[string]parserlock.Action{"some/composite@v0": {Uses: []string{"actions/cache@v4"}}})
+		assert.False(t, isTransitivePin(f, depByKey, withParents, locked))
 	})
 
 	t.Run("not transitive when the dep has no parents", func(t *testing.T) {
 		noParents := map[string][]string{d.Key(): nil}
 		f := checks.Finding{Dependency: &d}
-		assert.False(t, isTransitivePin(f, depByKey, noParents))
+		assert.False(t, isTransitivePin(f, depByKey, noParents, nil))
 	})
 }
 
