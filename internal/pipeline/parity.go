@@ -751,8 +751,12 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			uses += "/" + ref.Path
 		}
 		f.Remediation = fmt.Sprintf("run `gh actions-lock` to rewrite it as `uses: %s@%s`", uses, ref.Ref)
-		if inActionFile(pw, ref) {
+		switch {
+		case inActionFile(pw, ref.NWO(), ref.Ref):
 			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in the same-repository action that uses it, then run `gh actions-lock`", uses, ref.Ref)
+		case inActionFile(pw, st.NameWithOwner, ref.Ref):
+			// The action file's spelling keeps this one as written.
+			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in the workflow, then run `gh actions-lock`", uses, ref.Ref)
 		}
 		if f.ParentNWO != "" {
 			f.Remediation = fmt.Sprintf("upgrade %s to a version that uses %s", f.ParentNWO, st.NameWithOwner)
@@ -763,19 +767,19 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 	return f, true
 }
 
-// foldKey lowercases the owner/repo of an NWO@ref key. Refs are
-// case-sensitive, so folding them would let a fresh ref miss its closure.
-// inActionFile reports whether an in-repo `$/…` action file writes ref.
-// Runs never rewrite those files.
-func inActionFile(pw checks.ParsedWorkflow, ref parserlock.ActionRef) bool {
+// inActionFile reports whether an in-repo `$/…` action file uses nwo at
+// ref. Runs never rewrite those files.
+func inActionFile(pw checks.ParsedWorkflow, nwo, ref string) bool {
 	for _, held := range pw.SelfActionRefs {
-		if strings.EqualFold(held.NWO(), ref.NWO()) && held.Ref == ref.Ref {
+		if strings.EqualFold(held.NWO(), nwo) && held.Ref == ref {
 			return true
 		}
 	}
 	return false
 }
 
+// foldKey lowercases the owner/repo of an NWO@ref key. Refs are
+// case-sensitive, so folding them would let a fresh ref miss its closure.
 func foldKey(k string) string {
 	nwo, ref, _ := strings.Cut(k, "@")
 	return strings.ToLower(nwo) + "@" + ref

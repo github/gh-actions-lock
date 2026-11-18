@@ -361,6 +361,12 @@ func TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName(t *testing.T) {
 			assert.Contains(t, lock, "        - '"+tt.wantWorkflow+"'\n", "the workflow's key")
 			_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 			require.NoError(t, err, "%s\n%s", stderr, lock)
+			if tt.ref == parityTestSHA {
+				// The workflow still shares the action file's ref, so no
+				// rerun will rewrite it.
+				_, stderr, _ = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
+				assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in the workflow, then run")
+			}
 		})
 	}
 }
