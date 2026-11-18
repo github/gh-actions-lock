@@ -593,7 +593,9 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 
 // buildPinnedEntries emits an entry for every resolved dep, marking it Verified
 // when the lockfile already records the same SHA and Pinned otherwise. Deps
-// already emitted from inventory under the same key and commit are skipped.
+// already emitted from inventory under the same key and commit are skipped
+// unless a composite read this run uses them: the inventory entry doesn't
+// carry that edge, and narrowing may rename it away from the composite's key.
 func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap, directTracker lockfile.DirectTracker, inventorySHA map[string]bool) []Entry {
 	// Load existing lockfile state so re-runs are noops for unchanged deps.
 	existingSHA := make(map[string]string) // NWO@Ref -> SHA
@@ -626,11 +628,11 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 	for _, dep := range deps {
 		// Each key needs its own entry: a ref that moved onto a commit a
 		// sibling ref is locked at must still be written.
-		if inventorySHA[checks.PruneKey(dep.NWO, dep.Ref, dep.SHA)] {
-			continue // already emitted as Verified from inventory
-		}
 		depKey := dep.Key()
 		parents := parentMap[depKey]
+		if inventorySHA[checks.PruneKey(dep.NWO, dep.Ref, dep.SHA)] && len(parents) == 0 {
+			continue // already emitted as Verified from inventory
+		}
 		res := Pinned
 		if sha, ok := existingSHA[depKey]; ok && sha == dep.SHA {
 			res = Verified

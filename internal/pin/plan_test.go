@@ -325,6 +325,36 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 	assert.True(t, comp.Direct, "composite is a direct workflow use")
 }
 
+func TestPlanWorkflow_NewCompositeEdgeToRecordedDirectDep(t *testing.T) {
+	compSHA := "1111111111111111111111111111111111111111"
+	transSHA := "2222222222222222222222222222222222222222"
+	resolver, pool, tagger := newTransitivePlanFixture(t, compSHA, transSHA)
+
+	direct := parserlock.ActionRef{Owner: "trans", Repo: "dep", Ref: "v2"}
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/test.yml",
+		Findings: []checks.Finding{{
+			ActionRef:  &parserlock.ActionRef{Owner: "comp", Repo: "action", Ref: "v1.0.0"},
+			Category:   "unpinned",
+			Severity:   checks.SeverityWarning,
+			Confidence: checks.ConfidenceHigh,
+		}},
+		ActionRefs: []parserlock.ActionRef{{Owner: "comp", Repo: "action", Ref: "v1.0.0"}, direct},
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "trans/dep", Ref: "v2", SHA: transSHA},
+			Direct: true,
+		}},
+	}
+
+	result, err := planWorkflow(context.Background(), wr, PlanOptions{Resolver: resolver, Pool: pool, Tagger: tagger}, func(string) {})
+	require.NoError(t, err)
+
+	rec := &Record{Entries: result.entries}
+	assert.Equal(t, []string{"comp/action@v1.0.0"}, buildParentMap(rec, wr.Path)["trans/dep@v2"],
+		"the new composite's edge to the recorded dep must survive")
+	assert.True(t, buildDirectKeys(rec, wr.Path)["trans/dep@v2"], "the recorded dep stays a direct root")
+}
+
 // TestNarrowVerifiedEntries_StickyPrecision locks the fast-path narrowing
 // guard: an already-recorded direct dep the user kept at an imprecise semver
 // ref (v4) must not be narrowed to a full tag on a no-op re-pin, and a
