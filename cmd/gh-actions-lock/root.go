@@ -275,7 +275,16 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 
 func discoverWorkflowPaths(existing []string, workflowsDir string, allowEmpty bool) ([]string, error) {
 	if len(existing) > 0 {
-		return expandWorkflowPaths(existing)
+		paths, err := expandWorkflowPaths(existing)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range paths {
+			if workflowfile.IsActionFile(p) {
+				return nil, fmt.Errorf("%s is an action file, not a workflow. Composite actions can't carry their own lockfile yet, so locking one doesn't protect the workflows that call it. Run gh actions-lock on those workflows instead", p)
+			}
+		}
+		return paths, nil
 	}
 
 	if workflowsDir != "" {
