@@ -14,7 +14,8 @@ require "io/console"
 require "json"
 require "open3"
 require "openssl"
-require "pty"
+require "rbconfig"
+require "pty" unless RbConfig::CONFIG["host_os"] =~ /mswin|mingw|cygwin/
 require "reline"
 require "set"
 require "shellwords"
@@ -88,7 +89,7 @@ module ActionsPin
 
         @server = WEBrick::HTTPServer.new(
           Port: 0,
-          Logger: WEBrick::Log.new("/dev/null"),
+          Logger: WEBrick::Log.new(File::NULL),
           AccessLog: [],
           SSLEnable: true,
           SSLCertificate: cert,
@@ -513,7 +514,11 @@ module ActionsPin
         if @needs_token || @live_repo
           token = ENV["GH_TOKEN"] || ENV["GITHUB_TOKEN"]
           if token.nil? || token.empty?
-            gh_token = `gh auth token 2>/dev/null`.strip
+            gh_token = begin
+              Open3.capture2("gh", "auth", "token", err: File::NULL).first.strip
+            rescue Errno::ENOENT
+              ""
+            end
             raise SkipScenario, "no GH_TOKEN or gh auth" if gh_token.empty?
           end
         end
@@ -528,7 +533,9 @@ module ActionsPin
           else
             result = ctx.run_captured
           end
-          @last_diff = `cd #{Shellwords.shellescape(ctx.dir)} && git add -N . 2>/dev/null; git --no-pager diff --color 2>/dev/null`.strip
+          _, = Open3.capture2("git", "add", "-N", ".", chdir: ctx.dir)
+          @last_diff, = Open3.capture2("git", "--no-pager", "diff", "--color", chdir: ctx.dir)
+          @last_diff = @last_diff.strip
           @assertions.each { |a| a.call(result) }
           result
         ensure
@@ -1292,11 +1299,12 @@ module ActionsPin
             print "  \e[2mbuilding…\e[0m "
             $stdout.flush
             t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            ok = system("go", "build", "-o", "gh-actions-lock", "./cmd/gh-actions-lock", chdir: repo_root)
+            binary_name = "gh-actions-lock#{RbConfig::CONFIG["EXEEXT"]}"
+            ok = system("go", "build", "-o", binary_name, "./cmd/gh-actions-lock", chdir: repo_root)
             elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
             if ok
               puts "\e[32m✓\e[0m \e[2m(#{format_elapsed(elapsed)})\e[0m"
-              @binary = File.join(repo_root, "gh-actions-lock")
+              @binary = File.join(repo_root, binary_name)
             else
               puts "\e[31m✗ build failed\e[0m"
             end
@@ -1606,10 +1614,11 @@ module ActionsPin
       end
 
       def find_binary
-        repo_bin = File.expand_path("../../../gh-actions-lock", __FILE__)
+        binary_name = "gh-actions-lock#{RbConfig::CONFIG["EXEEXT"]}"
+        repo_bin = File.expand_path("../../../#{binary_name}", __FILE__)
         return repo_bin if File.executable?(repo_bin)
 
-        gobin = File.join(ENV["HOME"], "go", "bin", "gh-actions-lock")
+        gobin = File.join(ENV["HOME"], "go", "bin", binary_name)
         return gobin if File.executable?(gobin)
 
         raise "Cannot find gh-actions-lock binary. Run `make build` first."
