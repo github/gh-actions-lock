@@ -505,7 +505,7 @@ scenarios:
 
   - name: migrate_local_actions_rewrite
     category: workflow_parsing
-    description: "--migrate-local-actions on a fix run rewrites only the workflow's ./ to $/; in-repo action files stay byte-for-byte, so their own ./ refs are reported as uncovered and no self repository ref enters the lockfile"
+    description: "--migrate-local-actions never edits action files, so a ./ chain inside the migrated action that reaches a remote action (here two levels down) blocks the run: nothing is written and the error names the action file to change"
     needs_stub: true
     tags: [stub]
     flags: ["--migrate-local-actions"]
@@ -541,16 +541,14 @@ scenarios:
               - uses: actions/checkout@v4
       delete_lockfile: true
     expect:
-      exit: 0
-      output_contains: ["Cannot follow 1 workspace-local action"]
-      lockfile_excludes: ["$/", "actions/checkout"]
+      exit: 1
+      output_contains: ["Change it to $/helper in $/my-action", "Nothing was written"]
       files_contain:
-        ".github/workflows/ci.yml": ["uses: $/my-action"]
+        ".github/workflows/ci.yml": ["uses: ./my-action"]
         "my-action/action.yml": ["uses: ./helper"]
         "helper/action.yml": ["uses: ./nested/deep"]
         "nested/deep/action.yml": ["uses: actions/checkout@v4\n"]
       files_exclude:
-        ".github/workflows/ci.yml": ["uses: ./my-action", "actions/checkout"]
         "my-action/action.yml": ["$/"]
         "helper/action.yml": ["$/"]
 

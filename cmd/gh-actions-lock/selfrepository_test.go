@@ -316,10 +316,11 @@ func TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName(t *testing.T) {
 		newName = "typesafegithub/github-actions-typing"
 	)
 	tests := []struct {
-		name, ref, wantWorkflow string
+		name, ref, wfPath, actionPath, wantWorkflow string
 	}{
 		{name: "full SHA", ref: parityTestSHA, wantWorkflow: oldName + "@" + parityTestSHA},
 		{name: "partial tag", ref: "v2", wantWorkflow: oldName + "@v2.2.2"},
+		{name: "partial tag, different sub-actions", ref: "v2", wfPath: "/restore", actionPath: "/save", wantWorkflow: oldName + "@v2.2.2"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -341,20 +342,20 @@ func TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName(t *testing.T) {
 				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/heads/main$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/heads/main", parityTestSHA)))
 			}
 			isolateRunLogs(t)
-			path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+oldName+"@"+tt.ref+"\n")
+			path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+oldName+tt.wfPath+"@"+tt.ref+"\n")
 			require.NoError(t, os.Mkdir(".git", 0o755))
 			action := filepath.Join(".github", "actions", "typing", "action.yml")
 			require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
-			require.NoError(t, os.WriteFile(action, []byte(composite(newName+"@"+tt.ref)), 0o600))
+			require.NoError(t, os.WriteFile(action, []byte(composite(newName+tt.actionPath+"@"+tt.ref)), 0o600))
 
 			_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
 			require.NoError(t, err, stderr)
 			got, err := os.ReadFile(action)
 			require.NoError(t, err)
-			assert.Equal(t, composite(newName+"@"+tt.ref), string(got))
+			assert.Equal(t, composite(newName+tt.actionPath+"@"+tt.ref), string(got))
 			wf, err := os.ReadFile(path)
 			require.NoError(t, err)
-			assert.Contains(t, string(wf), "uses: "+tt.wantWorkflow+"\n")
+			assert.Contains(t, string(wf), "uses: "+strings.Replace(tt.wantWorkflow, "@", tt.wfPath+"@", 1)+"\n")
 			lock := readTempLockfilePins(t)
 			assert.Contains(t, lock, "        - '"+newName+"@"+tt.ref+"'\n", "the action file's key")
 			assert.Contains(t, lock, "        - '"+tt.wantWorkflow+"'\n", "the workflow's key")

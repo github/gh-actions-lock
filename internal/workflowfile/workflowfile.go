@@ -590,27 +590,40 @@ func ValidateInRepo(path string) error {
 }
 
 // LocalActionRemoteUses returns the remote actions that the composite at the
-// `./…` path localPath uses, read from the checkout containing workflowPath.
-// It returns nil when the action can't be read there: the runner workspace
-// may hold something else, so nothing is known about it.
+// `./…` path localPath uses, directly or through further `./…` actions, read
+// from the checkout containing workflowPath. It returns nil when the action
+// can't be read there: the runner workspace may hold something else, so
+// nothing is known about it.
 func LocalActionRemoteUses(workflowPath, localPath string) []string {
 	root, err := findRepoRoot(workflowPath)
 	if err != nil || root == "" {
 		return nil
 	}
-	actionDir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(localPath, "./")))
-	if !isWithinRoot(root, actionDir) {
-		return nil
-	}
-	actionUses, err := readActionUses(root, actionDir)
-	if err != nil {
-		return nil
-	}
 	var out []string
-	for _, use := range actionUses {
-		use = strings.TrimSpace(use)
-		if uses.Classify(use, uses.Step).Kind == uses.Action && !slices.Contains(out, use) {
-			out = append(out, use)
+	seen := map[string]bool{}
+	queue := []string{localPath}
+	for len(queue) > 0 {
+		local := queue[0]
+		queue = queue[1:]
+		actionDir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(local, "./")))
+		if seen[actionDir] || !isWithinRoot(root, actionDir) {
+			continue
+		}
+		seen[actionDir] = true
+		actionUses, err := readActionUses(root, actionDir)
+		if err != nil {
+			continue
+		}
+		for _, use := range actionUses {
+			use = strings.TrimSpace(use)
+			switch uses.Classify(use, uses.Step).Kind {
+			case uses.Action:
+				if !slices.Contains(out, use) {
+					out = append(out, use)
+				}
+			case uses.Local:
+				queue = append(queue, use)
+			}
 		}
 	}
 	return out

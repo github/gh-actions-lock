@@ -196,7 +196,7 @@ The workflow uses an action from a local path, such as `uses: ./.github/actions/
 
 A `./` path resolves against the runner's workspace, which checkouts, downloads, and scripts can change. The extension never follows or locks a `./` reference. The workflow's other dependencies are still locked and checked.
 
-**When it's an error:** The headline is **local action**. The local action's `action.yml` in your checkout uses other actions. At run time, each of those actions needs a lockfile entry, and the lockfile can't record those entries for a `./` action. Every mode reports this error, including `--verify` and `--verify-local`. The message says:
+**When it's an error:** The headline is **local action**. The local action's `action.yml` in your checkout uses other actions, directly or through further `./` actions. At run time, each of those actions needs a lockfile entry, and the lockfile can't record those entries for a `./` action. Every mode reports this error, including `--verify` and `--verify-local`. The message says:
 
 > PATH runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced.
 
@@ -218,9 +218,9 @@ Fix it in one of these ways:
 
   The actions it uses aren't covered by the lockfile. `--no-migrate-local-actions` is an alias.
 
-If the `./` reference is inside a composite action from another repository, the message names that action and only `--ignore-local-actions` applies.
+If the `./` reference is inside one of your repository's `$/` actions, the message names that action file: change the reference there to `$/`, or pass `--ignore-local-actions`. If it's inside a composite action from another repository, the message names that action and only `--ignore-local-actions` applies.
 
-**When it's a warning:** The headline is **Cannot follow N workspace-local actions**, followed by each workflow and its `./` paths. This is reported when the action file isn't in your checkout, when it has only `run:` steps, or when you pass `--ignore-local-actions`. No action is needed. The local action isn't covered by the lockfile.
+**When it's a warning:** The headline is **Cannot follow N workspace-local actions**, followed by each workflow and its `./` paths. This is reported when the action file isn't in your checkout, when it and the `./` actions it uses have only `run:` steps, or when you pass `--ignore-local-actions`. No action is needed. The local action isn't covered by the lockfile.
 
 ### `invalid-self-repository-ref`
 

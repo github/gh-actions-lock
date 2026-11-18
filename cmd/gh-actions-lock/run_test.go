@@ -934,12 +934,13 @@ func TestRun_LocalActionUsingRemoteActionsBlocks(t *testing.T) {
 	}
 }
 
-// TestRun_LocalActionErrorNamesTheFix: inside a `$/…` action the `$/` rewrite
-// still applies; inside a remote composite only the flag does.
+// TestRun_LocalActionErrorNamesTheFix: inside a `$/…` action the rewrite is
+// left to the user, since action files are never edited; inside a remote
+// composite only the flag applies.
 func TestRun_LocalActionErrorNamesTheFix(t *testing.T) {
 	for _, tc := range []struct{ parent, want string }{
 		{"", "./x runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
-		{"$/actions/build", "./x (in $/actions/build) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
+		{"$/actions/build", "./x (in $/actions/build) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Change it to $/x in $/actions/build, or pass --ignore-local-actions to keep ./."},
 		{"octo/tool@v2", "./x (in octo/tool@v2) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --ignore-local-actions to keep ./."},
 	} {
 		report := &checks.Report{Workflows: []checks.WorkflowReport{{Findings: []checks.Finding{{

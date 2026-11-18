@@ -182,21 +182,22 @@ func (r *Resolver) KeepWrittenNames(refs []parserlock.ActionRef) {
 		r.writtenNames = make(map[ghapi.ActionRef]bool, len(refs))
 	}
 	for _, ref := range refs {
-		r.writtenNames[cacheKey(ref)] = true
+		r.writtenNames[ghapi.ForActionRef(ref.Owner, ref.Repo, "", ref.Ref)] = true
 	}
 }
 
 // keepsWrittenName reports whether ref, written as orig and resolving to
 // the canonical name, stays as written. That holds when an action file
-// writes either spelling: redirecting an alias onto the action file's name
-// would merge the two, and narrowing the merged ref would drop the key the
-// action file needs.
+// writes either spelling of the repository at that ref, under any path:
+// lock entries are keyed by repository and ref, so redirecting an alias
+// onto the action file's name would merge the two, and narrowing the
+// merged entry would drop the key the action file needs.
 func (r *Resolver) keepsWrittenName(orig parserlock.ActionRef, canonical string) bool {
-	if r.writtenNames[cacheKey(orig)] {
+	if r.writtenNames[ghapi.ForActionRef(orig.Owner, orig.Repo, "", orig.Ref)] {
 		return true
 	}
 	owner, repo, ok := strings.Cut(canonical, "/")
-	return ok && r.writtenNames[ghapi.ForActionRef(owner, repo, orig.Path, orig.Ref)]
+	return ok && r.writtenNames[ghapi.ForActionRef(owner, repo, "", orig.Ref)]
 }
 
 // Redirect re-labels the entry seeded for owner/repo under its canonical

@@ -596,12 +596,16 @@ func TestLocalActionRemoteUses(t *testing.T) {
 	write("remote", "runs:\n  using: composite\n  steps:\n    - uses: actions/setup-node@v4\n    - uses: ./other\n    - uses: $/self\n    - uses: docker://alpine:3\n    - uses: actions/setup-node@v4\n    - uses: octo/tool/sub@v1\n")
 	write("runonly", "runs:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n")
 	write("node", "runs:\n  using: node20\n  main: index.js\n")
+	write("outer", "runs:\n  using: composite\n  steps:\n    - uses: ./mid\n")
+	write("mid", "runs:\n  using: composite\n  steps:\n    - uses: ./outer\n    - uses: ./leaf\n")
+	write("leaf", "runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n")
 
 	for _, tc := range []struct {
 		name, path string
 		want       []string
 	}{
 		{"remote uses, deduplicated", "./remote", []string{"actions/setup-node@v4", "octo/tool/sub@v1"}},
+		{"through nested local actions, cycle included", "./outer", []string{"actions/checkout@v4"}},
 		{"run steps only", "./runonly", nil},
 		{"not a composite", "./node", nil},
 		{"missing from the checkout", "./generated", nil},
