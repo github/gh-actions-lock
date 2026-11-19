@@ -1,0 +1,134 @@
+// Publishes verify-<tag> for a CLI release: checks the release binaries'
+// attestations, stamps actions/verify with the tag and their checksums, and tags
+// a GitHub-signed commit on top of the release commit.
+//
+// Usage (release workflow, with GH_TOKEN and REPO set):
+//   node script/verify-action-release.mjs <vX.Y.Z[-rc.N]>
+
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const ASSETS = [
+  "linux-amd64",
+  "linux-arm64",
+  "darwin-amd64",
+  "darwin-arm64",
+  "windows-amd64.exe",
+  "windows-arm64.exe",
+];
+export const ACTION = "actions/verify/action.yml";
+export const CHECKSUMS = "actions/verify/checksums.txt";
+const MARKER = 'default: "" # stamped by script/verify-action-release.mjs';
+
+export function checkTag(tag) {
+  if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\.[1-9]\d*)?$/.test(tag ?? "")) {
+    throw new Error(`invalid tag '${tag}'; expected vX.Y.Z or vX.Y.Z-rc.N`);
+  }
+  return tag;
+}
+
+// stamp defaults the action's version input to tag and writes checksums.txt for
+// the release binaries in assetsDir. It refuses an already stamped action.
+export async function stamp({ root, tag, assetsDir }) {
+  checkTag(tag);
+  const actionPath = join(root, ACTION);
+  const action = await readFile(actionPath, "utf8");
+  if (action.split(MARKER).length !== 2) {
+    throw new Error(`${ACTION} must contain exactly one line with: ${MARKER}`);
+  }
+  const lines = [`# ${tag}`];
+  for (const a of ASSETS) {
+    const path = join(assetsDir, a);
+    if (!existsSync(path)) throw new Error(`missing release asset ${path}`);
+    lines.push(`${createHash("sha256").update(await readFile(path)).digest("hex")}  ${a}`);
+  }
+  await writeFile(join(root, CHECKSUMS), lines.join("\n") + "\n");
+  await writeFile(actionPath, action.replace(MARKER, `default: ${tag}`));
+}
+
+// publish commits files on top of head through the Git Data API, so GitHub signs
+// the commit as the tag ruleset requires, and tags it verify-<tag>.
+export async function publish({ api, token, repo, tag, head, baseTree, files, fetch: fetchFn = fetch }) {
+  const call = async (method, path, body) => {
+    const res = await fetchFn(`${api}/repos/${repo}/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.github+json",
+        "content-type": "application/json",
+      },
+      body: body && JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${method} ${path}: HTTP ${res.status} ${await res.text()}`);
+    return res.json();
+  };
+
+  const tree = [];
+  for (const { path, content } of files) {
+    const blob = await call("POST", "git/blobs", { content: Buffer.from(content).toString("base64"), encoding: "base64" });
+    tree.push({ path, mode: "100644", type: "blob", sha: blob.sha });
+  }
+  const { sha: treeSha } = await call("POST", "git/trees", { base_tree: baseTree, tree });
+  const { sha: commit } = await call("POST", "git/commits", {
+    message: `Stamp actions/verify for ${tag}`,
+    tree: treeSha,
+    parents: [head],
+  });
+  const { verification } = await call("GET", `git/commits/${commit}`);
+  if (!verification?.verified) throw new Error(`stamp commit ${commit} is not signed`);
+  await call("POST", "git/refs", { ref: `refs/tags/verify-${tag}`, sha: commit });
+  return commit;
+}
+
+function run(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...opts });
+  if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed`);
+  return r.stdout.trim();
+}
+
+async function main(tag) {
+  checkTag(tag);
+  const { REPO: repo, GH_TOKEN: token, GITHUB_API_URL: api = "https://api.github.com" } = process.env;
+  if (!repo || !token) throw new Error("set REPO and GH_TOKEN");
+  const root = resolve(fileURLToPath(import.meta.url), "../..");
+
+  const assetsDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "assets-"));
+  for (const a of ASSETS) {
+    run("gh", ["release", "download", tag, "--repo", repo, "--pattern", a, "--dir", assetsDir]);
+    run("gh", [
+      "attestation", "verify", join(assetsDir, a),
+      "--repo", repo,
+      "--signer-workflow", `${repo}/.github/workflows/release.yml`,
+      "--source-ref", `refs/tags/${tag}`,
+    ]);
+  }
+
+  await stamp({ root, tag, assetsDir });
+  const files = [];
+  for (const path of [ACTION, CHECKSUMS]) files.push({ path, content: await readFile(join(root, path)) });
+  const commit = await publish({
+    api,
+    token,
+    repo,
+    tag,
+    head: run("git", ["rev-parse", "HEAD"], { cwd: root }),
+    baseTree: run("git", ["rev-parse", "HEAD^{tree}"], { cwd: root }),
+    files,
+  });
+  console.log(`Tagged verify-${tag} at ${commit}`);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    if (process.argv.length !== 3) throw new Error("usage: node script/verify-action-release.mjs <tag>");
+    await main(process.argv[2]);
+  } catch (err) {
+    console.error(`::error::${err.message}`);
+    process.exitCode = 1;
+  }
+}

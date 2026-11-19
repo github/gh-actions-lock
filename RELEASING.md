@@ -42,8 +42,8 @@ The tag workflow verifies the tag, then publishes the binaries, attestations,
 and GitHub release.
 
 It then publishes the [verify action](actions/verify/README.md) for the
-release. `script/stamp-verify-action` sets the action's default `version` to
-the new tag and records the release binaries' checksums in
+release. `script/verify-action-release.mjs` checks the release binaries'
+attestations, sets the action's default `version` to the new tag and records the release binaries' checksums in
 `actions/verify/checksums.txt`. The workflow commits that on top of the release
 commit and tags it `verify-vX.Y.Z`. That commit isn't on `main`, since it
 holds checksums of binaries built from its parent. Don't edit the default or
