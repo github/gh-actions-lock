@@ -1,0 +1,19 @@
+name: Verify actions.lock
+description: Fail when .github/workflows/actions.lock is out of sync with the workflows or a locked pin no longer verifies upstream
+
+inputs:
+  token:
+    description: Token the CLI uses to read action repositories. The default GITHUB_TOKEN can't read private or internal actions in other repositories; pass a GitHub App installation token for those.
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: gh-actions-lock release to run, such as v0.5.1. Defaults to the release recorded in checksums.json.
+    required: false
+  args:
+    description: Arguments passed to gh-actions-lock, split on whitespace.
+    required: false
+    default: --verify
+
+runs:
+  using: node24
+  main: verify.mjs

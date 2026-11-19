@@ -14,7 +14,8 @@
 #   RELEASE_DRY_RUN=1   Compute and print the next version, then stop before
 #                       tagging or pushing.
 #
-# Requires: git, go, make.
+# Requires: git, go, make, node, and actions/verify on main stamped for the latest
+# release (see RELEASING.md).
 
 set -euo pipefail
 
@@ -48,6 +49,18 @@ require_current_main() {
     die "release commit ${commit} is not current main ${main}"
 }
 
+# The verify action on main must carry the latest release's stamp before the
+# next release. The stamp can't land with its own release: the binaries embed the
+# commit they're built from, so their checksums only exist after the tag.
+require_current_stamp() {
+  local latest="$1"
+  local stamped
+  stamped="$( (git show refs/remotes/origin/main:actions/verify/checksums.json 2>/dev/null || true) |
+    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).version)); } catch {} });')"
+  [ "$stamped" = "${latest}" ] ||
+    die "actions/verify on main isn't stamped for ${latest} (got '${stamped}'); merge the release workflow's stamp pull request first (see RELEASING.md)"
+}
+
 require_clean() {
   if [ -n "$(git status --porcelain)" ]; then
     git --no-pager status --short >&2
@@ -78,7 +91,9 @@ cut_tag() {
   branch="$(git symbolic-ref --quiet --short HEAD || true)"
   [ "$branch" = "main" ] || die "releases must be cut from main (got ${branch:-detached HEAD})"
   require_clean
-  require_current_main "$(git rev-parse HEAD)"
+  local head
+  head="$(git rev-parse HEAD)"
+  require_current_main "$head"
 
   make fmt-check vet test test-stub
 
@@ -96,6 +111,7 @@ cut_tag() {
     base="0.0.0"
     echo "No existing ${TAG_PREFIX}* release tag; basing bump on v0.0.0."
   else
+    require_current_stamp "$latest"
     base="${latest#"$TAG_PREFIX"}"
   fi
 
@@ -122,8 +138,15 @@ cut_tag() {
     tag="${tag}-rc.$((rc + 1))"
   fi
   validate_tag "$tag"
-  git rev-parse -q --verify "refs/tags/${tag}" >/dev/null &&
-    die "tag ${tag} already exists"
+  # A rerun after a held push reuses the local tag if it's the one it would create.
+  local reuse=0
+  if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    [ "$(git cat-file -t "refs/tags/${tag}")" = tag ] ||
+      die "local tag ${tag} is not annotated; delete it and rerun"
+    [ "$(git rev-parse "${tag}^{commit}")" = "$head" ] ||
+      die "local tag ${tag} points at $(git rev-parse --short "${tag}^{commit}"), not HEAD; delete it and rerun"
+    reuse=1
+  fi
 
   echo "Cutting ${tag} (module version ${version}) at $(git rev-parse --short HEAD)"
   if [ "${RELEASE_DRY_RUN:-}" = "1" ]; then
@@ -131,7 +154,11 @@ cut_tag() {
     return
   fi
 
-  git tag -a "$tag" -m "$tag"
+  if [ "$reuse" = "1" ]; then
+    echo "Reusing local tag ${tag}."
+  else
+    git tag -a "$tag" -m "$tag"
+  fi
   local commit
   commit="$(git rev-parse "${tag}^{commit}")"
   require_current_main "$commit"

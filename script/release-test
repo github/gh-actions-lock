@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -r "$tmp"' EXIT
+trap 'rm -rf "$tmp"' EXIT
 
 git init --quiet --bare "$tmp/origin.git"
 git clone --quiet "$tmp/origin.git" "$tmp/repo"
@@ -15,6 +15,8 @@ mkdir script
 cp "$root/script/release" script/release
 cp "$root/script/verify-release-tag" script/verify-release-tag
 touch tracked
+mkdir -p actions/verify
+printf '{"version": "v1.2.3", "sha256": {}}\n' >actions/verify/checksums.json
 git add .
 git commit --quiet -m initial
 git push --quiet -u origin main
@@ -38,6 +40,51 @@ output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
 
 output="$(RELEASE_DRY_RUN=1 script/release patch)"
 [[ "$output" == *"Cutting v1.2.4 "* ]]
+
+printf '{"version": "v1.2.2", "sha256": {}}\n' >actions/verify/checksums.json
+git commit --quiet -am "stale stamp"
+git push --quiet origin main
+if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
+  echo "expected a stale verify action stamp to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"isn't stamped for v1.2.3"* ]]
+git rm --quiet actions/verify/checksums.json
+git commit --quiet -m "no stamp"
+git push --quiet origin main
+if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
+  echo "expected a missing verify action stamp to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"isn't stamped for v1.2.3"* ]]
+git reset --quiet --hard HEAD~2
+git push --quiet --force origin main
+
+# A rerun after a held push pushes the existing local tag.
+git tag -a v1.2.4 -m v1.2.4
+output="$(script/release patch)"
+[[ "$output" == *"Reusing local tag v1.2.4."* ]]
+[[ "$output" == *"Pushed v1.2.4"* ]]
+[ "$(git ls-remote --tags origin 'refs/tags/v1.2.4^{}' | awk '{ print $1 }')" = "$(git rev-parse HEAD)" ]
+
+# A rerun after a successful push stops at the next step: stamping main.
+if output="$(script/release patch 2>&1)"; then
+  echo "expected a rerun after a successful push to require the stamp" >&2
+  exit 1
+fi
+[[ "$output" == *"isn't stamped for v1.2.4"* ]]
+
+# A leftover local tag at another commit still blocks the release.
+printf '{"version": "v1.2.4", "sha256": {}}\n' >actions/verify/checksums.json
+git commit --quiet -am "stamp v1.2.4"
+git push --quiet origin main
+git tag -a v1.2.5 -m v1.2.5 HEAD~1
+if output="$(script/release patch 2>&1)"; then
+  echo "expected a local tag at another commit to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"local tag v1.2.5 points at "* ]]
+git tag -d v1.2.5 >/dev/null
 
 ancestor="$(git rev-parse HEAD)"
 tree="$(git rev-parse "${ancestor}^{tree}")"
