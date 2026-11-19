@@ -90,7 +90,9 @@ cut_tag() {
   branch="$(git symbolic-ref --quiet --short HEAD || true)"
   [ "$branch" = "main" ] || die "releases must be cut from main (got ${branch:-detached HEAD})"
   require_clean
-  require_current_main "$(git rev-parse HEAD)"
+  local head
+  head="$(git rev-parse HEAD)"
+  require_current_main "$head"
 
   make fmt-check vet test test-stub
 
@@ -135,8 +137,15 @@ cut_tag() {
     tag="${tag}-rc.$((rc + 1))"
   fi
   validate_tag "$tag"
-  git rev-parse -q --verify "refs/tags/${tag}" >/dev/null &&
-    die "tag ${tag} already exists"
+  # A rerun after a held push reuses the local tag if it's the one it would create.
+  local reuse=0
+  if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    [ "$(git cat-file -t "refs/tags/${tag}")" = tag ] ||
+      die "local tag ${tag} is not annotated; delete it and rerun"
+    [ "$(git rev-parse "${tag}^{commit}")" = "$head" ] ||
+      die "local tag ${tag} points at $(git rev-parse --short "${tag}^{commit}"), not HEAD; delete it and rerun"
+    reuse=1
+  fi
 
   echo "Cutting ${tag} (module version ${version}) at $(git rev-parse --short HEAD)"
   if [ "${RELEASE_DRY_RUN:-}" = "1" ]; then
@@ -144,7 +153,11 @@ cut_tag() {
     return
   fi
 
-  git tag -a "$tag" -m "$tag"
+  if [ "$reuse" = "1" ]; then
+    echo "Reusing local tag ${tag}."
+  else
+    git tag -a "$tag" -m "$tag"
+  fi
   local commit
   commit="$(git rev-parse "${tag}^{commit}")"
   require_current_main "$commit"

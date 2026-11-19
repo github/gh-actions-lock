@@ -60,6 +60,32 @@ fi
 git reset --quiet --hard HEAD~2
 git push --quiet --force origin main
 
+# A rerun after a held push pushes the existing local tag.
+git tag -a v1.2.4 -m v1.2.4
+output="$(script/release patch)"
+[[ "$output" == *"Reusing local tag v1.2.4."* ]]
+[[ "$output" == *"Pushed v1.2.4"* ]]
+[ "$(git ls-remote --tags origin 'refs/tags/v1.2.4^{}' | awk '{ print $1 }')" = "$(git rev-parse HEAD)" ]
+
+# A rerun after a successful push stops at the next step: stamping main.
+if output="$(script/release patch 2>&1)"; then
+  echo "expected a rerun after a successful push to require the stamp" >&2
+  exit 1
+fi
+[[ "$output" == *"isn't stamped for v1.2.4"* ]]
+
+# A leftover local tag at another commit still blocks the release.
+printf '# v1.2.4\n' >actions/verify/checksums.txt
+git commit --quiet -am "stamp v1.2.4"
+git push --quiet origin main
+git tag -a v1.2.5 -m v1.2.5 HEAD~1
+if output="$(script/release patch 2>&1)"; then
+  echo "expected a local tag at another commit to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"local tag v1.2.5 points at "* ]]
+git tag -d v1.2.5 >/dev/null
+
 ancestor="$(git rev-parse HEAD)"
 tree="$(git rev-parse "${ancestor}^{tree}")"
 descendant="$(printf 'descendant\n' | git -c user.name=test -c user.email=test@example.com commit-tree "$tree" -p "$ancestor")"
