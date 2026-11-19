@@ -370,3 +370,84 @@ func TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName(t *testing.T) {
 		})
 	}
 }
+
+// TestSelfRepositoryActionRenameWithOtherSpelling: an action file holds a
+// ref that shares the workflow's commit or lock entry but not its spelling.
+// A fork at the same SHA is another repository, so the workflow's renamed
+// ref is still rewritten; another sub-path of the renamed repository shares
+// the lock entry, so the advice names the action file as well, and names
+// the workflow even where it spells the ref exactly as the action file does.
+func TestSelfRepositoryActionRenameWithOtherSpelling(t *testing.T) {
+	const (
+		oldName  = "krzema12/github-actions-typing"
+		newName  = "typesafegithub/github-actions-typing"
+		forkName = "forkowner/github-actions-typing"
+	)
+	tests := []struct {
+		name, wfUse, actionUse, wantWorkflow, wantAdvice string
+	}{
+		{
+			name: "fork at the same SHA", wfUse: oldName + "@" + parityTestSHA, actionUse: forkName + "@" + parityTestSHA,
+			wantWorkflow: newName + "@" + parityTestSHA,
+		},
+		{
+			name: "other sub-path of the old name", wfUse: oldName + "/restore@v2", actionUse: oldName + "/save@v2",
+			wantWorkflow: oldName + "/restore@v2",
+			wantAdvice:   "change " + oldName + " to " + newName + " in .github/actions/typing/action.yml, .github/workflows/workflow.yml, then run",
+		},
+		{
+			name: "same spelling in both", wfUse: oldName + "@v2.2.2", actionUse: oldName + "@v2.2.2",
+			wantWorkflow: oldName + "@v2.2.2",
+			wantAdvice:   "change it to `uses: " + newName + "@v2.2.2` in .github/actions/typing/action.yml, .github/workflows/workflow.yml, then run",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+			for _, owner := range []string{"krzema12", "typesafegithub"} {
+				reg.RegisterReusable(httpmock.GraphQLForRepo(owner, "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{"a0": withRepoID(testRepoResponse(newName, parityTestSHA, nodeActionYAML), 1)},
+				}))
+			}
+			reg.RegisterReusable(httpmock.GraphQLForRepo("forkowner", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+				"data": map[string]any{"a0": withRepoID(testRepoResponse(forkName, parityTestSHA, nodeActionYAML), 2)},
+			}))
+			for _, nwo := range []string{oldName, newName, forkName} {
+				full, id := newName, 1
+				if nwo == forkName {
+					full, id = forkName, 2
+				}
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`$`), httpmock.JSONResponse(map[string]any{
+					"full_name": full, "id": id, "default_branch": "main", "owner": map[string]any{"id": 42},
+				}))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/releases`), httpmock.JSONResponse([]map[string]any{}))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/tags/v2(\.2\.2)?$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/tags/v2.2.2", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/heads/main$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/heads/main", parityTestSHA)))
+			}
+			isolateRunLogs(t)
+			path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+tt.wfUse+"\n")
+			require.NoError(t, os.Mkdir(".git", 0o755))
+			action := filepath.Join(".github", "actions", "typing", "action.yml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+			require.NoError(t, os.WriteFile(action, []byte(composite(tt.actionUse)), 0o600))
+
+			_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
+			require.NoError(t, err, stderr)
+			got, err := os.ReadFile(action)
+			require.NoError(t, err)
+			assert.Equal(t, composite(tt.actionUse), string(got))
+			wf, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(wf), "uses: "+tt.wantWorkflow+"\n")
+			_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
+			require.NoError(t, err, "%s\n%s", stderr, readTempLockfilePins(t))
+			if tt.wantAdvice != "" {
+				_, stderr, _ = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
+				assert.Contains(t, stderr, tt.wantAdvice)
+			}
+		})
+	}
+}

@@ -20,6 +20,8 @@ type ParsedWorkflow struct {
 	// RewriteRefs are the refs that pinning may rewrite in the workflow file:
 	// those no in-repo `$/…` action file it reaches also holds.
 	RewriteRefs []parserlock.ActionRef
+	// WorkflowRefs are the remote refs the workflow file itself writes.
+	WorkflowRefs []parserlock.ActionRef
 	// SelfActionRefs are the remote refs found inside the in-repo action
 	// files reached through step-level `$/…` refs.
 	SelfActionRefs []parserlock.ActionRef

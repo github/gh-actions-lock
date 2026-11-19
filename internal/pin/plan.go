@@ -318,7 +318,9 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
-	required := transferRewrites(deps, rootTracker, rewriteRefs, rewrites)
+	// Renames follow repository identity, not SHA: the resolver already kept
+	// the written name of any repository an action file spells either way.
+	required := transferRewrites(deps, rootTracker, wr.ActionRefs, rewrites)
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
 			Path:             wr.Path,

@@ -758,7 +758,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			uses += "/" + ref.Path
 		}
 		f.Remediation = fmt.Sprintf("run `gh actions-lock` to rewrite it as `uses: %s@%s`", uses, ref.Ref)
-		switch files := pw.SelfActionFiles[workflowfile.RefFileKey(ref)]; {
+		switch files, samePath := keptNameFiles(pw, ref); {
+		case len(files) > 0 && !samePath:
+			f.Remediation = fmt.Sprintf("change %s to %s in %s, then run `gh actions-lock`", nwo, st.NameWithOwner, strings.Join(files, ", "))
+			f.KeptName = true
 		case len(files) > 0:
 			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, strings.Join(files, ", "))
 			f.KeptName = true
@@ -775,6 +778,44 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		return checks.Finding{}, false
 	}
 	return f, true
+}
+
+// keptNameFiles lists every file that spells ref's repository at ref,
+// under any sub-path, when an in-repo action file is among them: they share
+// one lock entry and a run rewrites none of them. samePath reports whether
+// they all use ref's sub-path.
+func keptNameFiles(pw checks.ParsedWorkflow, ref parserlock.ActionRef) (files []string, samePath bool) {
+	nwo, refKey, _ := strings.Cut(workflowfile.RefFileKey(parserlock.ActionRef{Owner: ref.Owner, Repo: ref.Repo, Ref: ref.Ref}), "@")
+	samePath = true
+	for key, paths := range pw.SelfActionFiles {
+		head, r, _ := strings.Cut(key, "@")
+		if r != refKey || (head != nwo && !strings.HasPrefix(head, nwo+"/")) {
+			continue
+		}
+		if key != workflowfile.RefFileKey(ref) {
+			samePath = false
+		}
+		for _, p := range paths {
+			if !slices.Contains(files, p) {
+				files = append(files, p)
+			}
+		}
+	}
+	if len(files) == 0 {
+		return nil, true
+	}
+	slices.Sort(files)
+	inWorkflow := false
+	for _, r := range pw.WorkflowRefs {
+		if strings.EqualFold(r.NWO(), ref.NWO()) && r.Ref == ref.Ref {
+			inWorkflow = true
+			samePath = samePath && r.Path == ref.Path
+		}
+	}
+	if inWorkflow {
+		files = append(files, filepath.ToSlash(pw.Path))
+	}
+	return files, samePath
 }
 
 // inActionFile reports whether any in-repo `$/…` action file in the run

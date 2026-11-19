@@ -83,6 +83,7 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 		pw.SHASpellings = lowercaseSHAs(scan.Refs, selfScan.Refs)
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
 		pw.RewriteRefs = rewritableRefs(pw.Refs, selfScan.Refs)
+		pw.WorkflowRefs = scan.Refs
 		pw.SelfActionRefs = selfScan.Refs
 		pw.SelfActionFiles = selfScan.RefFiles
 		pw.LocalPaths = scan.LocalPaths
