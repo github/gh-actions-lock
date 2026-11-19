@@ -1,7 +1,7 @@
 # Fails when .github/workflows/actions.lock is out of sync with the
 # workflows or a locked pin no longer verifies upstream.
 #
-# This repository runs its own actions/verify from the checkout, so the
+# This repository runs its own actions/verify at the workflow commit, so the
 # version is set here. Other repositories pin a verify-v* tag instead; see
 # actions/verify/README.md.
 
@@ -23,6 +23,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: ./actions/verify
+      - uses: $/actions/verify
         with:
           version: v0.4.1
