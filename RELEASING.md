@@ -35,10 +35,9 @@ the release script again for the next RC.
 Rerunning a step is safe. If the push was held, rerun the same command: it
 pushes the local tag when that tag already points at `HEAD`, and stops if it
 points anywhere else. After a successful push, a rerun stops at the next step:
-stamping `main`. Rerunning the tag workflow checks the attestations again and skips
+stamping `main`. Rerunning the tag workflow checks the attestations again, skips
 tagging when `verify-vX.Y.Z` is already that same signed stamp on the release
-commit, and `--stamp-only` skips
-a tree that's already stamped for the tag.
+commit, and reuses the stamp branch and pull request for `main`.
 
 Use `patch` for compatible fixes, `minor` for compatible additions, and `major`
 for breaking changes.
@@ -59,11 +58,19 @@ tags it `verify-vX.Y.Z`. Don't edit `checksums.json` by hand.
 `main` also carries a stamp, so this repository's own `verify-lockfile`
 workflow runs the action the way other repositories do. The stamp for a release
 can only land after it: the binaries embed the commit they're built from. So
-after each release, run
+for a stable release that's the latest release, the tag workflow also commits
+the same `checksums.json` to a `verify-stamp-vX.Y.Z` branch off `main`, opens the
+"Stamp actions/verify on main for vX.Y.Z" pull request, and dispatches the
+`test` and `verify-lockfile` workflows on it (pull requests opened by the
+workflow token don't trigger `pull_request` runs). Review and merge it like any
+other pull request. Release candidates don't stamp `main`.
+
+`script/release` refuses to cut the next release, including a release
+candidate, until `main` is stamped for the latest stable release. If the stamp
+pull request is missing, run
 `node script/verify-action-release.mjs --stamp-only vX.Y.Z` (it checks the
-attestations with `gh`) and merge the result. `script/release` refuses to cut
-the next release, including a release candidate, until `main` is stamped for
-the latest stable release. Stamp `main` with stable releases only.
+attestations with `gh`) and open one by hand. `--stamp-only` skips a tree that's
+already stamped for the tag.
 
 ## Dependabot compatibility
 

@@ -58,7 +58,7 @@ require_current_stamp() {
   stamped="$( (git show refs/remotes/origin/main:actions/verify/checksums.json 2>/dev/null || true) |
     node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).version)); } catch {} });')"
   [ "$stamped" = "${latest}" ] ||
-    die "actions/verify on main isn't stamped for ${latest} (got '${stamped}'); run 'node script/verify-action-release.mjs --stamp-only ${latest}' and merge that first"
+    die "actions/verify on main isn't stamped for ${latest} (got '${stamped}'); merge the release workflow's stamp pull request first (see RELEASING.md)"
 }
 
 require_clean() {
