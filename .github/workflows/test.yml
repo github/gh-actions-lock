@@ -33,6 +33,8 @@ jobs:
         if: runner.os == 'Linux'
       - run: go test -count=1 ./...
         if: runner.os == 'Windows'
+      - run: node --test actions/verify/lib.test.mjs script/verify-action-release.test.mjs
+        if: runner.os == 'Windows'
 
   integration-stub:
     runs-on: ${{ matrix.os }}

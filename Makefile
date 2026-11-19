@@ -17,7 +17,7 @@ test: test-release
 
 test-release:
 	script/release-test
-	script/stamp-verify-action-test
+	node --test actions/verify/lib.test.mjs script/verify-action-release.test.mjs
 
 vet:
 	go vet ./...
