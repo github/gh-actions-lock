@@ -26,6 +26,9 @@ Requires an authenticated GitHub CLI. github.com and GitHub Enterprise Cloud wit
 gh extension install github/gh-actions-lock
 ```
 
+On GHE.com, `gh` looks the shorthand up on the tenant, so install from the full URL instead:
+`gh extension install https://github.com/github/gh-actions-lock`.
+
 Run every command from the repository checkout. The host comes from `--hostname`, then `GH_HOST`,
 then the repository remote, then github.com.
 

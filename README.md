@@ -16,6 +16,13 @@ To teach your AI coding agent the CLI:
 gh skill install github/gh-actions-lock
 ```
 
+On GHE.com, `gh` looks the shorthand up on your tenant, so install from the full URL instead:
+
+```bash
+gh extension install https://github.com/github/gh-actions-lock
+gh skill install https://github.com/github/gh-actions-lock
+```
+
 ## Quickstart
 
 From the repository checkout:
