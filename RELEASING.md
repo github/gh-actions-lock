@@ -49,10 +49,13 @@ commits that on top of the release commit and tags it `verify-vX.Y.Z`. Don't
 edit the default or the checksums by hand.
 
 `main` also carries a stamp, so this repository's own `verify-lockfile`
-workflow runs the action the way other repositories do. It can trail the latest
-release; the release workflow restamps on top of it either way. To move it, run
+workflow runs the action the way other repositories do. The stamp for a release
+can only land after it: the binaries embed the commit they're built from. So
+after each release, run
 `node script/verify-action-release.mjs --stamp-only vX.Y.Z` (it checks the
-attestations with `gh`) and open a pull request with the result.
+attestations with `gh`) and merge the result. `script/release` refuses to cut
+the next release, including a release candidate, until `main` is stamped for
+the latest stable release. Stamp `main` with stable releases only.
 
 ## Dependabot compatibility
 

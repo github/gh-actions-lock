@@ -14,7 +14,8 @@
 #   RELEASE_DRY_RUN=1   Compute and print the next version, then stop before
 #                       tagging or pushing.
 #
-# Requires: git, go, make.
+# Requires: git, go, make, and actions/verify on main stamped for the latest
+# release (see RELEASING.md).
 
 set -euo pipefail
 
@@ -46,6 +47,17 @@ require_current_main() {
   main="$(git rev-parse refs/remotes/origin/main)"
   [ "$commit" = "$main" ] ||
     die "release commit ${commit} is not current main ${main}"
+}
+
+# The verify action on main must carry the latest release's stamp before the
+# next release. The stamp can't land with its own release: the binaries embed the
+# commit they're built from, so their checksums only exist after the tag.
+require_current_stamp() {
+  local latest="$1"
+  local stamped
+  stamped="$( (git show refs/remotes/origin/main:actions/verify/checksums.txt 2>/dev/null || true) | head -n 1)"
+  [ "$stamped" = "# ${latest}" ] ||
+    die "actions/verify on main isn't stamped for ${latest} (got '${stamped}'); run 'node script/verify-action-release.mjs --stamp-only ${latest}' and merge that first"
 }
 
 require_clean() {
@@ -96,6 +108,7 @@ cut_tag() {
     base="0.0.0"
     echo "No existing ${TAG_PREFIX}* release tag; basing bump on v0.0.0."
   else
+    require_current_stamp "$latest"
     base="${latest#"$TAG_PREFIX"}"
   fi
 

@@ -45,7 +45,7 @@ export async function stamp({ root, tag, assetsDir }) {
   if (action.split(MARKER).length !== 2 || !STAMP.test(action)) {
     throw new Error(`${ACTION} must contain exactly one line like: default: vX.Y.Z ${MARKER}`);
   }
-  const lines = [`# ${tag}`];
+  const lines = [`# ${tag}`]; // script/release reads this header
   for (const a of ASSETS) {
     const path = join(assetsDir, a);
     if (!existsSync(path)) throw new Error(`missing release asset ${path}`);

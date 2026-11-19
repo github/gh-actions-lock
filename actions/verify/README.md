@@ -19,7 +19,7 @@ It's a Node action (`node24`) that uses only Node built-ins, so it runs on the r
 | Input | Default | Description |
 |---|---|---|
 | `token` | `${{ github.token }}` | Token the CLI uses to read action repositories. |
-| `version` | the CLI release the tag was cut with | `gh-actions-lock` release to run, such as `v0.5.1`. |
+| `version` | the CLI release the action was stamped with; each `verify-vX.Y.Z` tag uses `vX.Y.Z` | `gh-actions-lock` release to run, such as `v0.5.1`. |
 | `args` | `--verify` | Arguments passed to `gh-actions-lock`, split on whitespace and newlines. For example, `--verify --fail-on-warning`. |
 
 With the default `version`, the binary is checked against checksums recorded in the action. With another `version`, it's checked against the release's build attestation on github.com using `token`, which needs the GitHub CLI (`gh`) on `PATH`. GitHub-hosted runners have it; self-hosted runners may not. On GHE.com, that check uses `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` instead, so your tenant token never leaves the tenant.
