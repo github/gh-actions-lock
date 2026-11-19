@@ -9,7 +9,7 @@ inputs:
   version:
     description: gh-actions-lock release to run, such as v0.4.1. Release tags of this action default it to the CLI release they were cut with.
     required: false
-    default: "" # stamped by script/stamp-verify-action
+    default: "" # stamped by script/verify-action-release.mjs
   args:
     description: Arguments passed to gh-actions-lock, split on whitespace.
     required: false
@@ -18,23 +18,10 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install gh-actions-lock
-      id: install
+    - name: Verify actions.lock
       shell: bash
       env:
-        VERSION: ${{ inputs.version }}
-        GH_TOKEN: ${{ inputs.token }}
-        OS: ${{ runner.os }}
-        ARCH: ${{ runner.arch }}
-      run: bash "$GITHUB_ACTION_PATH/install.sh"
-
-    - name: Run gh-actions-lock
-      shell: bash
-      env:
-        BIN: ${{ steps.install.outputs.bin }}
-        ARGS: ${{ inputs.args }}
-        GH_TOKEN: ${{ inputs.token }}
-      run: |
-        set -f
-        read -r -d '' -a args <<<"$ARGS" || true
-        "$BIN" "${args[@]}"
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: node "$GITHUB_ACTION_PATH/verify.mjs"

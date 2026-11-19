@@ -12,7 +12,7 @@ steps:
 
 Use the [latest `verify-v*` tag](https://github.com/github/gh-actions-lock/tags). Every CLI release `vX.Y.Z` publishes `verify-vX.Y.Z`, which runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Check out the repository before this step.
 
-The action runs on Linux, macOS and Windows runners, on x64 and arm64.
+The action runs on Linux, macOS and Windows runners, on x64 and arm64. It needs `node` (20 or later) on `PATH`, which GitHub-hosted runners have.
 
 ## Inputs
 
