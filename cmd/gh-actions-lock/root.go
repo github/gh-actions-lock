@@ -35,7 +35,7 @@ func execute() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	defer ui.CloseProgressTrace()
-	if err := enterRepoRoot(os.Args[1:]); err != nil {
+	if err := enterRepoRoot(); err != nil {
 		ui.New().Error("%s", err)
 		return 2
 	}
@@ -65,8 +65,10 @@ func execute() int {
 
 // enterRepoRoot changes into the repository root when the command is run from
 // .github or .github/workflows, since all workflow paths are repo-relative.
-// Arguments that name existing files are rewritten to stay valid after the move.
-func enterRepoRoot(args []string) error {
+// The original directory is kept in startDir so parsed operands and path
+// flags can be resolved against it afterwards (see rebaseOperands); relative
+// path environment overrides are made absolute before the move.
+func enterRepoRoot() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil
@@ -75,36 +77,62 @@ func enterRepoRoot(args []string) error {
 	if root == "" {
 		return nil
 	}
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
-		if _, err := os.Stat(a); err != nil {
-			continue
-		}
-		abs, err := filepath.Abs(a)
-		if err != nil {
-			continue
-		}
-		if rel, err := filepath.Rel(root, abs); err == nil {
-			args[i] = rel
+	for _, name := range []string{"GH_ACTIONS_LOCK_WORKFLOWS_DIR", "GH_ACTIONS_LOCK_REPO_ROOT"} {
+		if v := os.Getenv(name); v != "" && !filepath.IsAbs(v) {
+			if err := os.Setenv(name, filepath.Join(cwd, v)); err != nil {
+				return fmt.Errorf("resolving %s: %w", name, err)
+			}
 		}
 	}
 	if err := os.Chdir(root); err != nil {
 		return fmt.Errorf("changing to repository root %s: %w", root, err)
 	}
+	startDir, repoRoot = cwd, root
 	return nil
 }
 
+// startDir and repoRoot are set when enterRepoRoot moved the process.
+var startDir, repoRoot string
+
+// rebasePath resolves p, given relative to the original directory, against
+// the repository root.
+func rebasePath(p string) string {
+	if startDir == "" || p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	abs := filepath.Join(startDir, p)
+	if rel, err := filepath.Rel(repoRoot, abs); err == nil {
+		return rel
+	}
+	return abs
+}
+
+// repoRootFromGitHubDir returns the repository root when dir is .github or
+// .github/workflows inside a checkout. It returns "" when dir is itself a
+// checkout (an org's .github repository) or the candidate root is not one.
 func repoRootFromGitHubDir(dir string) string {
 	dir = filepath.Clean(dir)
-	if strings.EqualFold(filepath.Base(dir), "workflows") && strings.EqualFold(filepath.Base(filepath.Dir(dir)), ".github") {
-		return filepath.Dir(filepath.Dir(dir))
+	if hasGit(dir) {
+		return ""
 	}
-	if filepath.Base(dir) == ".github" {
-		return filepath.Dir(dir)
+	var root string
+	switch {
+	case strings.EqualFold(filepath.Base(dir), "workflows") && strings.EqualFold(filepath.Base(filepath.Dir(dir)), ".github"):
+		root = filepath.Dir(filepath.Dir(dir))
+	case strings.EqualFold(filepath.Base(dir), ".github"):
+		root = filepath.Dir(dir)
+	default:
+		return ""
 	}
-	return ""
+	if !hasGit(root) {
+		return ""
+	}
+	return root
+}
+
+func hasGit(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 // printedError is a tool failure the run already printed; it still exits 2.
@@ -223,7 +251,14 @@ $ gh actions-lock --json
 		Version: cliVersion(),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				opts.workflowPaths = args
+				opts.workflowPaths = make([]string, len(args))
+				for i, a := range args {
+					opts.workflowPaths[i] = rebasePath(a)
+				}
+			}
+			// Profile output stays where the user ran the command.
+			if startDir != "" && opts.profileDir != "" && !filepath.IsAbs(opts.profileDir) {
+				opts.profileDir = filepath.Join(startDir, opts.profileDir)
 			}
 			return opts.validateOutputFlags()
 		},
