@@ -9,6 +9,9 @@ name: verify-lockfile
 
 on:
   pull_request:
+  # The release workflow dispatches this on its stamp pull request, which
+  # GITHUB_TOKEN can't trigger through pull_request.
+  workflow_dispatch:
   push:
     branches:
       - main

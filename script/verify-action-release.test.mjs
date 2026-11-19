@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { parseChecksums } from "../actions/verify/lib.mjs";
-import { ASSETS, CHECKSUMS, checkTag, publish, published, stamp, stampedFor } from "./verify-action-release.mjs";
+import { ASSETS, CHECKSUMS, checkTag, openStampPR, publish, published, stamp, stampedFor } from "./verify-action-release.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -160,5 +160,84 @@ describe("published", () => {
   test("fails on an annotated tag object", async () => {
     const fetch = fakeAPI({ "git/ref/tags/verify-v1.2.3": { object: { type: "tag", sha: "tagobj" } } });
     await assert.rejects(published({ ...args, fetch }), /already exists at tagobj/);
+  });
+});
+
+describe("openStampPR", () => {
+  const content = JSON.stringify({ version: "v1.2.3", sha256: { "linux-amd64": "a".repeat(64) } }, null, 2) + "\n";
+  const file = (text) => ({ content: Buffer.from(text).toString("base64") });
+  const old = JSON.stringify({ version: "v1.2.2", sha256: {} });
+  const args = { api: "https://api.test", token: "tok", repo: "o/r", tag: "v1.2.3", content, log: () => {} };
+
+  // fakeAPI answers "METHOD path" keys; a missing GET is a 404.
+  function fakeAPI(responses) {
+    const calls = [];
+    const fetch = async (url, { method, body }) => {
+      const key = `${method} ${url.replace("https://api.test/repos/o/r/", "")}`;
+      calls.push({ key, body: body && JSON.parse(body) });
+      if (key.includes("/dispatches")) return new Response(null, { status: 204 });
+      if (!(key in responses)) {
+        if (method === "GET") return new Response("Not Found", { status: 404 });
+        throw new Error(`unexpected ${key}`);
+      }
+      return new Response(JSON.stringify(responses[key]), { status: 200 });
+    };
+    return { calls, fetch };
+  }
+  const base = {
+    "GET releases/latest": { tag_name: "v1.2.3" },
+    "GET git/ref/heads/main": { object: { sha: "main1" } },
+    "GET contents/actions/verify/checksums.json?ref=main1": file(old),
+  };
+  const dispatches = ["POST actions/workflows/test.yml/dispatches", "POST actions/workflows/verify-lockfile.yml/dispatches"];
+
+  test("commits the stamp on main, opens the pull request and dispatches its checks", async () => {
+    const { calls, fetch } = fakeAPI({
+      ...base,
+      "GET git/commits/main1": { tree: { sha: "maintree" } },
+      "POST git/blobs": { sha: "blob1" },
+      "POST git/trees": { sha: "tree1" },
+      "POST git/commits": { sha: "commit1" },
+      "POST git/refs": {},
+      "GET pulls?state=open&base=main&head=o%3Averify-stamp-v1.2.3": [],
+      "POST pulls": { html_url: "https://github.test/o/r/pull/7" },
+    });
+    assert.equal(await openStampPR({ ...args, fetch }), "https://github.test/o/r/pull/7");
+    const body = (k) => calls.find((c) => c.key === k).body;
+    assert.equal(Buffer.from(body("POST git/blobs").content, "base64").toString(), content);
+    assert.deepEqual(body("POST git/trees").base_tree, "maintree");
+    assert.deepEqual(body("POST git/commits").parents, ["main1"]);
+    assert.deepEqual(body("POST git/refs"), { ref: "refs/heads/verify-stamp-v1.2.3", sha: "commit1" });
+    assert.equal(body("POST pulls").head, "verify-stamp-v1.2.3");
+    assert.equal(body("POST pulls").base, "main");
+    assert.deepEqual(calls.filter((c) => c.key.endsWith("/dispatches")).map((c) => c.key), dispatches);
+    assert.deepEqual(body(dispatches[0]), { ref: "verify-stamp-v1.2.3" });
+  });
+
+  test("a rerun reuses the branch and pull request and dispatches the checks again", async () => {
+    const { calls, fetch } = fakeAPI({
+      ...base,
+      "GET contents/actions/verify/checksums.json?ref=verify-stamp-v1.2.3": file(content),
+      "GET pulls?state=open&base=main&head=o%3Averify-stamp-v1.2.3": [{ html_url: "https://github.test/o/r/pull/7" }],
+    });
+    assert.equal(await openStampPR({ ...args, fetch }), "https://github.test/o/r/pull/7");
+    assert.deepEqual(calls.filter((c) => c.key.startsWith("POST")).map((c) => c.key), dispatches);
+  });
+
+  test("fails when the stamp branch holds something else", async () => {
+    const { fetch } = fakeAPI({ ...base, "GET contents/actions/verify/checksums.json?ref=verify-stamp-v1.2.3": file(old) });
+    await assert.rejects(openStampPR({ ...args, fetch }), /branch verify-stamp-v1\.2\.3 exists with a different/);
+  });
+
+  test("does nothing when main is already stamped", async () => {
+    const { calls, fetch } = fakeAPI({ ...base, "GET contents/actions/verify/checksums.json?ref=main1": file(content) });
+    assert.equal(await openStampPR({ ...args, fetch }), null);
+    assert.ok(calls.every((c) => c.key.startsWith("GET")));
+  });
+
+  test("does nothing for a release that isn't the latest", async () => {
+    const { calls, fetch } = fakeAPI({ "GET releases/latest": { tag_name: "v1.3.0" } });
+    assert.equal(await openStampPR({ ...args, fetch }), null);
+    assert.equal(calls.length, 1);
   });
 });

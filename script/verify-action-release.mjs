@@ -1,11 +1,11 @@
 // Publishes verify-<tag> for a CLI release: checks the release binaries'
 // attestations, records the tag and their checksums in actions/verify/checksums.json,
-// and tags
-// a GitHub-signed commit on top of the release commit.
+// and tags a GitHub-signed commit on top of the release commit. For a stable
+// release it then opens a pull request that stamps main the same way.
 //
 // Usage (release workflow, with GH_TOKEN and REPO set):
 //   node script/verify-action-release.mjs <vX.Y.Z[-rc.N]>
-// To restamp the working tree only, for example to move main to a newer release:
+// To restamp the working tree only, as a manual fallback for main's stamp pull request:
 //   node script/verify-action-release.mjs --stamp-only <vX.Y.Z[-rc.N]>
 
 import { spawnSync } from "node:child_process";
@@ -61,18 +61,22 @@ function github({ api, token, repo, fetch: fetchFn = fetch }) {
     });
     if (allow404 && res.status === 404) return null;
     if (!res.ok) throw new Error(`${method} ${path}: HTTP ${res.status} ${await res.text()}`);
-    return res.json();
+    return res.status === 204 ? null : res.json();
   };
+}
+
+function stampedVersion(text) {
+  try {
+    return parseChecksums(text).version;
+  } catch {
+    return null;
+  }
 }
 
 // stampedFor returns the version root's checksums.json records, or null if it's
 // missing or malformed.
 export async function stampedFor(root) {
-  try {
-    return parseChecksums(await readFile(join(root, CHECKSUMS), "utf8")).version;
-  } catch {
-    return null;
-  }
+  return existsSync(join(root, CHECKSUMS)) ? stampedVersion(await readFile(join(root, CHECKSUMS), "utf8")) : null;
 }
 
 // published returns the commit verify-<tag> points at, or null if the tag
@@ -117,6 +121,61 @@ export async function publish({ api, token, repo, tag, head, baseTree, files, fe
   return commit;
 }
 
+export const STAMP_WORKFLOWS = ["test.yml", "verify-lockfile.yml"];
+
+// openStampPR opens a pull request that stamps main for tag with content, the
+// stamped checksums.json, when tag is the latest release and main isn't stamped
+// for it yet. A rerun reuses the branch and pull request. Pull requests opened
+// with GITHUB_TOKEN don't start pull_request workflows, so it dispatches the
+// required checks on the branch instead; workflow_dispatch is exempt from that.
+export async function openStampPR({ api, token, repo, tag, content, fetch: fetchFn = fetch, log = console.log }) {
+  const call = github({ api, token, repo, fetch: fetchFn });
+  const latest = await call("GET", "releases/latest");
+  if (latest.tag_name !== tag) {
+    log(`${tag} isn't the latest release (${latest.tag_name}); not stamping main`);
+    return null;
+  }
+  const main = (await call("GET", "git/ref/heads/main")).object.sha;
+  const onMain = await call("GET", `contents/${CHECKSUMS}?ref=${main}`, undefined, { allow404: true });
+  if (onMain && stampedVersion(Buffer.from(onMain.content, "base64").toString()) === tag) {
+    log(`main is already stamped for ${tag}`);
+    return null;
+  }
+
+  const branch = `verify-stamp-${tag}`;
+  const existing = await call("GET", `contents/${CHECKSUMS}?ref=${encodeURIComponent(branch)}`, undefined, { allow404: true });
+  if (!existing) {
+    const { tree } = await call("GET", `git/commits/${main}`);
+    const blob = await call("POST", "git/blobs", { content: Buffer.from(content).toString("base64"), encoding: "base64" });
+    const { sha: treeSha } = await call("POST", "git/trees", {
+      base_tree: tree.sha,
+      tree: [{ path: CHECKSUMS, mode: "100644", type: "blob", sha: blob.sha }],
+    });
+    const { sha: commit } = await call("POST", "git/commits", {
+      message: `Stamp actions/verify on main for ${tag}`,
+      tree: treeSha,
+      parents: [main],
+    });
+    await call("POST", "git/refs", { ref: `refs/heads/${branch}`, sha: commit });
+  } else if (Buffer.from(existing.content, "base64").toString() !== content) {
+    throw new Error(`branch ${branch} exists with a different ${CHECKSUMS}`);
+  }
+
+  const owner = repo.split("/")[0];
+  const [open] = await call("GET", `pulls?state=open&base=main&head=${encodeURIComponent(`${owner}:${branch}`)}`);
+  const pr =
+    open ??
+    (await call("POST", "pulls", {
+      title: `Stamp actions/verify on main for ${tag}`,
+      head: branch,
+      base: "main",
+      body: `Records ${tag} and its release binaries' checksums in \`${CHECKSUMS}\`, so \`script/release\` can cut the next release.`,
+    }));
+  for (const wf of STAMP_WORKFLOWS) await call("POST", `actions/workflows/${wf}/dispatches`, { ref: branch });
+  log(`Stamp pull request: ${pr.html_url}`);
+  return pr.html_url;
+}
+
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...opts });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed`);
@@ -159,19 +218,22 @@ async function main(tag, { stampOnly = false } = {}) {
   const done = await published({ api, token, repo, tag, head, tree });
   if (done) {
     console.log(`verify-${tag} already exists at ${done}`);
-    return;
+  } else {
+    const commit = await publish({
+      api,
+      token,
+      repo,
+      tag,
+      head,
+      baseTree: run("git", ["rev-parse", "HEAD^{tree}"], { cwd: root }),
+      files: [{ path: CHECKSUMS, content: await readFile(join(root, CHECKSUMS)) }],
+    });
+    console.log(`Tagged verify-${tag} at ${commit}`);
   }
-  const files = [{ path: CHECKSUMS, content: await readFile(join(root, CHECKSUMS)) }];
-  const commit = await publish({
-    api,
-    token,
-    repo,
-    tag,
-    head,
-    baseTree: run("git", ["rev-parse", "HEAD^{tree}"], { cwd: root }),
-    files,
-  });
-  console.log(`Tagged verify-${tag} at ${commit}`);
+  // main carries stable releases only.
+  if (!tag.includes("-rc.")) {
+    await openStampPR({ api, token, repo, tag, content: await readFile(join(root, CHECKSUMS), "utf8") });
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
