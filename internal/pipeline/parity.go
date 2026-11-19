@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -763,7 +764,7 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			f.KeptName = true
 		case inActionFile(held, ref.NWO(), ref.Ref) || inActionFile(held, st.NameWithOwner, ref.Ref):
 			// An action file's spelling anywhere in the run keeps this one as written.
-			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, pw.Path)
+			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, filepath.ToSlash(pw.Path))
 			f.KeptName = true
 		}
 		if f.ParentNWO != "" {

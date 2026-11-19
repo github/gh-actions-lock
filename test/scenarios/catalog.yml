@@ -542,7 +542,7 @@ scenarios:
       delete_lockfile: true
     expect:
       exit: 1
-      output_contains: ["Change it to $/helper in $/my-action", "Nothing was written"]
+      output_contains: ["Change it to $/helper in my-action/action.yml", "Nothing was written"]
       files_contain:
         ".github/workflows/ci.yml": ["uses: ./my-action"]
         "my-action/action.yml": ["uses: ./helper"]
