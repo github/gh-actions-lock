@@ -41,6 +41,14 @@ then pushes and verifies an annotated `vX.Y.Z` or `vX.Y.Z-rc.N` tag.
 The tag workflow verifies the tag, then publishes the binaries, attestations,
 and GitHub release.
 
+It then publishes the [verify action](actions/verify/README.md) for the
+release. `script/stamp-verify-action` sets the action's default `version` to
+the new tag and records the release binaries' checksums in
+`actions/verify/checksums.txt`. The workflow commits that on top of the release
+commit and tags it `verify-vX.Y.Z`. That commit isn't on `main`, since it
+holds checksums of binaries built from its parent. Don't edit the default or
+the checksums by hand.
+
 ## Dependabot compatibility
 
 Before releasing, decide whether

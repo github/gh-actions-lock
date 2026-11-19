@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - v*
+      - "!verify-v*"
 
 permissions:
   contents: read
@@ -34,3 +35,56 @@ jobs:
           generate_attestations: true
           go_version_file: go.mod
           go_build_options: ./cmd/gh-actions-lock
+
+  stamp-action:
+    name: Publish verify action
+    needs: publish
+    permissions:
+      contents: write
+      attestations: read
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download and check release binaries
+        run: |
+          mkdir "$RUNNER_TEMP/assets"
+          cd "$RUNNER_TEMP/assets"
+          for a in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64.exe windows-arm64.exe; do
+            gh release download "$TAG" --repo "$REPO" --pattern "$a"
+            gh attestation verify "$a" --repo "$REPO" \
+              --signer-workflow "$REPO/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" >/dev/null
+          done
+
+      - name: Stamp actions/verify
+        run: script/stamp-verify-action "$TAG" "$RUNNER_TEMP/assets"
+
+      # A commit created through the API is signed by GitHub, which the tag
+      # ruleset requires. It sits on top of the release commit, off main.
+      - name: Tag verify-${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          entries='[]'
+          for f in actions/verify/action.yml actions/verify/checksums.txt; do
+            sha="$(base64 -w0 "$f" | jq -Rn '{content: input, encoding: "base64"}' |
+              gh api "repos/$REPO/git/blobs" --input - --jq .sha)"
+            entries="$(jq -c --arg p "$f" --arg s "$sha" '. + [{path: $p, mode: "100644", type: "blob", sha: $s}]' <<<"$entries")"
+          done
+          tree="$(jq -n --arg b "$(git rev-parse 'HEAD^{tree}')" --argjson t "$entries" '{base_tree: $b, tree: $t}' |
+            gh api "repos/$REPO/git/trees" --input - --jq .sha)"
+          commit="$(jq -n --arg m "Stamp actions/verify for $TAG" --arg t "$tree" --arg p "$(git rev-parse HEAD)" \
+            '{message: $m, tree: $t, parents: [$p]}' |
+            gh api "repos/$REPO/git/commits" --input - --jq .sha)"
+          [ "$(gh api "repos/$REPO/git/commits/$commit" --jq .verification.verified)" = true ] || {
+            echo "::error::stamp commit $commit is not signed"
+            exit 1
+          }
+          gh api "repos/$REPO/git/refs" -f "ref=refs/tags/verify-$TAG" -f "sha=$commit" >/dev/null
+          echo "Tagged verify-$TAG at $commit"
