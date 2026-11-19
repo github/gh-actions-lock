@@ -20,9 +20,9 @@ The action runs on Linux, macOS and Windows runners, on x64 and arm64.
 |---|---|---|
 | `token` | `${{ github.token }}` | Token the CLI uses to read action repositories. |
 | `version` | the CLI release the tag was cut with | `gh-actions-lock` release to run, such as `v0.4.1`. |
-| `args` | `--verify` | Arguments passed to `gh-actions-lock`, split on whitespace. For example, `--verify --fail-on-warning`. |
+| `args` | `--verify` | Arguments passed to `gh-actions-lock`, split on whitespace and newlines. For example, `--verify --fail-on-warning`. |
 
-With the default `version`, the binary is checked against checksums recorded in the tag. With another `version`, it's checked against the release's build attestation using `token`, so that token must be able to read public github.com repositories.
+With the default `version`, the binary is checked against checksums recorded in the tag. With another `version`, it's checked against the release's build attestation on github.com using `token`. On GHE.com, that check uses `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` instead, so your tenant token never leaves the tenant.
 
 ## Private and internal actions
 

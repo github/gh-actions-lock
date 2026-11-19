@@ -38,10 +38,11 @@ mkdir -p "$dir"
 curl -fsSL --retry 3 -o "$bin" "https://github.com/$repo/releases/download/$VERSION/$asset"
 
 sha256() {
+  # Hash stdin: GNU sha256sum escapes output for Windows paths with backslashes.
   if command -v sha256sum >/dev/null; then
-    sha256sum "$1" | awk '{ print $1 }'
+    sha256sum <"$1" | awk '{ print $1 }'
   else
-    shasum -a 256 "$1" | awk '{ print $1 }'
+    shasum -a 256 <"$1" | awk '{ print $1 }'
   fi
 }
 
@@ -54,7 +55,14 @@ if [ "$VERSION" = "$stamped" ]; then
   [ "$got" = "$want" ] || die "checksum mismatch for $asset $VERSION: got $got, want $want"
   echo "Verified $asset $VERSION against the stamped checksum."
 else
-  GH_HOST=github.com gh attestation verify "$bin" \
+  # Attestations live on github.com. A GHE.com job token must never be sent there.
+  token="${GH_TOKEN:-}"
+  if [ "${GITHUB_SERVER_URL:-https://github.com}" != https://github.com ]; then
+    token="${GH_ACTIONS_LOCK_GITHUB_COM_TOKEN:-}"
+    [ -n "$token" ] ||
+      die "set GH_ACTIONS_LOCK_GITHUB_COM_TOKEN to check $VERSION, or use the version this action tag was released with"
+  fi
+  env -u GITHUB_TOKEN GH_HOST=github.com GH_TOKEN="$token" gh attestation verify "$bin" \
     --repo "$repo" \
     --signer-workflow "$repo/.github/workflows/release.yml" \
     --source-ref "refs/tags/$VERSION" >/dev/null ||

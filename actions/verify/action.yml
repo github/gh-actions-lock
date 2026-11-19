@@ -36,5 +36,5 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
       run: |
         set -f
-        read -r -a args <<<"$ARGS"
+        read -r -d '' -a args <<<"$ARGS" || true
         "$BIN" "${args[@]}"
