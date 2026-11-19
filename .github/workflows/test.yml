@@ -57,7 +57,8 @@ jobs:
         run: ruby --version
       - run: gem install webrick
       - run: make build
-      - run: make test-stub
+      # Use the same Ruby that installed WEBrick, not the Makefile's Homebrew preference.
+      - run: make test-stub RUBY=ruby
 
   integration-live:
     runs-on: ubuntu-latest
