@@ -7,16 +7,21 @@ A [GitHub CLI](https://cli.github.com/) extension that pins every direct and tra
 Requires an authenticated `gh`. github.com and GitHub Enterprise Cloud with data residency (`*.ghe.com`) are supported; GitHub Enterprise Server is not.
 
 ```bash
-gh extension install https://github.com/github/gh-actions-lock
+gh extension install github/gh-actions-lock
 ```
 
 To teach your AI coding agent the CLI:
 
 ```bash
-gh skill install https://github.com/github/gh-actions-lock
+gh skill install github/gh-actions-lock
 ```
 
-The full URL makes `gh` fetch from github.com even when your default host is a `*.ghe.com` tenant.
+On GHE.com, `gh` looks the shorthand up on your tenant, so install from the full URL instead:
+
+```bash
+gh extension install https://github.com/github/gh-actions-lock
+gh skill install https://github.com/github/gh-actions-lock
+```
 
 ## Quickstart
 
