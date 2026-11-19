@@ -51,10 +51,10 @@ and GitHub release.
 
 It then publishes the [verify action](actions/verify/README.md) for the
 release. `script/verify-action-release.mjs` checks the release binaries'
-attestations, sets the action's default `version` to the new tag and records the
-release binaries' checksums in `actions/verify/checksums.txt`. The workflow
-commits that on top of the release commit and tags it `verify-vX.Y.Z`. Don't
-edit the default or the checksums by hand.
+attestations and writes the new tag and the release binaries' checksums to
+`actions/verify/checksums.json`. The action runs that version when its `version`
+input is empty. The workflow commits that file on top of the release commit and
+tags it `verify-vX.Y.Z`. Don't edit `checksums.json` by hand.
 
 `main` also carries a stamp, so this repository's own `verify-lockfile`
 workflow runs the action the way other repositories do. The stamp for a release

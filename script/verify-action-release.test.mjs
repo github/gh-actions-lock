@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { ACTION, ASSETS, CHECKSUMS, checkTag, publish, published, stamp, stampedFor } from "./verify-action-release.mjs";
+import { parseChecksums } from "../actions/verify/lib.mjs";
+import { ASSETS, CHECKSUMS, checkTag, publish, published, stamp, stampedFor } from "./verify-action-release.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -17,14 +18,12 @@ describe("checkTag", () => {
 });
 
 describe("checked-in stamp", () => {
-  test("the version default matches checksums.txt, which covers every asset", async () => {
-    const action = await readFile(join(repoRoot, ACTION), "utf8");
-    const tag = action.match(/^ {4}default: (\S+) # stamped by/m)?.[1];
-    assert.equal(checkTag(tag), tag);
-    const lines = (await readFile(join(repoRoot, CHECKSUMS), "utf8")).trimEnd().split("\n");
-    assert.equal(lines[0], `# ${tag}`);
-    assert.deepEqual(lines.slice(1).map((l) => l.split(/\s+/)[1]), ASSETS);
-    for (const l of lines.slice(1)) assert.match(l, /^[0-9a-f]{64}  \S+$/);
+  test("checksums.json covers every release asset, and action.yml has no version default", async () => {
+    const sums = parseChecksums(await readFile(join(repoRoot, CHECKSUMS), "utf8"));
+    assert.equal(checkTag(sums.version), sums.version);
+    assert.deepEqual(Object.keys(sums.sha256), ASSETS);
+    const action = await readFile(join(repoRoot, "actions/verify/action.yml"), "utf8");
+    assert.doesNotMatch(action.slice(action.indexOf("  version:"), action.indexOf("  args:")), /default:/);
   });
 });
 
@@ -35,22 +34,18 @@ describe("stamp", () => {
     assetsDir = join(root, "assets");
     await mkdir(join(root, "actions/verify"), { recursive: true });
     await mkdir(assetsDir);
-    await writeFile(join(root, ACTION), await readFile(join(repoRoot, ACTION)));
     for (const a of ASSETS) await writeFile(join(assetsDir, a), a);
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test("defaults the version input to the tag and records checksums", async () => {
+  test("records the tag and every asset's checksum in a form the action reads", async () => {
     await stamp({ root, tag: "v1.2.3-rc.1", assetsDir });
-    const action = await readFile(join(root, ACTION), "utf8");
-    assert.match(action, /^ {4}default: v1\.2\.3-rc\.1 # stamped by/m);
-    const lines = (await readFile(join(root, CHECKSUMS), "utf8")).trimEnd().split("\n");
-    assert.equal(lines[0], "# v1.2.3-rc.1");
-    assert.equal(lines.length, 1 + ASSETS.length);
-    const want = createHash("sha256").update("linux-arm64").digest("hex");
-    assert.ok(lines.includes(`${want}  linux-arm64`));
+    const sums = parseChecksums(await readFile(join(root, CHECKSUMS), "utf8"));
+    assert.equal(sums.version, "v1.2.3-rc.1");
+    assert.deepEqual(Object.keys(sums.sha256), ASSETS);
+    assert.equal(sums.sha256["linux-arm64"], createHash("sha256").update("linux-arm64").digest("hex"));
   });
 
   test("rejects an invalid tag", async () => {
@@ -62,26 +57,16 @@ describe("stamp", () => {
     await assert.rejects(stamp({ root, tag: "v1.2.3", assetsDir }), /missing release asset/);
   });
 
-  test("restamps an earlier stamp and keeps the marker", async () => {
+  test("restamps an earlier stamp", async () => {
     await stamp({ root, tag: "v1.2.3", assetsDir });
     await stamp({ root, tag: "v1.2.4", assetsDir });
-    const action = await readFile(join(root, ACTION), "utf8");
-    assert.match(action, /^    default: v1\.2\.4 # stamped by script\/verify-action-release\.mjs$/m);
-    assert.match(await readFile(join(root, CHECKSUMS), "utf8"), /^# v1\.2\.4\n/);
+    assert.equal(await stampedFor(root), "v1.2.4");
   });
 
-  test("stampedFor reports the tag only when the action and checksums agree", async () => {
+  test("stampedFor is null when checksums.json is missing or malformed", async () => {
     assert.equal(await stampedFor(root), null);
-    await stamp({ root, tag: "v1.2.3", assetsDir });
-    assert.equal(await stampedFor(root), "v1.2.3");
-    await writeFile(join(root, CHECKSUMS), "# v1.2.2\n");
+    await writeFile(join(root, CHECKSUMS), "version: v1.2.2\n");
     assert.equal(await stampedFor(root), null);
-  });
-
-  test("refuses an action without exactly one stamp line", async () => {
-    const action = await readFile(join(root, ACTION), "utf8");
-    await writeFile(join(root, ACTION), action + action);
-    await assert.rejects(stamp({ root, tag: "v1.2.4", assetsDir }), /exactly one line/);
   });
 });
 
@@ -110,10 +95,7 @@ describe("publish", () => {
     tag: "v1.2.3",
     head: "head1",
     baseTree: "base1",
-    files: [
-      { path: ACTION, content: "a" },
-      { path: CHECKSUMS, content: "c" },
-    ],
+    files: [{ path: CHECKSUMS, content: "c" }],
   };
 
   test("tags a signed commit on top of the release commit", async () => {
@@ -121,18 +103,15 @@ describe("publish", () => {
     assert.equal(await publish({ ...args, fetch }), "commit1");
     assert.deepEqual(
       calls.map((c) => `${c.method} ${c.path}`),
-      ["POST git/blobs", "POST git/blobs", "POST git/trees", "POST git/commits", "GET git/commits/commit1", "POST git/refs"],
+      ["POST git/blobs", "POST git/trees", "POST git/commits", "GET git/commits/commit1", "POST git/refs"],
     );
-    assert.deepEqual(calls[0].body, { content: Buffer.from("a").toString("base64"), encoding: "base64" });
-    assert.deepEqual(calls[2].body, {
+    assert.deepEqual(calls[0].body, { content: Buffer.from("c").toString("base64"), encoding: "base64" });
+    assert.deepEqual(calls[1].body, {
       base_tree: "base1",
-      tree: [
-        { path: ACTION, mode: "100644", type: "blob", sha: "blob1" },
-        { path: CHECKSUMS, mode: "100644", type: "blob", sha: "blob2" },
-      ],
+      tree: [{ path: CHECKSUMS, mode: "100644", type: "blob", sha: "blob1" }],
     });
-    assert.deepEqual(calls[3].body.parents, ["head1"]);
-    assert.deepEqual(calls[5].body, { ref: "refs/tags/verify-v1.2.3", sha: "commit1" });
+    assert.deepEqual(calls[2].body.parents, ["head1"]);
+    assert.deepEqual(calls[4].body, { ref: "refs/tags/verify-v1.2.3", sha: "commit1" });
   });
 
   test("does not tag an unsigned commit", async () => {

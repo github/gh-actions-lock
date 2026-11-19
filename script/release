@@ -14,7 +14,7 @@
 #   RELEASE_DRY_RUN=1   Compute and print the next version, then stop before
 #                       tagging or pushing.
 #
-# Requires: git, go, make, and actions/verify on main stamped for the latest
+# Requires: git, go, make, node, and actions/verify on main stamped for the latest
 # release (see RELEASING.md).
 
 set -euo pipefail
@@ -55,8 +55,9 @@ require_current_main() {
 require_current_stamp() {
   local latest="$1"
   local stamped
-  stamped="$( (git show refs/remotes/origin/main:actions/verify/checksums.txt 2>/dev/null || true) | head -n 1)"
-  [ "$stamped" = "# ${latest}" ] ||
+  stamped="$( (git show refs/remotes/origin/main:actions/verify/checksums.json 2>/dev/null || true) |
+    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).version)); } catch {} });')"
+  [ "$stamped" = "${latest}" ] ||
     die "actions/verify on main isn't stamped for ${latest} (got '${stamped}'); run 'node script/verify-action-release.mjs --stamp-only ${latest}' and merge that first"
 }
 

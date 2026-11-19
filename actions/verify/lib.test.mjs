@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { ActionError, assetFor, attestationEnv, checkVersion, downloadFile, install, selectCheck, splitArgs, useEnvProxy, withSubdomainNoProxy } from "./lib.mjs";
+import { ActionError, assetFor, attestationEnv, checkVersion, downloadFile, install, parseChecksums, selectCheck, splitArgs, useEnvProxy, withSubdomainNoProxy } from "./lib.mjs";
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 
@@ -46,25 +46,55 @@ describe("assetFor", () => {
   });
 });
 
-describe("selectCheck", () => {
-  const sums = `# v0.4.1\n${"a".repeat(64)}  linux-amd64\n${"b".repeat(64)}  windows-amd64.exe\n`;
-  test("uses the stamped checksum for the stamped version", () => {
-    assert.deepEqual(selectCheck("v0.4.1", sums, "windows-amd64.exe"), { kind: "checksum", want: "b".repeat(64) });
+describe("parseChecksums", () => {
+  const sums = { version: "v0.4.1", sha256: { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) } };
+  test("reads the version and checksums", () => {
+    assert.deepEqual(parseChecksums(JSON.stringify(sums, null, 2)), sums);
   });
-  test("handles CRLF checksums", () => {
-    assert.deepEqual(selectCheck("v0.4.1", sums.replaceAll("\n", "\r\n"), "linux-amd64"), {
-      kind: "checksum",
-      want: "a".repeat(64),
-    });
+  const bad = {
+    "invalid JSON": "version: v0.4.1",
+    "null": "null",
+    "an array": "[]",
+    "a missing version": JSON.stringify({ sha256: sums.sha256 }),
+    "an invalid version": JSON.stringify({ ...sums, version: "v0.4" }),
+    "a non-string version": JSON.stringify({ ...sums, version: 1 }),
+    "an array of checksums": JSON.stringify({ ...sums, sha256: [] }),
+    "a short digest": JSON.stringify({ ...sums, sha256: { "linux-amd64": "a".repeat(63) } }),
+    "an uppercase digest": JSON.stringify({ ...sums, sha256: { "linux-amd64": "A".repeat(64) } }),
+    "a bad asset name": JSON.stringify({ ...sums, sha256: { "../x": "a".repeat(64) } }),
+    "an unknown key": JSON.stringify({ ...sums, extra: 1 }),
+  };
+  for (const [name, t] of Object.entries(bad)) {
+    test(`rejects ${name}`, () => assert.throws(() => parseChecksums(t), ActionError));
+  }
+});
+
+describe("selectCheck", () => {
+  const sums = { version: "v0.4.1", sha256: { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) } };
+  test("defaults to the recorded version and its checksum", () => {
+    assert.deepEqual(selectCheck("", sums, "windows-amd64.exe"), { version: "v0.4.1", kind: "checksum", want: "b".repeat(64) });
+    assert.deepEqual(selectCheck(undefined, sums, "linux-amd64"), { version: "v0.4.1", kind: "checksum", want: "a".repeat(64) });
+  });
+  test("uses the checksum when the recorded version is set explicitly", () => {
+    assert.deepEqual(selectCheck("v0.4.1", sums, "linux-amd64"), { version: "v0.4.1", kind: "checksum", want: "a".repeat(64) });
   });
   test("uses the attestation for any other version", () => {
-    assert.deepEqual(selectCheck("v0.4.2", sums, "linux-amd64"), { kind: "attestation" });
+    assert.deepEqual(selectCheck("v0.4.2", sums, "linux-amd64"), { version: "v0.4.2", kind: "attestation" });
   });
-  test("uses the attestation when the action is unstamped", () => {
-    assert.deepEqual(selectCheck("v0.4.1", null, "linux-amd64"), { kind: "attestation" });
+  test("uses the attestation without checksums.json", () => {
+    assert.deepEqual(selectCheck("v0.4.1", null, "linux-amd64"), { version: "v0.4.1", kind: "attestation" });
   });
-  test("fails when the stamped version lacks the asset", () => {
-    assert.throws(() => selectCheck("v0.4.1", sums, "darwin-arm64"), /no checksum for darwin-arm64/);
+  test("asks for a version with neither input nor checksums.json", () => {
+    assert.throws(() => selectCheck("", null, "linux-amd64"), /set the version input/);
+  });
+  test("rejects an invalid version input", () => {
+    assert.throws(() => selectCheck("v0.4", sums, "linux-amd64"), /invalid version/);
+  });
+  test("fails when the recorded version lacks the asset", () => {
+    assert.throws(() => selectCheck("", sums, "darwin-arm64"), /no checksum for darwin-arm64/);
+  });
+  test("ignores inherited property names", () => {
+    assert.throws(() => selectCheck("", sums, "constructor"), /no checksum for constructor/);
   });
 });
 
@@ -109,7 +139,7 @@ describe("install", () => {
   const quiet = () => {};
 
   async function stampedAction(version, asset, sum = sha(binary)) {
-    await writeFile(join(tmp, "checksums.txt"), `# ${version}\n${sum}  ${asset}\n`);
+    await writeFile(join(tmp, "checksums.json"), JSON.stringify({ version, sha256: { [asset]: sum } }));
     return tmp;
   }
 
@@ -133,6 +163,20 @@ describe("install", () => {
     assert.equal(fetched, "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/windows-amd64.exe");
     assert.equal(bin, join(env.RUNNER_TEMP, "gh-actions-lock", "gh-actions-lock.exe"));
     assert.equal(await readFile(bin, "utf8"), binary);
+  });
+
+  test("runs the recorded version when the version input is empty", async () => {
+    const env = { INPUT_VERSION: "", RUNNER_OS: "Linux", RUNNER_ARCH: "ARM64", RUNNER_TEMP: tmp };
+    const actionDir = await stampedAction("v0.4.1", "linux-arm64");
+    let fetched;
+    await install({
+      env,
+      actionDir,
+      download: async (url, dest) => ((fetched = url), okDownload(url, dest)),
+      gh: () => assert.fail("attestation should not run"),
+      log: quiet,
+    });
+    assert.equal(fetched, "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-arm64");
   });
 
   test("fails on a checksum mismatch", async () => {

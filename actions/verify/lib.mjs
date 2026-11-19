@@ -42,19 +42,35 @@ export function splitArgs(input) {
   return (input ?? "").split(/\s+/).filter(Boolean);
 }
 
-// selectCheck picks how to check the binary: the checksum stamped into this action
-// when version is the release it was stamped with, otherwise the release's
-// build attestation. checksums is the text of checksums.txt, or null.
-export function selectCheck(version, checksums, asset) {
-  const lines = checksums?.split(/\r?\n/) ?? [];
-  const header = lines[0]?.split(/\s+/);
-  const stamped = header?.[0] === "#" ? header[1] : undefined;
-  if (version !== stamped) return { kind: "attestation" };
-  for (const line of lines.slice(1)) {
-    const [sum, name] = line.trim().split(/\s+/);
-    if (name === asset) return { kind: "checksum", want: sum };
+// parseChecksums reads checksums.json, which script/verify-action-release.mjs
+// writes: {"version": "vX.Y.Z", "sha256": {"<release asset>": "<hex digest>"}}.
+// Anything else fails.
+export function parseChecksums(text) {
+  let sums;
+  try {
+    sums = JSON.parse(text);
+  } catch (err) {
+    throw new ActionError(`checksums.json: ${err.message}`);
   }
-  throw new ActionError(`no checksum for ${asset} in checksums.txt`);
+  const { version, sha256, ...extra } = sums ?? {};
+  const shaped =
+    typeof version === "string" &&
+    sha256 !== null && typeof sha256 === "object" && !Array.isArray(sha256) &&
+    Object.keys(extra).length === 0 &&
+    Object.entries(sha256).every(([k, v]) => /^[a-z0-9][a-z0-9.-]*$/.test(k) && /^[0-9a-f]{64}$/.test(v));
+  if (!shaped) throw new ActionError('checksums.json must be {"version": "vX.Y.Z", "sha256": {"<asset>": "<sha256 hex>"}}');
+  checkVersion(version);
+  return { version, sha256 };
+}
+
+// selectCheck picks the version to run and how to check it: the checksum in
+// checksums.json when version is empty or the release it records, otherwise the
+// release's build attestation. sums is parsed checksums.json, or null.
+export function selectCheck(version, sums, asset) {
+  const v = checkVersion(version || sums?.version);
+  if (v !== sums?.version) return { version: v, kind: "attestation" };
+  if (!Object.hasOwn(sums.sha256, asset)) throw new ActionError(`no checksum for ${asset} in checksums.json`);
+  return { version: v, kind: "checksum", want: sums.sha256[asset] };
 }
 
 // attestationEnv builds the environment for `gh attestation verify`. Attestations
@@ -65,7 +81,7 @@ export function attestationEnv(env) {
     token = env.GH_ACTIONS_LOCK_GITHUB_COM_TOKEN ?? "";
     if (!token) {
       throw new ActionError(
-        `set GH_ACTIONS_LOCK_GITHUB_COM_TOKEN to check ${env.INPUT_VERSION}, or use the version this action was stamped with`,
+        `set GH_ACTIONS_LOCK_GITHUB_COM_TOKEN to check ${env.INPUT_VERSION}, or leave version empty`,
       );
     }
   }
@@ -133,7 +149,7 @@ export function useEnvProxy(env, http) {
 function runGh(args, env) {
   const r = spawnSync("gh", args, { env, stdio: ["ignore", "ignore", "inherit"] });
   if (r.error?.code === "ENOENT") {
-    throw new ActionError("gh is not on PATH; it's needed to check a version other than the one this action was stamped with");
+    throw new ActionError("gh is not on PATH; it's needed to check a version other than the one in checksums.json");
   }
   return r.status === 0;
 }
@@ -141,14 +157,14 @@ function runGh(args, env) {
 // install downloads the gh-actions-lock binary for this runner into RUNNER_TEMP,
 // checks it and returns its path.
 export async function install({ env, actionDir, download = downloadFile, gh = runGh, log = console.log }) {
-  const version = checkVersion(env.INPUT_VERSION);
   const { asset, ext } = assetFor(env.RUNNER_OS, env.RUNNER_ARCH);
   if (!env.RUNNER_TEMP) throw new ActionError("RUNNER_TEMP is not set");
 
-  const sumsPath = join(actionDir, "checksums.txt");
-  const sums = existsSync(sumsPath) ? await readFile(sumsPath, "utf8") : null;
-  const check = selectCheck(version, sums, asset);
-  const ghEnv = check.kind === "attestation" ? attestationEnv(env) : null;
+  const sumsPath = join(actionDir, "checksums.json");
+  const sums = existsSync(sumsPath) ? parseChecksums(await readFile(sumsPath, "utf8")) : null;
+  const check = selectCheck(env.INPUT_VERSION, sums, asset);
+  const { version } = check;
+  const ghEnv = check.kind === "attestation" ? attestationEnv({ ...env, INPUT_VERSION: version }) : null;
 
   const dir = join(env.RUNNER_TEMP, "gh-actions-lock");
   await mkdir(dir, { recursive: true });
@@ -161,7 +177,7 @@ export async function install({ env, actionDir, download = downloadFile, gh = ru
     if (got !== check.want) {
       throw new ActionError(`checksum mismatch for ${asset} ${version}: got ${got}, want ${check.want}`);
     }
-    log(`Verified ${asset} ${version} against the stamped checksum.`);
+    log(`Verified ${asset} ${version} against checksums.json.`);
   } else {
     const ok = gh(
       [

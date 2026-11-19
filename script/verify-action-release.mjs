@@ -1,5 +1,6 @@
 // Publishes verify-<tag> for a CLI release: checks the release binaries'
-// attestations, stamps actions/verify with the tag and their checksums, and tags
+// attestations, records the tag and their checksums in actions/verify/checksums.json,
+// and tags
 // a GitHub-signed commit on top of the release commit.
 //
 // Usage (release workflow, with GH_TOKEN and REPO set):
@@ -14,6 +15,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseChecksums } from "../actions/verify/lib.mjs";
 
 export const ASSETS = [
   "linux-amd64",
@@ -23,10 +25,7 @@ export const ASSETS = [
   "windows-amd64.exe",
   "windows-arm64.exe",
 ];
-export const ACTION = "actions/verify/action.yml";
-export const CHECKSUMS = "actions/verify/checksums.txt";
-const MARKER = "# stamped by script/verify-action-release.mjs";
-const STAMP = /^(\s*default: )\S+( # stamped by script\/verify-action-release\.mjs)$/m;
+export const CHECKSUMS = "actions/verify/checksums.json";
 
 export function checkTag(tag) {
   if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\.[1-9]\d*)?$/.test(tag ?? "")) {
@@ -35,28 +34,19 @@ export function checkTag(tag) {
   return tag;
 }
 
-// stamp defaults the action's version input to tag and writes checksums.txt for
-// the release binaries in assetsDir, replacing any earlier stamp. The marker
-// comment stays so main and every verify-v* tag can be restamped the same way.
+// stamp writes checksums.json for the release binaries in assetsDir, replacing
+// any earlier stamp. The action runs the version it records by default.
 export async function stamp({ root, tag, assetsDir }) {
   checkTag(tag);
-  const actionPath = join(root, ACTION);
-  const action = await readFile(actionPath, "utf8");
-  if (action.split(MARKER).length !== 2 || !STAMP.test(action)) {
-    throw new Error(`${ACTION} must contain exactly one line like: default: vX.Y.Z ${MARKER}`);
-  }
-  const lines = [`# ${tag}`]; // script/release reads this header
+  const sha256 = {};
   for (const a of ASSETS) {
     const path = join(assetsDir, a);
     if (!existsSync(path)) throw new Error(`missing release asset ${path}`);
-    lines.push(`${createHash("sha256").update(await readFile(path)).digest("hex")}  ${a}`);
+    sha256[a] = createHash("sha256").update(await readFile(path)).digest("hex");
   }
-  await writeFile(join(root, CHECKSUMS), lines.join("\n") + "\n");
-  await writeFile(actionPath, action.replace(STAMP, `$1${tag}$2`));
+  await writeFile(join(root, CHECKSUMS), JSON.stringify({ version: tag, sha256 }, null, 2) + "\n");
 }
 
-// publish commits files on top of head through the Git Data API, so GitHub signs
-// the commit as the tag ruleset requires, and tags it verify-<tag>.
 // github returns a caller for repo's REST API. With allow404, a 404 returns null.
 function github({ api, token, repo, fetch: fetchFn = fetch }) {
   return async (method, path, body, { allow404 = false } = {}) => {
@@ -75,14 +65,14 @@ function github({ api, token, repo, fetch: fetchFn = fetch }) {
   };
 }
 
-// stampedFor returns the tag root's action and checksums.txt are both stamped
-// for, or null if they disagree.
+// stampedFor returns the version root's checksums.json records, or null if it's
+// missing or malformed.
 export async function stampedFor(root) {
-  const action = (await readFile(join(root, ACTION), "utf8")).match(STAMP)?.[0].match(/default: (\S+)/)[1];
-  const header = existsSync(join(root, CHECKSUMS))
-    ? (await readFile(join(root, CHECKSUMS), "utf8")).split("\n", 1)[0]
-    : "";
-  return action && header === `# ${action}` ? action : null;
+  try {
+    return parseChecksums(await readFile(join(root, CHECKSUMS), "utf8")).version;
+  } catch {
+    return null;
+  }
 }
 
 // published returns the commit verify-<tag> points at, or null if the tag
@@ -142,7 +132,7 @@ async function main(tag, { stampOnly = false } = {}) {
   const head = run("git", ["rev-parse", "HEAD"], { cwd: root });
   // Each step skips when a previous run already did it.
   if (stampOnly && (await stampedFor(root)) === tag) {
-    console.log(`${ACTION} and ${CHECKSUMS} are already stamped for ${tag}`);
+    console.log(`${CHECKSUMS} is already stamped for ${tag}`);
     return;
   }
   const assetsDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "assets-"));
@@ -158,21 +148,20 @@ async function main(tag, { stampOnly = false } = {}) {
 
   await stamp({ root, tag, assetsDir });
   if (stampOnly) {
-    console.log(`Stamped ${ACTION} and ${CHECKSUMS} for ${tag}`);
+    console.log(`Stamped ${CHECKSUMS} for ${tag}`);
     return;
   }
   // The tree head would have with the stamp, from a scratch index.
   const env = { ...process.env, GIT_INDEX_FILE: join(assetsDir, "index") };
   run("git", ["read-tree", "HEAD"], { cwd: root, env });
-  run("git", ["add", "--", ACTION, CHECKSUMS], { cwd: root, env });
+  run("git", ["add", "--", CHECKSUMS], { cwd: root, env });
   const tree = run("git", ["write-tree"], { cwd: root, env });
   const done = await published({ api, token, repo, tag, head, tree });
   if (done) {
     console.log(`verify-${tag} already exists at ${done}`);
     return;
   }
-  const files = [];
-  for (const path of [ACTION, CHECKSUMS]) files.push({ path, content: await readFile(join(root, path)) });
+  const files = [{ path: CHECKSUMS, content: await readFile(join(root, CHECKSUMS)) }];
   const commit = await publish({
     api,
     token,

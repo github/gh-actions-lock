@@ -16,7 +16,7 @@ cp "$root/script/release" script/release
 cp "$root/script/verify-release-tag" script/verify-release-tag
 touch tracked
 mkdir -p actions/verify
-printf '# v1.2.3\n' >actions/verify/checksums.txt
+printf '{"version": "v1.2.3", "sha256": {}}\n' >actions/verify/checksums.json
 git add .
 git commit --quiet -m initial
 git push --quiet -u origin main
@@ -41,7 +41,7 @@ output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
 output="$(RELEASE_DRY_RUN=1 script/release patch)"
 [[ "$output" == *"Cutting v1.2.4 "* ]]
 
-printf '# v1.2.2\n' >actions/verify/checksums.txt
+printf '{"version": "v1.2.2", "sha256": {}}\n' >actions/verify/checksums.json
 git commit --quiet -am "stale stamp"
 git push --quiet origin main
 if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
@@ -49,7 +49,7 @@ if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
   exit 1
 fi
 [[ "$output" == *"isn't stamped for v1.2.3"* ]]
-git rm --quiet actions/verify/checksums.txt
+git rm --quiet actions/verify/checksums.json
 git commit --quiet -m "no stamp"
 git push --quiet origin main
 if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
@@ -75,7 +75,7 @@ fi
 [[ "$output" == *"isn't stamped for v1.2.4"* ]]
 
 # A leftover local tag at another commit still blocks the release.
-printf '# v1.2.4\n' >actions/verify/checksums.txt
+printf '{"version": "v1.2.4", "sha256": {}}\n' >actions/verify/checksums.json
 git commit --quiet -am "stamp v1.2.4"
 git push --quiet origin main
 git tag -a v1.2.5 -m v1.2.5 HEAD~1

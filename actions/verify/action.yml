@@ -7,9 +7,8 @@ inputs:
     required: false
     default: ${{ github.token }}
   version:
-    description: gh-actions-lock release to run, such as v0.5.1. Defaults to the CLI release this action was stamped with.
+    description: gh-actions-lock release to run, such as v0.5.1. Defaults to the release recorded in checksums.json.
     required: false
-    default: v0.5.1 # stamped by script/verify-action-release.mjs
   args:
     description: Arguments passed to gh-actions-lock, split on whitespace.
     required: false
