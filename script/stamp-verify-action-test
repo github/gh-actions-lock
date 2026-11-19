@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -r "$tmp"' EXIT
+
+mkdir -p "$tmp/repo/script" "$tmp/repo/actions/verify" "$tmp/assets"
+cp "$root/script/stamp-verify-action" "$tmp/repo/script/"
+cp "$root/actions/verify/action.yml" "$tmp/repo/actions/verify/"
+for a in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64.exe windows-arm64.exe; do
+  printf '%s' "$a" >"$tmp/assets/$a"
+done
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+if "$tmp/repo/script/stamp-verify-action" 'v1.2.3;x' "$tmp/assets" 2>/dev/null; then
+  fail "accepted an invalid tag"
+fi
+
+rm "$tmp/assets/windows-arm64.exe"
+if "$tmp/repo/script/stamp-verify-action" v1.2.3 "$tmp/assets" 2>/dev/null; then
+  fail "stamped with a missing asset"
+fi
+printf '%s' windows-arm64.exe >"$tmp/assets/windows-arm64.exe"
+
+cd "$tmp"
+repo/script/stamp-verify-action v1.2.3-rc.1 assets
+
+grep -q '^    default: v1.2.3-rc.1$' repo/actions/verify/action.yml ||
+  fail "version default not stamped"
+grep -q 'stamped by script/stamp-verify-action' repo/actions/verify/action.yml &&
+  fail "stamp marker left behind"
+[ "$(head -n 1 repo/actions/verify/checksums.txt)" = "# v1.2.3-rc.1" ] ||
+  fail "checksums.txt header"
+want="$(printf '%s' linux-arm64 | shasum -a 256 | awk '{ print $1 }')"
+grep -qx "$want  linux-arm64" repo/actions/verify/checksums.txt ||
+  fail "linux-arm64 checksum"
+[ "$(wc -l <repo/actions/verify/checksums.txt)" -eq 7 ] ||
+  fail "checksums.txt should list six assets"
+
+if repo/script/stamp-verify-action v1.2.4 assets 2>/dev/null; then
+  fail "restamped an already stamped action"
+fi
+
+echo "stamp-verify-action tests passed"

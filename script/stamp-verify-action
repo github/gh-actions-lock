@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# Stamp actions/verify with a CLI release: default its version input to the
+# tag and record the runner binaries' checksums.
+#
+# Usage:
+#   script/stamp-verify-action <vX.Y.Z[-rc.N]> <dir with release assets>
+#
+# The release workflow runs this on the tagged commit and publishes the result
+# as verify-<tag>.
+
+set -euo pipefail
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+[ "$#" -eq 2 ] || die "usage: script/stamp-verify-action <tag> <asset-dir>"
+tag="$1"
+assets="$(cd "$2" && pwd)" || die "no asset directory $2"
+[[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]] ||
+  die "invalid tag '$tag'; expected vX.Y.Z or vX.Y.Z-rc.N"
+
+cd "$(dirname "$0")/.."
+action=actions/verify/action.yml
+marker='default: "" # stamped by script/stamp-verify-action'
+
+[ "$(grep -cF "$marker" "$action")" -eq 1 ] ||
+  die "$action must contain exactly one line with: $marker"
+
+sha256() {
+  if command -v sha256sum >/dev/null; then
+    sha256sum "$1" | awk '{ print $1 }'
+  else
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  fi
+}
+
+{
+  echo "# $tag"
+  for a in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64.exe windows-arm64.exe; do
+    [ -f "$assets/$a" ] || die "missing release asset $assets/$a"
+    echo "$(sha256 "$assets/$a")  $a"
+  done
+} >actions/verify/checksums.txt
+
+tmp="$(mktemp)"
+awk -v m="$marker" -v r="default: $tag" '{ i = index($0, m); if (i) $0 = substr($0, 1, i - 1) r; print }' "$action" >"$tmp"
+mv "$tmp" "$action"

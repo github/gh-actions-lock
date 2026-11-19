@@ -1,0 +1,40 @@
+name: Verify actions.lock
+description: Fail when .github/workflows/actions.lock is out of sync with the workflows or a locked pin no longer verifies upstream
+
+inputs:
+  token:
+    description: Token the CLI uses to read action repositories. The default GITHUB_TOKEN can't read private or internal actions in other repositories; pass a GitHub App installation token for those.
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: gh-actions-lock release to run, such as v0.4.1. Release tags of this action default it to the CLI release they were cut with.
+    required: false
+    default: "" # stamped by script/stamp-verify-action
+  args:
+    description: Arguments passed to gh-actions-lock, split on whitespace.
+    required: false
+    default: --verify
+
+runs:
+  using: composite
+  steps:
+    - name: Install gh-actions-lock
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+        OS: ${{ runner.os }}
+        ARCH: ${{ runner.arch }}
+      run: bash "$GITHUB_ACTION_PATH/install.sh"
+
+    - name: Run gh-actions-lock
+      shell: bash
+      env:
+        BIN: ${{ steps.install.outputs.bin }}
+        ARGS: ${{ inputs.args }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -f
+        read -r -a args <<<"$ARGS"
+        "$BIN" "${args[@]}"

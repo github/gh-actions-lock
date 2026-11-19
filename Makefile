@@ -17,6 +17,7 @@ test: test-release
 
 test-release:
 	script/release-test
+	script/stamp-verify-action-test
 
 vet:
 	go vet ./...
