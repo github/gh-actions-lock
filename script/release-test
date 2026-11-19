@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -r "$tmp"' EXIT
+trap 'rm -rf "$tmp"' EXIT
 
 git init --quiet --bare "$tmp/origin.git"
 git clone --quiet "$tmp/origin.git" "$tmp/repo"
