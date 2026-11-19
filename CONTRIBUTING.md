@@ -17,7 +17,7 @@ Install the tools for the checks you plan to run:
 - **Go**: required for builds and Go tests. Install it [from go.dev](https://go.dev/doc/install); the minimum version is specified in [`go.mod`](go.mod).
 - **Git**: required by the integration test harness.
 - **GNU Make**: required for the `make` targets below.
-- **Bash and a C compiler**: required by `make test` on Linux. That target runs the Bash `script/release-test` and Go's race-enabled tests (which need cgo and a C toolchain).
+- **Bash and a C compiler**: required by `make test` on Linux and macOS. That target runs the Bash `script/release-test` and Go's race-enabled tests (which need cgo and a C toolchain).
 - **Ruby, WEBrick, and jq**: required for integration tests. Install Ruby [from ruby-lang.org](https://www.ruby-lang.org/en/documentation/installation/), then install WEBrick with `gem install webrick`. The integration scenarios use `jq` for JSON assertions.
 - **GitHub CLI and a token**: needed only for live integration scenarios; stub scenarios do not require authentication.
 
@@ -42,7 +42,7 @@ make build
 make test-stub
 ```
 
-### Linux
+### Linux and macOS
 
 With the prerequisites above installed, run the full unit/release checks and stub integration scenarios with:
 
