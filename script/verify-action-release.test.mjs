@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { ACTION, ASSETS, CHECKSUMS, checkTag, publish, stamp } from "./verify-action-release.mjs";
+import { ACTION, ASSETS, CHECKSUMS, checkTag, publish, published, stamp, stampedFor } from "./verify-action-release.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -68,6 +68,14 @@ describe("stamp", () => {
     const action = await readFile(join(root, ACTION), "utf8");
     assert.match(action, /^    default: v1\.2\.4 # stamped by script\/verify-action-release\.mjs$/m);
     assert.match(await readFile(join(root, CHECKSUMS), "utf8"), /^# v1\.2\.4\n/);
+  });
+
+  test("stampedFor reports the tag only when the action and checksums agree", async () => {
+    assert.equal(await stampedFor(root), null);
+    await stamp({ root, tag: "v1.2.3", assetsDir });
+    assert.equal(await stampedFor(root), "v1.2.3");
+    await writeFile(join(root, CHECKSUMS), "# v1.2.2\n");
+    assert.equal(await stampedFor(root), null);
   });
 
   test("refuses an action without exactly one stamp line", async () => {
@@ -136,5 +144,42 @@ describe("publish", () => {
   test("surfaces API errors", async () => {
     const fetch = async () => new Response("Reference already exists", { status: 422 });
     await assert.rejects(publish({ ...args, fetch }), /POST git\/blobs: HTTP 422 Reference already exists/);
+  });
+});
+
+describe("published", () => {
+  const args = { api: "https://api.test", token: "tok", repo: "o/r", tag: "v1.2.3", head: "head1", tree: "tree1" };
+  function fakeAPI(responses) {
+    return async (url) => {
+      const res = responses[url.replace("https://api.test/repos/o/r/", "")];
+      return res ? new Response(JSON.stringify(res), { status: 200 }) : new Response("Not Found", { status: 404 });
+    };
+  }
+  const ref = { "git/ref/tags/verify-v1.2.3": { object: { type: "commit", sha: "stamp1" } } };
+
+  test("returns null when the tag doesn't exist", async () => {
+    assert.equal(await published({ ...args, fetch: fakeAPI({}) }), null);
+  });
+
+  test("returns a signed stamp commit on head", async () => {
+    const fetch = fakeAPI({ ...ref, "git/commits/stamp1": { parents: [{ sha: "head1" }], tree: { sha: "tree1" }, verification: { verified: true } } });
+    assert.equal(await published({ ...args, fetch }), "stamp1");
+  });
+
+  for (const [name, commit] of [
+    ["another parent", { parents: [{ sha: "other" }], tree: { sha: "tree1" }, verification: { verified: true } }],
+    ["another tree", { parents: [{ sha: "head1" }], tree: { sha: "tree2" }, verification: { verified: true } }],
+    ["an unsigned commit", { parents: [{ sha: "head1" }], tree: { sha: "tree1" }, verification: { verified: false } }],
+    ["a merge commit", { parents: [{ sha: "head1" }, { sha: "x" }], tree: { sha: "tree1" }, verification: { verified: true } }],
+  ]) {
+    test(`fails on ${name}`, async () => {
+      const fetch = fakeAPI({ ...ref, "git/commits/stamp1": commit });
+      await assert.rejects(published({ ...args, fetch }), /verify-v1\.2\.3 already exists at stamp1/);
+    });
+  }
+
+  test("fails on an annotated tag object", async () => {
+    const fetch = fakeAPI({ "git/ref/tags/verify-v1.2.3": { object: { type: "tag", sha: "tagobj" } } });
+    await assert.rejects(published({ ...args, fetch }), /already exists at tagobj/);
   });
 });

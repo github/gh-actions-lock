@@ -57,8 +57,9 @@ export async function stamp({ root, tag, assetsDir }) {
 
 // publish commits files on top of head through the Git Data API, so GitHub signs
 // the commit as the tag ruleset requires, and tags it verify-<tag>.
-export async function publish({ api, token, repo, tag, head, baseTree, files, fetch: fetchFn = fetch }) {
-  const call = async (method, path, body) => {
+// github returns a caller for repo's REST API. With allow404, a 404 returns null.
+function github({ api, token, repo, fetch: fetchFn = fetch }) {
+  return async (method, path, body, { allow404 = false } = {}) => {
     const res = await fetchFn(`${api}/repos/${repo}/${path}`, {
       method,
       headers: {
@@ -68,9 +69,46 @@ export async function publish({ api, token, repo, tag, head, baseTree, files, fe
       },
       body: body && JSON.stringify(body),
     });
+    if (allow404 && res.status === 404) return null;
     if (!res.ok) throw new Error(`${method} ${path}: HTTP ${res.status} ${await res.text()}`);
     return res.json();
   };
+}
+
+// stampedFor returns the tag root's action and checksums.txt are both stamped
+// for, or null if they disagree.
+export async function stampedFor(root) {
+  const action = (await readFile(join(root, ACTION), "utf8")).match(STAMP)?.[0].match(/default: (\S+)/)[1];
+  const header = existsSync(join(root, CHECKSUMS))
+    ? (await readFile(join(root, CHECKSUMS), "utf8")).split("\n", 1)[0]
+    : "";
+  return action && header === `# ${action}` ? action : null;
+}
+
+// published returns the commit verify-<tag> points at, or null if the tag
+// doesn't exist. A rerun only skips the tag if it's a signed commit directly on
+// head whose tree is exactly tree, the freshly stamped one; anything else fails.
+export async function published({ api, token, repo, tag, head, tree, fetch: fetchFn = fetch }) {
+  const call = github({ api, token, repo, fetch: fetchFn });
+  const ref = await call("GET", `git/ref/tags/verify-${tag}`, undefined, { allow404: true });
+  if (!ref) return null;
+  const sha = ref.object?.sha;
+  const commit = ref.object?.type === "commit" ? await call("GET", `git/commits/${sha}`) : null;
+  if (
+    commit?.parents?.length !== 1 ||
+    commit.parents[0].sha !== head ||
+    commit.tree?.sha !== tree ||
+    !commit.verification?.verified
+  ) {
+    throw new Error(`verify-${tag} already exists at ${sha}, which is not this stamp signed on ${head}`);
+  }
+  return sha;
+}
+
+// publish commits files on top of head through the Git Data API, so GitHub signs
+// the commit as the tag ruleset requires, and tags it verify-<tag>.
+export async function publish({ api, token, repo, tag, head, baseTree, files, fetch: fetchFn = fetch }) {
+  const call = github({ api, token, repo, fetch: fetchFn });
 
   const tree = [];
   for (const { path, content } of files) {
@@ -101,6 +139,12 @@ async function main(tag, { stampOnly = false } = {}) {
   if (!repo || (!token && !stampOnly)) throw new Error("set REPO and GH_TOKEN");
   const root = resolve(fileURLToPath(import.meta.url), "../..");
 
+  const head = run("git", ["rev-parse", "HEAD"], { cwd: root });
+  // Each step skips when a previous run already did it.
+  if (stampOnly && (await stampedFor(root)) === tag) {
+    console.log(`${ACTION} and ${CHECKSUMS} are already stamped for ${tag}`);
+    return;
+  }
   const assetsDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "assets-"));
   for (const a of ASSETS) {
     run("gh", ["release", "download", tag, "--repo", repo, "--pattern", a, "--dir", assetsDir]);
@@ -117,6 +161,16 @@ async function main(tag, { stampOnly = false } = {}) {
     console.log(`Stamped ${ACTION} and ${CHECKSUMS} for ${tag}`);
     return;
   }
+  // The tree head would have with the stamp, from a scratch index.
+  const env = { ...process.env, GIT_INDEX_FILE: join(assetsDir, "index") };
+  run("git", ["read-tree", "HEAD"], { cwd: root, env });
+  run("git", ["add", "--", ACTION, CHECKSUMS], { cwd: root, env });
+  const tree = run("git", ["write-tree"], { cwd: root, env });
+  const done = await published({ api, token, repo, tag, head, tree });
+  if (done) {
+    console.log(`verify-${tag} already exists at ${done}`);
+    return;
+  }
   const files = [];
   for (const path of [ACTION, CHECKSUMS]) files.push({ path, content: await readFile(join(root, path)) });
   const commit = await publish({
@@ -124,7 +178,7 @@ async function main(tag, { stampOnly = false } = {}) {
     token,
     repo,
     tag,
-    head: run("git", ["rev-parse", "HEAD"], { cwd: root }),
+    head,
     baseTree: run("git", ["rev-parse", "HEAD^{tree}"], { cwd: root }),
     files,
   });
