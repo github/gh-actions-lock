@@ -32,6 +32,14 @@ The first candidate is `vX.Y.Z-rc.1`; repeating the same bump increments
 Release tags are immutable. If publishing fails, fix the publisher and run
 the release script again for the next RC.
 
+Rerunning a step is safe. If the push was held, rerun the same command: it
+pushes the local tag when that tag already points at `HEAD`, and stops if it
+points anywhere else. After a successful push, a rerun stops at the next step:
+stamping `main`. Rerunning the tag workflow checks the attestations again and skips
+tagging when `verify-vX.Y.Z` is already that same signed stamp on the release
+commit, and `--stamp-only` skips
+a tree that's already stamped for the tag.
+
 Use `patch` for compatible fixes, `minor` for compatible additions, and `major`
 for breaking changes.
 
