@@ -12,7 +12,7 @@ steps:
 
 Use the [latest `verify-v*` tag](https://github.com/github/gh-actions-lock/tags). Every CLI release `vX.Y.Z` publishes `verify-vX.Y.Z`, which runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Check out the repository before this step.
 
-The action runs on Linux, macOS and Windows runners, on x64 and arm64. It needs `node` (20 or later) on `PATH`, which GitHub-hosted runners have.
+It's a Node action (`node24`) that uses only Node built-ins, so it runs on the runner's own Node on Linux, macOS and Windows, x64 and arm64. Self-hosted runners need [runner v2.327.1](https://github.com/actions/runner/releases/tag/v2.327.1) or later for `node24` actions. Downloads honor `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
 
 ## Inputs
 
@@ -22,7 +22,7 @@ The action runs on Linux, macOS and Windows runners, on x64 and arm64. It needs 
 | `version` | the CLI release the tag was cut with | `gh-actions-lock` release to run, such as `v0.4.1`. |
 | `args` | `--verify` | Arguments passed to `gh-actions-lock`, split on whitespace and newlines. For example, `--verify --fail-on-warning`. |
 
-With the default `version`, the binary is checked against checksums recorded in the tag. With another `version`, it's checked against the release's build attestation on github.com using `token`. On GHE.com, that check uses `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` instead, so your tenant token never leaves the tenant.
+With the default `version`, the binary is checked against checksums recorded in the tag. With another `version`, it's checked against the release's build attestation on github.com using `token`, which needs the GitHub CLI (`gh`) on `PATH`. GitHub-hosted runners have it; self-hosted runners may not. On GHE.com, that check uses `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` instead, so your tenant token never leaves the tenant.
 
 ## Private and internal actions
 

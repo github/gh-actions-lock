@@ -2,9 +2,12 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export const REPO = "github/gh-actions-lock";
 
@@ -75,20 +78,69 @@ export async function sha256File(path) {
   return createHash("sha256").update(await readFile(path)).digest("hex");
 }
 
-// curl, unlike Node 20's fetch, honors the runner's proxy settings and backs off between retries.
-function curl(url, dest) {
-  const r = spawnSync("curl", ["-fsSL", "--retry", "3", "-o", dest, url], { stdio: ["ignore", "ignore", "inherit"] });
-  return r.status === 0;
+// The statuses curl --retry treats as transient.
+const transient = new Set([408, 429, 500, 502, 503, 504]);
+
+// downloadFile streams url to dest, retrying network errors and transient statuses
+// with exponential backoff.
+export async function downloadFile(url, dest, { fetch: get = fetch, retries = 3, delayMs = 1000, wait = sleep } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    let retry = true;
+    try {
+      const res = await get(url);
+      if (!res.ok) {
+        retry = transient.has(res.status);
+        throw new Error(`HTTP ${res.status}`);
+      }
+      await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
+      return;
+    } catch (err) {
+      if (!retry || attempt >= retries) throw new ActionError(`download ${url} failed: ${err.cause?.message ?? err.message}`);
+      await wait(delayMs * 2 ** attempt);
+    }
+  }
+}
+
+// withSubdomainNoProxy adds .example.com for each bare NO_PROXY entry example.com.
+// curl and node 24.22 let a bare entry match subdomains too, but node24 before that
+// matches it exactly, so release-assets.githubusercontent.com would go through the
+// proxy despite NO_PROXY=githubusercontent.com.
+export function withSubdomainNoProxy(env) {
+  const out = { ...env };
+  for (const key of ["NO_PROXY", "no_proxy"]) {
+    if (!out[key]) continue;
+    const entries = out[key].split(",").map((e) => e.trim()).filter(Boolean);
+    const extra = entries.filter((e) => !/^[.*]/.test(e) && !e.includes("/") && !entries.includes(`.${e}`)).map((e) => `.${e}`);
+    out[key] = [...entries, ...extra].join(",");
+  }
+  return out;
+}
+
+// useEnvProxy routes fetch through the runner's HTTPS_PROXY or HTTP_PROXY, honoring
+// NO_PROXY. http.setGlobalProxyFromEnv needs Node 24.14; older node24 runners
+// re-run this script with NODE_USE_ENV_PROXY=1 instead. Returns true when the
+// caller must re-run.
+export function useEnvProxy(env, http) {
+  const proxied = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((k) => env[k]);
+  if (!proxied) return false;
+  if (typeof http.setGlobalProxyFromEnv === "function") {
+    http.setGlobalProxyFromEnv(env);
+    return false;
+  }
+  return env.NODE_USE_ENV_PROXY !== "1";
 }
 
 function runGh(args, env) {
   const r = spawnSync("gh", args, { env, stdio: ["ignore", "ignore", "inherit"] });
+  if (r.error?.code === "ENOENT") {
+    throw new ActionError("gh is not on PATH; it's needed to check a version other than the one this action tag was released with");
+  }
   return r.status === 0;
 }
 
 // install downloads the gh-actions-lock binary for this runner into RUNNER_TEMP,
 // checks it and returns its path.
-export async function install({ env, actionDir, download = curl, gh = runGh, log = console.log }) {
+export async function install({ env, actionDir, download = downloadFile, gh = runGh, log = console.log }) {
   const version = checkVersion(env.INPUT_VERSION);
   const { asset, ext } = assetFor(env.RUNNER_OS, env.RUNNER_ARCH);
   if (!env.RUNNER_TEMP) throw new ActionError("RUNNER_TEMP is not set");
@@ -102,7 +154,7 @@ export async function install({ env, actionDir, download = curl, gh = runGh, log
   await mkdir(dir, { recursive: true });
   const bin = join(dir, `gh-actions-lock${ext}`);
   const url = `https://github.com/${REPO}/releases/download/${version}/${asset}`;
-  if (!(await download(url, bin))) throw new ActionError(`download ${url} failed`);
+  await download(url, bin);
 
   if (check.kind === "checksum") {
     const got = await sha256File(bin);

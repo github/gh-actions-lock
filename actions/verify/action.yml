@@ -16,12 +16,5 @@ inputs:
     default: --verify
 
 runs:
-  using: composite
-  steps:
-    - name: Verify actions.lock
-      shell: bash
-      env:
-        INPUT_TOKEN: ${{ inputs.token }}
-        INPUT_VERSION: ${{ inputs.version }}
-        INPUT_ARGS: ${{ inputs.args }}
-      run: node "$GITHUB_ACTION_PATH/verify.mjs"
+  using: node24
+  main: verify.mjs

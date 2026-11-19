@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { ActionError, assetFor, attestationEnv, checkVersion, install, selectCheck, splitArgs } from "./lib.mjs";
+import { ActionError, assetFor, attestationEnv, checkVersion, downloadFile, install, selectCheck, splitArgs, useEnvProxy, withSubdomainNoProxy } from "./lib.mjs";
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 
@@ -105,7 +105,7 @@ describe("install", () => {
   });
 
   const binary = "fake gh-actions-lock";
-  const okDownload = async (url, dest) => (await writeFile(dest, binary), true);
+  const okDownload = (url, dest) => writeFile(dest, binary);
   const quiet = () => {};
 
   async function stampedAction(version, asset, sum = sha(binary)) {
@@ -176,6 +176,11 @@ describe("install", () => {
     );
   });
 
+  test("names gh when it's missing for an attestation check", async () => {
+    const env = { INPUT_VERSION: "v0.4.2", RUNNER_OS: "Linux", RUNNER_ARCH: "X64", RUNNER_TEMP: tmp, PATH: "", Path: "" };
+    await assert.rejects(install({ env, actionDir: tmp, download: okDownload, log: quiet }), /gh is not on PATH/);
+  });
+
   test("checks the token scope before downloading", async () => {
     const env = {
       INPUT_VERSION: "v0.4.2",
@@ -189,13 +194,88 @@ describe("install", () => {
       /GH_ACTIONS_LOCK_GITHUB_COM_TOKEN/,
     );
   });
+});
 
-  test("fails when the download fails", async () => {
-    const env = { INPUT_VERSION: "v0.4.1", RUNNER_OS: "Linux", RUNNER_ARCH: "X64", RUNNER_TEMP: tmp };
-    const actionDir = await stampedAction("v0.4.1", "linux-amd64");
+describe("downloadFile", () => {
+  let tmp;
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), "verify-download-"));
+  });
+  afterEach(async () => {
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  const respond = (status, body = "") => new Response(status === 200 ? body : null, { status });
+
+  test("retries transient failures with backoff, then streams the body to disk", async () => {
+    const dest = join(tmp, "bin");
+    const replies = [() => { throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") }); }, () => respond(503), () => respond(200, "binary")];
+    const waits = [];
+    await downloadFile("https://example.test/a", dest, {
+      fetch: async () => replies.shift()(),
+      wait: async (ms) => waits.push(ms),
+    });
+    assert.equal(await readFile(dest, "utf8"), "binary");
+    assert.deepEqual(waits, [1000, 2000]);
+  });
+
+  test("does not retry a missing release", async () => {
+    let calls = 0;
     await assert.rejects(
-      install({ env, actionDir, download: () => false, gh: () => true, log: quiet }),
-      /download https:\/\/github.com\/github\/gh-actions-lock\/releases\/download\/v0.4.1\/linux-amd64 failed/,
+      downloadFile("https://example.test/v9.9.9/linux-amd64", join(tmp, "bin"), {
+        fetch: async () => (calls++, respond(404)),
+        wait: async () => assert.fail("retried"),
+      }),
+      (err) => err instanceof ActionError && /download https:\/\/example.test\/v9.9.9\/linux-amd64 failed: HTTP 404/.test(err.message),
     );
+    assert.equal(calls, 1);
+  });
+
+  test("gives up after three retries and reports the cause", async () => {
+    let calls = 0;
+    await assert.rejects(
+      downloadFile("https://example.test/a", join(tmp, "bin"), {
+        fetch: async () => { calls++; throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND") }); },
+        wait: async () => {},
+      }),
+      /failed: getaddrinfo ENOTFOUND/,
+    );
+    assert.equal(calls, 4);
+  });
+});
+
+describe("useEnvProxy", () => {
+  test("does nothing without a proxy", () => {
+    const http = { setGlobalProxyFromEnv: () => assert.fail("set proxy") };
+    assert.equal(useEnvProxy({ NO_PROXY: "example.test" }, http), false);
+  });
+  for (const key of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
+    test(`applies ${key} in process when Node supports it`, () => {
+      const env = { [key]: "http://proxy.test:3128" };
+      let got;
+      assert.equal(useEnvProxy(env, { setGlobalProxyFromEnv: (e) => (got = e) }), false);
+      assert.equal(got, env);
+    });
+  }
+  test("asks for a re-run with NODE_USE_ENV_PROXY on older Node", () => {
+    assert.equal(useEnvProxy({ https_proxy: "http://proxy.test:3128" }, {}), true);
+  });
+  test("does not re-run twice", () => {
+    assert.equal(useEnvProxy({ https_proxy: "http://proxy.test:3128", NODE_USE_ENV_PROXY: "1" }, {}), false);
+  });
+});
+
+describe("withSubdomainNoProxy", () => {
+  test("adds a subdomain entry for each bare host, in both cases", () => {
+    const env = withSubdomainNoProxy({ NO_PROXY: "github.com, .example.test,*.corp,10.0.0.0/8", no_proxy: "githubusercontent.com" });
+    assert.equal(env.NO_PROXY, "github.com,.example.test,*.corp,10.0.0.0/8,.github.com");
+    assert.equal(env.no_proxy, "githubusercontent.com,.githubusercontent.com");
+  });
+  test("is idempotent across the proxy re-run", () => {
+    const once = withSubdomainNoProxy({ no_proxy: "github.com" });
+    assert.deepEqual(withSubdomainNoProxy(once), once);
+  });
+  test("leaves env without NO_PROXY alone", () => {
+    assert.deepEqual(withSubdomainNoProxy({ HTTPS_PROXY: "http://p:1" }), { HTTPS_PROXY: "http://p:1" });
   });
 });
