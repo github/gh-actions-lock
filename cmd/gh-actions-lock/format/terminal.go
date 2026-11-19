@@ -620,11 +620,11 @@ func renderContainerImages(out *ui.UI, report *checks.Report) {
 // renderRedirects lists pins whose repository was renamed or transferred
 // but kept its repo ID. The runner follows the redirect, so it's a warning
 // with the replacement `uses:` line. A fix run rewrites workflow refs and
-// reports that instead.
+// reports that instead, except for names it keeps as written.
 func renderRedirects(out *ui.UI, report *checks.Report, willRemediate bool) {
 	for _, wr := range report.Workflows {
 		for _, f := range wr.Findings {
-			if f.Category == checks.RepoRenamed && f.IsWarning() && !willRemediate {
+			if f.Category == checks.RepoRenamed && f.IsWarning() && (!willRemediate || f.KeptName) {
 				out.TermWarn("%s: %s", f.WorkflowPath, f.Detail)
 				out.TermDetail("↳ %s", f.Remediation)
 			}

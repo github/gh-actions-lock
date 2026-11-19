@@ -274,36 +274,26 @@ func newRun(workflowPaths []string, hostname string, pool *pinpool.Pool, newReso
 }
 
 func discoverWorkflowPaths(existing []string, workflowsDir string, allowEmpty bool) ([]string, error) {
-	if len(existing) > 0 {
-		paths, err := expandWorkflowPaths(existing)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range paths {
-			if workflowfile.IsActionFile(p) {
-				return nil, fmt.Errorf("%s is an action file, not a workflow. Composite actions can't carry their own lockfile yet, so locking one doesn't protect the workflows that call it. Run gh actions-lock on those workflows instead", p)
-			}
-		}
-		return paths, nil
+	var paths []string
+	var err error
+	switch {
+	case len(existing) > 0:
+		paths, err = expandWorkflowPaths(existing)
+	case workflowsDir != "":
+		paths, err = workflowfile.DiscoverWorkflowsIn(workflowsDir)
+	default:
+		paths, err = workflowfile.DiscoverWorkflows()
 	}
-
-	if workflowsDir != "" {
-		paths, err := workflowfile.DiscoverWorkflowsIn(workflowsDir)
-		if err != nil {
-			return nil, err
-		}
-		if len(paths) == 0 && !allowEmpty {
-			return nil, noWorkflowsError(workflowsDir)
-		}
-		return paths, nil
-	}
-
-	paths, err := workflowfile.DiscoverWorkflows()
 	if err != nil {
 		return nil, err
 	}
-	if len(paths) == 0 && !allowEmpty {
+	if len(existing) == 0 && len(paths) == 0 && !allowEmpty {
 		return nil, noWorkflowsError(workflowsDir)
+	}
+	for _, p := range paths {
+		if workflowfile.IsActionFile(p) {
+			return nil, fmt.Errorf("%s is an action file, not a workflow: composite actions can't carry their own lockfile yet, so lock the workflows that use it instead", p)
+		}
 	}
 	return paths, nil
 }

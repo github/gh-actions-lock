@@ -216,10 +216,10 @@ dependencies:
 	}
 }
 
-// TestSelfRepositoryActionSHAPinFollowsRename: a `$/…` action pins a
-// renamed repository by SHA. The pin moves to the new name and keeps its
-// SHA, and the lockfile covers it.
-func TestSelfRepositoryActionSHAPinFollowsRename(t *testing.T) {
+// TestSelfRepositoryActionSHAPinKeepsRenamedName: a `$/…` action pins a
+// renamed repository by SHA. The action file is left alone and the lockfile
+// covers the pin under the name it's written with.
+func TestSelfRepositoryActionSHAPinKeepsRenamedName(t *testing.T) {
 	const (
 		oldName = "krzema12/github-actions-typing"
 		newName = "typesafegithub/github-actions-typing"
@@ -249,18 +249,21 @@ func TestSelfRepositoryActionSHAPinFollowsRename(t *testing.T) {
 	require.NoError(t, err, stderr)
 	got, err := os.ReadFile(action)
 	require.NoError(t, err)
-	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	assert.Equal(t, composite(oldName+"@"+parityTestSHA), string(got))
 	lock := readTempLockfilePins(t)
-	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+oldName+"@"+parityTestSHA+"'\n")
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 	require.NoError(t, err, "%s\n%s", stderr, lock)
+	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in .github/actions/typing/action.yml, then run")
 }
 
-// TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings: a workflow
+// TestSelfRepositoryActionSHAPinKeepsRenamedNameAcrossSpellings: a workflow
 // uses a renamed repository's new name at the commit a `$/…` action pins
-// under the old name. Both spellings resolve to one dependency, and the
-// action's pin still moves to the new name with its SHA, not a tag.
-func TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings(t *testing.T) {
+// under the old name. The action file is left alone and the lockfile covers
+// both spellings.
+func TestSelfRepositoryActionSHAPinKeepsRenamedNameAcrossSpellings(t *testing.T) {
 	const (
 		oldName = "krzema12/github-actions-typing"
 		newName = "typesafegithub/github-actions-typing"
@@ -295,9 +298,156 @@ func TestSelfRepositoryActionSHAPinFollowsRenameAcrossSpellings(t *testing.T) {
 	require.NoError(t, err, stderr)
 	got, err := os.ReadFile(action)
 	require.NoError(t, err)
-	assert.Equal(t, composite(newName+"@"+parityTestSHA), string(got))
+	assert.Equal(t, composite(oldName+"@"+parityTestSHA), string(got))
 	lock := readTempLockfilePins(t)
-	assert.Contains(t, lock, "    '"+path+"':\n        - '"+newName+"@"+parityTestSHA+"'\n")
+	assert.Contains(t, lock, "    '"+path+"':\n        - '"+oldName+"@"+parityTestSHA+"'\n")
+	assert.Contains(t, lock, "        - '"+newName+"@"+parityTestSHA+"'\n")
 	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
 	require.NoError(t, err, "%s\n%s", stderr, lock)
+}
+
+// TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName: a workflow uses
+// a renamed repository's old name while a `$/…` action uses the new one.
+// The workflow's ref isn't folded into the action file's, so narrowing or
+// the rename can't drop the key the untouched action file needs.
+func TestSelfRepositoryActionKeepsKeyWhenWorkflowUsesOldName(t *testing.T) {
+	const (
+		oldName = "krzema12/github-actions-typing"
+		newName = "typesafegithub/github-actions-typing"
+	)
+	tests := []struct {
+		name, ref, wfPath, actionPath, wantWorkflow string
+	}{
+		{name: "full SHA", ref: parityTestSHA, wantWorkflow: oldName + "@" + parityTestSHA},
+		{name: "partial tag", ref: "v2", wantWorkflow: oldName + "@v2.2.2"},
+		{name: "partial tag, different sub-actions", ref: "v2", wfPath: "/restore", actionPath: "/save", wantWorkflow: oldName + "@v2.2.2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+			for _, owner := range []string{"krzema12", "typesafegithub"} {
+				reg.RegisterReusable(httpmock.GraphQLForRepo(owner, "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{"a0": withRepoID(testRepoResponse(newName, parityTestSHA, nodeActionYAML), 1)},
+				}))
+			}
+			for _, nwo := range []string{oldName, newName} {
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`$`), httpmock.JSONResponse(map[string]any{
+					"full_name": newName, "id": 1, "default_branch": "main", "owner": map[string]any{"id": 42},
+				}))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/releases`), httpmock.JSONResponse([]map[string]any{}))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/tags/v2(\.2\.2)?$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/tags/v2.2.2", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/heads/main$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/heads/main", parityTestSHA)))
+			}
+			isolateRunLogs(t)
+			path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+oldName+tt.wfPath+"@"+tt.ref+"\n")
+			require.NoError(t, os.Mkdir(".git", 0o755))
+			action := filepath.Join(".github", "actions", "typing", "action.yml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+			require.NoError(t, os.WriteFile(action, []byte(composite(newName+tt.actionPath+"@"+tt.ref)), 0o600))
+
+			_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
+			require.NoError(t, err, stderr)
+			got, err := os.ReadFile(action)
+			require.NoError(t, err)
+			assert.Equal(t, composite(newName+tt.actionPath+"@"+tt.ref), string(got))
+			wf, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(wf), "uses: "+strings.Replace(tt.wantWorkflow, "@", tt.wfPath+"@", 1)+"\n")
+			lock := readTempLockfilePins(t)
+			assert.Contains(t, lock, "        - '"+newName+"@"+tt.ref+"'\n", "the action file's key")
+			assert.Contains(t, lock, "        - '"+tt.wantWorkflow+"'\n", "the workflow's key")
+			_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
+			require.NoError(t, err, "%s\n%s", stderr, lock)
+			if tt.ref == parityTestSHA {
+				// The workflow still shares the action file's ref, so no
+				// rerun will rewrite it.
+				_, stderr, _ = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
+				assert.Contains(t, stderr, "change it to `uses: "+newName+"@"+parityTestSHA+"` in .github/workflows/workflow.yml, then run")
+			}
+		})
+	}
+}
+
+// TestSelfRepositoryActionRenameWithOtherSpelling: an action file holds a
+// ref that shares the workflow's commit or lock entry but not its spelling.
+// A fork at the same SHA is another repository, so the workflow's renamed
+// ref is still rewritten; another sub-path of the renamed repository shares
+// the lock entry, so the advice names the action file as well, and names
+// the workflow even where it spells the ref exactly as the action file does.
+func TestSelfRepositoryActionRenameWithOtherSpelling(t *testing.T) {
+	const (
+		oldName  = "krzema12/github-actions-typing"
+		newName  = "typesafegithub/github-actions-typing"
+		forkName = "forkowner/github-actions-typing"
+	)
+	tests := []struct {
+		name, wfUse, actionUse, wantWorkflow, wantAdvice string
+	}{
+		{
+			name: "fork at the same SHA", wfUse: oldName + "@" + parityTestSHA, actionUse: forkName + "@" + parityTestSHA,
+			wantWorkflow: newName + "@" + parityTestSHA,
+		},
+		{
+			name: "other sub-path of the old name", wfUse: oldName + "/restore@v2", actionUse: oldName + "/save@v2",
+			wantWorkflow: oldName + "/restore@v2",
+			wantAdvice:   "change " + oldName + " to " + newName + " in .github/actions/typing/action.yml, .github/workflows/workflow.yml, then run",
+		},
+		{
+			name: "same spelling in both", wfUse: oldName + "@v2.2.2", actionUse: oldName + "@v2.2.2",
+			wantWorkflow: oldName + "@v2.2.2",
+			wantAdvice:   "change it to `uses: " + newName + "@v2.2.2` in .github/actions/typing/action.yml, .github/workflows/workflow.yml, then run",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), renamedParity)
+			for _, owner := range []string{"krzema12", "typesafegithub"} {
+				reg.RegisterReusable(httpmock.GraphQLForRepo(owner, "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+					"data": map[string]any{"a0": withRepoID(testRepoResponse(newName, parityTestSHA, nodeActionYAML), 1)},
+				}))
+			}
+			reg.RegisterReusable(httpmock.GraphQLForRepo("forkowner", "github-actions-typing"), httpmock.JSONResponse(map[string]any{
+				"data": map[string]any{"a0": withRepoID(testRepoResponse(forkName, parityTestSHA, nodeActionYAML), 2)},
+			}))
+			for _, nwo := range []string{oldName, newName, forkName} {
+				full, id := newName, 1
+				if nwo == forkName {
+					full, id = forkName, 2
+				}
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`$`), httpmock.JSONResponse(map[string]any{
+					"full_name": full, "id": id, "default_branch": "main", "owner": map[string]any{"id": 42},
+				}))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v2.2.2", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/releases`), httpmock.JSONResponse([]map[string]any{}))
+				reg.RegisterReusable(httpmock.REST("GET", `repos/`+nwo+`/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/tags/v2(\.2\.2)?$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/tags/v2.2.2", parityTestSHA)))
+				reg.RegisterReusable(httpmock.REST("GET", `^/repos/`+nwo+`/git/ref/heads/main$`), httpmock.JSONResponse(httpmock.GitRefResponse("refs/heads/main", parityTestSHA)))
+			}
+			isolateRunLogs(t)
+			path := writeTempWorkflow(t, "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: $/.github/actions/typing\n      - uses: "+tt.wfUse+"\n")
+			require.NoError(t, os.Mkdir(".git", 0o755))
+			action := filepath.Join(".github", "actions", "typing", "action.yml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(action), 0o755))
+			require.NoError(t, os.WriteFile(action, []byte(composite(tt.actionUse)), 0o600))
+
+			_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive")
+			require.NoError(t, err, stderr)
+			got, err := os.ReadFile(action)
+			require.NoError(t, err)
+			assert.Equal(t, composite(tt.actionUse), string(got))
+			wf, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Contains(t, string(wf), "uses: "+tt.wantWorkflow+"\n")
+			_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--verify-local")
+			require.NoError(t, err, "%s\n%s", stderr, readTempLockfilePins(t))
+			if tt.wantAdvice != "" {
+				_, stderr, _ = runCommandWithHTTP(t, parityFallback{reg}, "--verify")
+				assert.Contains(t, stderr, tt.wantAdvice)
+			}
+		})
+	}
 }

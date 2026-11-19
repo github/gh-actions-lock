@@ -42,8 +42,7 @@ jobs:
 	require.Len(t, pw.Refs, 1)
 	assert.Equal(t, "actions/checkout", pw.Refs[0].NWO())
 	assert.Equal(t, "v4", pw.Refs[0].Ref)
-	assert.NotEmpty(t, pw.RewriteRefs, "refs inside a self repository action are rewritable in their action file")
-	assert.Equal(t, []string{actionPath}, pw.SelfActionFiles)
+	assert.Empty(t, pw.RewriteRefs, "refs inside a self repository action are never rewritten")
 	assert.ElementsMatch(t, []string{"$/actions/root", "$/.github/workflows/reusable.yml"}, pw.SelfRepositoryRefs)
 	assert.Empty(t, pw.SelfRepositoryResolutionErrs)
 }
@@ -64,10 +63,10 @@ func TestRewritableRefs(t *testing.T) {
 			want:     []string{"actions/checkout@v4"},
 		},
 		{
-			name:     "tag in a self repository action stays rewritable",
-			refs:     []string{"octo/cache@v2"},
-			selfRefs: []string{"octo/cache@v2"},
-			want:     []string{"octo/cache@v2"},
+			name:     "tag in a self repository action is kept everywhere",
+			refs:     []string{"Octo/Cache@v2", "octo/cache/restore@v2", "octo/cache@v3"},
+			selfRefs: []string{"octo/cache/save@v2"},
+			want:     []string{"octo/cache@v3"},
 		},
 		{
 			name: "SHA only in the workflow stays rewritable",

@@ -244,7 +244,6 @@ func precheckWorkflow(pw checks.ParsedWorkflow, store *lockfile.State) (checks.W
 		wr.RewriteRefs = pw.Refs
 	}
 	wr.SHASpellings = pw.SHASpellings
-	wr.SelfActionFiles = pw.SelfActionFiles
 	wr.SelfActionRefs = pw.SelfActionRefs
 	for _, img := range pw.Images {
 		checks.AddContainerImage(&wr, img)
@@ -345,6 +344,7 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 			Severity:        checks.SeverityWarning,
 			Confidence:      checks.ConfidenceHigh,
 			ParentNWO:       lu.Parent,
+			ParentFile:      lu.File,
 			LocalPath:       lu.Path,
 			LocalRemoteUses: workflowfile.LocalActionRemoteUses(pw.Path, lu.Path),
 			Detail:          fmt.Sprintf("cannot follow workspace-local action %s used by %s", lu.Path, lu.Parent),

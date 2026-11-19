@@ -540,6 +540,16 @@ func TestActionFilePathRejected(t *testing.T) {
 		}
 	})
 
+	t.Run("workflows directory holding an action file", func(t *testing.T) {
+		writeTempWorkflow(t, "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+		dir := filepath.Join(".github", "actions", "foo")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "action.yml"), []byte(action), 0o600))
+		_, err := discoverWorkflowPaths(nil, dir, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is an action file, not a workflow")
+	})
+
 	t.Run("workflow named action.yml", func(t *testing.T) {
 		writeTempWorkflow(t, "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
 		path := filepath.Join(".github", "workflows", "action.yml")
