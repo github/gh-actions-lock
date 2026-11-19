@@ -34,8 +34,8 @@ the release script again for the next RC.
 
 Rerunning a step is safe. If the push was held, rerun the same command: it
 pushes the local tag when that tag already points at `HEAD`, and stops if it
-points anywhere else. After a successful push, a rerun stops at the next step:
-stamping `main`. Rerunning the tag workflow checks the attestations again, skips
+points anywhere else. After a successful push, a rerun stops until the stamp
+pull request below is merged. Rerunning the tag workflow checks the attestations again, skips
 tagging when `verify-vX.Y.Z` is already that same signed stamp on the release
 commit, and reuses the stamp branch and pull request for `main`.
 
@@ -63,7 +63,9 @@ the same `checksums.json` to a `verify-stamp-vX.Y.Z` branch off `main`, opens th
 "Stamp actions/verify on main for vX.Y.Z" pull request, and dispatches the
 `test` and `verify-lockfile` workflows on it (pull requests opened by the
 workflow token don't trigger `pull_request` runs). Review and merge it like any
-other pull request. Release candidates don't stamp `main`.
+other pull request. If a required check or code scanning never reports on it,
+close and reopen the pull request to start the `pull_request` runs. Release
+candidates don't stamp `main`.
 
 `script/release` refuses to cut the next release, including a release
 candidate, until `main` is stamped for the latest stable release. If the stamp
