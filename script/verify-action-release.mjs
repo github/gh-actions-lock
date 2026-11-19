@@ -4,6 +4,8 @@
 //
 // Usage (release workflow, with GH_TOKEN and REPO set):
 //   node script/verify-action-release.mjs <vX.Y.Z[-rc.N]>
+// To restamp the working tree only, for example to move main to a newer release:
+//   node script/verify-action-release.mjs --stamp-only <vX.Y.Z[-rc.N]>
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -23,7 +25,8 @@ export const ASSETS = [
 ];
 export const ACTION = "actions/verify/action.yml";
 export const CHECKSUMS = "actions/verify/checksums.txt";
-const MARKER = 'default: "" # stamped by script/verify-action-release.mjs';
+const MARKER = "# stamped by script/verify-action-release.mjs";
+const STAMP = /^(\s*default: )\S+( # stamped by script\/verify-action-release\.mjs)$/m;
 
 export function checkTag(tag) {
   if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\.[1-9]\d*)?$/.test(tag ?? "")) {
@@ -33,13 +36,14 @@ export function checkTag(tag) {
 }
 
 // stamp defaults the action's version input to tag and writes checksums.txt for
-// the release binaries in assetsDir. It refuses an already stamped action.
+// the release binaries in assetsDir, replacing any earlier stamp. The marker
+// comment stays so main and every verify-v* tag can be restamped the same way.
 export async function stamp({ root, tag, assetsDir }) {
   checkTag(tag);
   const actionPath = join(root, ACTION);
   const action = await readFile(actionPath, "utf8");
-  if (action.split(MARKER).length !== 2) {
-    throw new Error(`${ACTION} must contain exactly one line with: ${MARKER}`);
+  if (action.split(MARKER).length !== 2 || !STAMP.test(action)) {
+    throw new Error(`${ACTION} must contain exactly one line like: default: vX.Y.Z ${MARKER}`);
   }
   const lines = [`# ${tag}`];
   for (const a of ASSETS) {
@@ -48,7 +52,7 @@ export async function stamp({ root, tag, assetsDir }) {
     lines.push(`${createHash("sha256").update(await readFile(path)).digest("hex")}  ${a}`);
   }
   await writeFile(join(root, CHECKSUMS), lines.join("\n") + "\n");
-  await writeFile(actionPath, action.replace(MARKER, `default: ${tag}`));
+  await writeFile(actionPath, action.replace(STAMP, `$1${tag}$2`));
 }
 
 // publish commits files on top of head through the Git Data API, so GitHub signs
@@ -91,10 +95,10 @@ function run(cmd, args, opts = {}) {
   return r.stdout.trim();
 }
 
-async function main(tag) {
+async function main(tag, { stampOnly = false } = {}) {
   checkTag(tag);
-  const { REPO: repo, GH_TOKEN: token, GITHUB_API_URL: api = "https://api.github.com" } = process.env;
-  if (!repo || !token) throw new Error("set REPO and GH_TOKEN");
+  const { REPO: repo = stampOnly ? "github/gh-actions-lock" : undefined, GH_TOKEN: token, GITHUB_API_URL: api = "https://api.github.com" } = process.env;
+  if (!repo || (!token && !stampOnly)) throw new Error("set REPO and GH_TOKEN");
   const root = resolve(fileURLToPath(import.meta.url), "../..");
 
   const assetsDir = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "assets-"));
@@ -109,6 +113,10 @@ async function main(tag) {
   }
 
   await stamp({ root, tag, assetsDir });
+  if (stampOnly) {
+    console.log(`Stamped ${ACTION} and ${CHECKSUMS} for ${tag}`);
+    return;
+  }
   const files = [];
   for (const path of [ACTION, CHECKSUMS]) files.push({ path, content: await readFile(join(root, path)) });
   const commit = await publish({
@@ -125,8 +133,11 @@ async function main(tag) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length !== 3) throw new Error("usage: node script/verify-action-release.mjs <tag>");
-    await main(process.argv[2]);
+    const args = process.argv.slice(2);
+    const stampOnly = args[0] === "--stamp-only";
+    if (stampOnly) args.shift();
+    if (args.length !== 1) throw new Error("usage: node script/verify-action-release.mjs [--stamp-only] <tag>");
+    await main(args[0], { stampOnly });
   } catch (err) {
     console.error(`::error::${err.message}`);
     process.exitCode = 1;

@@ -16,6 +16,18 @@ describe("checkTag", () => {
   }
 });
 
+describe("checked-in stamp", () => {
+  test("the version default matches checksums.txt, which covers every asset", async () => {
+    const action = await readFile(join(repoRoot, ACTION), "utf8");
+    const tag = action.match(/^ {4}default: (\S+) # stamped by/m)?.[1];
+    assert.equal(checkTag(tag), tag);
+    const lines = (await readFile(join(repoRoot, CHECKSUMS), "utf8")).trimEnd().split("\n");
+    assert.equal(lines[0], `# ${tag}`);
+    assert.deepEqual(lines.slice(1).map((l) => l.split(/\s+/)[1]), ASSETS);
+    for (const l of lines.slice(1)) assert.match(l, /^[0-9a-f]{64}  \S+$/);
+  });
+});
+
 describe("stamp", () => {
   let root, assetsDir;
   beforeEach(async () => {
@@ -33,8 +45,7 @@ describe("stamp", () => {
   test("defaults the version input to the tag and records checksums", async () => {
     await stamp({ root, tag: "v1.2.3-rc.1", assetsDir });
     const action = await readFile(join(root, ACTION), "utf8");
-    assert.match(action, /^ {4}default: v1\.2\.3-rc\.1$/m);
-    assert.doesNotMatch(action, /stamped by/);
+    assert.match(action, /^ {4}default: v1\.2\.3-rc\.1 # stamped by/m);
     const lines = (await readFile(join(root, CHECKSUMS), "utf8")).trimEnd().split("\n");
     assert.equal(lines[0], "# v1.2.3-rc.1");
     assert.equal(lines.length, 1 + ASSETS.length);
@@ -51,8 +62,17 @@ describe("stamp", () => {
     await assert.rejects(stamp({ root, tag: "v1.2.3", assetsDir }), /missing release asset/);
   });
 
-  test("refuses to restamp", async () => {
+  test("restamps an earlier stamp and keeps the marker", async () => {
     await stamp({ root, tag: "v1.2.3", assetsDir });
+    await stamp({ root, tag: "v1.2.4", assetsDir });
+    const action = await readFile(join(root, ACTION), "utf8");
+    assert.match(action, /^    default: v1\.2\.4 # stamped by script\/verify-action-release\.mjs$/m);
+    assert.match(await readFile(join(root, CHECKSUMS), "utf8"), /^# v1\.2\.4\n/);
+  });
+
+  test("refuses an action without exactly one stamp line", async () => {
+    const action = await readFile(join(root, ACTION), "utf8");
+    await writeFile(join(root, ACTION), action + action);
     await assert.rejects(stamp({ root, tag: "v1.2.4", assetsDir }), /exactly one line/);
   });
 });

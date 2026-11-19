@@ -1,9 +1,9 @@
 # Fails when .github/workflows/actions.lock is out of sync with the
 # workflows or a locked pin no longer verifies upstream.
 #
-# This repository runs its own actions/verify at the workflow commit, so the
-# version is set here. Other repositories pin a verify-v* tag instead; see
-# actions/verify/README.md.
+# This repository runs its own actions/verify at the workflow commit, with the
+# CLI release stamped on main. Other repositories pin a verify-v* tag instead;
+# see actions/verify/README.md.
 
 name: verify-lockfile
 
@@ -24,5 +24,3 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/actions/verify
-        with:
-          version: v0.4.1

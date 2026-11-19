@@ -43,7 +43,7 @@ export function splitArgs(input) {
 }
 
 // selectCheck picks how to check the binary: the checksum stamped into this action
-// tag when version is the release it was stamped with, otherwise the release's
+// when version is the release it was stamped with, otherwise the release's
 // build attestation. checksums is the text of checksums.txt, or null.
 export function selectCheck(version, checksums, asset) {
   const lines = checksums?.split(/\r?\n/) ?? [];
@@ -65,7 +65,7 @@ export function attestationEnv(env) {
     token = env.GH_ACTIONS_LOCK_GITHUB_COM_TOKEN ?? "";
     if (!token) {
       throw new ActionError(
-        `set GH_ACTIONS_LOCK_GITHUB_COM_TOKEN to check ${env.INPUT_VERSION}, or use the version this action tag was released with`,
+        `set GH_ACTIONS_LOCK_GITHUB_COM_TOKEN to check ${env.INPUT_VERSION}, or use the version this action was stamped with`,
       );
     }
   }
@@ -133,7 +133,7 @@ export function useEnvProxy(env, http) {
 function runGh(args, env) {
   const r = spawnSync("gh", args, { env, stdio: ["ignore", "ignore", "inherit"] });
   if (r.error?.code === "ENOENT") {
-    throw new ActionError("gh is not on PATH; it's needed to check a version other than the one this action tag was released with");
+    throw new ActionError("gh is not on PATH; it's needed to check a version other than the one this action was stamped with");
   }
   return r.status === 0;
 }
