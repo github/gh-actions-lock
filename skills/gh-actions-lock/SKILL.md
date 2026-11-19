@@ -23,8 +23,11 @@ Requires an authenticated GitHub CLI. github.com and GitHub Enterprise Cloud wit
 (`*.ghe.com`) are supported; GitHub Enterprise Server is not.
 
 ```bash
-gh extension install github/gh-actions-lock
+gh extension install https://github.com/github/gh-actions-lock
 ```
+
+Use the full URL: the short `github/gh-actions-lock` form resolves against `gh`'s default host,
+which fails when that host is a `*.ghe.com` tenant.
 
 Run every command from the repository checkout. The host comes from `--hostname`, then `GH_HOST`,
 then the repository remote, then github.com.
