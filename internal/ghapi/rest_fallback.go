@@ -141,6 +141,9 @@ func (c *Client) policyFailure(owner string, denial, cause error) error {
 		if !ip {
 			return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: denial}
 		}
+		// Reuse a rate limit already reported as one only when it records an
+		// IP policy: the read that hit it may have been refused by SAML, a
+		// different block than the one that sent this lookup to the fallback.
 		var limited *SSORateLimitedError
 		if errors.As(cause, &limited) && limited.ipPolicy {
 			return cause

@@ -622,3 +622,35 @@ func TestFallbackPolicyEvidenceIsPerLookup(t *testing.T) {
 		})
 	}
 }
+
+// A rate limit that a SAML-refused metadata read hit is reported by that read
+// as SAML's. It must not turn the IP-policy lookup that triggered it into an
+// SSO failure: the lookup stays a retryable IP-policy rate limit.
+func TestIPAllowListFallback_SAMLMetadataRateLimit(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(anyRequest, func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") != "" {
+			message := ipAllowListDeniedMessage("acme")
+			if req.URL.Path != "/graphql" {
+				message = "Resource protected by organization SAML enforcement."
+			}
+			resp, err := httpmock.JSONResponse(map[string]any{"message": message})(req)
+			resp.StatusCode = http.StatusForbidden
+			return resp, err
+		}
+		if req.URL.Path == "/orgs/acme" {
+			return httpmock.StatusResponse(http.StatusOK)(req)
+		}
+		return httpmock.StatusResponseWithHeaders(http.StatusTooManyRequests, map[string]string{"Retry-After": "120"})(req)
+	})
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	err := c.CheckPins(context.Background(), []PinCheck{{Owner: "acme", Repo: "widget", SHA: paritySHA}})[0].Err
+	require.Error(t, err)
+	assert.True(t, IPAllowListBlocked(err), "err = %v", err)
+	assert.True(t, IsRateLimited(err), "err = %v", err)
+	assert.False(t, RetryAt(err).IsZero(), "reset time was dropped")
+	assert.NotContains(t, Brief(err), "SSO")
+}
