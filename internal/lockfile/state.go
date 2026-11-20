@@ -311,8 +311,9 @@ func (s *State) SetMetadataResolver(meta MetadataResolver) {
 // VerifyHosts confirms that the pins reachable from workflowKeys can be looked
 // up on their recorded host before they are trusted on Proxima. Older
 // producers used omission for dotcom, not the home tenant. Only inconclusive
-// lookups fail here; a missing repository or a changed repo ID is left to the
-// parity pass, which reports repo-unavailable or repo-replaced.
+// lookups fail here; a missing repository, one an IP allow list keeps from this
+// token, or a changed repo ID is left to the parity pass, which reports
+// repo-unavailable or repo-replaced.
 func (s *State) VerifyHosts(ctx context.Context, workflowKeys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -351,11 +352,18 @@ func (s *State) VerifyHosts(ctx context.Context, workflowKeys []string) error {
 			return fmt.Errorf("invalid dependency %q", key)
 		}
 		hostname := s.hostOrHome(s.file.Dependencies[key].Hostname)
-		if _, _, err := s.meta.RepoIDs(ctx, hostname, pin.Owner, pin.Repo); err != nil && !ghapi.IsNotFound(err) {
+		if _, _, err := s.meta.RepoIDs(ctx, hostname, pin.Owner, pin.Repo); err != nil && !answered(err) {
 			return fmt.Errorf("could not verify %s on %s: %w", key, hostname, err)
 		}
 	}
 	return nil
+}
+
+// answered reports a failed lookup that is GitHub's answer, not an outage: a
+// 404, or an IP allow list refusing the token whose anonymous fallback was
+// not rate-limited (that one clears on a retry).
+func answered(err error) bool {
+	return ghapi.IsNotFound(err) || (ghapi.IPAllowListBlocked(err) && !ghapi.IsTransient(err))
 }
 
 // HasWorkflow reports whether the lockfile's workflows{} map already

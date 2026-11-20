@@ -198,6 +198,43 @@ func TestIPAllowListFallback_PrivateRepository(t *testing.T) {
 	}
 }
 
+// For a repository the anonymous read can see, a 404 or 422 is still a
+// verdict on the ref or the commits, as it is for an authenticated read.
+func TestIPAllowListFallback_PublicRepositoryMissingRef(t *testing.T) {
+	ctx := context.Background()
+	for _, status := range []int{http.StatusNotFound, http.StatusUnprocessableEntity} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/orgs/acme":
+					w.WriteHeader(http.StatusOK)
+				case "/repos/acme/widget":
+					writeJSON(w, map[string]any{"full_name": "acme/widget"})
+				default:
+					w.WriteHeader(status)
+				}
+			})
+			_, found, err := c.restCommit(ctx, "acme", "widget", "v1")
+			require.NoError(t, err)
+			assert.False(t, found)
+
+			_, _, err = c.fetchGitRef(ctx, "acme", "widget", "refs/tags/v1")
+			require.NoError(t, err)
+
+			_, _, err = c.CompareRefs(ctx, "acme", "widget", paritySHA, parityMoved)
+			code, ok := StatusCode(err)
+			require.True(t, ok, "err = %v", err)
+			assert.Equal(t, status, code)
+			assert.False(t, IPAllowListBlocked(err))
+
+			_, err = c.CommitSHA(ctx, "acme", "widget", "v1")
+			code, ok = StatusCode(err)
+			require.True(t, ok, "err = %v", err)
+			assert.Equal(t, status, code)
+		})
+	}
+}
+
 // The same reads succeed for a public repository.
 func TestIPAllowListFallback_PublicRepositoryReads(t *testing.T) {
 	ctx := context.Background()
