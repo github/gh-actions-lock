@@ -258,9 +258,11 @@ func (c *Client) restGet(ctx context.Context, owner, repo, path string, dest any
 		err = c.anonGet(ctx, path, dest)
 	} else {
 		err = c.rest.DoWithContext(ctx, http.MethodGet, path, nil, dest)
-		if err != nil && c.orgPolicyFallback(ctx, owner, repo, err) {
-			if anonErr := c.anonGet(ctx, path, dest); anonErr != nil {
-				err = c.anonReadFailed(ctx, owner, repo, err, anonErr)
+		if err != nil {
+			if fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err); ferr != nil {
+				err = ferr
+			} else if anonErr := c.anonGet(fctx, path, dest); anonErr != nil {
+				err = c.anonReadFailed(fctx, owner, repo, err, anonErr)
 			} else {
 				err = nil
 			}
@@ -270,7 +272,7 @@ func (c *Client) restGet(ctx context.Context, owner, repo, path string, dest any
 		return false, nil
 	}
 	if err != nil {
-		return false, c.ssoErr(owner, err)
+		return false, err
 	}
 	return true, nil
 }

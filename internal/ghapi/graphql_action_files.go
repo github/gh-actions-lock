@@ -139,11 +139,12 @@ func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileReques
 		if r.Err == nil || ctx.Err() != nil {
 			continue
 		}
-		if ok, failure := c.repoFallback(ctx, refs[i].Owner, refs[i].Repo, r.Err); !ok {
-			results[i].Err = c.fallbackFailure(refs[i].Owner, r.Err, failure)
+		fctx, ok, cause := c.repoFallback(ctx, refs[i].Owner, refs[i].Repo, r.Err)
+		if !ok {
+			results[i].Err = c.fallbackFailure(refs[i].Owner, r.Err, cause)
 			continue
 		}
-		results[i] = c.resolveAnonymous(ctx, refs[i])
+		results[i] = c.resolveAnonymous(fctx, refs[i])
 		if rateLimited(results[i].Err) && organizationDenied(r.Err) {
 			results[i].Err = &SSORateLimitedError{Host: c.Hostname, Owner: refs[i].Owner, Err: results[i].Err, ipPolicy: isIPAllowListDenial(r.Err)}
 		}

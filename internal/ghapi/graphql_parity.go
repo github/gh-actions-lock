@@ -120,10 +120,10 @@ func (c *Client) checkPinBatch(ctx context.Context, pins []PinCheck) []PinState 
 			if s.Err == nil || ctx.Err() != nil {
 				continue
 			}
-			if ok, failure := c.repoFallback(ctx, pins[i].Owner, pins[i].Repo, s.Err); ok {
-				states[i] = c.checkPinREST(ctx, pins[i])
+			if fctx, ok, cause := c.repoFallback(ctx, pins[i].Owner, pins[i].Repo, s.Err); ok {
+				states[i] = c.checkPinREST(fctx, pins[i])
 			} else {
-				states[i].Err = c.fallbackFailure(pins[i].Owner, s.Err, failure)
+				states[i].Err = c.fallbackFailure(pins[i].Owner, s.Err, cause)
 			}
 		}
 		return states

@@ -57,12 +57,12 @@ func (c *Client) PeelTagObject(ctx context.Context, owner, repo, sha string) (Pe
 		"expr":  sha + "^{commit}",
 	}
 	if err := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "peel"), tagObjectPeelQuery, vars, &resp); err != nil {
-		ok, failure := c.repoFallback(ctx, owner, repo, err)
+		fctx, ok, cause := c.repoFallback(ctx, owner, repo, err)
 		if ok {
-			return c.anonPeelTagObject(ctx, owner, repo, sha)
+			return c.anonPeelTagObject(fctx, owner, repo, sha)
 		}
-		if failure != nil {
-			err = failure
+		if cause != nil && isIPAllowListDenial(err) {
+			err = c.fallbackFailure(owner, err, cause)
 		}
 		return PeelTagObjectResult{}, err
 	}

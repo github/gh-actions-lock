@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
@@ -123,7 +124,7 @@ func TestSAMLFallbackRateLimit_KeepsDenial(t *testing.T) {
 	require.False(t, c.SSOFallbackEligible(context.Background(), "acme"))
 
 	saml := &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource protected by organization SAML enforcement."}
-	err := c.ssoErr("acme", saml)
+	_, err := c.orgPolicyFallback(context.Background(), "acme", "widget", saml)
 	var limited *SSORateLimitedError
 	require.ErrorAs(t, err, &limited)
 	assert.Same(t, saml, limited.Err)
@@ -484,8 +485,6 @@ func TestIPAllowListFallback_ProbeFailures(t *testing.T) {
 		})}
 		_, err := c.CommitSHA(ctx, "acme", "widget", "v1")
 		require.Error(t, err)
-		_, stored := anonProbeFailed.Load(c.anonBase() + "/acme")
-		assert.False(t, stored, "a canceled run says nothing about the owner")
 		assert.False(t, IsTransient(err), "err = %v", err)
 	})
 }
@@ -558,4 +557,68 @@ func TestPublicClient_IPAllowListRetryRateLimited(t *testing.T) {
 	assert.Equal(t, publicAnonymous, publicAuthOf(cause(err)), "the retry used no token")
 	assert.Contains(t, Brief(err), "IP allow list")
 	assert.NotContains(t, Brief(err), "gh auth login", "a token can't lift an IP allow list")
+}
+
+// Which policy refused a lookup's token is evidence about that lookup. A
+// concurrent lookup of the same owner that SAML refused must not change how
+// the in-flight IP-policy lookup's rate limit is reported, nor the other way
+// round.
+func TestFallbackPolicyEvidenceIsPerLookup(t *testing.T) {
+	const saml = "Resource protected by organization SAML enforcement."
+	for _, tt := range []struct {
+		name, slowRef, fastRef string
+		slowIP                 bool
+	}{
+		{"IP policy in flight, SAML concurrent", "ip", "saml", true},
+		{"SAML in flight, IP policy concurrent", "saml", "ip", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAnonFallbackState()
+			started, release := make(chan struct{}), make(chan struct{})
+			// Not a httpmock.Registry: it serializes requests, so a request
+			// held open would block the concurrent lookup.
+			rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("Authorization") != "" {
+					message := ipAllowListDeniedMessage("acme")
+					if req.URL.Path == "/repos/acme/widget/commits/saml" {
+						message = saml
+					}
+					resp, err := httpmock.JSONResponse(map[string]any{"message": message})(req)
+					resp.StatusCode = http.StatusForbidden
+					return resp, err
+				}
+				switch req.URL.Path {
+				case "/orgs/acme":
+					return httpmock.StatusResponse(http.StatusOK)(req)
+				case "/repos/acme/widget/commits/" + tt.slowRef:
+					close(started)
+					<-release
+					return httpmock.StatusResponse(http.StatusTooManyRequests)(req)
+				}
+				return httpmock.JSONResponse(map[string]any{"sha": paritySHA})(req)
+			})
+			c, err := New("github.com", WithClientTransport(rt))
+			require.NoError(t, err)
+			c.anonHTTP = &http.Client{Transport: rt}
+
+			slow := make(chan error, 1)
+			go func() {
+				_, err := c.CommitSHA(context.Background(), "acme", "widget", tt.slowRef)
+				slow <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the in-flight lookup never reached the anonymous read")
+			}
+			_, err = c.CommitSHA(context.Background(), "acme", "widget", tt.fastRef)
+			require.NoError(t, err)
+			close(release)
+
+			err = <-slow
+			var limited *SSORateLimitedError
+			require.ErrorAs(t, err, &limited, "err = %v", err)
+			assert.Equal(t, tt.slowIP, IPAllowListBlocked(err), "err = %v", err)
+		})
+	}
 }

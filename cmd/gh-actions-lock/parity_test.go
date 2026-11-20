@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -5325,4 +5326,136 @@ jobs:
 		categories = append(categories, f.Category)
 	}
 	assert.Equal(t, []string{"ref-moved"}, categories)
+}
+
+const ipAllowListMessage = "Although you appear to have the correct authorization credentials, the `krzema12` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."
+
+// ipAllowListTransport refuses every token-bearing request with the
+// organization IP allow list denial, as a GitHub-hosted runner is refused,
+// and answers anonymous ones through anon. Anonymous requests are recorded.
+func ipAllowListTransport(t *testing.T, anon http.HandlerFunc) (*httpmock.Registry, *[]string) {
+	t.Helper()
+	reg := &httpmock.Registry{}
+	var anonymous []string
+	reg.RegisterReusable(func(*http.Request) bool { return true }, func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") != "" {
+			resp, err := httpmock.JSONResponse(map[string]string{"message": ipAllowListMessage})(req)
+			if err != nil {
+				return nil, err
+			}
+			resp.StatusCode, resp.Status = http.StatusForbidden, "403 Forbidden"
+			return resp, nil
+		}
+		anonymous = append(anonymous, req.Method+" "+req.URL.Path)
+		rec := httptest.NewRecorder()
+		anon(rec, req)
+		resp := rec.Result()
+		resp.Request = req
+		return resp, nil
+	})
+	useDefaultTransport(t, reg)
+	return reg, &anonymous
+}
+
+func ipAllowListPublicRepo(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/orgs/krzema12":
+		w.WriteHeader(http.StatusOK)
+	case "/repos/krzema12/github-actions-typing":
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"full_name": "krzema12/github-actions-typing", "id": 1, "owner": map[string]any{"id": 1}, "visibility": "public",
+		})
+	case "/repos/krzema12/github-actions-typing/git/ref/tags/v2.2.2":
+		_ = json.NewEncoder(w).Encode(httpmock.GitRefResponse("refs/tags/v2.2.2", parityTestSHA))
+	case "/repos/krzema12/github-actions-typing/commits/v2.2.2", "/repos/krzema12/github-actions-typing/commits/" + parityTestSHA:
+		_ = json.NewEncoder(w).Encode(map[string]string{"sha": parityTestSHA})
+	case "/repos/krzema12/github-actions-typing/contents/action.yml":
+		_, _ = io.WriteString(w, nodeActionYAML)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// TestRun_VerifyIPAllowListFallbackSucceeds is #274: on a GitHub-hosted runner
+// the job token is refused for a public action whose organization has an IP
+// allow list, and --verify still passes from anonymous reads without writing.
+func TestRun_VerifyIPAllowListFallbackSucceeds(t *testing.T) {
+	t.Setenv("CODESPACES", "")
+	reg, anonymous := ipAllowListTransport(t, ipAllowListPublicRepo)
+	path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+	before := readTempLockfilePins(t)
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--verify", "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "All 1 workflow valid")
+	assert.NotContains(t, stderr, "IP allow list")
+	assert.Equal(t, before, readTempLockfilePins(t))
+	assert.Contains(t, *anonymous, "GET /repos/krzema12/github-actions-typing")
+	for _, req := range reg.Requests {
+		if req.URL.Path == "/graphql" {
+			assert.NotEmpty(t, req.Header.Get("Authorization"), "the lookup is tried with the token first")
+		}
+	}
+}
+
+// TestRun_IPAllowListFallbackFailsClosed: when the anonymous read can't see
+// the repository (a private action behind the allow list), the run fails with
+// the IP allow list guidance, not SSO's, and writes nothing.
+func TestRun_IPAllowListFallbackFailsClosed(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		args []string
+	}{
+		{"fix", nil},
+		{"no-fix", []string{"--no-fix"}},
+		{"verify", []string{"--verify"}},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Setenv("CODESPACES", "")
+			reg, anonymous := ipAllowListTransport(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/orgs/krzema12" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				http.NotFound(w, r)
+			})
+			path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+			before := readTempLockfilePins(t)
+
+			_, stderr, err := runCommandWithHTTP(t, reg, append(mode.args, "--no-interactive", path)...)
+			require.ErrorIs(t, err, errSilent)
+			assert.Contains(t, stderr, "use a token from an IP address the organization's IP allow list permits")
+			assert.NotContains(t, stderr, "SSO")
+			assert.NotContains(t, stderr, "https://api.github.com/")
+			assert.Equal(t, before, readTempLockfilePins(t))
+			assert.NotContains(t, *anonymous, "GET /repos/krzema12/github-actions-typing/git/ref/tags/v2.2.2", "no verdict from reads of a repository it can't see")
+		})
+	}
+}
+
+// TestRun_IPAllowListFallbackRateLimited: a rate-limited anonymous fallback is
+// a retryable outage that says to wait or run from an allowed address, never to
+// use a token.
+func TestRun_IPAllowListFallbackRateLimited(t *testing.T) {
+	t.Setenv("CODESPACES", "")
+	reg, _ := ipAllowListTransport(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/orgs/krzema12" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	path := writeTempWorkflow(t, transferWorkflow, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
+	before := readTempLockfilePins(t)
+
+	p, err := runParity(t, reg, "--verify", "--no-interactive", path)
+	require.ErrorIs(t, err, errSilent)
+	require.Len(t, p.Findings, 1, "%+v", p.Findings)
+	f := p.Findings[0]
+	assert.Equal(t, "reachability-unknown", f.Category)
+	assert.True(t, f.Retryable)
+	assert.Contains(t, f.Remediation, "run from an IP address the organization's IP allow list permits")
+	assert.NotContains(t, f.Remediation, "token")
+	assert.Equal(t, before, readTempLockfilePins(t))
 }

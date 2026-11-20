@@ -401,27 +401,6 @@ func TestSSOFallbackEligible_CachesOnlyDefinitiveAnswers(t *testing.T) {
 	}
 }
 
-// TestSSOFallbackEligible_ClearsStaleRateLimit: a later definitive or 5xx
-// answer must drop the rate-limit marker so errors stop blaming it.
-func TestSSOFallbackEligible_ClearsStaleRateLimit(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusBadGateway} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			resetAnonFallbackState()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(status)
-			}))
-			defer srv.Close()
-			c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
-			anonRateLimited.Store(c.anonBase()+"/acme", struct{}{})
-
-			c.SSOFallbackEligible(context.Background(), "acme")
-			if _, ok := anonRateLimited.Load(c.anonBase() + "/acme"); ok {
-				t.Error("stale rate-limit marker survived a later response")
-			}
-		})
-	}
-}
-
 func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
 	tests := []struct {
 		name string
@@ -514,9 +493,6 @@ func TestCompareRefs_SSOFallback(t *testing.T) {
 
 func resetAnonFallbackState() {
 	anonProbeCache = sync.Map{}
-	anonRateLimited = sync.Map{}
-	anonProbeFailed = sync.Map{}
-	anonIPBlocked = sync.Map{}
 }
 
 func ipAllowListDeniedMessage(owner string) string {
