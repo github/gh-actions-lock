@@ -57,7 +57,7 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 				Protected bool `json:"protected"`
 			}
 			if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-				if c.orgPolicyFallback(ctx, owner, err) {
+				if c.orgPolicyFallback(ctx, owner, repo, err) {
 					anon, anonErr := c.anonListBranches(ctx, owner, repo)
 					if anonErr == nil {
 						c.branchListCache.Put(key, anon)
@@ -111,7 +111,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 			} `json:"commit"`
 		}
 		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			if c.orgPolicyFallback(ctx, owner, err) {
+			if c.orgPolicyFallback(ctx, owner, repo, err) {
 				tags, anonErr := c.anonListTags(ctx, owner, repo)
 				if anonErr != nil {
 					return result{err: anonErr}, nil
@@ -181,7 +181,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
 			}
 		} else if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			if c.orgPolicyFallback(ctx, owner, err) {
+			if c.orgPolicyFallback(ctx, owner, repo, err) {
 				if anonErr := c.anonGet(ctx, path, &resp); anonErr != nil {
 					return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
 				}
@@ -389,8 +389,14 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 				c.compareCache.Put(key, false)
 				return false, nil
 			}
-			if c.orgPolicyFallback(ctx, owner, err) {
+			if c.orgPolicyFallback(ctx, owner, repo, err) {
 				contains, anonErr := c.anonCompareCommits(ctx, owner, repo, sha, branchHeadSHA)
+				if code, _ := StatusCode(anonErr); code == http.StatusNotFound || code == http.StatusUnprocessableEntity {
+					// Same verdict as the authenticated read above: the
+					// commits are unrelated or one is missing.
+					c.compareCache.Put(key, false)
+					return false, nil
+				}
 				if anonErr == nil {
 					c.compareCache.Put(key, contains)
 					return contains, nil
@@ -427,7 +433,7 @@ func (c *Client) CompareRefs(ctx context.Context, owner, repo, base, head string
 		err = c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp)
 		// Same fallback as CompareCommits: a public repository behind an
 		// org's SSO is still readable anonymously.
-		if err != nil && c.orgPolicyFallback(ctx, owner, err) {
+		if err != nil && c.orgPolicyFallback(ctx, owner, repo, err) {
 			resp = compareResponse{}
 			err = c.anonGet(ctx, path, &resp)
 		}

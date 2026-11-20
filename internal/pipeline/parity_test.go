@@ -483,8 +483,18 @@ func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
 		ghapi.PinCheck{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, SHA: sha, Head: "v2.2.2"},
 		ghapi.PinState{Err: err}, nil)
 	require.True(t, ok)
-	assert.Equal(t, checks.RepoUnavailable, f.Category)
-	assert.False(t, f.Retryable)
+	assert.Equal(t, checks.ReachabilityUnknown, f.Category)
+	assert.True(t, f.Retryable)
+	assert.True(t, f.RateLimited)
 	assert.Contains(t, f.Detail, "IP allow list")
-	assert.Equal(t, "wait for the anonymous GitHub API rate limit to reset and re-run, or use a token from an IP address the krzema12 organization's IP allow list permits", f.Remediation)
+	assert.Equal(t, "couldn't verify; re-run once the rate limit resets, or use a token from an IP address the krzema12 organization's IP allow list permits", f.Remediation)
+}
+
+// TestUnanswered_SSORateLimited: a SAML block whose anonymous fallback was
+// rate-limited is answered (authorize the token), unlike an outage.
+func TestUnanswered_SSORateLimited(t *testing.T) {
+	limited := &api.HTTPError{StatusCode: http.StatusTooManyRequests}
+	assert.False(t, unanswered(&ghapi.SSORateLimitedError{Host: "github.com", Owner: "acme", Err: limited}))
+	assert.True(t, unanswered(limited))
+	assert.False(t, unanswered(&api.HTTPError{StatusCode: http.StatusForbidden}))
 }

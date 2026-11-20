@@ -122,15 +122,20 @@ func (f *Finding) MarkRetryable(cause error) {
 	f.Remediation = "couldn't verify; " + RetryAdvice(f.RetryAt, f.RateLimited, f.AnonymousLimited)
 }
 
-// RetryAdvice is the next step for a check an outage or rate limit stopped.
-func RetryAdvice(at time.Time, rateLimited, anonymous bool) string {
-	advice := "re-run this check once the GitHub API is reachable"
+// RetryWhen is when to re-run a check an outage or rate limit stopped.
+func RetryWhen(at time.Time, rateLimited bool) string {
 	switch {
 	case !at.IsZero():
-		advice = fmt.Sprintf("re-run after %s UTC", at.UTC().Format("15:04"))
+		return fmt.Sprintf("re-run after %s UTC", at.UTC().Format("15:04"))
 	case rateLimited:
-		advice = "re-run once the rate limit resets"
+		return "re-run once the rate limit resets"
 	}
+	return "re-run this check once the GitHub API is reachable"
+}
+
+// RetryAdvice is the next step for a check an outage or rate limit stopped.
+func RetryAdvice(at time.Time, rateLimited, anonymous bool) string {
+	advice := RetryWhen(at, rateLimited)
 	switch {
 	case anonymous:
 		advice += ", or " + ghapi.AnonymousFallbackHint

@@ -44,6 +44,10 @@ type Client struct {
 	// GH_ACTIONS_LOCK_INSECURE (TLS skip) for integration tests.
 	anonHTTP *http.Client
 
+	// noCredHTTP, set on a github.com public client that authenticates with a
+	// token, sends the same requests with no credentials. See anonDo.
+	noCredHTTP *http.Client
+
 	// Caches for raw GitHub resources. These live here so all consumers
 	// (resolver, auditor, tag lister) share a single cache per CLI run.
 	compareCache         syncmap.Map[Compare, bool]
@@ -163,6 +167,7 @@ func newClient(hostname string, opts ...ClientOption) (*Client, error) {
 		apiOpts.AuthToken = "anonymous"
 		if token != "" {
 			apiOpts.AuthToken = token
+			c.noCredHTTP = &http.Client{Transport: publicTransport{inner: apiOpts.Transport}}
 		}
 		apiOpts.Transport = publicTransport{inner: apiOpts.Transport, token: token}
 		c.restOnly = true

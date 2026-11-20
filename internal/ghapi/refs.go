@@ -160,7 +160,7 @@ func (c *Client) gitRef(ctx context.Context, owner, repo, qualified string) (git
 func (c *Client) fetchGitRef(ctx context.Context, owner, repo, qualified string) (gitRefBody, bool, error) {
 	var raw json.RawMessage
 	path := fmt.Sprintf("repos/%s/%s/git/ref/%s", url.PathEscape(owner), url.PathEscape(repo), escapeBranchPath(strings.TrimPrefix(qualified, "refs/")))
-	found, err := c.restGet(ctx, owner, path, &raw)
+	found, err := c.restGet(ctx, owner, repo, path, &raw)
 	if err != nil || !found {
 		return gitRefBody{}, false, err
 	}
@@ -216,7 +216,7 @@ func (c *Client) allTags(ctx context.Context, owner, repo string) ([]TagEntry, e
 					SHA string `json:"sha"`
 				} `json:"commit"`
 			}
-			found, err := c.restGet(ctx, owner, path, &resp)
+			found, err := c.restGet(ctx, owner, repo, path, &resp)
 			if err != nil {
 				return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)}, nil
 			}
@@ -242,7 +242,7 @@ func (c *Client) restCommit(ctx context.Context, owner, repo, ref string) (strin
 		SHA string `json:"sha"`
 	}
 	path := fmt.Sprintf("repos/%s/%s/commits/%s", url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref))
-	found, err := c.restGet(ctx, owner, path, &commit)
+	found, err := c.restGet(ctx, owner, repo, path, &commit)
 	if err != nil || !found {
 		return "", false, err
 	}
@@ -252,13 +252,13 @@ func (c *Client) restCommit(ctx context.Context, owner, repo, ref string) (strin
 // restGet reports found=false for a 404 or 422. It reads anonymously under
 // the Dependabot proxy, and falls back to an anonymous read for a public
 // repository behind an organization's SSO.
-func (c *Client) restGet(ctx context.Context, owner, path string, dest any) (bool, error) {
+func (c *Client) restGet(ctx context.Context, owner, repo, path string, dest any) (bool, error) {
 	var err error
 	if c.restOnly {
 		err = c.anonGet(ctx, path, dest)
 	} else {
 		err = c.rest.DoWithContext(ctx, http.MethodGet, path, nil, dest)
-		if err != nil && c.orgPolicyFallback(ctx, owner, err) {
+		if err != nil && c.orgPolicyFallback(ctx, owner, repo, err) {
 			err = c.anonGet(ctx, path, dest)
 		}
 	}

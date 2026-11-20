@@ -370,9 +370,14 @@ func rootPaths(recorded []parserlock.ActionRef, lp lockfile.LockedPin) []string 
 
 // unanswered reports a check GitHub didn't answer, which a later run may
 // complete. An SSO block whose anonymous fallback was rate-limited is
-// answered: authorizing the token is the fix.
+// answered: authorizing the token is the fix. An IP allow list block is not:
+// a public action on a hosted runner has no allow-listed address, so the
+// rate limit resetting is what lets the fallback through.
 func unanswered(err error) bool {
-	return ghapi.IsTransient(err) && !errors.As(err, new(*ghapi.SSORateLimitedError))
+	if !ghapi.IsTransient(err) {
+		return false
+	}
+	return !errors.As(err, new(*ghapi.SSORateLimitedError)) || ghapi.IPAllowListBlocked(err)
 }
 
 // dropSuperseded fails closed: it settles a finding only where another
@@ -706,6 +711,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			f.Category = checks.ReachabilityUnknown
 			f.Confidence = checks.ConfidenceLow
 			f.MarkRetryable(st.Err)
+			if ghapi.IPAllowListBlocked(st.Err) {
+				// The generic advice would suggest a token with a higher rate limit; the block is the IP address.
+				f.Remediation = fmt.Sprintf("couldn't verify; %s, or use a token from an IP address the %s organization's IP allow list permits", checks.RetryWhen(f.RetryAt, f.RateLimited), pc.Owner)
+			}
 			break
 		}
 		// GitHub answered, but not with the pin: a re-run won't change that.
@@ -714,10 +723,6 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		if ghapi.IPAllowListBlocked(st.Err) {
 			// Authorizing the token for SSO doesn't lift an IP allow list.
 			f.Remediation = fmt.Sprintf("use a token from an IP address the %s organization's IP allow list permits, then re-run", pc.Owner)
-			if errors.As(st.Err, new(*ghapi.SSORateLimitedError)) {
-				// A public action on a hosted runner has no allow-listed address; waiting is the remaining fix.
-				f.Remediation = fmt.Sprintf("wait for the anonymous GitHub API rate limit to reset and re-run, or use a token from an IP address the %s organization's IP allow list permits", pc.Owner)
-			}
 		}
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable

@@ -139,8 +139,8 @@ func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileReques
 		if r.Err == nil || ctx.Err() != nil {
 			continue
 		}
-		if !c.repoFallbackEligible(ctx, refs[i].Owner, refs[i].Repo, r.Err) {
-			results[i].Err = c.ssoErr(refs[i].Owner, r.Err)
+		if ok, failure := c.repoFallback(ctx, refs[i].Owner, refs[i].Repo, r.Err); !ok {
+			results[i].Err = c.fallbackFailure(refs[i].Owner, r.Err, failure)
 			continue
 		}
 		results[i] = c.resolveAnonymous(ctx, refs[i])

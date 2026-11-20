@@ -1,6 +1,7 @@
 package ghapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,9 +20,14 @@ import (
 // Only definitive answers are cached; rate limits and 5xx are retried.
 var anonProbeCache sync.Map // map[string]bool
 
-// anonRateLimited marks owners whose anonymous fallback was last skipped
-// because the unauthenticated rate limit was exhausted.
-var anonRateLimited sync.Map // map[string]struct{}
+// anonRateLimited holds, per owner, the rate-limited anonymous response that
+// last stopped the fallback. Errors keep it: its status and reset headers say
+// when a retry can succeed.
+var anonRateLimited sync.Map // map[string]*api.HTTPError
+
+// anonProbeFailed holds, per owner, the 5xx answer to the last eligibility
+// probe: an outage, not a verdict on the owner.
+var anonProbeFailed sync.Map // map[string]*api.HTTPError
 
 // anonIPBlocked remembers the denial behind a fallback's later rate limit.
 var anonIPBlocked sync.Map // map[string]bool
@@ -77,14 +83,17 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	resp.Body.Close()
 
 	anonRateLimited.Delete(key)
+	anonProbeFailed.Delete(key)
+	herr := &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		anonProbeCache.Store(key, true)
 		return true
 	case isRateLimited(resp):
-		anonRateLimited.Store(key, struct{}{})
+		anonRateLimited.Store(key, herr)
 		return false
 	case resp.StatusCode >= 500:
+		anonProbeFailed.Store(key, herr)
 		return false
 	}
 	anonProbeCache.Store(key, false)
@@ -101,11 +110,27 @@ func isRateLimited(resp *http.Response) bool {
 	return false
 }
 
-// ssoErr upgrades an organization policy block to SSORateLimitedError when
-// the anonymous fallback for owner was skipped because of a rate limit.
+// ssoErr reports why an organization policy block was final. When the
+// anonymous fallback for owner was skipped because of a rate limit it
+// upgrades the block to SSORateLimitedError; for an IP allow list the error
+// then carries the rate-limited response, whose reset time is the only thing
+// that can change the outcome. An IP allow list block whose fallback probe hit
+// an outage reports the outage instead. SAML blocks keep their own error.
 func (c *Client) ssoErr(owner string, err error) error {
-	if _, limited := anonRateLimited.Load(c.anonBase() + "/" + owner); limited && organizationDenied(err) {
-		return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: err, ipPolicy: isIPAllowListDenial(err)}
+	if !organizationDenied(err) {
+		return err
+	}
+	key := c.anonBase() + "/" + owner
+	ip := isIPAllowListDenial(err)
+	if v, limited := anonRateLimited.Load(key); limited {
+		wrapped := &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: err, ipPolicy: ip}
+		if herr, ok := v.(*api.HTTPError); ok && ip {
+			wrapped.Err = herr
+		}
+		return wrapped
+	}
+	if v, down := anonProbeFailed.Load(key); down && ip {
+		return fmt.Errorf("anonymous fallback for %q unavailable: %w", owner, v.(*api.HTTPError))
 	}
 	return err
 }
@@ -114,29 +139,93 @@ func (c *Client) recordPolicy(owner string, err error) {
 	anonIPBlocked.Store(c.anonBase()+"/"+owner, isIPAllowListDenial(err))
 }
 
-func (c *Client) orgPolicyFallback(ctx context.Context, owner string, err error) bool {
-	if !organizationDenied(err) || !c.SSOFallbackEligible(ctx, owner) {
+func (c *Client) orgPolicyFallback(ctx context.Context, owner, repo string, err error) bool {
+	if !organizationDenied(err) || !c.policyFallbackEligible(ctx, owner, repo, err) {
 		return false
 	}
 	c.recordPolicy(owner, err)
 	return true
 }
 
-// Metadata may succeed authenticated; the fallback's own reads must still succeed.
-// Record the policy even when metadata is cached and supplies no REST denial.
-func (c *Client) repoFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
-	if IsProxima(c.Hostname) {
+// policyFallbackEligible reports whether owner/repo can be read anonymously
+// after err blocked the token. Beyond an organization owner (see
+// SSOFallbackEligible), an IP allow list also covers a public repository whose
+// requested owner is no organization: one transferred from a user or another
+// owner, where REST followed the redirect into the restricted organization.
+// The repository itself is then the probe.
+func (c *Client) policyFallbackEligible(ctx context.Context, owner, repo string, err error) bool {
+	if c.SSOFallbackEligible(ctx, owner) {
+		return true
+	}
+	if !isIPAllowListDenial(err) || IsProxima(c.Hostname) {
 		return false
+	}
+	// Only a definitive "not an organization" justifies another request; a
+	// rate limit or an outage would fail the repository probe the same way.
+	if v, ok := anonProbeCache.Load(c.anonBase() + "/" + owner); !ok || v.(bool) {
+		return false
+	}
+	return c.publicRepoReadable(ctx, owner, repo)
+}
+
+// publicRepoReadable reports whether an unauthenticated request can read
+// owner/repo, following redirects. Only definitive answers are cached.
+func (c *Client) publicRepoReadable(ctx context.Context, owner, repo string) bool {
+	key := c.anonBase() + "/" + owner + "/" + repo
+	if v, ok := anonProbeCache.Load(key); ok {
+		return v.(bool)
+	}
+	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
+	err := c.anonGet(ctx, path, &struct{}{})
+	if err == nil {
+		anonProbeCache.Store(key, true)
+		return true
+	}
+	if code, _ := StatusCode(err); code == http.StatusNotFound {
+		anonProbeCache.Store(key, false)
+	}
+	return false
+}
+
+// repoFallback reports whether owner/repo can be read anonymously after err
+// blocked the authenticated path: an organization policy block or a GraphQL
+// 401. Metadata may succeed authenticated; the fallback's own reads must still
+// succeed. Record the policy even when metadata is cached and supplies no REST
+// denial.
+//
+// When an IP allow list is the block and the metadata read fails with an
+// outage or rate limit, that failure is returned: it can clear on a retry,
+// unlike the denial err, which would be reported as final. Any other failure
+// means the repository is not readable and err stands.
+func (c *Client) repoFallback(ctx context.Context, owner, repo string, err error) (eligible bool, failure error) {
+	if IsProxima(c.Hostname) {
+		return false, nil
 	}
 	if !organizationDenied(err) {
 		if code, _ := StatusCode(err); code != http.StatusUnauthorized {
-			return false
+			return false, nil
 		}
 	} else {
 		c.recordPolicy(owner, err)
 	}
 	_, metaErr := c.repoMetadata(ctx, owner, repo)
-	return metaErr == nil
+	if metaErr == nil {
+		return true, nil
+	}
+	if isIPAllowListDenial(err) && IsTransient(metaErr) {
+		return false, metaErr
+	}
+	return false, nil
+}
+
+// fallbackFailure is the error to report when owner's anonymous fallback was
+// not taken: failure from repoFallback if there is one, else denial as
+// ssoErr describes it.
+func (c *Client) fallbackFailure(owner string, denial, failure error) error {
+	if failure != nil {
+		return failure
+	}
+	return c.ssoErr(owner, denial)
 }
 
 func organizationDenied(err error) bool {
@@ -237,6 +326,25 @@ func (c *Client) anonClient() *http.Client {
 	return http.DefaultClient
 }
 
+// anonDo sends req on the anonymous client. The github.com public client of a
+// *.ghe.com run may carry a stored or configured token, which an organization's
+// IP allow list refuses even for public repositories; such a denial is retried
+// once with no credentials, which GitHub accepts for public reads. req must
+// have no body.
+func (c *Client) anonDo(req *http.Request) (*http.Response, error) {
+	resp, err := c.anonClient().Do(req)
+	if err != nil || c.noCredHTTP == nil || resp.StatusCode != http.StatusForbidden || isRateLimited(resp) {
+		return resp, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	if readErr == nil && strings.Contains(string(body), ipAllowListDenial) {
+		return c.noCredHTTP.Do(req)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
+}
+
 // anonGet performs an unauthenticated GET and decodes JSON into dest.
 func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	u := c.anonBase() + "/" + path
@@ -246,7 +354,7 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := c.anonClient().Do(req)
+	resp, err := c.anonDo(req)
 	if err != nil {
 		return err
 	}
@@ -258,12 +366,13 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 		ownerKey = c.anonBase() + "/" + parts[1]
 		if !isRateLimited(resp) {
 			anonRateLimited.Delete(ownerKey)
+			anonProbeFailed.Delete(ownerKey)
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		herr := &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
 		if isRateLimited(resp) && !c.restOnly && ownerKey != "" {
-			anonRateLimited.Store(ownerKey, struct{}{})
+			anonRateLimited.Store(ownerKey, herr)
 			blocked, _ := anonIPBlocked.Load(ownerKey)
 			ipPolicy, _ := blocked.(bool)
 			return &SSORateLimitedError{Host: c.Hostname, Owner: parts[1], Err: herr, ipPolicy: ipPolicy}
@@ -484,7 +593,7 @@ func (c *Client) anonGetCommitSHA(ctx context.Context, url string) (string, erro
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := c.anonClient().Do(req)
+	resp, err := c.anonDo(req)
 	if err != nil {
 		return "", err
 	}
@@ -527,7 +636,7 @@ func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref,
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3.raw")
 
-	resp, err := c.anonClient().Do(req)
+	resp, err := c.anonDo(req)
 	if err != nil {
 		return "", err
 	}

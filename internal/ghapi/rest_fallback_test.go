@@ -583,24 +583,23 @@ func TestIPAllowListRateLimitedGuidance(t *testing.T) {
 		return c.ResolveActionFiles(ctx, []ActionFileRequest{{Owner: "acme", Repo: "widget", Ref: "v1"}})[0].Err
 	}
 	tests := []struct {
-		name, limitedPath  string
-		check              func(*Client) error
-		wantRateLimitCause bool
+		name, limitedPath string
+		check             func(*Client) error
 	}{
 		{"REST commit probe", "/orgs/acme", func(c *Client) error {
 			_, err := c.CommitSHA(ctx, "acme", "widget", "v1")
 			return err
-		}, false},
-		{"pin probe", "/orgs/acme", pins, false},
-		{"pin metadata", "/repos/acme/widget", pins, false},
-		{"ancestry probe", "/orgs/acme", ancestry, false},
-		{"ancestry metadata", "/repos/acme/widget", ancestry, false},
+		}},
+		{"pin probe", "/orgs/acme", pins},
+		{"pin metadata", "/repos/acme/widget", pins},
+		{"ancestry probe", "/orgs/acme", ancestry},
+		{"ancestry metadata", "/repos/acme/widget", ancestry},
 		{"ref comparison probe", "/orgs/acme", func(c *Client) error {
 			_, _, err := c.CompareRefs(ctx, "acme", "widget", paritySHA, parityMoved)
 			return err
-		}, false},
-		{"action commit", "/repos/acme/widget/commits/v1", action, true},
-		{"action contents", "/repos/acme/widget/contents/action.yml", action, true},
+		}},
+		{"action commit", "/repos/acme/widget/commits/v1", action},
+		{"action contents", "/repos/acme/widget/contents/action.yml", action},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -634,9 +633,8 @@ func TestIPAllowListRateLimitedGuidance(t *testing.T) {
 			assert.Contains(t, Brief(err), "IP allow list")
 			assert.Contains(t, Brief(err), "anonymous fallback for public repositories was rate-limited")
 			assert.NotContains(t, Brief(err), "SSO")
-			if tt.wantRateLimitCause {
-				assert.True(t, IsRateLimited(err), "the anonymous rate-limit cause must survive")
-			}
+			assert.True(t, IsRateLimited(err), "the anonymous rate-limit cause must survive")
+			assert.True(t, IsTransient(err), "an anonymous rate limit clears, so the check is unanswered, not refused")
 		})
 	}
 }

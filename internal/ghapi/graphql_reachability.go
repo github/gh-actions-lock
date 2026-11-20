@@ -64,10 +64,11 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 	if gqlErr != nil {
 		var httpErr *api.HTTPError
 		if errors.As(gqlErr, &httpErr) || isIPAllowListDenial(gqlErr) {
-			if c.repoFallbackEligible(ctx, owner, repo, gqlErr) {
+			ok, failure := c.repoFallback(ctx, owner, repo, gqlErr)
+			if ok {
 				return c.anonBatchBranchContains(ctx, owner, repo, sha, branches)
 			}
-			return "", false, c.ssoErr(owner, gqlErr)
+			return "", false, c.fallbackFailure(owner, gqlErr, failure)
 		}
 		if data == nil {
 			return "", false, gqlErr
