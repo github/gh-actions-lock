@@ -711,10 +711,6 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			f.Category = checks.ReachabilityUnknown
 			f.Confidence = checks.ConfidenceLow
 			f.MarkRetryable(st.Err)
-			if ghapi.IPAllowListBlocked(st.Err) {
-				// The generic advice would suggest a token with a higher rate limit; the block is the IP address.
-				f.Remediation = fmt.Sprintf("couldn't verify; %s, or use a token from an IP address the %s organization's IP allow list permits", checks.RetryWhen(f.RetryAt, f.RateLimited), pc.Owner)
-			}
 			break
 		}
 		// GitHub answered, but not with the pin: a re-run won't change that.
@@ -722,7 +718,7 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		f.Remediation = fmt.Sprintf("use a token that can read %s or authorize SSO for %s, then re-run", nwo, pc.Owner)
 		if ghapi.IPAllowListBlocked(st.Err) {
 			// Authorizing the token for SSO doesn't lift an IP allow list.
-			f.Remediation = fmt.Sprintf("use a token from an IP address the %s organization's IP allow list permits, then re-run", pc.Owner)
+			f.Remediation = "use a token from an IP address the organization's IP allow list permits, then re-run"
 		}
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable

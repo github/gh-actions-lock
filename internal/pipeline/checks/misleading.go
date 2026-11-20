@@ -148,7 +148,7 @@ func (f *Finding) MarkRefMoved() {
 	f.Category = RefMoved
 	f.Severity = SeverityWarning
 	f.Confidence = ConfidenceHigh
-	f.Retryable, f.RetryReason, f.RetryAt, f.RateLimited, f.AnonymousLimited = false, "", time.Time{}, false, false
+	f.Retryable, f.RetryReason, f.RetryAt, f.RateLimited, f.AnonymousLimited, f.IPAllowListBlocked = false, "", time.Time{}, false, false, false
 	f.Detail = fmt.Sprintf("ref %s now resolves to %s, lockfile pins %s", f.Dependency.Ref, parserlock.ShortSHA(f.ObservedSHA), parserlock.ShortSHA(f.Dependency.SHA))
 	f.Remediation = "run `gh actions-lock --relock` to refresh the lock entry"
 }

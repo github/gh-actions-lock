@@ -25,9 +25,9 @@ var anonProbeCache sync.Map // map[string]bool
 // when a retry can succeed.
 var anonRateLimited sync.Map // map[string]*api.HTTPError
 
-// anonProbeFailed holds, per owner, the 5xx answer to the last eligibility
-// probe: an outage, not a verdict on the owner.
-var anonProbeFailed sync.Map // map[string]*api.HTTPError
+// anonProbeFailed holds, per owner, the outage that ended the last eligibility
+// probe (a 5xx or a transport failure): not a verdict on the owner.
+var anonProbeFailed sync.Map // map[string]error
 
 // anonIPBlocked remembers the denial behind a fallback's later rate limit.
 var anonIPBlocked sync.Map // map[string]bool
@@ -44,7 +44,9 @@ type SSORateLimitedError struct {
 func (e *SSORateLimitedError) Error() string {
 	message := ssoRequiredMessage(e.Host, e.Owner)
 	if e.ipPolicy {
-		message = fmt.Sprintf("GitHub refused the token for the %q organization: this IP address is not on the organization's IP allow list. Retry from an allowed IP address, or add this one to the allow list", e.Owner)
+		// Owner is the requested owner, which after a transfer is not the
+		// organization whose allow list refused the token: don't name it.
+		message = "GitHub refused the token: this IP address is not on the organization's IP allow list. Retry from an allowed IP address, or add this one to the allow list"
 	}
 	return message + " (the anonymous fallback for public repositories was rate-limited)"
 }
@@ -75,9 +77,12 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := c.anonClient().Do(req)
+	resp, err := c.probeClient().Do(req)
 	if err != nil {
 		// Transport error (network, context canceled) — don't cache.
+		if IsTransient(err) {
+			anonProbeFailed.Store(key, err)
+		}
 		return false
 	}
 	resp.Body.Close()
@@ -130,7 +135,7 @@ func (c *Client) ssoErr(owner string, err error) error {
 		return wrapped
 	}
 	if v, down := anonProbeFailed.Load(key); down && ip {
-		return fmt.Errorf("anonymous fallback for %q unavailable: %w", owner, v.(*api.HTTPError))
+		return fmt.Errorf("anonymous fallback for %q unavailable: %w", owner, v.(error))
 	}
 	return err
 }
@@ -183,6 +188,9 @@ func (c *Client) publicRepoReadable(ctx context.Context, owner, repo string) boo
 	}
 	if code, _ := StatusCode(err); code == http.StatusNotFound {
 		anonProbeCache.Store(key, false)
+	} else if IsTransient(err) && !IsRateLimited(err) {
+		// A rate limit is already recorded for the owner by anonGet.
+		anonProbeFailed.Store(c.anonBase()+"/"+owner, err)
 	}
 	return false
 }
@@ -331,18 +339,47 @@ func (c *Client) anonClient() *http.Client {
 // IP allow list refuses even for public repositories; such a denial is retried
 // once with no credentials, which GitHub accepts for public reads. req must
 // have no body.
-func (c *Client) anonDo(req *http.Request) (*http.Response, error) {
-	resp, err := c.anonClient().Do(req)
+//
+// retried reports that resp answers the credential-free retry, so errors made
+// from it must not claim the token was used (see anonHTTPErr).
+func (c *Client) anonDo(req *http.Request) (resp *http.Response, retried bool, err error) {
+	resp, err = c.anonClient().Do(req)
 	if err != nil || c.noCredHTTP == nil || resp.StatusCode != http.StatusForbidden || isRateLimited(resp) {
-		return resp, err
+		return resp, false, err
 	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()
 	if readErr == nil && strings.Contains(string(body), ipAllowListDenial) {
-		return c.noCredHTTP.Do(req)
+		resp, err = c.noCredHTTP.Do(req)
+		return resp, true, err
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
-	return resp, nil
+	return resp, false, nil
+}
+
+// probeClient sends eligibility probes, which never need a credential: a
+// public client's token would only have an IP allow list refuse the probe of
+// an organization whose public repositories are readable without it.
+func (c *Client) probeClient() *http.Client {
+	if c.noCredHTTP != nil {
+		return c.noCredHTTP
+	}
+	return c.anonClient()
+}
+
+// anonHTTPErr is the error for a non-200 anonymous response. A response to
+// the credential-free retry of an IP allow list denial is anonymous whatever
+// the client's credential, and a rate limit on it keeps the policy that put
+// the lookup on the anonymous limit.
+func (c *Client) anonHTTPErr(owner string, herr *api.HTTPError, retried bool) error {
+	if !retried {
+		return c.publicErr(herr)
+	}
+	var err error = herr
+	if IsRateLimited(herr) {
+		err = &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: herr, ipPolicy: true}
+	}
+	return &publicError{auth: publicAnonymous, err: err}
 }
 
 // anonGet performs an unauthenticated GET and decodes JSON into dest.
@@ -354,16 +391,17 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := c.anonDo(req)
+	resp, retried, err := c.anonDo(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	parts := strings.SplitN(path, "/", 3)
-	ownerKey := ""
+	ownerKey, owner := "", ""
 	if len(parts) > 1 {
-		ownerKey = c.anonBase() + "/" + parts[1]
+		owner = parts[1]
+		ownerKey = c.anonBase() + "/" + owner
 		if !isRateLimited(resp) {
 			anonRateLimited.Delete(ownerKey)
 			anonProbeFailed.Delete(ownerKey)
@@ -375,9 +413,9 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 			anonRateLimited.Store(ownerKey, herr)
 			blocked, _ := anonIPBlocked.Load(ownerKey)
 			ipPolicy, _ := blocked.(bool)
-			return &SSORateLimitedError{Host: c.Hostname, Owner: parts[1], Err: herr, ipPolicy: ipPolicy}
+			return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: herr, ipPolicy: ipPolicy}
 		}
-		return c.publicErr(herr)
+		return c.anonHTTPErr(owner, herr, retried)
 	}
 	return json.NewDecoder(resp.Body).Decode(dest)
 }
@@ -529,7 +567,7 @@ func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) Ac
 		url.PathEscape(result.Repo),
 		url.PathEscape(ref.Ref),
 	)
-	sha, err := c.anonGetCommitSHA(ctx, commitURL)
+	sha, err := c.anonGetCommitSHA(ctx, result.Owner, commitURL)
 	if err != nil {
 		var missing *RefNotFoundError
 		if errors.As(err, &missing) {
@@ -586,14 +624,14 @@ func (c *Client) anonDockerfile(ctx context.Context, base, owner, repo, sha, dir
 }
 
 // anonGetCommitSHA fetches the commit SHA for a ref without authentication.
-func (c *Client) anonGetCommitSHA(ctx context.Context, url string) (string, error) {
+func (c *Client) anonGetCommitSHA(ctx context.Context, owner, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := c.anonDo(req)
+	resp, retried, err := c.anonDo(req)
 	if err != nil {
 		return "", err
 	}
@@ -603,7 +641,7 @@ func (c *Client) anonGetCommitSHA(ctx context.Context, url string) (string, erro
 		return "", &RefNotFoundError{Err: fmt.Errorf("HTTP %d resolving commit", resp.StatusCode)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolving commit: %w", c.publicErr(&api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}))
+		return "", fmt.Errorf("resolving commit: %w", c.anonHTTPErr(owner, &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}, retried))
 	}
 
 	var commit struct {
@@ -636,14 +674,14 @@ func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref,
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3.raw")
 
-	resp, err := c.anonDo(req)
+	resp, retried, err := c.anonDo(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", c.publicErr(&api.HTTPError{StatusCode: resp.StatusCode, Message: fmt.Sprintf("fetching %s", path), Headers: resp.Header})
+		return "", c.anonHTTPErr(owner, &api.HTTPError{StatusCode: resp.StatusCode, Message: fmt.Sprintf("fetching %s", path), Headers: resp.Header}, retried)
 	}
 
 	body, err := io.ReadAll(resp.Body)

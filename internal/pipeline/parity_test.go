@@ -176,7 +176,7 @@ func TestParityFinding(t *testing.T) {
 			name: "an IP allow list refusal points at the network, not SSO", ref: "v2",
 			state:      ghapi.PinState{Err: &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Although you appear to have the correct authorization credentials, the `krzema12` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."}},
 			want:       checks.RepoUnavailable,
-			wantRemedy: "use a token from an IP address the krzema12 organization's IP allow list permits, then re-run",
+			wantRemedy: "use a token from an IP address the organization's IP allow list permits, then re-run",
 		},
 	}
 	for _, tt := range tests {
@@ -487,7 +487,7 @@ func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
 	assert.True(t, f.Retryable)
 	assert.True(t, f.RateLimited)
 	assert.Contains(t, f.Detail, "IP allow list")
-	assert.Equal(t, "couldn't verify; re-run once the rate limit resets, or use a token from an IP address the krzema12 organization's IP allow list permits", f.Remediation)
+	assert.Equal(t, "couldn't verify; re-run once the rate limit resets, or run from an IP address the organization's IP allow list permits", f.Remediation)
 }
 
 // TestUnanswered_SSORateLimited: a SAML block whose anonymous fallback was
@@ -497,4 +497,41 @@ func TestUnanswered_SSORateLimited(t *testing.T) {
 	assert.False(t, unanswered(&ghapi.SSORateLimitedError{Host: "github.com", Owner: "acme", Err: limited}))
 	assert.True(t, unanswered(limited))
 	assert.False(t, unanswered(&api.HTTPError{StatusCode: http.StatusForbidden}))
+}
+
+// TestMarkRetryable_IPAllowListFallbackRateLimited: every retryable check
+// behind an IP allow list gets the same advice, which never points at a
+// token: not the parity check alone, and not the github.com public client of
+// a *.ghe.com run, whose retry is anonymous even though it holds a token.
+func TestMarkRetryable_IPAllowListFallbackRateLimited(t *testing.T) {
+	t.Setenv(ghapi.DotcomTokenEnv, "dotcom-secret")
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(func(req *http.Request) bool { return req.URL.Host == "api.tenant.ghe.com" }, httpmock.StatusResponse(http.StatusNotFound))
+	reg.RegisterReusable(func(req *http.Request) bool { return req.URL.Host == "api.github.com" },
+		func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Header.Get("Authorization") != "":
+				resp, err := httpmock.JSONResponse(map[string]string{"message": "Although you appear to have the correct authorization credentials, the `acme` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."})(req)
+				resp.StatusCode, resp.Status = http.StatusForbidden, "403 Forbidden"
+				return resp, err
+			case req.Method == http.MethodHead:
+				return httpmock.StatusResponse(http.StatusOK)(req)
+			case req.URL.Path == "/repos/acme/widget":
+				return httpmock.JSONResponse(map[string]any{"visibility": "public", "full_name": "acme/widget", "id": 2, "owner": map[string]any{"id": 1}})(req)
+			}
+			return httpmock.StatusResponseWithHeaders(http.StatusTooManyRequests, map[string]string{"Retry-After": "120"})(req)
+		})
+	c, err := ghapi.New("tenant.ghe.com", ghapi.WithClientTransport(reg))
+	require.NoError(t, err)
+	_, err = c.CommitSHA(context.Background(), "acme", "widget", "v1")
+	require.Error(t, err)
+
+	var f checks.Finding
+	f.MarkRetryable(err)
+	assert.True(t, f.Retryable)
+	assert.True(t, f.RateLimited)
+	assert.True(t, f.IPAllowListBlocked)
+	assert.False(t, f.RetryAt.IsZero(), "reset time was dropped")
+	assert.Regexp(t, `^couldn't verify; re-run after \d\d:\d\d UTC, or run from an IP address the organization's IP allow list permits$`, f.Remediation)
+	assert.NotContains(t, f.Remediation, "token")
 }

@@ -107,6 +107,10 @@ type Finding struct {
 	// AnonymousLimited marks a rate limit on the anonymous github.com
 	// public fallback of a *.ghe.com run, which a tenant token can't raise.
 	AnonymousLimited bool
+	// IPAllowListBlocked marks a retry that waits on the anonymous fallback
+	// for an organization whose IP allow list refused the token: no token
+	// raises that limit, only an allow-listed address avoids it.
+	IPAllowListBlocked bool
 	// ImageUses are the places a container-image finding's image is used.
 	ImageUses []uses.Image
 }
@@ -119,11 +123,12 @@ func (f *Finding) MarkRetryable(cause error) {
 	f.RetryReason, f.RateLimited = ghapi.Outage(cause)
 	f.RetryAt = ghapi.RetryAt(cause)
 	f.AnonymousLimited = ghapi.AnonymousFallbackLimited(cause)
-	f.Remediation = "couldn't verify; " + RetryAdvice(f.RetryAt, f.RateLimited, f.AnonymousLimited)
+	f.IPAllowListBlocked = f.RateLimited && ghapi.IPAllowListBlocked(cause)
+	f.Remediation = "couldn't verify; " + RetryAdvice(f.RetryAt, f.RateLimited, f.AnonymousLimited, f.IPAllowListBlocked)
 }
 
-// RetryWhen is when to re-run a check an outage or rate limit stopped.
-func RetryWhen(at time.Time, rateLimited bool) string {
+// retryWhen is when to re-run a check an outage or rate limit stopped.
+func retryWhen(at time.Time, rateLimited bool) string {
 	switch {
 	case !at.IsZero():
 		return fmt.Sprintf("re-run after %s UTC", at.UTC().Format("15:04"))
@@ -134,9 +139,13 @@ func RetryWhen(at time.Time, rateLimited bool) string {
 }
 
 // RetryAdvice is the next step for a check an outage or rate limit stopped.
-func RetryAdvice(at time.Time, rateLimited, anonymous bool) string {
-	advice := RetryWhen(at, rateLimited)
+// A rate limit behind an IP allow list says nothing of tokens: the token
+// isn't what the policy refuses.
+func RetryAdvice(at time.Time, rateLimited, anonymous, ipBlocked bool) string {
+	advice := retryWhen(at, rateLimited)
 	switch {
+	case ipBlocked:
+		advice += ", or run from an IP address the organization's IP allow list permits"
 	case anonymous:
 		advice += ", or " + ghapi.AnonymousFallbackHint
 	case rateLimited:

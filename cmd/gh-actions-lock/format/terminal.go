@@ -189,7 +189,7 @@ func renderRetryable(out *ui.UI, ff []checks.Finding, retried time.Duration) {
 	out.TermBlank()
 	out.TermError("%s", head)
 	out.TermDetail("  %s", strings.Join(pins, ", "))
-	out.TermDetail("  ↳ %s", checks.RetryAdvice(cause.RetryAt, cause.RateLimited, cause.AnonymousLimited))
+	out.TermDetail("  ↳ %s", checks.RetryAdvice(cause.RetryAt, cause.RateLimited, cause.AnonymousLimited, cause.IPAllowListBlocked))
 }
 
 // retryLabels names each pin, with the composite that uses it, or the

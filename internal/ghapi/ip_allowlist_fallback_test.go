@@ -2,8 +2,10 @@ package ghapi
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"syscall"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -267,4 +269,113 @@ func TestPublicClient_NoRetryForOrdinaryDenial(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, githubRequests, "only an IP allow list denial is retried")
+}
+
+// A repository probe or an organization probe that ends in an outage is not
+// an answer: the IP denial must not be reported as final.
+func TestIPAllowListFallback_ProbeFailures(t *testing.T) {
+	t.Run("repository probe outage", func(t *testing.T) {
+		c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/orgs/alice" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+		_, err := c.CommitSHA(context.Background(), "alice", "action", "v1")
+		require.Error(t, err)
+		assert.True(t, IsTransient(err), "err = %v", err)
+		code, _ := StatusCode(err)
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+	})
+	t.Run("organization probe transport failure", func(t *testing.T) {
+		c, _ := ipAllowListClient(t, "acme", func(http.ResponseWriter, *http.Request) {})
+		c.anonHTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+		})}
+		_, err := c.CommitSHA(context.Background(), "acme", "widget", "v1")
+		require.Error(t, err)
+		assert.True(t, IsTransient(err), "err = %v", err)
+		assert.False(t, IPAllowListBlocked(err))
+	})
+	t.Run("canceled context is not an outage", func(t *testing.T) {
+		c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := c.CommitSHA(ctx, "acme", "widget", "v1")
+		require.Error(t, err)
+		assert.False(t, IsTransient(err), "err = %v", err)
+	})
+}
+
+// publicIPAllowListClient is the github.com public client of a *.ghe.com run
+// with a stored token, which an IP allow list refuses: every request carrying
+// it gets the denial, and anon answers the rest. Requests are recorded.
+func publicIPAllowListClient(t *testing.T, anon http.HandlerFunc) (c *Client, requests *[]*http.Request) {
+	t.Helper()
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(anyRequest, func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") != "" {
+			resp, err := httpmock.JSONResponse(map[string]any{"message": ipAllowListDeniedMessage("acme")})(req)
+			resp.StatusCode = http.StatusForbidden
+			return resp, err
+		}
+		rec := httptest.NewRecorder()
+		anon(rec, req)
+		resp := rec.Result()
+		resp.Request = req
+		return resp, nil
+	})
+	root, err := New("tenant.ghe.com", WithClientTransport(reg), withStoredLogin(t, "dotcom-secret"))
+	require.NoError(t, err)
+	require.NotNil(t, root.public)
+	return root.public, &reg.Requests
+}
+
+// The public client's own REST reads and its eligibility probe carry a token
+// the IP allow list refuses; both must fall back without credentials.
+func TestPublicClient_IPAllowListFallbackWithoutCredentials(t *testing.T) {
+	c, requests := publicIPAllowListClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/orgs/acme":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/repos/acme/widget/commits/v1":
+			writeJSON(w, map[string]any{"sha": paritySHA})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	sha, err := c.CommitSHA(context.Background(), "acme", "widget", "v1")
+	require.NoError(t, err)
+	assert.Equal(t, paritySHA, sha)
+	for _, req := range *requests {
+		if req.Method == http.MethodHead {
+			assert.Empty(t, req.Header.Get("Authorization"), "the probe needs no credential")
+		}
+	}
+}
+
+// A rate limit on the credential-free retry is an anonymous one, whatever
+// token the client holds, and it keeps the IP policy behind it.
+func TestPublicClient_IPAllowListRetryRateLimited(t *testing.T) {
+	c, _ := publicIPAllowListClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.Header().Set("Retry-After", "120")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+	})
+	_, err := c.CommitSHA(context.Background(), "acme", "widget", "v1")
+	require.Error(t, err)
+	assert.True(t, IsRateLimited(err), "err = %v", err)
+	assert.True(t, IPAllowListBlocked(err))
+	assert.False(t, RetryAt(err).IsZero(), "reset time was dropped")
+	assert.Equal(t, publicAnonymous, publicAuthOf(cause(err)), "the retry used no token")
+	assert.Contains(t, Brief(err), "IP allow list")
+	assert.NotContains(t, Brief(err), "gh auth login", "a token can't lift an IP allow list")
 }
