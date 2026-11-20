@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -35,15 +36,40 @@ func attachParent(f *checks.Finding, depByKey map[string]dep.Dependency, directN
 }
 
 // isTransitivePin reports whether the finding refers to a dep reached via
-// composite expansion (i.e. has parents in the parent map).
-func isTransitivePin(f checks.Finding, depByKey map[string]dep.Dependency, parentMap map[string][]string) bool {
+// composite expansion (i.e. has parents in the parent map) that the lock
+// records only under the workflow, as a lock without `uses:` edges does.
+// When a locked entry's `uses:` already lists the dep, that edge keeps it
+// and the workflow's own entry for it is stale (#296). Any entry counts, not
+// just a live parent's, since a live parent may be bumped in the same run.
+func isTransitivePin(f checks.Finding, depByKey map[string]dep.Dependency, parentMap map[string][]string, lockedChildren map[string]bool) bool {
 	if f.Dependency == nil {
 		return false
 	}
 	if _, ok := depByKey[f.Dependency.Key()]; !ok {
 		return false
 	}
+	if lockedChildren[canonicalPin(f.Dependency.Key())] {
+		return false
+	}
 	return len(parentMap[f.Dependency.Key()]) > 0
+}
+
+// lockedChildren returns every pin key a locked entry lists in `uses:`.
+func lockedChildren(deps map[string]parserlock.Action) map[string]bool {
+	out := make(map[string]bool)
+	for _, a := range deps {
+		for _, u := range a.Uses {
+			out[u] = true
+		}
+	}
+	return out
+}
+
+func canonicalPin(key string) string {
+	if p, ok := parserlock.ParsePin(key); ok {
+		return p.String()
+	}
+	return key
 }
 
 // populateInventoryParents fills in the Parents field for transitive inventory

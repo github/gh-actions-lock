@@ -208,13 +208,14 @@ func TestRunChecks(t *testing.T) {
 			wantCategories: []Category{NotPinned, ShaAsRef},
 		},
 		{
-			name: "sha-as-ref: bare SHA locked under its tag stays a warning",
+			// The backend looks the use up by its SHA key, not the tag's.
+			name: "not-pinned + stale: bare SHA locked only under its tag blocks",
 			lockfile: map[string][]string{
 				wfPath: {checkPinKey("actions", "checkout", "v4", shaCheckoutV4)},
 			},
 			workflowRefs:   []parserlock.ActionRef{checkRef("actions", "checkout", shaCheckoutV4)},
 			noResolver:     true,
-			wantCategories: []Category{ShaAsRef},
+			wantCategories: []Category{NotPinned, ShaAsRef, Stale},
 		},
 		{
 			name: "ref-changed + stale: lockfile pins v4, workflow uses v3",
@@ -663,6 +664,22 @@ func TestRunChecks(t *testing.T) {
 	}
 }
 
+func TestRunChecks_SHAUseLockedUnderItsOwnKey(t *testing.T) {
+	const wfPath = ".github/workflows/ci.yml"
+	key := "actions/checkout@" + shaCheckoutV4
+	lf := checkNewLockfile(
+		map[string][]string{wfPath: {key}},
+		map[string]parserlock.Action{key: {Ref: "v4", Commit: "sha1-" + shaCheckoutV4}},
+	)
+	pw := checkParsedWF(wfPath, checkRef("actions", "checkout", strings.ToUpper(shaCheckoutV4)))
+
+	got := RunChecks(context.Background(), pw, lf, nil)
+
+	if cats := findingCategories(got); len(cats) != 1 || cats[0] != string(ShaAsRef) {
+		t.Fatalf("an upper-case SHA use must match its lower-case key: got %v", cats)
+	}
+}
+
 // TestRunChecks_AllFindingsCarryConfidence is the fail-fast guard the
 // confidence-axis card requires: every finding emitted by any check
 // path must carry a non-empty Confidence. A zero value here would mean
@@ -698,6 +715,19 @@ func TestRunChecks_AllFindingsCarryConfidence(t *testing.T) {
 		if f.Confidence == "" {
 			t.Errorf("finding[%d] category=%s has empty Confidence — every construction site must set it", i, f.Category)
 		}
+	}
+}
+
+// TestRunChecks_SelfActionSHAPinIsNotShaAsRef: pinning keeps a SHA a `$/…`
+// action pins (#264), so suggesting a tag instead would be wrong.
+func TestRunChecks_SelfActionSHAPinIsNotShaAsRef(t *testing.T) {
+	const wfPath = ".github/workflows/ci.yml"
+	lf := checkNewLockfile(map[string][]string{wfPath: {}})
+	pw := checkParsedWF(wfPath, checkRef("actions", "checkout", shaCheckoutV4))
+	pw.RewriteRefs = []parserlock.ActionRef{}
+	got := RunChecks(context.Background(), pw, lf, nil)
+	if cats := findingCategories(got); strings.Join(cats, ",") != string(NotPinned) {
+		t.Fatalf("categories: got %v, want [%s]", cats, NotPinned)
 	}
 }
 

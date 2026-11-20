@@ -1,4 +1,4 @@
-BIN := gh-actions-lock
+BIN := gh-actions-lock$(shell go env GOEXE)
 EXT_NAME := gh-actions-lock
 # Honor XDG_DATA_HOME so this matches where gh actually resolves its data
 # dir; fall back to the documented default when it's unset.

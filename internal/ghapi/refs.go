@@ -174,36 +174,67 @@ func (c *Client) fetchGitRef(ctx context.Context, owner, repo, qualified string)
 // TagsAtCommit returns the names of every tag in owner/repo whose commit is
 // sha, reading every page of the tag listing (one request per 100 tags).
 // Use it only where a later page matters: ListTags reads the first page.
+// The full listing is cached per repository, so a SHA pinned in many
+// workflows, or several SHAs in one repository, page through it once.
 func (c *Client) TagsAtCommit(ctx context.Context, owner, repo, sha string) ([]string, error) {
 	c, err := c.ForRepo(ctx, owner, repo)
 	if err != nil {
 		return nil, err
 	}
+	tags, err := c.allTags(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
 	var names []string
-	for page := 1; ; page++ {
-		path := fmt.Sprintf("repos/%s/%s/tags?per_page=100&page=%d", url.PathEscape(owner), url.PathEscape(repo), page)
-		var resp []struct {
-			Name   string `json:"name"`
-			Commit struct {
-				SHA string `json:"sha"`
-			} `json:"commit"`
-		}
-		found, err := c.restGet(ctx, owner, path, &resp)
-		if err != nil {
-			return nil, fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)
-		}
-		if !found {
-			return names, nil
-		}
-		for _, t := range resp {
-			if strings.EqualFold(t.Commit.SHA, sha) {
-				names = append(names, t.Name)
-			}
-		}
-		if len(resp) < 100 {
-			return names, nil
+	for _, t := range tags {
+		if strings.EqualFold(t.SHA, sha) {
+			names = append(names, t.Name)
 		}
 	}
+	return names, nil
+}
+
+func (c *Client) allTags(ctx context.Context, owner, repo string) ([]TagEntry, error) {
+	key := ForRepo(owner, repo)
+	if cached, ok := c.allTagsCache.Get(key); ok {
+		return cached, nil
+	}
+	type result struct {
+		tags []TagEntry
+		err  error
+	}
+	v, _, _ := c.allTagsSF.Do(key.String(), func() (any, error) {
+		if cached, ok := c.allTagsCache.Get(key); ok {
+			return result{tags: cached}, nil
+		}
+		var tags []TagEntry
+		for page := 1; ; page++ {
+			path := fmt.Sprintf("repos/%s/%s/tags?per_page=100&page=%d", url.PathEscape(owner), url.PathEscape(repo), page)
+			var resp []struct {
+				Name   string `json:"name"`
+				Commit struct {
+					SHA string `json:"sha"`
+				} `json:"commit"`
+			}
+			found, err := c.restGet(ctx, owner, path, &resp)
+			if err != nil {
+				return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, err)}, nil
+			}
+			if !found {
+				break
+			}
+			for _, t := range resp {
+				tags = append(tags, TagEntry{Name: t.Name, SHA: t.Commit.SHA})
+			}
+			if len(resp) < 100 {
+				break
+			}
+		}
+		c.allTagsCache.Put(key, tags)
+		return result{tags: tags}, nil
+	})
+	r := v.(result)
+	return r.tags, r.err
 }
 
 func (c *Client) restCommit(ctx context.Context, owner, repo, ref string) (string, bool, error) {

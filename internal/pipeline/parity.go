@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -51,6 +52,12 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	reportIdx := make(map[string]int, len(report.Workflows))
 	for i, wr := range report.Workflows {
 		reportIdx[wr.Path] = i
+	}
+	// A fix run keeps names run-wide, so whether a rename is manual is decided
+	// run-wide; where to make it follows this workflow's own action files.
+	var held []parserlock.ActionRef
+	for _, pw := range parsed {
+		held = append(held, pw.SelfActionRefs...)
 	}
 	var pins []ghapi.PinCheck
 	pinIdx := map[string]int{}
@@ -108,10 +115,10 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 		recorded, _ := pw.PartitionRefs()
 		// rootRef is the workflow ref that still uses a recorded root, by
 		// the same rule as the stale check (lockfile.RootUse): the use
-		// naming its key, else one naming its commit.
+		// naming its key.
 		use := lockfile.RootUse(recorded)
 		rootRef := func(p parserlock.Pin, a parserlock.Action) (parserlock.ActionRef, bool) {
-			return use(p, a.Commit)
+			return use(p)
 		}
 		live := func(p parserlock.Pin, a parserlock.Action) bool {
 			_, ok := rootRef(p, a)
@@ -272,7 +279,7 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	}()
 	for i, st := range states {
 		for _, o := range owners[i] {
-			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st)
+			f, ok := parityFinding(o.pw, o.ref, o.lp, pins[i], st, held)
 			// A pin parity blocks or can't check is not worth reading.
 			if ok && (f.Severity == checks.SeverityError || st.Err != nil) {
 				unhealthy[pinKey(pins[i].Owner+"/"+pins[i].Repo, pins[i].SHA)] = true
@@ -350,12 +357,11 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 // uses reach the root entry lp, matched as lockfile.RootUse matches them.
 func rootPaths(recorded []parserlock.ActionRef, lp lockfile.LockedPin) []string {
 	var out []string
-	sha := lockedSHA(lp.Action.Commit)
 	for _, ref := range recorded {
 		if !strings.EqualFold(ref.NWO(), lp.Pin.NWO) || slices.Contains(out, ref.Path) {
 			continue
 		}
-		if ref.Ref == lp.Pin.Ref || parserlock.IsFullSha(ref.Ref) && strings.EqualFold(ref.Ref, sha) {
+		if ref.Ref == lp.Pin.Ref {
 			out = append(out, ref.Path)
 		}
 	}
@@ -673,7 +679,7 @@ func freshEntryRef(d dep.Dependency) string {
 	return d.Ref
 }
 
-func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfile.LockedPin, pc ghapi.PinCheck, st ghapi.PinState) (checks.Finding, bool) {
+func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfile.LockedPin, pc ghapi.PinCheck, st ghapi.PinState, held []parserlock.ActionRef) (checks.Finding, bool) {
 	nwo := pc.Owner + "/" + pc.Repo
 	f := checks.Finding{
 		WorkflowPath: pw.Path,
@@ -752,13 +758,75 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 			uses += "/" + ref.Path
 		}
 		f.Remediation = fmt.Sprintf("run `gh actions-lock` to rewrite it as `uses: %s@%s`", uses, ref.Ref)
+		switch files, samePath := keptNameFiles(pw, ref); {
+		case len(files) > 0 && !samePath:
+			f.Remediation = fmt.Sprintf("change %s to %s in %s, then run `gh actions-lock`", nwo, st.NameWithOwner, strings.Join(files, ", "))
+			f.KeptName = true
+		case len(files) > 0:
+			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, strings.Join(files, ", "))
+			f.KeptName = true
+		case inActionFile(held, ref.NWO(), ref.Ref) || inActionFile(held, st.NameWithOwner, ref.Ref):
+			// An action file's spelling anywhere in the run keeps this one as written.
+			f.Remediation = fmt.Sprintf("change it to `uses: %s@%s` in %s, then run `gh actions-lock`", uses, ref.Ref, filepath.ToSlash(pw.Path))
+			f.KeptName = true
+		}
 		if f.ParentNWO != "" {
+			f.KeptName = false
 			f.Remediation = fmt.Sprintf("upgrade %s to a version that uses %s", f.ParentNWO, st.NameWithOwner)
 		}
 	default:
 		return checks.Finding{}, false
 	}
 	return f, true
+}
+
+// keptNameFiles lists every file that spells ref's repository at ref,
+// under any sub-path, when an in-repo action file is among them: they share
+// one lock entry and a run rewrites none of them. samePath reports whether
+// they all use ref's sub-path.
+func keptNameFiles(pw checks.ParsedWorkflow, ref parserlock.ActionRef) (files []string, samePath bool) {
+	nwo, refKey, _ := strings.Cut(workflowfile.RefFileKey(parserlock.ActionRef{Owner: ref.Owner, Repo: ref.Repo, Ref: ref.Ref}), "@")
+	samePath = true
+	for key, paths := range pw.SelfActionFiles {
+		head, r, _ := strings.Cut(key, "@")
+		if r != refKey || (head != nwo && !strings.HasPrefix(head, nwo+"/")) {
+			continue
+		}
+		if key != workflowfile.RefFileKey(ref) {
+			samePath = false
+		}
+		for _, p := range paths {
+			if !slices.Contains(files, p) {
+				files = append(files, p)
+			}
+		}
+	}
+	if len(files) == 0 {
+		return nil, true
+	}
+	slices.Sort(files)
+	inWorkflow := false
+	for _, r := range pw.WorkflowRefs {
+		if strings.EqualFold(r.NWO(), ref.NWO()) && r.Ref == ref.Ref {
+			inWorkflow = true
+			samePath = samePath && r.Path == ref.Path
+		}
+	}
+	if inWorkflow {
+		files = append(files, filepath.ToSlash(pw.Path))
+	}
+	return files, samePath
+}
+
+// inActionFile reports whether any in-repo `$/…` action file in the run
+// uses nwo at ref. Runs never rewrite those files.
+func inActionFile(held []parserlock.ActionRef, nwo, ref string) bool {
+	for _, h := range held {
+		if strings.EqualFold(h.NWO(), nwo) && h.Ref == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // foldKey lowercases the owner/repo of an NWO@ref key. Refs are

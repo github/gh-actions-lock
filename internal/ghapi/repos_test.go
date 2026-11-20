@@ -315,6 +315,12 @@ func TestTagsAtCommit_ReadsEveryPage(t *testing.T) {
 			names, err := c.TagsAtCommit(context.Background(), "o", "r", "abc")
 			require.NoError(t, err)
 			assert.Equal(t, []string{"twin"}, names)
+
+			// Each page is registered once: a second lookup in the same repo
+			// must come from the cached listing.
+			names, err = c.TagsAtCommit(context.Background(), "O", "R", "ABC")
+			require.NoError(t, err)
+			assert.Equal(t, []string{"twin"}, names)
 		})
 	}
 }

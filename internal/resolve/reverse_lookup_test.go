@@ -2,6 +2,8 @@ package resolve
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -34,11 +36,13 @@ func TestReverseLookup_ContainingBranchDoesNotIdentifyHistoricalCommit(t *testin
 			defer reg.Verify(t)
 			reg.Register(httpmock.REST("GET", `repos/owner/action$`),
 				httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
-			reg.Register(httpmock.REST("GET", `repos/owner/action/git/ref/heads/main`),
-				httpmock.JSONResponse(map[string]any{
-					"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
-				}))
-			if tt.sha != headSHA {
+			if tt.tag == "" {
+				reg.Register(httpmock.REST("GET", `repos/owner/action/git/ref/heads/main`),
+					httpmock.JSONResponse(map[string]any{
+						"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
+					}))
+			}
+			if tt.tag == "" && tt.sha != headSHA {
 				reg.Register(httpmock.REST("GET", `repos/owner/action/compare/`+oldSHA+`\.\.\.`+headSHA),
 					httpmock.JSONResponse(httpmock.CompareAncestorResponse(oldSHA)))
 			}
@@ -55,13 +59,65 @@ func TestReverseLookup_ContainingBranchDoesNotIdentifyHistoricalCommit(t *testin
 			require.NoError(t, err)
 			assert.Empty(t, issues)
 			assert.Equal(t, tt.wantRef, deps[0].Ref)
-			assert.Equal(t, "main", deps[0].Branch)
+			wantBranch := "main"
+			if tt.tag != "" {
+				wantBranch = ""
+			}
+			assert.Equal(t, wantBranch, deps[0].Branch)
 			assert.Equal(t, tt.tag, deps[0].Tag)
 			if tt.wantRef == tt.sha {
 				assert.Empty(t, rewrites)
 			} else {
 				assert.Equal(t, map[string]string{"owner/action@" + tt.sha: "owner/action@" + tt.wantRef}, rewrites)
 			}
+		})
+	}
+}
+
+// TestDiscoverContaining_TaggedSHASkipsBranchSearch is #267: in a repo
+// where every branch is protected, a tagged SHA must not trigger the
+// one-compare-per-branch search, wherever the tag sits in the listing.
+func TestDiscoverContaining_TaggedSHASkipsBranchSearch(t *testing.T) {
+	const sha = "0daab03d71ff584ef619d027a3fd9146679c5d84"
+	filler := func(prefix string, n int) []string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("%s%03d", prefix, i), "zzz")
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		firstPage []string
+		page2     []string
+	}{
+		{name: "tag on first page", firstPage: append(filler("v2.", 99), "v3.35.3", sha)},
+		{name: "tag on later page", firstPage: filler("v2.", 100), page2: []string{"v3.35.3", sha}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.RegisterReusable(httpmock.REST("GET", `repos/github/codeql-action$`),
+				httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
+			reg.RegisterReusable(httpmock.RESTWithQuery("GET", `repos/github/codeql-action/tags`, "&page=2"),
+				httpmock.JSONResponse(httpmock.TagListResponse(tt.page2...)))
+			reg.RegisterReusable(httpmock.RESTWithQuery("GET", `repos/github/codeql-action/tags`, "per_page=100"),
+				httpmock.JSONResponse(httpmock.TagListResponse(tt.firstPage...)))
+			branchSearch := func(req *http.Request) (*http.Response, error) {
+				t.Errorf("unexpected branch search request: %s", req.URL)
+				return nil, fmt.Errorf("unexpected request")
+			}
+			for _, path := range []string{`/compare/`, `/branches`, `/git/ref/heads/`, `/git/matching-refs/`} {
+				reg.RegisterReusable(httpmock.REST("GET", `repos/github/codeql-action`+path), branchSearch)
+			}
+
+			r, err := New("github.com", pinpool.New(2, nil), WithTransport(reg))
+			require.NoError(t, err)
+			tag, branch, err := r.DiscoverContaining(context.Background(), "github", "codeql-action", sha, sha)
+			require.NoError(t, err)
+			assert.Equal(t, "v3.35.3", tag)
+			assert.Empty(t, branch)
 		})
 	}
 }

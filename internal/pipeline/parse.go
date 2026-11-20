@@ -22,6 +22,7 @@ import (
 // UI progress.
 func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *lockfile.State, pool *pinpool.Pool) *checks.Report {
 	parsed := ParseAll(paths, store)
+	keepActionFileNames(r, parsed)
 	if r != nil {
 		refs, _ := CollectResolvable(parsed)
 		if len(refs) > 0 {
@@ -29,6 +30,17 @@ func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *l
 		}
 	}
 	return DiagnoseParsed(ctx, parsed, r, store, pool)
+}
+
+// keepActionFileNames resolves every ref an in-repo `$/…` action file holds
+// under the name it is written with. Runs never write action files.
+func keepActionFileNames(r *resolve.Resolver, parsed []checks.ParsedWorkflow) {
+	if r == nil {
+		return
+	}
+	for _, pw := range parsed {
+		r.KeepWrittenNames(pw.SelfActionRefs)
+	}
 }
 
 // ParseAll loads and parses every workflow path, returning a slice in input
@@ -70,11 +82,10 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 
 		pw.SHASpellings = lowercaseSHAs(scan.Refs, selfScan.Refs)
 		pw.Refs = mergeActionRefs(scan.Refs, selfScan.Refs)
-		// Refs inside `$/…` actions are rewritable too: their action file is
-		// rewritten alongside the workflow, so narrowing stays in sync.
-		pw.RewriteRefs = pw.Refs
-		pw.SelfActionFiles = selfScan.ActionFiles
+		pw.RewriteRefs = rewritableRefs(pw.Refs, selfScan.Refs)
+		pw.WorkflowRefs = scan.Refs
 		pw.SelfActionRefs = selfScan.Refs
+		pw.SelfActionFiles = selfScan.RefFiles
 		pw.LocalPaths = scan.LocalPaths
 		pw.NestedLocalUses = selfScan.LocalUses
 		pw.SelfRepositoryRefs = mergeStrings(scan.SelfRepositoryRefs, selfScan.SelfRepositoryRefs)
@@ -106,6 +117,36 @@ func lowercaseSHAs(groups ...[]parserlock.ActionRef) map[string]string {
 		}
 	}
 	return spellings
+}
+
+// rewritableRefs drops from refs every ref an in-repo `$/…` action file
+// holds, matched by repository and ref. Runs never write action files, and
+// the runner looks up each of those refs as written, so it keeps that
+// spelling everywhere it's written and locks under it. A full SHA is
+// matched by SHA alone: a renamed repository's old and new names resolve to
+// one commit, and a `$/…` action is also used from other repositories,
+// which run it without this lockfile, so its SHA is its only pin (#264).
+func rewritableRefs(refs, selfRefs []parserlock.ActionRef) []parserlock.ActionRef {
+	if len(selfRefs) == 0 {
+		return refs
+	}
+	held := make(map[string]bool, len(selfRefs))
+	for _, ref := range selfRefs {
+		if parserlock.IsFullSha(ref.Ref) {
+			held[strings.ToLower(ref.Ref)] = true
+		} else {
+			held[strings.ToLower(ref.NWO())+"@"+ref.Ref] = true
+		}
+	}
+	// Non-nil even when empty: a nil RewriteRefs means every ref.
+	out := make([]parserlock.ActionRef, 0, len(refs))
+	for _, ref := range refs {
+		if held[strings.ToLower(ref.Ref)] || held[strings.ToLower(ref.NWO())+"@"+ref.Ref] {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 func mergeActionRefs(groups ...[]parserlock.ActionRef) []parserlock.ActionRef {

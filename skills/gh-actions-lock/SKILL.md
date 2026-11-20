@@ -26,6 +26,9 @@ Requires an authenticated GitHub CLI. github.com and GitHub Enterprise Cloud wit
 gh extension install github/gh-actions-lock
 ```
 
+On GHE.com, `gh` looks the shorthand up on the tenant, so install from the full URL instead:
+`gh extension install https://github.com/github/gh-actions-lock`.
+
 Run every command from the repository checkout. The host comes from `--hostname`, then `GH_HOST`,
 then the repository remote, then github.com.
 
@@ -67,11 +70,12 @@ action in the checkout uses remote actions, every mode reports a blocking `local
 Fix it with one of:
 
 ```bash
-gh actions-lock --migrate-local-actions   # rewrite same-repo ./… to $/… so they get locked
+gh actions-lock --migrate-local-actions   # rewrite workflows' same-repo ./… to $/… so they get locked
 gh actions-lock --ignore-local-actions    # keep ./… and downgrade it to a warning
 ```
 
-`$/…` refers to the same repository at the running commit and needs no lockfile entry. A `./…`
+`$/…` refers to the same repository at the running commit and needs no lockfile entry. Action files
+are never edited; change a `./…` inside one to `$/…` by hand. A `./…`
 inside a remote composite can't be rewritten, so only `--ignore-local-actions` applies there.
 
 ## Relocking and moved refs
@@ -94,7 +98,7 @@ automation, where it would silently accept a tampered pin.
 | Code | Meaning |
 |---|---|
 | 0 | Nothing to fix, or every finding was fixed |
-| 1 | Blocking findings remain; the report is well-formed |
+| 1 | Blocking findings remain, or `--fail-on-warning` is set and a read-only run reported a warning; the report is well-formed |
 | 2 | The tool itself failed (bad flag, IO, auth, malformed lockfile); read stderr |
 
 ```bash

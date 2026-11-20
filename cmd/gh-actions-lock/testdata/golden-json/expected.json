@@ -54,6 +54,27 @@
     {
       "category": "stale",
       "confidence": "high",
+      "dependency": "actions/cache@v4",
+      "detail": "lockfile pins actions/cache@v4 but no uses: in this workflow references it",
+      "doc_url": "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#stale",
+      "remediation": "run `gh actions-lock` to prune the unused entry",
+      "severity": "error",
+      "workflow": ".github/workflows/ci.yml"
+    },
+    {
+      "category": "stale",
+      "confidence": "high",
+      "dependency": "helper/only-transitive@v1",
+      "detail": "lockfile pins helper/only-transitive@v1 but no uses: in this workflow references it",
+      "doc_url": "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#stale",
+      "remediation": "run `gh actions-lock` to prune the unused entry",
+      "required_by": "actions/setup-go@v6",
+      "severity": "error",
+      "workflow": ".github/workflows/ci.yml"
+    },
+    {
+      "category": "stale",
+      "confidence": "high",
       "dependency": "old/dead@v1",
       "detail": "lockfile pins old/dead@v1 but no uses: in this workflow references it",
       "doc_url": "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#stale",
@@ -114,6 +135,27 @@
           "detail": "workflow uses ref \"v3\" but lockfile pins \"v4\"",
           "doc_url": "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#ref-changed",
           "remediation": "re-run `gh actions-lock` to refresh the lockfile, or revert the uses: line",
+          "severity": "error",
+          "workflow": ".github/workflows/ci.yml"
+        },
+        {
+          "category": "stale",
+          "confidence": "high",
+          "dependency": "actions/cache@v4",
+          "detail": "lockfile pins actions/cache@v4 but no uses: in this workflow references it",
+          "doc_url": "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#stale",
+          "remediation": "run `gh actions-lock` to prune the unused entry",
+          "severity": "error",
+          "workflow": ".github/workflows/ci.yml"
+        },
+        {
+          "category": "stale",
+          "confidence": "high",
+          "dependency": "helper/only-transitive@v1",
+          "detail": "lockfile pins helper/only-transitive@v1 but no uses: in this workflow references it",
+          "doc_url": "https://github.com/github/gh-actions-lock/blob/main/docs/troubleshooting.md#stale",
+          "remediation": "run `gh actions-lock` to prune the unused entry",
+          "required_by": "actions/setup-go@v6",
           "severity": "error",
           "workflow": ".github/workflows/ci.yml"
         },

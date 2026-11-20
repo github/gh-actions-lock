@@ -86,8 +86,9 @@ func TestParity_TransferredRepoWarns(t *testing.T) {
 }
 
 // TestParity_TransferredRepoNamesTheKeyUse: a tag-keyed entry the workflow
-// also uses by its commit SHA, earlier in the file, is still checked as
-// the tag use, so the rename advice rewrites that use.
+// also uses by its commit SHA, earlier in the file, is checked as the tag
+// use, so the rename advice rewrites that use. The SHA use has no key of its
+// own, so verify still fails on it.
 func TestParity_TransferredRepoNamesTheKeyUse(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(httpmock.GraphQL(`commit: object\(oid`), transferParity(1))
@@ -103,8 +104,9 @@ jobs:
 `, "krzema12/github-actions-typing@v2.2.2=sha1-"+parityTestSHA)
 
 	_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--verify", path)
-	require.NoError(t, err, stderr)
+	require.Error(t, err)
 	assert.Contains(t, stderr, "rewrite it as `uses: typesafegithub/github-actions-typing@v2.2.2`")
+	assert.Contains(t, stderr, "Not pinned krzema12/github-actions-typing@"+parityTestSHA)
 }
 
 // TestParity_TransferredRepoRewrites: in fix mode a recorded same-ID
@@ -2009,9 +2011,9 @@ jobs:
 	}
 }
 
-// TestParity_RootUsedBySHAClosureChecked: a tag-keyed root the workflow
-// uses by its commit SHA (`uses:` rewritten to the commit) is still used,
-// so parity checks its stored closure like any other root's: a replaced
+// TestParity_RootUsedBySHAClosureChecked: a root the workflow uses by its
+// commit SHA, keyed by that SHA, gets its stored closure checked like any
+// other root's: a replaced
 // repository or a commit missing from it blocks, and a healthy one passes.
 func TestParity_RootUsedBySHAClosureChecked(t *testing.T) {
 	for _, deep := range []string{"replaced", "missing commit", "healthy"} {
@@ -2054,10 +2056,10 @@ jobs:
     steps:
       - uses: actions/checkout@`+parityTestSHA+`
 `)
-			lock := "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/workflow.yml':\n        - 'actions/checkout@v6.1.0'\n" +
+			lock := "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/workflow.yml':\n        - 'actions/checkout@" + parityTestSHA + "'\n" +
 				"dependencies:\n" +
 				"    'actions/cache@v1':\n        ref: 'v1'\n        commit: 'sha1-" + parityTestSHA + "'\n        owner_id: 1\n        repo_id: 1\n" +
-				"    'actions/checkout@v6.1.0':\n        ref: 'v6.1.0'\n        commit: 'sha1-" + parityTestSHA + "'\n        owner_id: 1\n        repo_id: 1\n        uses:\n            - 'actions/cache@v1'\n"
+				"    'actions/checkout@" + parityTestSHA + "':\n        ref: 'v6.1.0'\n        commit: 'sha1-" + parityTestSHA + "'\n        owner_id: 1\n        repo_id: 1\n        uses:\n            - 'actions/cache@v1'\n"
 			require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
 
 			p, err := runParity(t, reg, "--verify", "--no-interactive")
@@ -3180,6 +3182,35 @@ func TestParity_ExactTagBehindSeededCompositeChildBlocks(t *testing.T) {
 	p, err := runParity(t, reg, "--no-narrow", "--no-interactive", path)
 	require.ErrorIs(t, err, errSilent)
 	assert.False(t, p.Valid)
+	var cats []string
+	for _, f := range p.Findings {
+		cats = append(cats, f.Category)
+	}
+	assert.Contains(t, cats, "tag-commit-mismatch")
+	after, rerr := os.ReadFile(lockPath)
+	require.NoError(t, rerr)
+	assert.Equal(t, lock, string(after), "nothing is written")
+}
+
+// TestParity_SHAUseOfTagRootChecksClosure: a full-SHA use whose commit is
+// locked only under its tag is resolved fresh, so a child locked behind its
+// exact tag blocks the fix run instead of moving to the SHA key unchecked.
+func TestParity_SHAUseOfTagRootChecksClosure(t *testing.T) {
+	const rootSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	reg := exactTagBehindRegistry(t, rootSHA)
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/root/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", rootSHA)))
+	httpmock.NoTagsNamed(reg, "octo", "root")
+	path := writeTempWorkflow(t, "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/root@"+rootSHA+"\n")
+	lock := "version: '" + parserlock.Version + "'\ndependencies:\n" +
+		"  'octo/root@v1':\n    ref: 'v1'\n    commit: 'sha1-" + rootSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"    uses:\n      - 'actions/checkout@v7.0.1'\n" +
+		"  'actions/checkout@v7.0.1':\n    ref: 'v7.0.1'\n    commit: 'sha1-" + parityTestSHA + "'\n    owner_id: 1\n    repo_id: 1\n" +
+		"workflows:\n  '.github/workflows/workflow.yml':\n    - 'octo/root@v1'\n"
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte(lock), 0o600))
+
+	p, err := runParity(t, reg, "--no-narrow", "--no-interactive", path)
+	require.ErrorIs(t, err, errSilent)
 	var cats []string
 	for _, f := range p.Findings {
 		cats = append(cats, f.Category)

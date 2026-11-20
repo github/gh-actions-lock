@@ -325,6 +325,36 @@ func TestPlanWorkflow_TransitiveDepUsesDiscoveredRef(t *testing.T) {
 	assert.True(t, comp.Direct, "composite is a direct workflow use")
 }
 
+func TestPlanWorkflow_NewCompositeEdgeToRecordedDirectDep(t *testing.T) {
+	compSHA := "1111111111111111111111111111111111111111"
+	transSHA := "2222222222222222222222222222222222222222"
+	resolver, pool, tagger := newTransitivePlanFixture(t, compSHA, transSHA)
+
+	direct := parserlock.ActionRef{Owner: "trans", Repo: "dep", Ref: "v2"}
+	wr := checks.WorkflowReport{
+		Path: ".github/workflows/test.yml",
+		Findings: []checks.Finding{{
+			ActionRef:  &parserlock.ActionRef{Owner: "comp", Repo: "action", Ref: "v1.0.0"},
+			Category:   "unpinned",
+			Severity:   checks.SeverityWarning,
+			Confidence: checks.ConfidenceHigh,
+		}},
+		ActionRefs: []parserlock.ActionRef{{Owner: "comp", Repo: "action", Ref: "v1.0.0"}, direct},
+		Inventory: []checks.InventoryEntry{{
+			Dep:    dep.Dependency{NWO: "trans/dep", Ref: "v2", SHA: transSHA},
+			Direct: true,
+		}},
+	}
+
+	result, err := planWorkflow(context.Background(), wr, PlanOptions{Resolver: resolver, Pool: pool, Tagger: tagger}, func(string) {})
+	require.NoError(t, err)
+
+	rec := &Record{Entries: result.entries}
+	assert.Equal(t, []string{"comp/action@v1.0.0"}, buildParentMap(rec, wr.Path)["trans/dep@v2"],
+		"the new composite's edge to the recorded dep must survive")
+	assert.True(t, buildDirectKeys(rec, wr.Path)["trans/dep@v2"], "the recorded dep stays a direct root")
+}
+
 // TestNarrowVerifiedEntries_StickyPrecision locks the fast-path narrowing
 // guard: an already-recorded direct dep the user kept at an imprecise semver
 // ref (v4) must not be narrowed to a full tag on a no-op re-pin, and a
@@ -669,10 +699,14 @@ func TestPlanNormalizationRespectsLockedTarget(t *testing.T) {
 			defer reg.Verify(t)
 			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`$`),
 				httpmock.JSONResponse(map[string]any{"default_branch": "main"}))
-			reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`/git/ref/heads/main`),
-				httpmock.JSONResponse(map[string]any{
-					"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
-				}))
+			wantBranch := ""
+			if tt.tag == "" {
+				wantBranch = "main"
+				reg.Register(httpmock.REST("GET", `repos/`+tt.nwo+`/git/ref/heads/main`),
+					httpmock.JSONResponse(map[string]any{
+						"ref": "refs/heads/main", "object": map[string]any{"sha": headSHA, "type": "commit"},
+					}))
+			}
 			tags := httpmock.TagListResponse()
 			if tt.tag != "" {
 				tags = httpmock.TagListResponse(tt.tag, headSHA)
@@ -708,7 +742,7 @@ func TestPlanNormalizationRespectsLockedTarget(t *testing.T) {
 			assert.Equal(t, tt.lockedSHA, record.Entries[0].SHA)
 			assert.Equal(t, tt.wantRef, record.Entries[1].Ref)
 			assert.Equal(t, headSHA, record.Entries[1].SHA)
-			assert.Equal(t, "main", record.Entries[1].OnBranch)
+			assert.Equal(t, wantBranch, record.Entries[1].OnBranch)
 			assert.Equal(t, tt.tag, record.Entries[1].Tag)
 			require.Len(t, record.Workflows, 2)
 			assert.Empty(t, record.Workflows[0].Rewrites)
@@ -1067,19 +1101,6 @@ func TestNoNarrow_BareSHA(t *testing.T) {
 			"rewrite map should record the original SHA ref")
 	})
 
-	t.Run("partial scan rejects unrecorded shared action rewrite", func(t *testing.T) {
-		resolver, tagger, wr, _ := newSlowPathFixtures(t)
-		wr.SelfActionRefs = append([]parserlock.ActionRef(nil), wr.ActionRefs...)
-
-		_, err := planWorkflow(context.Background(), wr, PlanOptions{
-			Resolver:    resolver,
-			Tagger:      tagger,
-			Pool:        pinpool.New(2, nil),
-			PartialScan: true,
-		}, func(string) {})
-
-		require.ErrorContains(t, err, "shared local action during a partial workflow scan")
-	})
 }
 
 // TestPlanWorkflow_CrossRefTransitiveClosure verifies that a composite at

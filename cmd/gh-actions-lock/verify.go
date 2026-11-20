@@ -82,6 +82,9 @@ func runVerifyLocal(opts *checkOptions, out io.Writer, console *ui.UI) error {
 		}
 		return errSilent
 	}
+	if err := failOnWarnings(opts, report, console); err != nil {
+		return err
+	}
 
 	total := len(paths)
 	if opts.jsonFields == "" {

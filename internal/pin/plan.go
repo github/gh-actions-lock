@@ -161,10 +161,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	if !wr.NeedsAttention() && !rebuild {
 		entries = verifiedEntries(inventory, wr.Path)
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
-		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
-			return planResult{}, err
-		}
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -178,7 +175,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	// --accept-moved deliberately accepts these, so it is exempt.
 	if relockKeepsUnreachable(opts, wr) {
 		entries = verifiedEntries(wr.Inventory, wr.Path)
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -199,10 +196,7 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 
 	if len(unrecordedRefs) == 0 {
 		rw := narrowVerifiedEntries(ctx, entries, opts, rewriteRefs)
-		if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rw); err != nil {
-			return planResult{}, err
-		}
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw, SelfActionFiles: wr.SelfActionFiles})
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path, Rewrites: rw})
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
@@ -324,32 +318,66 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 			rewrites[k] = v
 		}
 	}
-	required := transferRewrites(deps, rootTracker, wr.RewriteRefs, rewrites)
-	if err := rejectPartialSelfActionRewrites(opts, wr.SelfActionRefs, rewrites); err != nil {
-		return planResult{}, err
+	// Renames follow repository identity, not SHA: the resolver already kept
+	// the written name of any repository an action file spells either way.
+	required := transferRewrites(deps, rootTracker, wr.ActionRefs, rewrites)
+
+	// Build entries for all pinned deps (skip any already emitted from inventory).
+	pinned := buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA)
+	for i := range pinned {
+		pinned[i].ReRecorded = reRecorded[pinned[i].NWO+"@"+pinned[i].Ref]
 	}
+	entries = append(entries, splitSharedSHAUses(ctx, pinned, opts, rewriteRefs, rewrites)...)
+
 	if len(rewrites) > 0 {
 		wplans = append(wplans, WorkflowPlan{
 			Path:             wr.Path,
 			Rewrites:         rewrites,
 			RequiredRewrites: required,
-			SelfActionFiles:  wr.SelfActionFiles,
 		})
 	} else if len(wplans) == 0 {
 		// Keep the workflow in the plan so its lockfile entry is updated.
-		wplans = append(wplans, WorkflowPlan{Path: wr.Path, SelfActionFiles: wr.SelfActionFiles})
-	}
-
-	// Build entries for all pinned deps (skip any already emitted from inventory).
-	for _, e := range buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA) {
-		e.ReRecorded = reRecorded[e.NWO+"@"+e.Ref]
-		entries = append(entries, e)
+		wplans = append(wplans, WorkflowPlan{Path: wr.Path})
 	}
 
 	// Record findings that are informational (misleading-sha).
 	entries = append(entries, informationalEntries(wr)...)
 
 	return planResult{entries: entries, wplans: wplans}, nil
+}
+
+// splitSharedSHAUses gives the workflow's own full-SHA use of a key a
+// composite also declares the rewrite a run from the lockfile gives it
+// (narrowVerifiedEntries), so one run converges (#310). The shared entry
+// keeps the SHA for the composite's edge and stops being a workflow root.
+// Version refs need no split: the kept ref becomes the recorded precision,
+// which later runs respect.
+func splitSharedSHAUses(ctx context.Context, entries []Entry, opts PlanOptions, rewriteRefs []parserlock.ActionRef, rewrites map[string]string) []Entry {
+	var shared []int
+	var uses []Entry
+	for i, e := range entries {
+		if !e.Direct || len(e.RequiredBy) == 0 || !parserlock.IsFullSha(e.Ref) {
+			continue
+		}
+		use := e
+		use.RequiredBy = nil
+		shared = append(shared, i)
+		uses = append(uses, use)
+	}
+	if len(uses) == 0 {
+		return entries
+	}
+	for k, v := range narrowVerifiedEntries(ctx, uses, opts, rewriteRefs) {
+		rewrites[k] = v
+	}
+	for j, use := range uses {
+		if use.Ref == entries[shared[j]].Ref {
+			continue
+		}
+		entries[shared[j]].Direct = false
+		entries = append(entries, use)
+	}
+	return entries
 }
 
 // respellRewrites keys planned rewrites of a full-SHA `uses:` by the
@@ -395,24 +423,6 @@ func transferRewrites(deps []dep.Dependency, rootTracker lockfile.DirectTracker,
 		}
 	}
 	return required
-}
-
-func rejectPartialSelfActionRewrites(opts PlanOptions, selfActionRefs []parserlock.ActionRef, rewrites map[string]string) error {
-	if !opts.PartialScan || len(rewrites) == 0 {
-		return nil
-	}
-	selfKeys := actionRefKeys(selfActionRefs)
-	for oldUses := range rewrites {
-		ref := parserlock.ParseActionRef(oldUses)
-		if ref == nil {
-			continue
-		}
-		key := strings.ToLower(ref.Owner+"/"+ref.Repo) + "@" + ref.Ref
-		if selfKeys[key] {
-			return fmt.Errorf("cannot rewrite %s in a shared local action during a partial workflow scan; scan all workflows", key)
-		}
-	}
-	return nil
 }
 
 // preserveReRecorded keeps the `uses:` of each full-SHA pin whose entry
@@ -593,7 +603,9 @@ func reverseLookupRewrites(ctx context.Context, opts PlanOptions, wr checks.Work
 
 // buildPinnedEntries emits an entry for every resolved dep, marking it Verified
 // when the lockfile already records the same SHA and Pinned otherwise. Deps
-// already emitted from inventory under the same key and commit are skipped.
+// already emitted from inventory under the same key and commit are skipped
+// unless a composite read this run uses them: the inventory entry doesn't
+// carry that edge, and narrowing may rename it away from the composite's key.
 func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.Dependency, parentMap dep.ParentMap, directTracker lockfile.DirectTracker, inventorySHA map[string]bool) []Entry {
 	// Load existing lockfile state so re-runs are noops for unchanged deps.
 	existingSHA := make(map[string]string) // NWO@Ref -> SHA
@@ -626,11 +638,11 @@ func buildPinnedEntries(opts PlanOptions, wr checks.WorkflowReport, deps []dep.D
 	for _, dep := range deps {
 		// Each key needs its own entry: a ref that moved onto a commit a
 		// sibling ref is locked at must still be written.
-		if inventorySHA[checks.PruneKey(dep.NWO, dep.Ref, dep.SHA)] {
-			continue // already emitted as Verified from inventory
-		}
 		depKey := dep.Key()
 		parents := parentMap[depKey]
+		if inventorySHA[checks.PruneKey(dep.NWO, dep.Ref, dep.SHA)] && len(parents) == 0 {
+			continue // already emitted as Verified from inventory
+		}
 		res := Pinned
 		if sha, ok := existingSHA[depKey]; ok && sha == dep.SHA {
 			res = Verified

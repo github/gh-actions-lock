@@ -75,6 +75,9 @@ type checkOptions struct {
 	// migrateLocalActions rewrites same-repo `./…` action refs to the
 	// inherently-pinned `$/…` form on fix runs. Opt-in.
 	migrateLocalActions bool
+	// failOnWarning makes a read-only run exit 1 when it reports any
+	// warning. Opt-in; the default exit code ignores warnings.
+	failOnWarning bool
 }
 
 // bindCheckFlags registers the run flags on the root command.
@@ -97,11 +100,13 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 		"Offline lockfile coverage check: verify every action ref has a lockfile entry.\n"+
 			"No network calls, no authentication, no file writes — ideal for pre-commit hooks.\n"+
 			"It does not check that the entries are trustworthy; use --verify in CI for that.")
+	cmd.Flags().BoolVar(&opts.failOnWarning, "fail-on-warning", false,
+		"With --verify, --verify-local or --no-fix, exit 1 when any warning is reported")
 	cmd.Flags().StringVar(&opts.profileDir, "profile", "", "Enable profiling: write trace, CPU profile, and HTTP log to `dir`")
 	cmd.Flags().BoolVar(&opts.ignoreLocalActions, "ignore-local-actions", false,
 		"Warn instead of failing when a local `./…` action uses remote actions the lockfile can't cover")
 	cmd.Flags().BoolVar(&opts.migrateLocalActions, "migrate-local-actions", false,
-		"Rewrite same-repo `uses: ./…` actions to the inherently-pinned `uses: $/…` form, in workflows and in-repo action files")
+		"Rewrite same-repo `uses: ./…` actions in workflows to the inherently-pinned `uses: $/…` form")
 	// Older releases spelled the opt-out this way; keep those commands working.
 	cmd.Flags().BoolVar(&opts.ignoreLocalActions, "no-migrate-local-actions", false, "Alias for --ignore-local-actions")
 	_ = cmd.Flags().MarkHidden("no-migrate-local-actions")
@@ -118,6 +123,9 @@ func (opts *checkOptions) validateOutputFlags() error {
 	}
 	if opts.verifyLocal && (opts.acceptMoved || opts.relock) {
 		return fmt.Errorf("--verify-local cannot be combined with --accept-moved or --relock because it runs offline")
+	}
+	if opts.failOnWarning && !opts.verify && !opts.verifyLocal && !opts.noFix {
+		return fmt.Errorf("--fail-on-warning requires --verify, --verify-local or --no-fix")
 	}
 	return nil
 }
@@ -428,6 +436,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 			}
 			return errSilent
 		}
+		if err := failOnWarnings(opts, report, console); err != nil {
+			return err
+		}
 		if opts.jsonFields == "" {
 			n := len(report.Workflows)
 			console.TermSuccess("All %d %s valid", n, ui.Pluralize(n, "workflow", "workflows"))
@@ -563,7 +574,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// succeeded, so machine consumers never see findings for a run that
 	// then failed to write. The run log keeps the pre-fix diagnosis.
 	if opts.jsonFields != "" {
-		fixed := postFixReport(report)
+		fixed := postFixReport(report, record)
 		return format.WriteJSON(out, fixed, record, fixed.IsValid(), opts.jsonFields, cliVersion(), store.File().Version, r.Hostname())
 	}
 
@@ -571,23 +582,80 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	return renderPinSummary(ctx, console, record, report, r, refusedLabels, opts.noNarrow, opts.acceptMoved, store.OriginalVersion(), staleWorkflows)
 }
 
+// failOnWarnings returns errSilent when --fail-on-warning is set and the
+// run reported a warning. It counts what --json reports, which includes
+// warnings the terminal summary leaves out (such as a moved branch ref).
+func failOnWarnings(opts *checkOptions, report *checks.Report, console *ui.UI) error {
+	if !opts.failOnWarning {
+		return nil
+	}
+	n := format.CountWarnings(report)
+	if n == 0 {
+		return nil
+	}
+	if opts.jsonFields == "" {
+		console.TermError("%d %s reported and --fail-on-warning is set", n, ui.Pluralize(n, "warning", "warnings"))
+		console.TermDetail("Run with --json=findings to list every warning.")
+	}
+	return errSilent
+}
+
 // postFixReport is report as a committed write left it. A run commits only
 // when it can fix every error it found (see runHasBlockingErrors), so no error
-// stands afterwards; warnings and info findings remain.
-func postFixReport(report *checks.Report) *checks.Report {
-	unfixed := func(ff []checks.Finding) []checks.Finding {
+// stands afterwards; warnings and info findings remain, except a sha-as-ref
+// for a bare-SHA `uses:` the commit replaced with a symbolic ref: that line
+// no longer exists.
+func postFixReport(report *checks.Report, record *pin.Record) *checks.Report {
+	rewrites := map[string]map[string]string{}
+	if record != nil {
+		for _, wp := range record.Workflows {
+			rewrites[wp.Path] = wp.Rewrites
+		}
+	}
+	committed := map[string]map[string]bool{}
+	unfixed := func(path string, ff []checks.Finding) []checks.Finding {
 		return slices.DeleteFunc(slices.Clone(ff), func(f checks.Finding) bool {
-			return f.Severity == checks.SeverityError
+			if f.Severity == checks.SeverityError {
+				return true
+			}
+			if f.Category != checks.ShaAsRef || f.ActionRef == nil {
+				return false
+			}
+			use := f.ActionRef.FullName() + "@" + f.ActionRef.Ref
+			target, ok := workflowfile.LookupRewrite(use, rewrites[path])
+			if !ok || parserlock.IsFullSha(target[strings.LastIndex(target, "@")+1:]) {
+				return false
+			}
+			if _, scanned := committed[path]; !scanned {
+				committed[path] = committedUses(path)
+			}
+			return committed[path] != nil && !committed[path][use]
 		})
 	}
 	out := *report
-	out.RepoFindings = unfixed(report.RepoFindings)
+	out.RepoFindings = unfixed("", report.RepoFindings)
 	out.Workflows = make([]checks.WorkflowReport, len(report.Workflows))
 	for i, wr := range report.Workflows {
-		wr.Findings = unfixed(wr.Findings)
+		wr.Findings = unfixed(wr.Path, wr.Findings)
 		out.Workflows[i] = wr
 	}
 	return &out
+}
+
+// committedUses reads the `uses:` values the workflow has after Commit. A
+// planned rewrite alone doesn't prove the old value is gone: RewriteActionRefs
+// skips anchored and aliased scalars. nil means the file couldn't be read, and
+// the caller keeps every warning.
+func committedUses(path string) map[string]bool {
+	wf, err := workflowfile.Load(path)
+	if err != nil {
+		return nil
+	}
+	uses := map[string]bool{}
+	for _, ref := range wf.ExtractActionRefs().Refs {
+		uses[ref.FullName()+"@"+ref.Ref] = true
+	}
+	return uses
 }
 
 // injectVersionRefFindings appends info-severity findings for entries pinned
@@ -684,13 +752,10 @@ func cliVersion() string {
 	return "unknown"
 }
 
-// migrateLocalActions rewrites same-repo `./…` action refs to `$/…` and writes
-// changes to disk. It covers two kinds of files: the discovered workflow files,
-// and every in-repo composite action definition file (action.yml/action.yaml)
-// found under the repository root. The latter is why a composite action that
-// internally uses `uses: ./helper` gets fixed too, not just the workflow that
-// calls it. Returns the total number of `uses:` lines rewritten and an undo
-// func that restores the original contents; undo is never nil.
+// migrateLocalActions rewrites same-repo `./…` action refs in the workflow
+// files to `$/…` and writes changes to disk. Action files are never written.
+// Returns the total number of `uses:` lines rewritten and an undo func that
+// restores the original contents; undo is never nil.
 func migrateLocalActions(paths []string) (int, func(), error) {
 	var written []plannedMigration
 	undo := func() {
@@ -698,28 +763,10 @@ func migrateLocalActions(paths []string) (int, func(), error) {
 			_ = os.WriteFile(m.path, m.original, 0o644)
 		}
 	}
-	files := append([]string(nil), paths...)
-
-	// Also sweep in-repo composite action files. The repo root is derived from
-	// a workflow path (they live under .github/workflows/); onboarding only
-	// runs when workflows exist, so an empty paths list means nothing to do.
-	if len(paths) > 0 {
-		root, err := workflowfile.FindRepoRoot(paths[0])
-		if err != nil {
-			return 0, undo, err
-		}
-		if root != "" {
-			actionFiles, err := workflowfile.DiscoverCompositeActionFiles(root)
-			if err != nil {
-				return 0, undo, err
-			}
-			files = append(files, actionFiles...)
-		}
-	}
 
 	var migrations []plannedMigration
 	seen := make(map[string]bool)
-	for _, path := range files {
+	for _, path := range paths {
 		absPath, err := filepath.Abs(path)
 		if err != nil {
 			return 0, undo, fmt.Errorf("resolving migration path %s: %w", path, err)
@@ -801,11 +848,13 @@ func blockLocalActions(report *checks.Report, ignore bool) bool {
 			}
 			subject := f.LocalPath
 			fix := "Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."
-			if f.ParentNWO != "" {
+			switch {
+			case f.ParentFile != "":
+				subject += " (in " + f.ParentFile + ")"
+				fix = "Change it to $/" + strings.TrimPrefix(f.LocalPath, "./") + " in " + f.ParentFile + ", or pass --ignore-local-actions to keep ./."
+			case f.ParentNWO != "":
 				subject += " (in " + f.ParentNWO + ")"
-				if !strings.HasPrefix(f.ParentNWO, "$/") {
-					fix = "Pass --ignore-local-actions to keep ./."
-				}
+				fix = "Pass --ignore-local-actions to keep ./."
 			}
 			cause := subject + " runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced."
 			f.Severity = checks.SeverityError
