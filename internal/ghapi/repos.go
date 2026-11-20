@@ -57,14 +57,16 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 				Protected bool `json:"protected"`
 			}
 			if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-				if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-					anon, anonErr := c.anonListBranches(ctx, owner, repo)
-					if anonErr == nil {
-						c.branchListCache.Put(key, anon)
-					}
-					return anon, anonErr
+				fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+				if ferr != nil {
+					return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, ferr)
 				}
-				return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, c.ssoErr(owner, err))
+				anon, anonErr := c.anonListBranches(fctx, owner, repo)
+				if anonErr != nil {
+					return nil, c.anonReadFailed(fctx, owner, repo, err, anonErr)
+				}
+				c.branchListCache.Put(key, anon)
+				return anon, nil
 			}
 			for _, b := range resp {
 				all = append(all, BranchHead{Name: b.Name, SHA: b.Commit.SHA, Protected: b.Protected})
@@ -111,15 +113,16 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 			} `json:"commit"`
 		}
 		if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-				tags, anonErr := c.anonListTags(ctx, owner, repo)
-				if anonErr != nil {
-					return result{err: anonErr}, nil
-				}
-				c.tagListCache.Put(key, tags)
-				return result{tags: tags}, nil
+			fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+			if ferr != nil {
+				return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, ferr)}, nil
 			}
-			return result{err: fmt.Errorf("listing tags for %s/%s: %w", owner, repo, c.ssoErr(owner, err))}, nil
+			tags, anonErr := c.anonListTags(fctx, owner, repo)
+			if anonErr != nil {
+				return result{err: c.anonReadFailed(fctx, owner, repo, err, anonErr)}, nil
+			}
+			c.tagListCache.Put(key, tags)
+			return result{tags: tags}, nil
 		}
 		tags := make([]TagEntry, 0, len(resp))
 		for _, t := range resp {
@@ -143,6 +146,10 @@ type repoMeta struct {
 	RepoID        int64
 	Visibility    string
 	PushedAt      string
+	// anonymous marks metadata read without credentials after an IP allow
+	// list refused the token: proof that the repository is public. Metadata
+	// from an authenticated read, or from the cache of one, is not.
+	anonymous bool
 }
 
 // repoMetadata fetches repos/{owner}/{repo} at most once per run, coalescing
@@ -176,18 +183,24 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			} `json:"owner"`
 		}
 		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
+		var viaFallback bool
 		if c.restOnly {
 			if err := c.anonGet(ctx, path, &resp); err != nil {
 				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
 			}
 		} else if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
-			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-				if anonErr := c.anonGet(ctx, path, &resp); anonErr != nil {
-					return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
-				}
-			} else {
-				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, c.ssoErr(owner, err))
+			fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+			if ferr != nil {
+				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, ferr)
 			}
+			if anonErr := c.anonGet(fctx, path, &resp); anonErr != nil {
+				// This read is what decides readability (see anonReadFailed).
+				if code, _ := StatusCode(anonErr); code == http.StatusNotFound && isIPAllowListDenial(err) {
+					return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
+				}
+				return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
+			}
+			viaFallback = isIPAllowListDenial(err)
 		}
 		m := repoMeta{
 			FullName:      resp.FullName,
@@ -196,6 +209,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			RepoID:        resp.ID,
 			Visibility:    resp.Visibility,
 			PushedAt:      resp.PushedAt,
+			anonymous:     viaFallback,
 		}
 		c.repoMetaCache.Put(key, m)
 		return m, nil
@@ -389,15 +403,25 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 				c.compareCache.Put(key, false)
 				return false, nil
 			}
-			if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-				contains, anonErr := c.anonCompareCommits(ctx, owner, repo, sha, branchHeadSHA)
-				if anonErr == nil {
-					c.compareCache.Put(key, contains)
-					return contains, nil
-				}
-				return false, anonErr
+			fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+			if ferr != nil {
+				return false, ferr
 			}
-			return false, c.ssoErr(owner, err)
+			contains, anonErr := c.anonCompareCommits(fctx, owner, repo, sha, branchHeadSHA)
+			if anonErr != nil {
+				anonErr = c.anonReadFailed(fctx, owner, repo, err, anonErr)
+			}
+			if code, _ := StatusCode(anonErr); code == http.StatusNotFound || code == http.StatusUnprocessableEntity {
+				// Same verdict as the authenticated read above: the
+				// commits are unrelated or one is missing.
+				c.compareCache.Put(key, false)
+				return false, nil
+			}
+			if anonErr == nil {
+				c.compareCache.Put(key, contains)
+				return contains, nil
+			}
+			return false, anonErr
 		}
 		contains := strings.EqualFold(resp.MergeBaseCommit.SHA, sha)
 		c.compareCache.Put(key, contains)
@@ -427,9 +451,17 @@ func (c *Client) CompareRefs(ctx context.Context, owner, repo, base, head string
 		err = c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp)
 		// Same fallback as CompareCommits: a public repository behind an
 		// org's SSO is still readable anonymously.
-		if err != nil && IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
+		if err != nil {
+			fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+			if ferr != nil {
+				return "", "", ferr
+			}
 			resp = compareResponse{}
-			err = c.anonGet(ctx, path, &resp)
+			if anonErr := c.anonGet(fctx, path, &resp); anonErr != nil {
+				err = c.anonReadFailed(fctx, owner, repo, err, anonErr)
+			} else {
+				err = nil
+			}
 		}
 	}
 	if err != nil {

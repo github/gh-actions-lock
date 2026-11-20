@@ -10,10 +10,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSSOFallbackEligible(t *testing.T) {
 	// Stand up a server that returns 200 for /orgs/actions and 404 for others.
+	resetAnonFallbackState()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/orgs/actions":
@@ -27,8 +33,8 @@ func TestSSOFallbackEligible(t *testing.T) {
 	c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
 	ctx := context.Background()
 
-	// Reset the global cache between subtests.
-	anonProbeCache = sync.Map{}
+	// Reset the global caches between subtests.
+	resetAnonFallbackState()
 
 	if !c.SSOFallbackEligible(ctx, "actions") {
 		t.Error("expected actions org to be eligible")
@@ -61,7 +67,7 @@ func TestNew_RESTOnlyForDependabotProxy(t *testing.T) {
 }
 
 func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
-	anonProbeCache = sync.Map{} // reset cache
+	resetAnonFallbackState()
 
 	// Stand up a fake API server for anonymous resolution.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +131,7 @@ func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
 }
 
 func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
-	anonProbeCache = sync.Map{} // reset cache
+	resetAnonFallbackState()
 
 	// Probe server: returns 404 for /orgs/mycompany (private org).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -369,8 +375,7 @@ func TestSSOFallbackEligible_CachesOnlyDefinitiveAnswers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			anonProbeCache = sync.Map{}
-			anonRateLimited = sync.Map{}
+			resetAnonFallbackState()
 			probes := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				probes++
@@ -396,28 +401,6 @@ func TestSSOFallbackEligible_CachesOnlyDefinitiveAnswers(t *testing.T) {
 	}
 }
 
-// TestSSOFallbackEligible_ClearsStaleRateLimit: a later definitive or 5xx
-// answer must drop the rate-limit marker so errors stop blaming it.
-func TestSSOFallbackEligible_ClearsStaleRateLimit(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusBadGateway} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			anonProbeCache = sync.Map{}
-			anonRateLimited = sync.Map{}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(status)
-			}))
-			defer srv.Close()
-			c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
-			anonRateLimited.Store(c.anonBase()+"/acme", struct{}{})
-
-			c.SSOFallbackEligible(context.Background(), "acme")
-			if _, ok := anonRateLimited.Load(c.anonBase() + "/acme"); ok {
-				t.Error("stale rate-limit marker survived a later response")
-			}
-		})
-	}
-}
-
 func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
 	tests := []struct {
 		name string
@@ -437,8 +420,7 @@ func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			anonProbeCache = sync.Map{}
-			anonRateLimited = sync.Map{}
+			resetAnonFallbackState()
 			srv := httptest.NewServer(http.HandlerFunc(tt.anon))
 			defer srv.Close()
 			saml := roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -475,8 +457,7 @@ func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
 // TestCompareRefs_SSOFallback: a recorded ref that moved in a public
 // repository behind an org's SSO is still compared anonymously.
 func TestCompareRefs_SSOFallback(t *testing.T) {
-	anonProbeCache = sync.Map{}
-	anonRateLimited = sync.Map{}
+	resetAnonFallbackState()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/orgs/acme":
@@ -507,5 +488,127 @@ func TestCompareRefs_SSOFallback(t *testing.T) {
 	}
 	if status != "ahead" || base != "aaa" {
 		t.Fatalf("got status=%q base=%q", status, base)
+	}
+}
+
+func resetAnonFallbackState() {
+	anonProbeCache = sync.Map{}
+}
+
+func ipAllowListDeniedMessage(owner string) string {
+	return "Although you appear to have the correct authorization credentials, the `" + owner + "` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."
+}
+
+func anyRequest(*http.Request) bool { return true }
+
+// ipAllowListAPI answers token-bearing requests with the organization IP
+// allow list 403 and hands anonymous ones to anon.
+func ipAllowListAPI(owner string, anon http.HandlerFunc) httpmock.Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") == "" {
+			rec := httptest.NewRecorder()
+			anon(rec, req)
+			return rec.Result(), nil
+		}
+		resp, err := httpmock.JSONResponse(map[string]any{"message": ipAllowListDeniedMessage(owner)})(req)
+		resp.StatusCode = http.StatusForbidden
+		resp.Status = "403 Forbidden"
+		return resp, err
+	}
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func TestIsIPAllowListDenial(t *testing.T) {
+	message := ipAllowListDeniedMessage("acme")
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"HTTP 403", &api.HTTPError{StatusCode: http.StatusForbidden, Message: message}, true},
+		{"GraphQL forbidden", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "FORBIDDEN", Message: message}}}, true},
+		{"bare message", errors.New(message), false},
+		{"ordinary forbidden", &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource not accessible by integration"}, false},
+		{"wrong GraphQL item", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "NOT_FOUND", Message: message}, {Type: "FORBIDDEN", Message: "ordinary denial"}}}, false},
+		{"GraphQL rate limit", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "FORBIDDEN", Message: message}, {Type: "RATE_LIMITED"}}}, false},
+		{"HTTP rate limit", &api.HTTPError{StatusCode: http.StatusForbidden, Message: message, Headers: http.Header{"X-Ratelimit-Remaining": {"0"}}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isIPAllowListDenial(tt.err))
+		})
+	}
+}
+
+func TestIPAllowListRateLimitedGuidance(t *testing.T) {
+	ctx := context.Background()
+	pins := func(c *Client) error {
+		return c.CheckPins(ctx, []PinCheck{{Owner: "acme", Repo: "widget", SHA: paritySHA}})[0].Err
+	}
+	ancestry := func(c *Client) error {
+		_, _, err := c.BatchBranchContains(ctx, "acme", "widget", paritySHA, []BranchHead{{Name: "main", SHA: parityMoved}})
+		return err
+	}
+	action := func(c *Client) error {
+		return c.ResolveActionFiles(ctx, []ActionFileRequest{{Owner: "acme", Repo: "widget", Ref: "v1"}})[0].Err
+	}
+	tests := []struct {
+		name, limitedPath string
+		check             func(*Client) error
+	}{
+		{"REST commit probe", "/orgs/acme", func(c *Client) error {
+			_, err := c.CommitSHA(ctx, "acme", "widget", "v1")
+			return err
+		}},
+		{"pin probe", "/orgs/acme", pins},
+		{"pin metadata", "/repos/acme/widget", pins},
+		{"ancestry probe", "/orgs/acme", ancestry},
+		{"ancestry metadata", "/repos/acme/widget", ancestry},
+		{"ref comparison probe", "/orgs/acme", func(c *Client) error {
+			_, _, err := c.CompareRefs(ctx, "acme", "widget", paritySHA, parityMoved)
+			return err
+		}},
+		{"action commit", "/repos/acme/widget/commits/v1", action},
+		{"action contents", "/repos/acme/widget/contents/action.yml", action},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetAnonFallbackState()
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == tt.limitedPath {
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				switch r.URL.Path {
+				case "/orgs/acme":
+					w.WriteHeader(http.StatusOK)
+				case "/repos/acme/widget":
+					writeJSON(w, map[string]any{"full_name": "acme/widget"})
+				case "/repos/acme/widget/commits/v1":
+					writeJSON(w, map[string]any{"sha": paritySHA})
+				default:
+					t.Errorf("unexpected anonymous request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			c := newTestClient(t, reg)
+			c.anonHTTP = &http.Client{Transport: reg}
+
+			err := tt.check(c)
+			var limited *SSORateLimitedError
+			require.ErrorAs(t, err, &limited)
+			assert.True(t, IPAllowListBlocked(err))
+			assert.Contains(t, Brief(err), "IP allow list")
+			assert.Contains(t, Brief(err), "anonymous fallback for public repositories was rate-limited")
+			assert.NotContains(t, Brief(err), "SSO")
+			assert.True(t, IsRateLimited(err), "the anonymous rate-limit cause must survive")
+			assert.True(t, IsTransient(err), "an anonymous rate limit clears, so the check is unanswered, not refused")
+		})
 	}
 }

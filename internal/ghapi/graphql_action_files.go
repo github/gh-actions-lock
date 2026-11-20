@@ -71,13 +71,13 @@ type repoResponse struct {
 // Results are returned in the same order as inputs; per-ref failures are
 // recorded in each result's Err field rather than aborting the batch.
 //
-// If GraphQL rejects the whole query — query cost/complexity, or an
-// unattributed SAML block — the batch is split in half and each half
-// retried, recursively down to a single ref, so a few oversized or bad refs
-// can't fail their batch-mates. An outage or rate limit is never split: it
-// rejects every half the same way, and the transport already retried it.
-// Splitting is skipped once ctx is canceled so a canceled scan doesn't fan
-// out into a flurry of doomed retries.
+// If GraphQL rejects the whole query — query cost/complexity, an unattributed
+// SAML block, or an organization IP allow list 403 — the batch is split in
+// half and each half retried, recursively down to a single ref, so a few
+// oversized or blocked refs can't fail their batch-mates. An outage or rate
+// limit is never split: it rejects every half the same way, and the transport
+// already retried it. Splitting is skipped once ctx is canceled so a canceled
+// scan doesn't fan out into a flurry of doomed retries.
 func (c *Client) ResolveActionFiles(ctx context.Context, refs []ActionFileRequest) []ActionFileResult {
 	if len(refs) == 0 {
 		return nil
@@ -139,11 +139,15 @@ func (c *Client) retryWithAnonymous(ctx context.Context, refs []ActionFileReques
 		if r.Err == nil || ctx.Err() != nil {
 			continue
 		}
-		if !c.repoFallbackEligible(ctx, refs[i].Owner, refs[i].Repo, r.Err) {
-			results[i].Err = c.ssoErr(refs[i].Owner, r.Err)
+		fctx, ok, cause := c.repoFallback(ctx, refs[i].Owner, refs[i].Repo, r.Err)
+		if !ok {
+			results[i].Err = c.fallbackFailure(refs[i].Owner, r.Err, cause)
 			continue
 		}
-		results[i] = c.resolveAnonymous(ctx, refs[i])
+		results[i] = c.resolveAnonymous(fctx, refs[i])
+		if rateLimited(results[i].Err) && organizationDenied(r.Err) {
+			results[i].Err = &SSORateLimitedError{Host: c.Hostname, Owner: refs[i].Owner, Err: results[i].Err, ipPolicy: isIPAllowListDenial(r.Err)}
+		}
 	}
 	return results
 }
@@ -160,8 +164,9 @@ func (c *Client) resolveActionFilesOnce(ctx context.Context, refs []ActionFileRe
 	var gqlErr *api.GraphQLError
 	if err != nil {
 		if !errors.As(err, &gqlErr) {
-			// Transport or HTTP failure: every result gets the error. The
-			// caller doesn't split it (see splittable).
+			// Transport or HTTP failure: every result gets the error. Only an
+			// organization IP allow list 403 is splittable (see splittable);
+			// an ordinary HTTP failure would reject every half the same way.
 			results := make([]ActionFileResult, len(refs))
 			for i, r := range refs {
 				results[i] = ActionFileResult{
@@ -178,11 +183,15 @@ func (c *Client) resolveActionFilesOnce(ctx context.Context, refs []ActionFileRe
 }
 
 // splittable reports whether splitting a batch rejected with err could
-// recover some of its refs. Only a query-level GraphQL error can; an outage
-// or rate limit rejects every half the same way.
+// recover some of its refs. A query-level GraphQL error or an organization IP
+// allow list 403 can; an outage, an ordinary HTTP failure, or a rate limit
+// rejects every half the same way.
 func splittable(err error) bool {
 	var gqlErr *api.GraphQLError
-	return errors.As(err, &gqlErr) && !graphQLRateLimited(err)
+	if errors.As(err, &gqlErr) {
+		return !graphQLRateLimited(err)
+	}
+	return isIPAllowListDenial(err)
 }
 
 // batchLevelGraphQLErr returns a non-nil error when gqlErr carries a
@@ -279,6 +288,10 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 
 	for alias, idx := range aliasMap {
 		ref := refs[idx]
+		if policyErr := ipAllowListAliasError(gqlErr, alias); policyErr != nil {
+			results[idx].Err = policyErr
+			continue
+		}
 		raw, ok := data[alias]
 		if !ok {
 			switch {
@@ -298,6 +311,8 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		if string(raw) == "null" {
 			if samlOwners[ref.Owner] {
 				results[idx].Err = fmt.Errorf("%s", ssoRequiredMessage(hostname, ref.Owner))
+			} else if batchErr != nil && isIPAllowListDenial(batchErr) {
+				results[idx].Err = batchErr
 			} else {
 				results[idx].Err = fmt.Errorf("repository not found or not accessible")
 			}

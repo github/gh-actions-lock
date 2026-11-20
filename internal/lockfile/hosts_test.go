@@ -167,6 +167,42 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 	}
 }
 
+// An IP allow list refusal is GitHub's answer, left to parity like a missing
+// repository; any other refusal is inconclusive here.
+func TestVerifyHosts_IPAllowListDenialIsAnswered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.lock")
+	body := fmt.Sprintf("version: v0.0.2\nworkflows:\n  .github/workflows/ci.yml:\n    - o/r@v1\ndependencies:\n  o/r@v1:\n    ref: v1\n    commit: sha1-%s\n    owner_id: 1\n    repo_id: 2\n", strings.Repeat("a", 40))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	store, err := LoadStateAt(path, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.SetHostname("tenant.ghe.com"))
+	for _, tt := range []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{"IP allow list", &api.HTTPError{StatusCode: 403, Message: "the `acme` organization has an IP allow list enabled"}, false},
+		{"ordinary denial", &api.HTTPError{StatusCode: 403, Message: "Resource not accessible by integration"}, true},
+		{"outage", &api.HTTPError{StatusCode: 503}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store.SetMetadataResolver(errMetadata{tt.err})
+			err := store.VerifyHosts(context.Background(), []string{".github/workflows/ci.yml"})
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+type errMetadata struct{ err error }
+
+func (m errMetadata) RepoIDs(context.Context, string, string, string) (int64, int64, error) {
+	return 0, 0, m.err
+}
+
 type failingMetadata struct{}
 
 func (failingMetadata) RepoIDs(context.Context, string, string, string) (int64, int64, error) {

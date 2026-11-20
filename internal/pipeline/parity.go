@@ -370,9 +370,14 @@ func rootPaths(recorded []parserlock.ActionRef, lp lockfile.LockedPin) []string 
 
 // unanswered reports a check GitHub didn't answer, which a later run may
 // complete. An SSO block whose anonymous fallback was rate-limited is
-// answered: authorizing the token is the fix.
+// answered: authorizing the token is the fix. An IP allow list block is not:
+// a public action on a hosted runner has no allow-listed address, so the
+// rate limit resetting is what lets the fallback through.
 func unanswered(err error) bool {
-	return ghapi.IsTransient(err) && !errors.As(err, new(*ghapi.SSORateLimitedError))
+	if !ghapi.IsTransient(err) {
+		return false
+	}
+	return !errors.As(err, new(*ghapi.SSORateLimitedError)) || ghapi.IPAllowListBlocked(err)
 }
 
 // dropSuperseded fails closed: it settles a finding only where another
@@ -711,6 +716,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		// GitHub answered, but not with the pin: a re-run won't change that.
 		f.Category = checks.RepoUnavailable
 		f.Remediation = fmt.Sprintf("use a token that can read %s or authorize SSO for %s, then re-run", nwo, pc.Owner)
+		if ghapi.IPAllowListBlocked(st.Err) {
+			// Authorizing the token for SSO doesn't lift an IP allow list.
+			f.Remediation = "use a token from an IP address the organization's IP allow list permits, then re-run"
+		}
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable
 		f.Detail = fmt.Sprintf("%s is missing or not visible to this token%s", nwo, via)

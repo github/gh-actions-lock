@@ -868,6 +868,18 @@ func TestPresentReadOnlyFailures_GroupsRetryable(t *testing.T) {
 			unwanted: []string{"higher rate limit"},
 		},
 		{
+			name: "anonymous fallback of an IP allow list",
+			findings: func() []checks.Finding {
+				f := retryableFinding("actions/checkout", "v4", "github.com rate limit for anonymous public lookups exhausted", true, reset)
+				f.AnonymousLimited, f.IPAllowListBlocked = true, true
+				return []checks.Finding{f}
+			}(),
+			want: []string{
+				"  ↳ re-run after 14:05 UTC, or run from an IP address the organization's IP allow list permits\n",
+			},
+			unwanted: []string{"higher rate limit", "gh auth login"},
+		},
+		{
 			name: "partial failure",
 			findings: []checks.Finding{
 				forged,

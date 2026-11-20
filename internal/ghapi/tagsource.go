@@ -51,12 +51,12 @@ func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoReleas
 		Immutable   bool   `json:"immutable"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &releases); err != nil {
-		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-			if anonErr := c.anonGet(ctx, path, &releases); anonErr != nil {
-				return nil, fmt.Errorf("anonymous fallback fetching releases for %s/%s: %w", owner, repo, anonErr)
-			}
-		} else {
-			return nil, fmt.Errorf("fetching releases for %s/%s: %w", owner, repo, c.ssoErr(owner, err))
+		fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+		if ferr != nil {
+			return nil, fmt.Errorf("fetching releases for %s/%s: %w", owner, repo, ferr)
+		}
+		if anonErr := c.anonGet(fctx, path, &releases); anonErr != nil {
+			return nil, fmt.Errorf("anonymous fallback fetching releases for %s/%s: %w", owner, repo, c.anonReadFailed(fctx, owner, repo, err, anonErr))
 		}
 	}
 
@@ -104,12 +104,12 @@ func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string
 		SHA string `json:"sha"`
 	}
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
-		if IsSAMLEnforcement(err) && c.SSOFallbackEligible(ctx, owner) {
-			if anonErr := c.anonGet(ctx, path, &result); anonErr != nil {
-				return "", fmt.Errorf("anonymous fallback resolving %s/%s@%s: %w", owner, repo, ref, anonErr)
-			}
-		} else {
-			return "", fmt.Errorf("resolving %s/%s@%s: %w", owner, repo, ref, c.ssoErr(owner, err))
+		fctx, ferr := c.orgPolicyFallback(ctx, owner, repo, err)
+		if ferr != nil {
+			return "", fmt.Errorf("resolving %s/%s@%s: %w", owner, repo, ref, ferr)
+		}
+		if anonErr := c.anonGet(fctx, path, &result); anonErr != nil {
+			return "", fmt.Errorf("anonymous fallback resolving %s/%s@%s: %w", owner, repo, ref, c.anonReadFailed(fctx, owner, repo, err, anonErr))
 		}
 	}
 	return result.SHA, nil

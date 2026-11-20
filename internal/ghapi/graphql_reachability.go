@@ -63,11 +63,12 @@ func (c *Client) batchBranchContainsChunk(ctx context.Context, owner, repo, sha 
 	gqlErr := c.graphql.DoWithContext(profile.WithGraphQLLabel(ctx, "reachability"), query, vars, &data)
 	if gqlErr != nil {
 		var httpErr *api.HTTPError
-		if errors.As(gqlErr, &httpErr) {
-			if c.repoFallbackEligible(ctx, owner, repo, gqlErr) {
-				return c.anonBatchBranchContains(ctx, owner, repo, sha, branches)
+		if errors.As(gqlErr, &httpErr) || isIPAllowListDenial(gqlErr) {
+			fctx, ok, cause := c.repoFallback(ctx, owner, repo, gqlErr)
+			if ok {
+				return c.anonBatchBranchContains(fctx, owner, repo, sha, branches)
 			}
-			return "", false, gqlErr
+			return "", false, c.fallbackFailure(owner, gqlErr, cause)
 		}
 		if data == nil {
 			return "", false, gqlErr

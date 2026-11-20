@@ -117,8 +117,13 @@ func (c *Client) checkPinBatch(ctx context.Context, pins []PinCheck) []PinState 
 	states, batchErr := c.checkPinsOnce(ctx, pins)
 	if !splittable(batchErr) || len(pins) == 1 || ctx.Err() != nil {
 		for i, s := range states {
-			if s.Err != nil && ctx.Err() == nil && c.repoFallbackEligible(ctx, pins[i].Owner, pins[i].Repo, s.Err) {
-				states[i] = c.checkPinREST(ctx, pins[i])
+			if s.Err == nil || ctx.Err() != nil {
+				continue
+			}
+			if fctx, ok, cause := c.repoFallback(ctx, pins[i].Owner, pins[i].Repo, s.Err); ok {
+				states[i] = c.checkPinREST(fctx, pins[i])
+			} else {
+				states[i].Err = c.fallbackFailure(pins[i].Owner, s.Err, cause)
 			}
 		}
 		return states
@@ -194,6 +199,10 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 	states := make([]PinState, len(pins))
 	for alias, i := range aliasMap {
 		p := pins[i]
+		if policyErr := ipAllowListAliasError(gqlErr, alias); policyErr != nil {
+			states[i].Err = policyErr
+			continue
+		}
 		raw, ok := data[alias]
 		switch {
 		case samlOwners[p.Owner] && (!ok || string(raw) == "null"):
@@ -204,6 +213,11 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 			continue
 		case !ok:
 			states[i].Err = fmt.Errorf("repository %s/%s missing from response", p.Owner, p.Repo)
+			continue
+		case string(raw) == "null" && batchErr != nil && aliasError(gqlErr, alias) == nil && isIPAllowListDenial(batchErr):
+			// A pathless IP-policy denial must reach the public fallback even
+			// when the alias came back null, not be read as a missing repository.
+			states[i].Err = batchErr
 			continue
 		case string(raw) == "null":
 			states[i].Err = aliasError(gqlErr, alias)

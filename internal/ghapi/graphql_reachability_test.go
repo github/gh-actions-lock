@@ -1,8 +1,14 @@
 package ghapi
 
 import (
+	"context"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildBranchCompareQuery(t *testing.T) {
@@ -40,4 +46,35 @@ func TestBatchReachabilitySize(t *testing.T) {
 	if batchReachabilitySize != 50 {
 		t.Fatalf("expected 50, got %d", batchReachabilitySize)
 	}
+}
+
+// Cached metadata must not erase the policy that forced a rate-limited fallback.
+func TestBatchBranchContains_IPAllowListRateLimitedFallback(t *testing.T) {
+	resetAnonFallbackState()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", `^/repos/acme/widget$`), httpmock.JSONResponse(map[string]any{"full_name": "acme/widget"}))
+	reg.Register(httpmock.GraphQL(`compare\(headRef`), httpmock.JSONResponse(map[string]any{
+		"data":   map[string]any{"repo": nil},
+		"errors": []map[string]any{{"type": "FORBIDDEN", "message": ipAllowListDeniedMessage("acme"), "path": []any{"repo"}}},
+	}))
+	reg.RegisterReusable(anyRequest, ipAllowListAPI("acme", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	c := newTestClient(t, reg)
+	c.anonHTTP = &http.Client{Transport: reg}
+
+	// An earlier pin warms the metadata the fallback then relies on.
+	_, err := c.RepoMetadata(context.Background(), "acme", "widget")
+	require.NoError(t, err)
+
+	_, checked, err := c.BatchBranchContains(context.Background(), "acme", "widget", paritySHA, []BranchHead{
+		{Name: "main", SHA: parityMoved},
+	})
+	assert.False(t, checked)
+	var rateLimited *SSORateLimitedError
+	require.ErrorAs(t, err, &rateLimited)
+	assert.Contains(t, rateLimited.Error(), "IP allow list")
+	assert.NotContains(t, rateLimited.Error(), "SAML")
 }
