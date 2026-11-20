@@ -139,8 +139,8 @@ category name alone.
 
 Copy [`.github/workflows/verify-lockfile.yml`](https://github.com/github/gh-actions-lock/blob/main/.github/workflows/verify-lockfile.yml)
 into the repository, then run `gh actions-lock` once so the new workflow is locked too. It runs
-`gh actions-lock --verify` on pull requests, pushes to `main`, and a weekly schedule that catches
-re-pointed tags. The job's `GITHUB_TOKEN` reads public actions and the repository itself; actions
+`gh actions-lock --verify` on pull requests and pushes to `main`.
+The job's `GITHUB_TOKEN` reads public actions and the repository itself; actions
 from other private or internal repositories need a token that can read them.
 
 ## Limits
@@ -153,8 +153,8 @@ from other private or internal repositories need a token that can read them.
 
 ## Learn more
 
-`gh actions-lock --help` is authoritative for flags. Failed runs print the path of a saved run
-log; attach it to bug reports. Start from these, plus each finding's `doc_url`:
+`gh actions-lock --help` is authoritative for flags. When a failed run prints a saved run-log path,
+attach that log to bug reports. Start from these, plus each finding's `doc_url`:
 
 - [Workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)
 - [Lock workflow dependencies](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies)
