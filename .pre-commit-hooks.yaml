@@ -1,0 +1,7 @@
+- id: gh-actions-lock
+  name: gh-actions-lock
+  description: Update `.github/workflows/actions.lock`. Needs network access.
+  entry: gh-actions-lock
+  language: golang
+  files: ^\.github/workflows/([^/]+\.ya?ml|actions\.lock)$
+  pass_filenames: false
