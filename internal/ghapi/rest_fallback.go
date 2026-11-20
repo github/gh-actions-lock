@@ -141,7 +141,8 @@ func (c *Client) policyFailure(owner string, denial, cause error) error {
 		if !ip {
 			return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: denial}
 		}
-		if errors.As(cause, new(*SSORateLimitedError)) {
+		var limited *SSORateLimitedError
+		if errors.As(cause, &limited) && limited.ipPolicy {
 			return cause
 		}
 		return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: cause, ipPolicy: true}
