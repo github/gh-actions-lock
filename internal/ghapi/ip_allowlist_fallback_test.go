@@ -654,3 +654,29 @@ func TestIPAllowListFallback_SAMLMetadataRateLimit(t *testing.T) {
 	assert.False(t, RetryAt(err).IsZero(), "reset time was dropped")
 	assert.NotContains(t, Brief(err), "SSO")
 }
+
+// After a transfer the requested owner is not the organization whose allow list
+// refused the token, so IP-policy messages name no organization, while SAML's
+// (which belongs to the requested owner) still does.
+func TestSSORateLimitedError_NamesOwnerOnlyForSAML(t *testing.T) {
+	ip := (&SSORateLimitedError{Host: "github.com", Owner: "alice", ipPolicy: true}).Error()
+	assert.NotContains(t, ip, "alice")
+	assert.Contains(t, ip, "IP allow list")
+	assert.Contains(t, ip, "anonymous fallback for public repositories was rate-limited")
+
+	saml := (&SSORateLimitedError{Host: "github.com", Owner: "alice"}).Error()
+	assert.Contains(t, saml, "alice")
+	assert.NotContains(t, saml, "IP allow list")
+
+	c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/orgs/alice" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	_, err := c.CommitSHA(context.Background(), "alice", "action", "v1")
+	require.Error(t, err)
+	assert.True(t, IPAllowListBlocked(err), "err = %v", err)
+	assert.NotContains(t, Brief(err), "alice")
+}
