@@ -235,6 +235,66 @@ func TestIPAllowListFallback_PublicRepositoryMissingRef(t *testing.T) {
 	}
 }
 
+// GraphQL may be refused while an authenticated REST read of the repository
+// succeeds, so that metadata proves nothing about what an anonymous read sees:
+// only a repository the credential-free read can see takes the fallback.
+func TestIPAllowListFallback_AuthenticatedMetadataIsNotProof(t *testing.T) {
+	ctx := context.Background()
+	graphqlOnly := func(t *testing.T, anonRepo http.HandlerFunc) (*Client, *[]string) {
+		t.Helper()
+		resetAnonFallbackState()
+		reg := &httpmock.Registry{}
+		var anon []string
+		reg.RegisterReusable(anyRequest, func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("Authorization") != "" {
+				if req.URL.Path == "/graphql" {
+					resp, err := httpmock.JSONResponse(map[string]any{"message": ipAllowListDeniedMessage("acme")})(req)
+					resp.StatusCode = http.StatusForbidden
+					return resp, err
+				}
+				return httpmock.JSONResponse(map[string]any{"full_name": "acme/widget", "id": 2, "owner": map[string]any{"id": 1}})(req)
+			}
+			rec := httptest.NewRecorder()
+			anon = append(anon, req.URL.Path)
+			if req.URL.Path == "/orgs/acme" {
+				rec.WriteHeader(http.StatusOK)
+			} else {
+				anonRepo(rec, req)
+			}
+			resp := rec.Result()
+			resp.Request = req
+			return resp, nil
+		})
+		c := newTestClient(t, reg)
+		c.anonHTTP = &http.Client{Transport: reg}
+		return c, &anon
+	}
+	checks := map[string]func(*Client) error{
+		"pins": func(c *Client) error {
+			return c.CheckPins(ctx, []PinCheck{{Owner: "acme", Repo: "widget", SHA: paritySHA}})[0].Err
+		},
+		"action files": func(c *Client) error {
+			return c.ResolveActionFiles(ctx, []ActionFileRequest{{Owner: "acme", Repo: "widget", Ref: "v1"}})[0].Err
+		},
+	}
+	for name, check := range checks {
+		t.Run(name+"/not public", func(t *testing.T) {
+			c, anon := graphqlOnly(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) })
+			err := check(c)
+			require.Error(t, err)
+			assert.True(t, IPAllowListBlocked(err), "err = %v", err)
+			assert.False(t, IsNotFound(err), "err = %v", err)
+			assert.NotContains(t, *anon, "/repos/acme/widget/commits/v1", "no anonymous read of a repository it can't see")
+		})
+		t.Run(name+"/outage", func(t *testing.T) {
+			c, _ := graphqlOnly(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
+			err := check(c)
+			require.Error(t, err)
+			assert.True(t, IsTransient(err), "err = %v", err)
+		})
+	}
+}
+
 // The same reads succeed for a public repository.
 func TestIPAllowListFallback_PublicRepositoryReads(t *testing.T) {
 	ctx := context.Background()

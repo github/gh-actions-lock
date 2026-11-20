@@ -144,6 +144,10 @@ type repoMeta struct {
 	RepoID        int64
 	Visibility    string
 	PushedAt      string
+	// anonymous marks metadata read without credentials after an IP allow
+	// list refused the token: proof that the repository is public. Metadata
+	// from an authenticated read, or from the cache of one, is not.
+	anonymous bool
 }
 
 // repoMetadata fetches repos/{owner}/{repo} at most once per run, coalescing
@@ -177,6 +181,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			} `json:"owner"`
 		}
 		path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
+		var viaFallback bool
 		if c.restOnly {
 			if err := c.anonGet(ctx, path, &resp); err != nil {
 				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, err)
@@ -190,6 +195,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 					}
 					return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
 				}
+				viaFallback = isIPAllowListDenial(err)
 			} else {
 				return repoMeta{}, fmt.Errorf("fetching %s: %w", path, c.ssoErr(owner, err))
 			}
@@ -201,6 +207,7 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 			RepoID:        resp.ID,
 			Visibility:    resp.Visibility,
 			PushedAt:      resp.PushedAt,
+			anonymous:     viaFallback,
 		}
 		c.repoMetaCache.Put(key, m)
 		return m, nil

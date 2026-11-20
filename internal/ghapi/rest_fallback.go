@@ -171,29 +171,36 @@ func (c *Client) policyFallbackEligible(ctx context.Context, owner, repo string,
 	if v, ok := anonProbeCache.Load(c.anonBase() + "/" + owner); !ok || v.(bool) {
 		return false
 	}
-	return c.publicRepoReadable(ctx, owner, repo)
+	ok, _ := c.publicRepoReadable(ctx, owner, repo)
+	return ok
 }
 
 // publicRepoReadable reports whether an unauthenticated request can read
-// owner/repo, following redirects. Only definitive answers are cached.
-func (c *Client) publicRepoReadable(ctx context.Context, owner, repo string) bool {
+// owner/repo, following redirects. Only definitive answers are cached. When
+// the read could not be made (an outage or rate limit), err says why.
+func (c *Client) publicRepoReadable(ctx context.Context, owner, repo string) (ok bool, err error) {
 	key := c.anonBase() + "/" + owner + "/" + repo
 	if v, ok := anonProbeCache.Load(key); ok {
-		return v.(bool)
+		return v.(bool), nil
 	}
 	path := fmt.Sprintf("repos/%s/%s", url.PathEscape(owner), url.PathEscape(repo))
-	err := c.anonGet(ctx, path, &struct{}{})
+	err = c.anonGet(ctx, path, &struct{}{})
 	if err == nil {
 		anonProbeCache.Store(key, true)
-		return true
+		return true, nil
 	}
 	if code, _ := StatusCode(err); code == http.StatusNotFound {
 		anonProbeCache.Store(key, false)
-	} else if IsTransient(err) && !IsRateLimited(err) {
+		return false, nil
+	}
+	if !IsTransient(err) {
+		return false, nil
+	}
+	if !IsRateLimited(err) {
 		// A rate limit is already recorded for the owner by anonGet.
 		anonProbeFailed.Store(c.anonBase()+"/"+owner, err)
 	}
-	return false
+	return false, err
 }
 
 // repoFallback reports whether owner/repo can be read anonymously after err
@@ -202,10 +209,13 @@ func (c *Client) publicRepoReadable(ctx context.Context, owner, repo string) boo
 // succeed. Record the policy even when metadata is cached and supplies no REST
 // denial.
 //
-// When an IP allow list is the block and the metadata read fails with an
-// outage or rate limit, that failure is returned: it can clear on a retry,
-// unlike the denial err, which would be reported as final. Any other failure
-// means the repository is not readable and err stands.
+// When an IP allow list is the block, metadata that an authenticated read
+// (or the cache of one) supplied proves nothing about what the anonymous reads
+// that follow will see, so a credential-free read of the repository must also
+// succeed. If either read fails with an outage or rate limit, that failure is
+// returned: it can clear on a retry, unlike the denial err, which would be
+// reported as final. Any other failure means the repository is not readable
+// and err stands.
 func (c *Client) repoFallback(ctx context.Context, owner, repo string, err error) (eligible bool, failure error) {
 	if IsProxima(c.Hostname) {
 		return false, nil
@@ -218,14 +228,24 @@ func (c *Client) repoFallback(ctx context.Context, owner, repo string, err error
 	// Also for a 401, so a later rate limit isn't blamed on a policy an
 	// earlier lookup of this owner recorded.
 	c.recordPolicy(owner, err)
-	_, metaErr := c.repoMetadata(ctx, owner, repo)
-	if metaErr == nil {
-		return true, nil
+	meta, metaErr := c.repoMetadata(ctx, owner, repo)
+	ip := isIPAllowListDenial(err)
+	if metaErr != nil {
+		if ip && IsTransient(metaErr) {
+			return false, metaErr
+		}
+		return false, nil
 	}
-	if isIPAllowListDenial(err) && IsTransient(metaErr) {
-		return false, metaErr
+	if ip && !meta.anonymous {
+		// Metadata that an authenticated read supplied (or the cache kept)
+		// doesn't show the anonymous reads that follow will see the
+		// repository: require a credential-free one.
+		ok, anonErr := c.publicRepoReadable(ctx, owner, repo)
+		if !ok {
+			return false, anonErr
+		}
 	}
-	return false, nil
+	return true, nil
 }
 
 // fallbackFailure is the error to report when owner's anonymous fallback was
