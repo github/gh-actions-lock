@@ -310,6 +310,8 @@ func parseActionFileResponse(data map[string]json.RawMessage, refs []ActionFileR
 		if string(raw) == "null" {
 			if samlOwners[ref.Owner] {
 				results[idx].Err = fmt.Errorf("%s", ssoRequiredMessage(hostname, ref.Owner))
+			} else if batchErr != nil && isIPAllowListDenial(batchErr) {
+				results[idx].Err = batchErr
 			} else {
 				results[idx].Err = fmt.Errorf("repository not found or not accessible")
 			}

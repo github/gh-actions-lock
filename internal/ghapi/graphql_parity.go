@@ -214,6 +214,11 @@ func parsePinCheckResponse(data map[string]json.RawMessage, pins []PinCheck, gql
 		case !ok:
 			states[i].Err = fmt.Errorf("repository %s/%s missing from response", p.Owner, p.Repo)
 			continue
+		case string(raw) == "null" && batchErr != nil && aliasError(gqlErr, alias) == nil && isIPAllowListDenial(batchErr):
+			// A pathless IP-policy denial must reach the public fallback even
+			// when the alias came back null, not be read as a missing repository.
+			states[i].Err = batchErr
+			continue
 		case string(raw) == "null":
 			states[i].Err = aliasError(gqlErr, alias)
 			states[i].RepoMissing = states[i].Err == nil || repoNotFound(gqlErr, alias)

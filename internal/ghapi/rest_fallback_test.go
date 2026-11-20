@@ -595,6 +595,10 @@ func TestIPAllowListRateLimitedGuidance(t *testing.T) {
 		{"pin metadata", "/repos/acme/widget", pins, false},
 		{"ancestry probe", "/orgs/acme", ancestry, false},
 		{"ancestry metadata", "/repos/acme/widget", ancestry, false},
+		{"ref comparison probe", "/orgs/acme", func(c *Client) error {
+			_, _, err := c.CompareRefs(ctx, "acme", "widget", paritySHA, parityMoved)
+			return err
+		}, false},
 		{"action commit", "/repos/acme/widget/commits/v1", action, true},
 		{"action contents", "/repos/acme/widget/contents/action.yml", action, true},
 	}

@@ -585,6 +585,18 @@ func TestParsersPreserveAliasIPPolicy(t *testing.T) {
 	}
 }
 
+func TestParsersPreserveBatchIPPolicyForNullAlias(t *testing.T) {
+	gqlErr := &api.GraphQLError{Errors: []api.GraphQLErrorItem{
+		{Type: "FORBIDDEN", Message: ipAllowListDeniedMessage("acme")},
+	}}
+	data := map[string]json.RawMessage{"a0": json.RawMessage("null")}
+	actions := parseActionFileResponse(data, []ActionFileRequest{{Owner: "acme", Repo: "widget"}}, map[string]int{"a0": 0}, gqlErr, "github.com")
+	states := parsePinCheckResponse(data, []PinCheck{{Owner: "acme", Repo: "widget"}}, gqlErr, "github.com")
+	assert.True(t, isIPAllowListDenial(actions[0].Err), "action files: %v", actions[0].Err)
+	assert.True(t, isIPAllowListDenial(states[0].Err), "pins: %v", states[0].Err)
+	assert.False(t, states[0].RepoMissing)
+}
+
 func TestResolveActionFiles_SingleRefBatchErrorSurfaced(t *testing.T) {
 	// A single-ref batch can't be split further, so a batch-level cost error
 	// must surface on the ref rather than being mislabeled "not found".

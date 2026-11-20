@@ -714,6 +714,10 @@ func parityFinding(pw checks.ParsedWorkflow, ref parserlock.ActionRef, lp lockfi
 		if ghapi.IPAllowListBlocked(st.Err) {
 			// Authorizing the token for SSO doesn't lift an IP allow list.
 			f.Remediation = fmt.Sprintf("use a token from an IP address the %s organization's IP allow list permits, then re-run", pc.Owner)
+			if errors.As(st.Err, new(*ghapi.SSORateLimitedError)) {
+				// A public action on a hosted runner has no allow-listed address; waiting is the remaining fix.
+				f.Remediation = fmt.Sprintf("wait for the anonymous GitHub API rate limit to reset and re-run, or use a token from an IP address the %s organization's IP allow list permits", pc.Owner)
+			}
 		}
 	case st.RepoMissing:
 		f.Category = checks.RepoUnavailable

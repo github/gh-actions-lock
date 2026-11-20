@@ -433,7 +433,7 @@ func (c *Client) CompareRefs(ctx context.Context, owner, repo, base, head string
 		}
 	}
 	if err != nil {
-		return "", "", err
+		return "", "", c.ssoErr(owner, err)
 	}
 	return resp.Status, resp.MergeBaseCommit.SHA, nil
 }

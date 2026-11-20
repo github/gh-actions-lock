@@ -481,10 +481,10 @@ func TestParityFinding_RateLimitedIPAllowListFallback(t *testing.T) {
 	ref := parserlock.ActionRef{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, Ref: lp.Pin.Ref}
 	f, ok := parityFinding(checks.ParsedWorkflow{Path: ".github/workflows/ci.yml"}, ref, lp,
 		ghapi.PinCheck{Owner: lp.Pin.Owner, Repo: lp.Pin.Repo, SHA: sha, Head: "v2.2.2"},
-		ghapi.PinState{Err: err})
+		ghapi.PinState{Err: err}, nil)
 	require.True(t, ok)
 	assert.Equal(t, checks.RepoUnavailable, f.Category)
 	assert.False(t, f.Retryable)
 	assert.Contains(t, f.Detail, "IP allow list")
-	assert.Equal(t, "use a token from an IP address the krzema12 organization's IP allow list permits, then re-run", f.Remediation)
+	assert.Equal(t, "wait for the anonymous GitHub API rate limit to reset and re-run, or use a token from an IP address the krzema12 organization's IP allow list permits", f.Remediation)
 }
