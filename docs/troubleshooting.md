@@ -174,7 +174,7 @@ Don't trust the new repository. Find the action's current, verified location, po
 
 **Headline:** Repository missing or inaccessible
 
-The extension can't find the action's repository. Either the repository was deleted, or your token can't read it. For a private or internal repository, check that you have access and that your token is authorized for single sign-on if your organization requires it. Then run the command again.
+The extension can't find the action's repository. Either the repository was deleted, or your token can't read it. For a private or internal repository, check that you have access and that your token is authorized for single sign-on if your organization requires it. If the organization has an IP allow list, the token is refused from addresses it doesn't permit (for example a GitHub-hosted runner): the extension then reads public repositories anonymously, so a private repository stays unavailable until you run from an allowed IP address. Then run the command again.
 
 ### `incomplete-lockfile`
 

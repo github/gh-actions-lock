@@ -259,7 +259,11 @@ func (c *Client) restGet(ctx context.Context, owner, repo, path string, dest any
 	} else {
 		err = c.rest.DoWithContext(ctx, http.MethodGet, path, nil, dest)
 		if err != nil && c.orgPolicyFallback(ctx, owner, repo, err) {
-			err = c.anonGet(ctx, path, dest)
+			if anonErr := c.anonGet(ctx, path, dest); anonErr != nil {
+				err = c.anonReadFailed(ctx, owner, repo, err, anonErr)
+			} else {
+				err = nil
+			}
 		}
 	}
 	if code, _ := StatusCode(err); code == http.StatusNotFound || code == http.StatusUnprocessableEntity {

@@ -105,6 +105,9 @@ func TestIPAllowListFallback_RateLimitKeepsResetTime(t *testing.T) {
 	assert.True(t, IPAllowListBlocked(err))
 	assert.True(t, IsRateLimited(err))
 	assert.False(t, RetryAt(err).IsZero(), "reset time was dropped")
+	reason, limited := Outage(err)
+	assert.True(t, limited)
+	assert.Equal(t, "anonymous GitHub API rate limit exhausted (an IP allow list refused the token)", reason)
 }
 
 // SAML blocks keep their own error: authorizing the token is the fix, so a
@@ -133,12 +136,15 @@ func TestCompareCommits_AnonymousFallbackUnprocessable(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			compares := 0
 			c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/orgs/acme" {
+				switch r.URL.Path {
+				case "/orgs/acme":
 					w.WriteHeader(http.StatusOK)
-					return
+				case "/repos/acme/widget":
+					writeJSON(w, map[string]any{"full_name": "acme/widget"})
+				default:
+					compares++
+					w.WriteHeader(status)
 				}
-				compares++
-				w.WriteHeader(status)
 			})
 			for range 2 {
 				ok, err := c.CompareCommits(context.Background(), "acme", "widget", paritySHA, parityMoved)
@@ -148,6 +154,80 @@ func TestCompareCommits_AnonymousFallbackUnprocessable(t *testing.T) {
 			assert.Equal(t, 1, compares, "the false verdict is cached")
 		})
 	}
+}
+
+// Anonymous reads can't see a private repository, so an anonymous 404 behind
+// an IP allow list is not a verdict on the ref, the commit or the history:
+// the denial stands and nothing is cached as "not an ancestor".
+func TestIPAllowListFallback_PrivateRepository(t *testing.T) {
+	ctx := context.Background()
+	reads := map[string]func(*Client) error{
+		"commit": func(c *Client) error { _, err := c.CommitSHA(ctx, "acme", "widget", "v1"); return err },
+		"releases": func(c *Client) error {
+			_, err := c.Releases(ctx, "acme", "widget")
+			return err
+		},
+		"branches": func(c *Client) error { _, err := c.ListBranches(ctx, "acme", "widget"); return err },
+		"tags":     func(c *Client) error { _, err := c.ListTags(ctx, "acme", "widget"); return err },
+		"all tags": func(c *Client) error { _, err := c.TagsAtCommit(ctx, "acme", "widget", paritySHA); return err },
+		"compare": func(c *Client) error {
+			_, err := c.CompareCommits(ctx, "acme", "widget", paritySHA, parityMoved)
+			return err
+		},
+		"compare refs": func(c *Client) error {
+			_, _, err := c.CompareRefs(ctx, "acme", "widget", paritySHA, parityMoved)
+			return err
+		},
+		"git ref":  func(c *Client) error { _, _, err := c.fetchGitRef(ctx, "acme", "widget", "refs/tags/v1"); return err },
+		"metadata": func(c *Client) error { _, err := c.repoMetadata(ctx, "acme", "widget"); return err },
+	}
+	for name, read := range reads {
+		t.Run(name, func(t *testing.T) {
+			c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/orgs/acme" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				http.NotFound(w, r)
+			})
+			err := read(c)
+			require.Error(t, err)
+			assert.True(t, IPAllowListBlocked(err), "err = %v", err)
+			assert.False(t, IsNotFound(err), "err = %v", err)
+		})
+	}
+}
+
+// The same reads succeed for a public repository.
+func TestIPAllowListFallback_PublicRepositoryReads(t *testing.T) {
+	ctx := context.Background()
+	c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orgs/acme":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widget":
+			writeJSON(w, map[string]any{"full_name": "acme/widget", "default_branch": "main", "id": 2, "owner": map[string]any{"id": 1}})
+		case "/repos/acme/widget/releases":
+			writeJSON(w, []map[string]any{{"tag_name": "v1"}})
+		case "/repos/acme/widget/branches":
+			writeJSON(w, []map[string]any{{"name": "main", "commit": map[string]string{"sha": paritySHA}}})
+		case "/repos/acme/widget/tags":
+			writeJSON(w, []map[string]any{{"name": "v1", "commit": map[string]string{"sha": paritySHA}}})
+		default:
+			t.Errorf("unexpected anonymous request: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	releases, err := c.Releases(ctx, "acme", "widget")
+	require.NoError(t, err)
+	require.Len(t, releases, 1)
+	branches, err := c.ListBranches(ctx, "acme", "widget")
+	require.NoError(t, err)
+	require.Len(t, branches, 1)
+	tags, err := c.ListTags(ctx, "acme", "widget")
+	require.NoError(t, err)
+	require.Len(t, tags, 1)
+	assert.Equal(t, "main", c.GetDefaultBranch(ctx, "acme", "widget"))
 }
 
 // A public repository transferred from a user into an IP-restricted
@@ -299,13 +379,16 @@ func TestIPAllowListFallback_ProbeFailures(t *testing.T) {
 		assert.False(t, IPAllowListBlocked(err))
 	})
 	t.Run("canceled context is not an outage", func(t *testing.T) {
-		c, _ := ipAllowListClient(t, "acme", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
+		c, _ := ipAllowListClient(t, "acme", func(http.ResponseWriter, *http.Request) {})
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
+		c.anonHTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			cancel()
+			return nil, ctx.Err()
+		})}
 		_, err := c.CommitSHA(ctx, "acme", "widget", "v1")
 		require.Error(t, err)
+		_, stored := anonProbeFailed.Load(c.anonBase() + "/acme")
+		assert.False(t, stored, "a canceled run says nothing about the owner")
 		assert.False(t, IsTransient(err), "err = %v", err)
 	})
 }

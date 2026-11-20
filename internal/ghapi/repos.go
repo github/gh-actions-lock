@@ -59,10 +59,11 @@ func (c *Client) ListBranches(ctx context.Context, owner, repo string) ([]Branch
 			if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 				if c.orgPolicyFallback(ctx, owner, repo, err) {
 					anon, anonErr := c.anonListBranches(ctx, owner, repo)
-					if anonErr == nil {
-						c.branchListCache.Put(key, anon)
+					if anonErr != nil {
+						return nil, c.anonReadFailed(ctx, owner, repo, err, anonErr)
 					}
-					return anon, anonErr
+					c.branchListCache.Put(key, anon)
+					return anon, nil
 				}
 				return nil, fmt.Errorf("listing branches for %s/%s: %w", owner, repo, c.ssoErr(owner, err))
 			}
@@ -114,7 +115,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string) ([]TagEntry, 
 			if c.orgPolicyFallback(ctx, owner, repo, err) {
 				tags, anonErr := c.anonListTags(ctx, owner, repo)
 				if anonErr != nil {
-					return result{err: anonErr}, nil
+					return result{err: c.anonReadFailed(ctx, owner, repo, err, anonErr)}, nil
 				}
 				c.tagListCache.Put(key, tags)
 				return result{tags: tags}, nil
@@ -183,6 +184,10 @@ func (c *Client) repoMetadata(ctx context.Context, owner, repo string) (repoMeta
 		} else if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 			if c.orgPolicyFallback(ctx, owner, repo, err) {
 				if anonErr := c.anonGet(ctx, path, &resp); anonErr != nil {
+					// This read is what decides readability (see anonReadFailed).
+					if code, _ := StatusCode(anonErr); code == http.StatusNotFound && isIPAllowListDenial(err) {
+						return repoMeta{}, fmt.Errorf("fetching %s: %w", path, c.ssoErr(owner, err))
+					}
 					return repoMeta{}, fmt.Errorf("anonymous fallback fetching %s: %w", path, anonErr)
 				}
 			} else {
@@ -391,6 +396,9 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, sha, branchHea
 			}
 			if c.orgPolicyFallback(ctx, owner, repo, err) {
 				contains, anonErr := c.anonCompareCommits(ctx, owner, repo, sha, branchHeadSHA)
+				if anonErr != nil {
+					anonErr = c.anonReadFailed(ctx, owner, repo, err, anonErr)
+				}
 				if code, _ := StatusCode(anonErr); code == http.StatusNotFound || code == http.StatusUnprocessableEntity {
 					// Same verdict as the authenticated read above: the
 					// commits are unrelated or one is missing.
@@ -435,7 +443,11 @@ func (c *Client) CompareRefs(ctx context.Context, owner, repo, base, head string
 		// org's SSO is still readable anonymously.
 		if err != nil && c.orgPolicyFallback(ctx, owner, repo, err) {
 			resp = compareResponse{}
-			err = c.anonGet(ctx, path, &resp)
+			if anonErr := c.anonGet(ctx, path, &resp); anonErr != nil {
+				err = c.anonReadFailed(ctx, owner, repo, err, anonErr)
+			} else {
+				err = nil
+			}
 		}
 	}
 	if err != nil {

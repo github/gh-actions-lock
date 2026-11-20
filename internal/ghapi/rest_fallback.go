@@ -77,6 +77,9 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
+	// Whatever this probe answers replaces what an earlier one left.
+	anonRateLimited.Delete(key)
+	anonProbeFailed.Delete(key)
 	resp, err := c.probeClient().Do(req)
 	if err != nil {
 		// Transport error (network, context canceled) — don't cache.
@@ -87,8 +90,6 @@ func (c *Client) SSOFallbackEligible(ctx context.Context, owner string) bool {
 	}
 	resp.Body.Close()
 
-	anonRateLimited.Delete(key)
-	anonProbeFailed.Delete(key)
 	herr := &api.HTTPError{StatusCode: resp.StatusCode, RequestURL: req.URL, Headers: resp.Header}
 	switch {
 	case resp.StatusCode == http.StatusOK:
@@ -213,9 +214,10 @@ func (c *Client) repoFallback(ctx context.Context, owner, repo string, err error
 		if code, _ := StatusCode(err); code != http.StatusUnauthorized {
 			return false, nil
 		}
-	} else {
-		c.recordPolicy(owner, err)
 	}
+	// Also for a 401, so a later rate limit isn't blamed on a policy an
+	// earlier lookup of this owner recorded.
+	c.recordPolicy(owner, err)
 	_, metaErr := c.repoMetadata(ctx, owner, repo)
 	if metaErr == nil {
 		return true, nil
@@ -367,6 +369,23 @@ func (c *Client) probeClient() *http.Client {
 	return c.anonClient()
 }
 
+// anonReadFailed is the error for a read that failed after the anonymous
+// fallback was taken for denial. Anonymous reads cannot see a private
+// repository, so under an IP allow list a 404 or 422 may mean the repository
+// isn't public rather than that the ref or commit is missing. The
+// repository's own anonymous metadata decides: when it isn't readable the
+// denial stands (or the metadata's outage, which a retry may clear), and only
+// for a readable repository is the 404 or 422 a verdict on the ref.
+func (c *Client) anonReadFailed(ctx context.Context, owner, repo string, denial, anonErr error) error {
+	if code, _ := StatusCode(anonErr); !isIPAllowListDenial(denial) || (code != http.StatusNotFound && code != http.StatusUnprocessableEntity) {
+		return anonErr
+	}
+	if ok, failure := c.repoFallback(ctx, owner, repo, denial); !ok {
+		return c.fallbackFailure(owner, denial, failure)
+	}
+	return anonErr
+}
+
 // anonHTTPErr is the error for a non-200 anonymous response. A response to
 // the credential-free retry of an IP allow list denial is anonymous whatever
 // the client's credential, and a rate limit on it keeps the policy that put
@@ -382,7 +401,9 @@ func (c *Client) anonHTTPErr(owner string, herr *api.HTTPError, retried bool) er
 	return &publicError{auth: publicAnonymous, err: err}
 }
 
-// anonGet performs an unauthenticated GET and decodes JSON into dest.
+// anonGet performs an unauthenticated GET and decodes JSON into dest. (A
+// github.com public client with a token retries an IP allow list denial
+// without it: see anonDo.)
 func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 	u := c.anonBase() + "/" + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -413,7 +434,7 @@ func (c *Client) anonGet(ctx context.Context, path string, dest any) error {
 			anonRateLimited.Store(ownerKey, herr)
 			blocked, _ := anonIPBlocked.Load(ownerKey)
 			ipPolicy, _ := blocked.(bool)
-			return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: herr, ipPolicy: ipPolicy}
+			return &SSORateLimitedError{Host: c.Hostname, Owner: owner, Err: herr, ipPolicy: ipPolicy || retried}
 		}
 		return c.anonHTTPErr(owner, herr, retried)
 	}
@@ -539,7 +560,8 @@ func (c *Client) anonCompareCommits(ctx context.Context, owner, repo, sha, branc
 
 // resolveAnonymous fetches the commit SHA and action.yml content for a
 // single ref using unauthenticated REST calls. This only works for public
-// repos and is used as a fallback when SSO blocks the authenticated path.
+// repos and is used as a fallback when an organization policy (SSO or an IP
+// allow list) blocks the authenticated path.
 func (c *Client) resolveAnonymous(ctx context.Context, ref ActionFileRequest) ActionFileResult {
 	result := ActionFileResult{
 		Hostname: c.Hostname,

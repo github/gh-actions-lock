@@ -511,19 +511,19 @@ func TestMarkRetryable_IPAllowListFallbackRateLimited(t *testing.T) {
 		func(req *http.Request) (*http.Response, error) {
 			switch {
 			case req.Header.Get("Authorization") != "":
-				resp, err := httpmock.JSONResponse(map[string]string{"message": "Although you appear to have the correct authorization credentials, the `acme` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."})(req)
+				resp, err := httpmock.JSONResponse(map[string]string{"message": "Although you appear to have the correct authorization credentials, the `retry-advice-org` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."})(req)
 				resp.StatusCode, resp.Status = http.StatusForbidden, "403 Forbidden"
 				return resp, err
 			case req.Method == http.MethodHead:
 				return httpmock.StatusResponse(http.StatusOK)(req)
-			case req.URL.Path == "/repos/acme/widget":
-				return httpmock.JSONResponse(map[string]any{"visibility": "public", "full_name": "acme/widget", "id": 2, "owner": map[string]any{"id": 1}})(req)
+			case req.URL.Path == "/repos/retry-advice-org/widget":
+				return httpmock.JSONResponse(map[string]any{"visibility": "public", "full_name": "retry-advice-org/widget", "id": 2, "owner": map[string]any{"id": 1}})(req)
 			}
 			return httpmock.StatusResponseWithHeaders(http.StatusTooManyRequests, map[string]string{"Retry-After": "120"})(req)
 		})
 	c, err := ghapi.New("tenant.ghe.com", ghapi.WithClientTransport(reg))
 	require.NoError(t, err)
-	_, err = c.CommitSHA(context.Background(), "acme", "widget", "v1")
+	_, err = c.CommitSHA(context.Background(), "retry-advice-org", "widget", "v1")
 	require.Error(t, err)
 
 	var f checks.Finding
@@ -534,4 +534,17 @@ func TestMarkRetryable_IPAllowListFallbackRateLimited(t *testing.T) {
 	assert.False(t, f.RetryAt.IsZero(), "reset time was dropped")
 	assert.Regexp(t, `^couldn't verify; re-run after \d\d:\d\d UTC, or run from an IP address the organization's IP allow list permits$`, f.Remediation)
 	assert.NotContains(t, f.Remediation, "token")
+}
+
+// TestResolveErrFinding_IPAllowListBlocked: a token can't lift an IP allow
+// list, so the resolver failure doesn't tell the user to find a better one.
+func TestResolveErrFinding_IPAllowListBlocked(t *testing.T) {
+	denied := &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Although you appear to have the correct authorization credentials, the `acme` organization has an IP allow list enabled, and your IP address is not permitted to access this resource."}
+	f := resolveErrFinding(".github/workflows/ci.yml", denied)
+	assert.Equal(t, checks.RepoUnavailable, f.Category)
+	assert.False(t, f.Retryable)
+	assert.Equal(t, "use a token from an IP address the organization's IP allow list permits, then re-run", f.Remediation)
+
+	other := resolveErrFinding(".github/workflows/ci.yml", &api.HTTPError{StatusCode: http.StatusForbidden, Message: "Resource not accessible by integration"})
+	assert.Contains(t, other.Remediation, "this token can read it")
 }

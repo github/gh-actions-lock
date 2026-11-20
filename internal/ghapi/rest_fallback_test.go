@@ -19,6 +19,7 @@ import (
 
 func TestSSOFallbackEligible(t *testing.T) {
 	// Stand up a server that returns 200 for /orgs/actions and 404 for others.
+	resetAnonFallbackState()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/orgs/actions":
@@ -32,8 +33,8 @@ func TestSSOFallbackEligible(t *testing.T) {
 	c := &Client{Hostname: "github.com", anonBaseURL: srv.URL}
 	ctx := context.Background()
 
-	// Reset the global cache between subtests.
-	anonProbeCache = sync.Map{}
+	// Reset the global caches between subtests.
+	resetAnonFallbackState()
 
 	if !c.SSOFallbackEligible(ctx, "actions") {
 		t.Error("expected actions org to be eligible")
@@ -66,7 +67,7 @@ func TestNew_RESTOnlyForDependabotProxy(t *testing.T) {
 }
 
 func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
-	anonProbeCache = sync.Map{} // reset cache
+	resetAnonFallbackState()
 
 	// Stand up a fake API server for anonymous resolution.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +131,7 @@ func TestResolveActionFiles_SSOFallbackForActionsOrg(t *testing.T) {
 }
 
 func TestResolveActionFiles_SSONoFallbackForNonActionsOrg(t *testing.T) {
-	anonProbeCache = sync.Map{} // reset cache
+	resetAnonFallbackState()
 
 	// Probe server: returns 404 for /orgs/mycompany (private org).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -374,8 +375,7 @@ func TestSSOFallbackEligible_CachesOnlyDefinitiveAnswers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			anonProbeCache = sync.Map{}
-			anonRateLimited = sync.Map{}
+			resetAnonFallbackState()
 			probes := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				probes++
@@ -406,8 +406,7 @@ func TestSSOFallbackEligible_CachesOnlyDefinitiveAnswers(t *testing.T) {
 func TestSSOFallbackEligible_ClearsStaleRateLimit(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusBadGateway} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			anonProbeCache = sync.Map{}
-			anonRateLimited = sync.Map{}
+			resetAnonFallbackState()
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(status)
 			}))
@@ -442,8 +441,7 @@ func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			anonProbeCache = sync.Map{}
-			anonRateLimited = sync.Map{}
+			resetAnonFallbackState()
 			srv := httptest.NewServer(http.HandlerFunc(tt.anon))
 			defer srv.Close()
 			saml := roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -480,8 +478,7 @@ func TestSSOFallback_RateLimitedGuidance(t *testing.T) {
 // TestCompareRefs_SSOFallback: a recorded ref that moved in a public
 // repository behind an org's SSO is still compared anonymously.
 func TestCompareRefs_SSOFallback(t *testing.T) {
-	anonProbeCache = sync.Map{}
-	anonRateLimited = sync.Map{}
+	resetAnonFallbackState()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/orgs/acme":
@@ -518,6 +515,7 @@ func TestCompareRefs_SSOFallback(t *testing.T) {
 func resetAnonFallbackState() {
 	anonProbeCache = sync.Map{}
 	anonRateLimited = sync.Map{}
+	anonProbeFailed = sync.Map{}
 	anonIPBlocked = sync.Map{}
 }
 

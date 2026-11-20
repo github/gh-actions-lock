@@ -196,6 +196,10 @@ func resolveErrFinding(path string, err error) checks.Finding {
 		Detail:       fmt.Sprintf("could not re-resolve actions: %s", err),
 		Remediation:  "check that each action's repository exists and this token can read it, then re-run",
 	}
+	if ghapi.IPAllowListBlocked(err) {
+		// A token can't lift an IP allow list, however able to read the repository.
+		f.Remediation = "use a token from an IP address the organization's IP allow list permits, then re-run"
+	}
 	if unanswered(err) {
 		// Low: this is the resolver failure itself, not a verdict about
 		// any specific dependency.

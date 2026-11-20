@@ -53,7 +53,7 @@ func (c *Client) Releases(ctx context.Context, owner, repo string) ([]RepoReleas
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &releases); err != nil {
 		if c.orgPolicyFallback(ctx, owner, repo, err) {
 			if anonErr := c.anonGet(ctx, path, &releases); anonErr != nil {
-				return nil, fmt.Errorf("anonymous fallback fetching releases for %s/%s: %w", owner, repo, anonErr)
+				return nil, fmt.Errorf("anonymous fallback fetching releases for %s/%s: %w", owner, repo, c.anonReadFailed(ctx, owner, repo, err, anonErr))
 			}
 		} else {
 			return nil, fmt.Errorf("fetching releases for %s/%s: %w", owner, repo, c.ssoErr(owner, err))
@@ -106,7 +106,7 @@ func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string
 	if err := c.rest.DoWithContext(ctx, http.MethodGet, path, nil, &result); err != nil {
 		if c.orgPolicyFallback(ctx, owner, repo, err) {
 			if anonErr := c.anonGet(ctx, path, &result); anonErr != nil {
-				return "", fmt.Errorf("anonymous fallback resolving %s/%s@%s: %w", owner, repo, ref, anonErr)
+				return "", fmt.Errorf("anonymous fallback resolving %s/%s@%s: %w", owner, repo, ref, c.anonReadFailed(ctx, owner, repo, err, anonErr))
 			}
 		} else {
 			return "", fmt.Errorf("resolving %s/%s@%s: %w", owner, repo, ref, c.ssoErr(owner, err))
