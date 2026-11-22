@@ -1783,6 +1783,66 @@ jobs:
 	require.NoError(t, err, stderr)
 }
 
+// TestSHAUseSharedWithRemoteCompositeConverges: the workflow and a remote
+// composite both use actions/checkout at the same full SHA (#310). The first
+// run rewrites the workflow's use to the tag and keeps the SHA key for the
+// composite's edge, so a second run changes nothing.
+func TestSHAUseSharedWithRemoteCompositeConverges(t *testing.T) {
+	const sha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	child := "94de994a9f6fffee200243214e17002e2920bb59"
+	composite := "name: c\nruns:\n  using: composite\n  steps:\n    - uses: actions/checkout@" + child + "\n"
+	reg := &httpmock.Registry{}
+	stubGraph(t, reg, nil,
+		map[string]string{"octo/composite": sha, "actions/checkout": child},
+		map[string]string{"octo/composite": composite})
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout/tags`), httpmock.JSONResponse(httpmock.TagListResponse("v4.2.0", child)))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout/git/ref/tags/v4\.2\.0$`),
+		httpmock.JSONResponse(httpmock.GitRefResponse("refs/tags/v4.2.0", child)))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{"ref": "refs/heads/main", "object": map[string]any{"sha": child, "type": "commit"}}))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout/branches`), httpmock.JSONResponse(httpmock.BranchListResponse("main", child)))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/actions/checkout$`),
+		httpmock.JSONResponse(map[string]any{"full_name": "actions/checkout", "default_branch": "main", "id": 1, "owner": map[string]any{"id": 1}}))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/composite$`),
+		httpmock.JSONResponse(map[string]any{"full_name": "octo/composite", "default_branch": "main", "id": 1, "owner": map[string]any{"id": 1}}))
+	httpmock.NoTagsNamed(reg, "actions", "checkout")
+	isolateRunLogs(t)
+	path := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: octo/composite@v1.0.0
+      - uses: actions/checkout@`+child+`
+`)
+	lockPath := filepath.Join(".github", "workflows", "actions.lock")
+
+	_, stderr, err := runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	wf, err := os.ReadFile(path)
+	require.NoError(t, err)
+	lock, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(wf), "uses: actions/checkout@v4.2.0\n")
+	assert.Contains(t, string(lock), "'.github/workflows/workflow.yml':\n        - 'actions/checkout@v4.2.0'\n        - 'octo/composite@v1.0.0'\n")
+	assert.Contains(t, string(lock), "uses:\n            - 'actions/checkout@"+child+"'\n")
+	assert.Contains(t, string(lock), "'actions/checkout@"+child+"':")
+
+	_, stderr, err = runCommandWithHTTP(t, parityFallback{reg}, "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	wfAgain, err := os.ReadFile(path)
+	require.NoError(t, err)
+	lockAgain, err := os.ReadFile(lockPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(wf), string(wfAgain), "second run leaves the workflow alone")
+	assert.Equal(t, string(lock), string(lockAgain), "second run leaves the lockfile alone")
+
+	_, stderr, err = runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
+	require.NoError(t, err, stderr)
+}
+
 // TestVerifyLocalAcceptsRecordedTagWithAt: a composite pins its child by full
 // SHA, and the child's entry records the tag found for it, which contains @
 // (as actions/attest-build-provenance's predicate@2.0.0 does).
@@ -1806,4 +1866,63 @@ jobs:
 
 	_, stderr, err := runCommandWithHTTP(t, &httpmock.Registry{}, "--verify-local", path)
 	require.NoError(t, err, stderr)
+}
+
+func TestCheck_ReusableWorkflowCallKeepsSHAFromSameRepositoryStep(t *testing.T) {
+	const sha = "b6e2e70617bc3265edd6dab6c906732b2f1ae151"
+
+	reg := &httpmock.Registry{}
+	httpmock.NoTagsNamed(reg, "dawidd6", "action-download-artifact")
+	reg.Register(
+		httpmock.GraphQLForRepo("dawidd6", "action-download-artifact"),
+		httpmock.JSONResponse(map[string]any{
+			"data": map[string]any{
+				"a0": testRepoResponse("dawidd6/action-download-artifact", sha, nodeActionYAML),
+			},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact$`),
+		httpmock.JSONResponse(map[string]any{
+			"default_branch": "main",
+			"id":             2,
+			"owner":          map[string]any{"id": 1},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/git/ref/heads/main`),
+		httpmock.JSONResponse(map[string]any{
+			"ref": "refs/heads/main", "object": map[string]any{"sha": sha, "type": "commit"},
+		}),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("v21", sha)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/dawidd6/action-download-artifact/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	call := "uses: dawidd6/action-download-artifact/.github/workflows/build.yml@" + sha + " # v21"
+	workflowPath := writeTempWorkflow(t, `
+name: ci
+on: push
+jobs:
+  call:
+    `+call+`
+  test:
+    needs: [call]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dawidd6/action-download-artifact@`+sha+` # v21
+`)
+
+	_, _, err := runCommandWithHTTP(t, reg, workflowPath)
+	require.NoError(t, err)
+
+	workflow, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(workflow), "      - uses: dawidd6/action-download-artifact@v21\n")
+	assert.Contains(t, string(workflow), "    "+call+"\n")
 }

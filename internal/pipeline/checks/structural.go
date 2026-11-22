@@ -31,30 +31,24 @@ func checkUntracked(pw ParsedWorkflow, tracked bool) []Finding {
 
 // checkNotPinned emits NotPinned for any uses: ref that has no
 // matching lockfile entry. When the lockfile has an entry for the same
-// action at a different ref, RefChanged wins, except for bare SHAs: an
-// unlocked SHA was never history-checked (it may be a fork commit served
-// under the upstream name), so it is NotPinned even if a sibling ref of
-// the same repo is locked.
+// action at a different ref, RefChanged wins, except for bare SHAs. The
+// Actions backend looks up a SHA use by its own key, so a SHA locked only
+// under its tag is still missing; an unlocked SHA was also never
+// history-checked (it may be a fork commit served under the upstream name).
 func checkNotPinned(pw ParsedWorkflow, depPins []lockedPin, depIndex map[string]lockedPin) []Finding {
 	if len(pw.Refs) == 0 {
 		return nil
 	}
 	knownAction := make(map[string]bool, len(depPins))
-	lockedSHA := make(map[string]bool, len(depPins))
 	for _, p := range depPins {
 		knownAction[nwoLower(p.Owner, p.Repo)] = true
-		lockedSHA[nwoLower(p.Owner, p.Repo)+"@"+strings.ToLower(p.SHA())] = true
 	}
 	var out []Finding
 	for _, ref := range pw.Refs {
-		if _, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref)]; ok {
+		if _, ok := depIndex[parserlock.IndexKey(ref.Owner, ref.Repo, lockfile.CanonicalRef(ref.Ref))]; ok {
 			continue
 		}
-		if parserlock.IsFullSha(ref.Ref) {
-			if lockedSHA[nwoLower(ref.Owner, ref.Repo)+"@"+strings.ToLower(ref.Ref)] {
-				continue
-			}
-		} else if knownAction[nwoLower(ref.Owner, ref.Repo)] {
+		if !parserlock.IsFullSha(ref.Ref) && knownAction[nwoLower(ref.Owner, ref.Repo)] {
 			continue
 		}
 		f := newRefFinding(pw, ref, NotPinned, SeverityError, ConfidenceHigh)
@@ -80,7 +74,7 @@ func checkSHARecordedRef(pw ParsedWorkflow, wfEntry []string, deps map[string]pa
 		if !ok || !found || !lockfile.RecordsOwnSHA(pin, action.Ref) {
 			continue
 		}
-		ref, ok := use(pin, action.Commit)
+		ref, ok := use(pin)
 		if !ok {
 			continue
 		}
@@ -100,10 +94,15 @@ func checkSHARecordedRef(pw ParsedWorkflow, wfEntry []string, deps map[string]pa
 // checkShaAsRef emits ShaAsRef for any uses: ref that is a bare
 // commit SHA — both bare-SHA uses with no lock entry and bare-SHA uses
 // whose lock entry just mirrors the same SHA. The anti-pattern (no
-// human-readable ref) is the same in both cases.
+// human-readable ref) is the same in both cases. A SHA a `$/…` action
+// pins is exempt: pinning keeps it on purpose (#264).
 func checkShaAsRef(pw ParsedWorkflow, depIndex map[string]lockedPin) []Finding {
 	var out []Finding
-	for _, ref := range pw.Refs {
+	refs := pw.RewriteRefs
+	if refs == nil {
+		refs = pw.Refs
+	}
+	for _, ref := range refs {
 		if !parserlock.IsFullSha(ref.Ref) {
 			continue
 		}
@@ -164,9 +163,8 @@ func checkRefChanged(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 }
 
 // checkStale emits Stale for lockfile dep entries that no uses:
-// ref in the workflow references. If the workflow has already been
-// rewritten to pin by SHA, the lockfile entry (keyed by the original tag)
-// is still valid — surface keys both ways so we don't false-flag.
+// ref in the workflow references by key. A tag-keyed entry does not cover a
+// use naming its commit (see lockfile.RootUse).
 // Stale is an error: a frozen check requires the lockfile to match the
 // workflows exactly, and a fix run prunes the entry.
 func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
@@ -176,7 +174,7 @@ func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 	used := lockfile.UsedRoot(pw.Refs)
 	var out []Finding
 	for _, p := range depPins {
-		if used(p.Pin, p.Commit) {
+		if used(p.Pin) {
 			continue
 		}
 		f := Finding{
@@ -203,7 +201,7 @@ func checkStale(pw ParsedWorkflow, depPins []lockedPin) []Finding {
 func checkLockGraph(pw ParsedWorkflow, lf parserlock.File) []Finding {
 	use := lockfile.RootUse(pw.Refs)
 	live := func(p parserlock.Pin, a parserlock.Action) bool {
-		_, ok := use(p, a.Commit)
+		_, ok := use(p)
 		return ok
 	}
 	var out []Finding

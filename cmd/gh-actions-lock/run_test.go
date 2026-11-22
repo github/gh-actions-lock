@@ -14,6 +14,7 @@ import (
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
+	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -817,27 +818,19 @@ func TestRun_SelfRepositoryLocalActionNamesItsParent(t *testing.T) {
 	assert.Contains(t, stderr, "./helper (in $/actions/build), ./helper (in $/actions/test)")
 }
 
-// TestRun_SharedSelfActionRewriteIsLockedForEveryWorkflow: ci.yml and
+// TestRun_SharedSelfActionSHAPinIsLockedForEveryWorkflow: ci.yml and
 // deploy.yml share $/.github/actions/restore, which uses
-// octo/cache/restore by SHA. ci.yml keeps that SHA, since octo/apt
-// declares it too; deploy.yml rewrites it to v2.0.0 in the shared file.
-// ci.yml then runs v2.0.0, so the lockfile must cover it. The SHA stays a
-// ci.yml root only while ci.yml still uses it directly; otherwise it is
-// locked only as octo/apt's child.
-func TestRun_SharedSelfActionRewriteIsLockedForEveryWorkflow(t *testing.T) {
+// octo/cache/restore by SHA. Other repositories run that action without
+// this lockfile, so the SHA stays as written (#264), and every workflow
+// that reaches it locks it under its SHA, wherever else it's written.
+func TestRun_SharedSelfActionSHAPinIsLockedForEveryWorkflow(t *testing.T) {
 	const cacheSHA, aptSHA = "cccccccccccccccccccccccccccccccccccccccc", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	byCommit := "octo/cache/restore@" + strings.ToUpper(cacheSHA)
 	for name, tc := range map[string]struct {
 		steps string
-		roots []string
 	}{
-		"used directly too": {
-			steps: "      - uses: " + byCommit + "\n",
-			roots: []string{"octo/apt@v1.0.0", "octo/cache@" + cacheSHA, "octo/cache@v2.0.0"},
-		},
-		"used only in the shared action": {
-			roots: []string{"octo/apt@v1.0.0", "octo/cache@v2.0.0"},
-		},
+		"used directly too":              {steps: "      - uses: " + byCommit + "\n"},
+		"used only in the shared action": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			manifests := map[string]string{"octo/apt": composite("octo/cache@" + cacheSHA)}
@@ -871,12 +864,15 @@ func TestRun_SharedSelfActionRewriteIsLockedForEveryWorkflow(t *testing.T) {
 			lock := readTempLockfilePins(t)
 			action, err := os.ReadFile(restore)
 			require.NoError(t, err)
-			assert.Contains(t, string(action), "uses: octo/cache/restore@v2.0.0\n")
-			want := "'" + filepath.ToSlash(ci) + "':\n"
-			for _, root := range tc.roots {
-				want += "        - '" + root + "'\n"
-			}
-			assert.Contains(t, lock, want+"dependencies:")
+			assert.Equal(t, composite(byCommit), string(action))
+			workflow, err := os.ReadFile(ci)
+			require.NoError(t, err)
+			assert.Equal(t, steps+"      - uses: octo/apt@v1.0.0\n"+tc.steps+"      - uses: $/.github/actions/restore\n", string(workflow))
+			assert.Contains(t, lock, "workflows:\n"+
+				"    '.github/workflows/deploy.yml':\n        - 'octo/cache@"+cacheSHA+"'\n"+
+				"    '"+filepath.ToSlash(ci)+"':\n        - 'octo/apt@v1.0.0'\n        - 'octo/cache@"+cacheSHA+"'\n"+
+				"dependencies:")
+			assert.NotContains(t, lock, "'octo/cache@v2.0.0'")
 			assert.Contains(t, lock, "        uses:\n            - 'octo/cache@"+cacheSHA+"'\n")
 			for _, mode := range []string{"--verify-local", "--verify"} {
 				_, stderr, err := runCommandWithHTTP(t, reg, mode)
@@ -939,16 +935,18 @@ func TestRun_LocalActionUsingRemoteActionsBlocks(t *testing.T) {
 	}
 }
 
-// TestRun_LocalActionErrorNamesTheFix: inside a `$/…` action the `$/` rewrite
-// still applies; inside a remote composite only the flag does.
+// TestRun_LocalActionErrorNamesTheFix: inside a `$/…` action the rewrite is
+// left to the user, since action files are never edited, so the message names
+// the file; inside a remote
+// composite only the flag applies.
 func TestRun_LocalActionErrorNamesTheFix(t *testing.T) {
-	for _, tc := range []struct{ parent, want string }{
-		{"", "./x runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
-		{"$/actions/build", "./x (in $/actions/build) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
-		{"octo/tool@v2", "./x (in octo/tool@v2) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --ignore-local-actions to keep ./."},
+	for _, tc := range []struct{ parent, file, want string }{
+		{"", "", "./x runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --migrate-local-actions to lock this repo's copy as $/, or --ignore-local-actions to keep ./."},
+		{"$/actions/build", "actions/build/action.yml", "./x (in actions/build/action.yml) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Change it to $/x in actions/build/action.yml, or pass --ignore-local-actions to keep ./."},
+		{"octo/tool@v2", "", "./x (in octo/tool@v2) runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced. Pass --ignore-local-actions to keep ./."},
 	} {
 		report := &checks.Report{Workflows: []checks.WorkflowReport{{Findings: []checks.Finding{{
-			Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: "./x", ParentNWO: tc.parent, LocalRemoteUses: []string{"a/b@v1"},
+			Category: checks.LocalAction, Severity: checks.SeverityWarning, LocalPath: "./x", ParentNWO: tc.parent, ParentFile: tc.file, LocalRemoteUses: []string{"a/b@v1"},
 		}}}}}
 		assert.True(t, blockLocalActions(report, false))
 		assert.Equal(t, tc.want, report.Workflows[0].Findings[0].Detail)
@@ -1006,7 +1004,7 @@ func TestPostFixReport(t *testing.T) {
 	}
 	require.False(t, report.IsValid())
 
-	got := postFixReport(report)
+	got := postFixReport(report, nil)
 
 	assert.True(t, got.IsValid())
 	var cats []checks.Category
@@ -1018,6 +1016,78 @@ func TestPostFixReport(t *testing.T) {
 	assert.Equal(t, checks.StaleWorkflow, got.RepoFindings[0].Category)
 	assert.Len(t, report.Workflows[0].Findings, 3, "the run log keeps the pre-fix report")
 	assert.Len(t, report.RepoFindings, 2)
+}
+
+// TestPostFixReport_DropsShaAsRefTheCommitReplaced: the committed workflow is
+// what decides. Rewritten to a tag (full name and sub-path key) drops the
+// warning; a planned rewrite the writer skipped (anchored scalar), a rename
+// that keeps the SHA, and an untouched bare SHA all keep it.
+func TestPostFixReport_DropsShaAsRefTheCommitReplaced(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	const other = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	committed := fmt.Sprintf(`
+name: ci
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/cache/restore@v4.3.0
+      - uses: &pinned octo/anchored@%[1]s
+      - uses: *pinned
+      - uses: new/action@%[1]s
+      - uses: octo/kept@%[2]s
+`, sha, other)
+	require.NoError(t, os.WriteFile(path, []byte(committed), 0o600))
+
+	shaAsRef := func(owner, repo, subpath, ref string) checks.Finding {
+		return checks.Finding{
+			WorkflowPath: path,
+			Category:     checks.ShaAsRef,
+			Severity:     checks.SeverityWarning,
+			ActionRef:    &parserlock.ActionRef{Owner: owner, Repo: repo, Path: subpath, Ref: ref},
+		}
+	}
+	report := &checks.Report{
+		Workflows: []checks.WorkflowReport{{
+			Path: path,
+			Findings: []checks.Finding{
+				shaAsRef("actions", "checkout", "", sha),
+				shaAsRef("actions", "cache", "restore", sha),
+				shaAsRef("octo", "anchored", "", sha),
+				shaAsRef("old", "action", "", sha),
+				shaAsRef("octo", "kept", "", other),
+			},
+		}},
+	}
+	record := &pin.Record{Workflows: []pin.WorkflowPlan{{
+		Path: path,
+		Rewrites: map[string]string{
+			"actions/checkout@" + sha: "actions/checkout@v7.0.1",
+			"actions/cache@" + sha:    "actions/cache@v4.3.0",
+			"octo/anchored@" + sha:    "octo/anchored@v1.0.0",
+			"old/action@" + sha:       "new/action@" + sha,
+		},
+	}}}
+
+	got := postFixReport(report, record)
+
+	var kept []string
+	for _, f := range got.Workflows[0].Findings {
+		kept = append(kept, f.ActionRef.FullName())
+	}
+	assert.Equal(t, []string{"octo/anchored", "old/action", "octo/kept"}, kept)
+	assert.Len(t, report.Workflows[0].Findings, 5, "the run log keeps the pre-fix report")
+
+	unchanged := postFixReport(report, &pin.Record{})
+	assert.Len(t, unchanged.Workflows[0].Findings, 5, "--no-narrow writes nothing, so every warning stands")
+
+	report.Workflows[0].Path = filepath.Join(t.TempDir(), "missing.yml")
+	record.Workflows[0].Path = report.Workflows[0].Path
+	unreadable := postFixReport(report, record)
+	assert.Len(t, unreadable.Workflows[0].Findings, 5, "a workflow that can't be re-read keeps every warning")
 }
 
 func TestRun_FixJSONReportsPostFixState(t *testing.T) {
@@ -1172,6 +1242,88 @@ func TestRun_BumpedCompositeKeepsMixedCaseChild(t *testing.T) {
 	assert.Contains(t, after, "'octo/comp@v2':\n        ref: 'v2'\n        commit: 'sha1-"+newSHA+"'\n        owner_id: 1\n        repo_id: 1\n        uses:\n            - '"+childKey+"'\n")
 	assert.Contains(t, after, "'"+childKey+"':\n")
 	assert.NotContains(t, after, "'octo/comp@v1'")
+
+	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
+	require.NoError(t, err, stderr)
+}
+
+// TestRun_BumpedDirectUseDropsStaleRootACompositeStillUses: the workflow
+// bumps its direct use of a dep a composite it calls still uses at the old
+// ref. The old ref leaves the workflow's roots but keeps its entry and the
+// composite's edge. A sub-path use makes the run read the composite's
+// manifest, so its edge to the old ref is live (#296).
+func TestRun_BumpedDirectUseDropsStaleRootACompositeStillUses(t *testing.T) {
+	const compSHA, oldSHA, newSHA = "cccccccccccccccccccccccccccccccccccccccc", "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"
+	shas := map[string]string{"octo/comp@v1": compSHA, "octo/java@v6.2.0": oldSHA, "octo/java@v6.3.0": newSHA}
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.GraphQL(`commit: object\(oid`), func(req *http.Request) (*http.Response, error) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+		data := map[string]any{}
+		for k, v := range body.Variables {
+			if i, ok := strings.CutPrefix(k, "oid"); ok {
+				nwo := body.Variables["owner"+i].(string) + "/" + body.Variables["name"+i].(string)
+				data["a"+i] = map[string]any{"nameWithOwner": nwo, "databaseId": 1, "commit": map[string]any{"oid": v},
+					"tag": map[string]any{"oid": v}, "tagRef": map[string]any{"oid": v}}
+			}
+		}
+		return httpmock.JSONResponse(map[string]any{"data": data})(req)
+	})
+	reg.RegisterReusable(httpmock.GraphQL(`.`), func(req *http.Request) (*http.Response, error) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+		data := map[string]any{}
+		for k, v := range body.Variables {
+			i, ok := strings.CutPrefix(k, "owner")
+			if !ok {
+				continue
+			}
+			nwo := v.(string) + "/" + body.Variables["name"+i].(string)
+			ref, _ := body.Variables["expr"+i].(string)
+			if r, ok := body.Variables["ref"+i].(string); ok {
+				ref = r
+			}
+			ref = strings.TrimSuffix(ref, "^{commit}")
+			sha, ok := shas[nwo+"@"+ref]
+			if !ok {
+				sha = ref
+			}
+			manifest := nodeActionYAML
+			if nwo == "octo/comp" {
+				manifest = composite("octo/java@v6.2.0")
+			}
+			data["a"+i] = testRepoResponse(nwo, sha, manifest)
+		}
+		return httpmock.JSONResponse(map[string]any{"data": data})(req)
+	})
+	reg.RegisterReusable(httpmock.REST("GET", `/(tags|releases)$`), httpmock.JSONResponse([]any{}))
+	useDefaultTransport(t, reg)
+
+	path := writeTempWorkflow(t, "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/java@v6.3.0\n      - uses: octo/comp/setup@v1\n")
+	entry := func(key, ref, sha string, uses ...string) string {
+		s := "    '" + key + "':\n        ref: '" + ref + "'\n        commit: 'sha1-" + sha + "'\n        owner_id: 1\n        repo_id: 1\n"
+		if len(uses) > 0 {
+			s += "        uses:\n"
+			for _, u := range uses {
+				s += "            - '" + u + "'\n"
+			}
+		}
+		return s
+	}
+	lock := "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/workflow.yml':\n        - 'octo/comp@v1'\n        - 'octo/java@v6.2.0'\n" +
+		"dependencies:\n" + entry("octo/comp@v1", "v1", compSHA, "octo/java@v6.2.0") + entry("octo/java@v6.2.0", "v6.2.0", oldSHA)
+	require.NoError(t, os.WriteFile(filepath.Join(".github", "workflows", "actions.lock"), []byte(lock), 0o600))
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-onboard", "--no-narrow", "--ignore-local-actions", "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	after := readTempLockfilePins(t)
+	assert.Contains(t, after, "'.github/workflows/workflow.yml':\n        - 'octo/comp@v1'\n        - 'octo/java@v6.3.0'\ndependencies:")
+	assert.Contains(t, after, entry("octo/comp@v1", "v1", compSHA, "octo/java@v6.2.0"))
+	assert.Contains(t, after, entry("octo/java@v6.2.0", "v6.2.0", oldSHA))
 
 	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
 	require.NoError(t, err, stderr)

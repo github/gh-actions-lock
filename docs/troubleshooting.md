@@ -48,9 +48,11 @@ A finding with `"retryable": true` is an `error` because GitHub didn't answer th
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | No errors remain. Warnings and notices don't change the exit code. |
-| `1` | One or more findings block the run. With `--json`, the output on `stdout` is complete. |
+| `0` | No errors remain. Warnings and notices don't change the exit code, unless you pass `--fail-on-warning`. |
+| `1` | One or more findings block the run, or with `--fail-on-warning`, a read-only run reported a warning. With `--json`, the output on `stdout` is complete. |
 | `2` | The tool failed, for example because of an invalid option, a lockfile it can't read, a lockfile version newer than the extension, or a rejected token. Read the message on `stderr`. |
+
+`--fail-on-warning` counts every finding that `--json` reports with `"severity": "warning"`, including ones the terminal summary leaves out, such as a moved `main` or `v4`. It changes only the exit code: `valid` in `--json` still reports whether any finding is an error.
 
 When a run that updates the lockfile succeeds, `--json` reports the state the run left: `valid` is `true`, and errors that the run fixed aren't listed. When a run exits with code `1`, `--json` reports the problems it found.
 
@@ -69,6 +71,8 @@ These findings block the run. While any of them remains, `gh actions-lock` doesn
 A workflow has `uses:` dependencies with no matching entry in the lockfile. Run `gh actions-lock` and commit the workflow and the lockfile together.
 
 The same fix applies when the message says `workflow has no lockfile entry`, which means the workflow isn't in the lockfile at all.
+
+A `uses:` line that pins a full-length commit SHA needs an entry keyed by that SHA. An entry for the matching tag doesn't cover it, because GitHub Actions looks the action up by the SHA as written. This includes SHA pins inside a same-repository composite action that a workflow calls with `$/`.
 
 The extension also reports `not-pinned` for a lockfile entry that's keyed by a full-length commit SHA and records that same SHA as its `ref`. Run `gh actions-lock` to record the tag or branch for that commit.
 
@@ -192,19 +196,19 @@ The workflow uses an action from a local path, such as `uses: ./.github/actions/
 
 A `./` path resolves against the runner's workspace, which checkouts, downloads, and scripts can change. The extension never follows or locks a `./` reference. The workflow's other dependencies are still locked and checked.
 
-**When it's an error:** The headline is **local action**. The local action's `action.yml` in your checkout uses other actions. At run time, each of those actions needs a lockfile entry, and the lockfile can't record those entries for a `./` action. Every mode reports this error, including `--verify` and `--verify-local`. The message says:
+**When it's an error:** The headline is **local action**. The local action's `action.yml` in your checkout uses other actions, directly or through further `./` actions. At run time, each of those actions needs a lockfile entry, and the lockfile can't record those entries for a `./` action. Every mode reports this error, including `--verify` and `--verify-local`. The message says:
 
 > PATH runs whatever is in the workspace, so the lockfile can't cover it or the actions it uses; they'll fail when the lockfile is enforced.
 
 Fix it in one of these ways:
 
-* **Lock the action as `$/`.** If the action is in your repository, rewrite `./` references to `$/`, in your workflows and in your repository's action files:
+* **Lock the action as `$/`.** If the action is in your repository, rewrite your workflows' `./` references to `$/`:
 
   ```shell
   gh actions-lock --migrate-local-actions
   ```
 
-  A `$/` reference always runs at the workflow's own commit, and the extension locks the actions it uses. Review the diff before you commit. For how `$/`, `owner/repo@ref`, and `./` references differ, see [Using an action in the same repository as the workflow](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended) in the GitHub Docs.
+  A `$/` reference always runs at the workflow's own commit, and the extension locks the actions it uses. The extension never edits action files, so change any `./` inside your repository's action files to `$/` yourself. Review the diff before you commit. For how `$/`, `owner/repo@ref`, and `./` references differ, see [Using an action in the same repository as the workflow](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended) in the GitHub Docs.
 
 * **Keep `./`.** Report the local action as a warning instead of an error:
 
@@ -214,9 +218,9 @@ Fix it in one of these ways:
 
   The actions it uses aren't covered by the lockfile. `--no-migrate-local-actions` is an alias.
 
-If the `./` reference is inside a composite action from another repository, the message names that action and only `--ignore-local-actions` applies.
+If the `./` reference is inside one of your repository's `$/` actions, the message names that action file: change the reference there to `$/`, or pass `--ignore-local-actions`. If it's inside a composite action from another repository, the message names that action and only `--ignore-local-actions` applies.
 
-**When it's a warning:** The headline is **Cannot follow N workspace-local actions**, followed by each workflow and its `./` paths. This is reported when the action file isn't in your checkout, when it has only `run:` steps, or when you pass `--ignore-local-actions`. No action is needed. The local action isn't covered by the lockfile.
+**When it's a warning:** The headline is **Cannot follow N workspace-local actions**, followed by each workflow and its `./` paths. This is reported when the action file isn't in your checkout, when it and the `./` actions it uses have only `run:` steps, or when you pass `--ignore-local-actions`. No action is needed. The local action isn't covered by the lockfile.
 
 ### `invalid-self-repository-ref`
 
@@ -256,7 +260,7 @@ These findings don't block the run, but you should read them.
 
 A tag or branch that your workflow uses now points to a different commit than the one in the lockfile.
 
-For a branch or a partial version, such as `main` or `v4`, a normal run keeps the locked commit. This warning appears only in `--json` output and doesn't change the exit code. To advance the reference, check what changed upstream between the two commits, then run:
+For a branch or a partial version, such as `main` or `v4`, a normal run keeps the locked commit. This warning appears only in `--json` output and doesn't change the exit code unless you pass `--fail-on-warning`. To advance the reference, check what changed upstream between the two commits, then run:
 
 ```shell
 gh actions-lock --relock
@@ -272,13 +276,15 @@ An exact release tag that moved for a dependency your workflow references by tag
 
 **Headline:** WORKFLOW: OLD-NAME was renamed or transferred to NEW-NAME
 
-The action's repository was renamed or transferred, but it's still the same repository, and GitHub Actions follows the redirect. Run `gh actions-lock` to update the `uses:` name. The run reports **Rewrote OLD-NAME → NEW-NAME** and doesn't change the locked commit. If a composite action uses it, upgrade the composite action to a version that uses the new name.
+The action's repository was renamed or transferred, but it's still the same repository, and GitHub Actions follows the redirect. Run `gh actions-lock` to update the `uses:` name. The run reports **Rewrote OLD-NAME → NEW-NAME** and doesn't change the locked commit. The extension never edits action files, so if one of your repository's `$/` actions uses the old name, the warning names that file, even on a fix run: change it there yourself. If a composite action uses it, upgrade the composite action to a version that uses the new name.
 
 ### `sha-as-ref`
 
 **Headline:** N actions are pinned to a bare SHA without a tag ref
 
 A `uses:` line pins a full-length commit SHA instead of a tag. The lockfile still pins the commit, but the workflow doesn't show which release it is. To clear the warning, change the `uses:` line to the release tag for that commit, then run `gh actions-lock`.
+
+A full SHA inside a same-repo `$/…` action doesn't get this warning. Other repositories that use the action don't have your lockfile, so the SHA is the only pin they get.
 
 ### `container-image`
 
@@ -310,7 +316,7 @@ Your Dependabot cooldown settings include options that the extension doesn't use
 
 **Headline:** N actions pinned without a full semver tag
 
-A workflow uses a partial version, such as `v4` or `v3.1`. A full version tag, such as `v4.2.1`, names one commit. Consider changing the `uses:` line to a full version tag. When you first lock a workflow, the extension narrows partial versions to full version tags; to keep partial versions, pass `--no-narrow`.
+A workflow uses a partial version, such as `v4` or `v3.1`. A full version tag, such as `v4.2.1`, names one commit. Consider changing the `uses:` line to a full version tag. When you first lock a workflow, the extension narrows partial versions to full version tags; to keep partial versions, pass `--no-narrow`. Partial versions inside your repository's `$/` actions are locked as written, because the extension never edits action files.
 
 ### `stale-workflow`
 

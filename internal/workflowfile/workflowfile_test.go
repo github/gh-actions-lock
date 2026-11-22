@@ -202,9 +202,13 @@ func TestScanSelfRepositoryActions_RecursiveClosure(t *testing.T) {
 		scan.SelfRepositoryRefErrs,
 	)
 	assert.Equal(t, []LocalUse{
-		{Path: "./workspace-relative", Parent: "$/actions/root"},
-		{Path: "./workspace-relative", Parent: "$/actions/child"},
+		{Path: "./workspace-relative", Parent: "$/actions/root", File: "actions/root/action.yml"},
+		{Path: "./workspace-relative", Parent: "$/actions/child", File: "actions/child/action.yml"},
 	}, scan.LocalUses, "one entry per containing action")
+	assert.Equal(t, map[string][]string{
+		"vendor/tool@v1":      {"actions/root/action.yml"},
+		"actions/checkout@v4": {"actions/child/action.yml"},
+	}, scan.RefFiles)
 	assert.Empty(t, scan.Errors)
 	assert.Equal(t, []uses.Image{{Name: "alpine:3.18", Where: "$/actions/child"}}, scan.Images)
 }
@@ -596,12 +600,16 @@ func TestLocalActionRemoteUses(t *testing.T) {
 	write("remote", "runs:\n  using: composite\n  steps:\n    - uses: actions/setup-node@v4\n    - uses: ./other\n    - uses: $/self\n    - uses: docker://alpine:3\n    - uses: actions/setup-node@v4\n    - uses: octo/tool/sub@v1\n")
 	write("runonly", "runs:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n")
 	write("node", "runs:\n  using: node20\n  main: index.js\n")
+	write("outer", "runs:\n  using: composite\n  steps:\n    - uses: ./mid\n")
+	write("mid", "runs:\n  using: composite\n  steps:\n    - uses: ./outer\n    - uses: ./leaf\n")
+	write("leaf", "runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n")
 
 	for _, tc := range []struct {
 		name, path string
 		want       []string
 	}{
 		{"remote uses, deduplicated", "./remote", []string{"actions/setup-node@v4", "octo/tool/sub@v1"}},
+		{"through nested local actions, cycle included", "./outer", []string{"actions/checkout@v4"}},
 		{"run steps only", "./runonly", nil},
 		{"not a composite", "./node", nil},
 		{"missing from the checkout", "./generated", nil},
@@ -687,55 +695,6 @@ func TestMigrateLocalActionsToSelfRepository_RejectsStructuralErrors(t *testing.
 	}
 }
 
-func TestDiscoverCompositeActionFiles(t *testing.T) {
-	root := t.TempDir()
-	write := func(rel string) {
-		full := filepath.Join(root, rel)
-		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
-		require.NoError(t, os.WriteFile(full, []byte("runs:\n  using: composite\n"), 0o644))
-	}
-	write("action.yml")
-	write("nested/deep/action.yaml")
-	write(".github/actions/thing/action.yml")
-	write("not-an-action.yml")
-	// A stray file inside .git must be skipped.
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "action.yml"), []byte("x"), 0o644))
-
-	got, err := DiscoverCompositeActionFiles(root)
-	require.NoError(t, err)
-
-	want := []string{
-		filepath.Join(root, ".github/actions/thing/action.yml"),
-		filepath.Join(root, "action.yml"),
-		filepath.Join(root, "nested/deep/action.yaml"),
-	}
-	assert.Equal(t, want, got)
-}
-
-func TestDiscoverCompositeActionFiles_EmptyRoot(t *testing.T) {
-	got, err := DiscoverCompositeActionFiles("")
-	require.NoError(t, err)
-	assert.Nil(t, got)
-}
-
-func TestDiscoverCompositeActionFiles_RejectsSymlinkEscape(t *testing.T) {
-	root := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "action.yml")
-	require.NoError(t, os.WriteFile(outside, []byte("runs:\n  using: composite\n"), 0o644))
-	actionDir := filepath.Join(root, "actions", "escape")
-	require.NoError(t, os.MkdirAll(actionDir, 0o755))
-	if err := os.Symlink(outside, filepath.Join(actionDir, "action.yml")); err != nil {
-		t.Skipf("creating symlink: %v", err)
-	}
-
-	paths, err := DiscoverCompositeActionFiles(root)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outside repository root")
-	assert.Empty(t, paths)
-}
-
 func TestParseErrorKinds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -760,4 +719,22 @@ func TestLoadReadErrorIsNotASyntaxError(t *testing.T) {
 	require.Error(t, err)
 	var syntaxErr *SyntaxError
 	assert.False(t, errors.As(err, &syntaxErr))
+}
+
+func TestRefFileKey(t *testing.T) {
+	const upper = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	tests := []struct {
+		name string
+		ref  parserlock.ActionRef
+		want string
+	}{
+		{"folds owner and repo, keeps tag case", parserlock.ActionRef{Owner: "Octo", Repo: "Tool", Ref: "V1"}, "octo/tool@V1"},
+		{"keeps sub-action paths apart", parserlock.ActionRef{Owner: "github", Repo: "codeql-action", Path: "analyze", Ref: "v3"}, "github/codeql-action/analyze@v3"},
+		{"spells a full SHA in lowercase", parserlock.ActionRef{Owner: "octo", Repo: "tool", Ref: upper}, "octo/tool@" + strings.ToLower(upper)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, RefFileKey(tt.ref))
+		})
+	}
 }

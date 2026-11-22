@@ -75,42 +75,27 @@ func Seedable(d dep.Dependency) bool {
 
 // UsedRoot returns the test for whether a workflow's recorded root is still
 // used by refs, the workflow's current `uses:` (see RootUse).
-func UsedRoot(refs []parserlock.ActionRef) func(pin parserlock.Pin, commit string) bool {
+func UsedRoot(refs []parserlock.ActionRef) func(pin parserlock.Pin) bool {
 	use := RootUse(refs)
-	return func(pin parserlock.Pin, commit string) bool {
-		_, ok := use(pin, commit)
+	return func(pin parserlock.Pin) bool {
+		_, ok := use(pin)
 		return ok
 	}
 }
 
 // RootUse returns the lookup of the use in refs, a workflow's current
-// `uses:`, that still uses a recorded root: the use naming its key, else one
-// naming its commit as a full SHA, since rewriting `uses:` to the commit
-// keeps the tag-keyed entry. SHAs compare case-insensitively; other refs
-// are case-sensitive. commit is the entry's algo-hex commit.
-func RootUse(refs []parserlock.ActionRef) func(pin parserlock.Pin, commit string) (parserlock.ActionRef, bool) {
+// `uses:`, that names a recorded root's key. The Actions backend looks a use
+// up by the ref as written, so a tag-keyed root is not used by a `uses:`
+// naming its commit.
+func RootUse(refs []parserlock.ActionRef) func(pin parserlock.Pin) (parserlock.ActionRef, bool) {
 	byKey := make(map[string]parserlock.ActionRef, len(refs))
-	bySHA := make(map[string]parserlock.ActionRef, len(refs))
 	for _, ref := range refs {
-		if k := parserlock.IndexKey(ref.Owner, ref.Repo, ref.Ref); !hasKey(byKey, k) {
+		if k := parserlock.IndexKey(ref.Owner, ref.Repo, CanonicalRef(ref.Ref)); !hasKey(byKey, k) {
 			byKey[k] = ref
 		}
-		if k := strings.ToLower(ref.Owner + "/" + ref.Repo + "@" + ref.Ref); !hasKey(bySHA, k) {
-			bySHA[k] = ref
-		}
 	}
-	return func(pin parserlock.Pin, commit string) (parserlock.ActionRef, bool) {
-		if ref, ok := byKey[pin.IndexKey()]; ok {
-			return ref, true
-		}
-		sha := commit
-		if _, hex, ok := strings.Cut(commit, "-"); ok {
-			sha = hex
-		}
-		if sha == "" {
-			return parserlock.ActionRef{}, false
-		}
-		ref, ok := bySHA[strings.ToLower(pin.Owner+"/"+pin.Repo+"@"+sha)]
+	return func(pin parserlock.Pin) (parserlock.ActionRef, bool) {
+		ref, ok := byKey[pin.IndexKey()]
 		return ref, ok
 	}
 }

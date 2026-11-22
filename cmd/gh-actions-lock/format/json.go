@@ -27,6 +27,25 @@ func skipFindingInJSON(f checks.Finding) bool {
 	return false
 }
 
+// CountWarnings returns the number of findings --json reports with severity
+// "warning", so --fail-on-warning agrees with what JSON consumers see.
+func CountWarnings(report *checks.Report) int {
+	n := 0
+	for _, f := range report.RepoFindings {
+		if f.Severity == checks.SeverityWarning {
+			n++
+		}
+	}
+	for _, wr := range report.Workflows {
+		for _, f := range wr.Findings {
+			if f.Severity == checks.SeverityWarning && !skipFindingInJSON(f) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // validJSONField reports whether name is a recognized --json output field.
 func validJSONField(name string) bool {
 	switch name {

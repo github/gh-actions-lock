@@ -7,8 +7,8 @@ package workflowfile
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -183,18 +183,34 @@ type SelfRepositoryActionScan struct {
 	// `$/…` action that contains it.
 	LocalUses     []LocalUse
 	MalformedRefs []string
-	// ActionFiles are the in-repo action definition files visited, in visit
-	// order. Refs in these files are rewritable source, unlike `$/…` itself.
-	ActionFiles []string
-	Errors      []string
+	Errors        []string
 	// Images are the mutable `docker://` steps in the visited actions.
 	Images []uses.Image
+	// RefFiles maps RefFileKey of each ref in Refs to the repo-relative
+	// action files that use it.
+	RefFiles map[string][]string
+}
+
+// RefFileKey keys a remote ref by owner/repo (case-insensitive), sub-action
+// path and ref, with a full SHA in lowercase as lockfile lookups spell it.
+func RefFileKey(a parserlock.ActionRef) string {
+	key := strings.ToLower(a.NWO())
+	if a.Path != "" {
+		key += "/" + a.Path
+	}
+	ref := a.Ref
+	if parserlock.IsFullSha(ref) {
+		ref = strings.ToLower(ref)
+	}
+	return key + "@" + ref
 }
 
 // LocalUse is a `./…` use and the `$/…` action whose steps contain it.
 type LocalUse struct {
 	Path   string
 	Parent string
+	// File is Parent's repo-relative action file.
+	File string
 }
 
 // ScanSelfRepositoryActions recursively reads in-repo actions reached through
@@ -259,12 +275,12 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 			continue
 		}
 
-		actionUses, actionPath, err := readActionUses(repoRoot, actionDir)
+		actionUses, name, err := readActionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
 		}
-		scan.ActionFiles = append(scan.ActionFiles, actionPath)
+		file := path.Join(filepath.ToSlash(relPath), name)
 		for _, rawUse := range actionUses {
 			use := strings.TrimSpace(rawUse)
 			switch {
@@ -280,7 +296,7 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 				}
 				pending = append(pending, pendingAction{ref: use, depth: current.depth + 1})
 			case strings.HasPrefix(use, "./"):
-				if lu := (LocalUse{Path: use, Parent: current.ref}); !seenLocal[lu] {
+				if lu := (LocalUse{Path: use, Parent: current.ref, File: file}); !seenLocal[lu] {
 					seenLocal[lu] = true
 					scan.LocalUses = append(scan.LocalUses, lu)
 				}
@@ -302,6 +318,13 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 					if !seenRefs[key] {
 						seenRefs[key] = true
 						scan.Refs = append(scan.Refs, c.Action)
+					}
+					fk := RefFileKey(c.Action)
+					if !slices.Contains(scan.RefFiles[fk], file) {
+						if scan.RefFiles == nil {
+							scan.RefFiles = map[string][]string{}
+						}
+						scan.RefFiles[fk] = append(scan.RefFiles[fk], file)
 					}
 				}
 			}
@@ -342,53 +365,29 @@ func DiscoverWorkflowsIn(dir string) ([]string, error) {
 	return paths, nil
 }
 
+// IsActionFile reports whether path is an action definition rather than a
+// workflow: a top-level runs key and no jobs key. It goes by content, not
+// name, so a workflow named action.yml passes and a case variant or symlink
+// of an action file doesn't.
+func IsActionFile(path string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return false
+	}
+	_, runs := doc["runs"]
+	_, jobs := doc["jobs"]
+	return runs && !jobs
+}
+
 // FindRepoRoot returns the repository root containing startPath, or "" when
 // startPath is not inside a git repository. RepoRootEnv overrides discovery;
 // an unusable override is an error.
 func FindRepoRoot(startPath string) (string, error) {
 	return findRepoRoot(startPath)
-}
-
-// DiscoverCompositeActionFiles walks the repository rooted at root and returns
-// the paths of all action definition files (action.yml / action.yaml). The
-// .git directory is skipped. Non-composite action files are included; callers
-// migrate them with MigrateLocalActionsToSelfRepository, which no-ops when a file has
-// no local `./…` steps.
-func DiscoverCompositeActionFiles(root string) ([]string, error) {
-	if root == "" {
-		return nil, nil
-	}
-	var paths []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Name() == "action.yml" || d.Name() == "action.yaml" {
-			if err := ValidatePathWithinRoot(root, p); err != nil {
-				return err
-			}
-			info, err := os.Stat(p)
-			if err != nil {
-				return err
-			}
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("action definition %s is not a regular file", p)
-			}
-			paths = append(paths, p)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discovering action files under %s: %w", root, err)
-	}
-	sort.Strings(paths)
-	return paths, nil
 }
 
 // walkUses visits `uses:` values at the only places GitHub Actions honors
@@ -397,8 +396,18 @@ func DiscoverCompositeActionFiles(root string) ([]string, error) {
 // anywhere else (an env var, a `with:` input) is ordinary data, not a
 // reference.
 func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
+	walkUsesNodes(node, func(valueNode *yaml.Node, stepLevel bool) {
+		if use := scalarValue(resolveAlias(valueNode)); use != "" {
+			fn(use, stepLevel)
+		}
+	})
+}
+
+// walkUsesNodes is walkUses over the `uses:` value nodes as written: an
+// aliased value is passed as its alias node, not the anchored target.
+func walkUsesNodes(node *yaml.Node, fn func(valueNode *yaml.Node, stepLevel bool)) {
 	root := resolveAlias(documentRoot(node))
-	walkStepUses(mapValue(root, "runs"), compositeSteps, fn)
+	walkStepUsesNodes(mapValue(root, "runs"), compositeSteps, fn)
 
 	jobs := mapValue(root, "jobs")
 	if jobs == nil || jobs.Kind != yaml.MappingNode {
@@ -409,11 +418,25 @@ func walkUses(node *yaml.Node, fn func(value string, stepLevel bool)) {
 		if job == nil || job.Kind != yaml.MappingNode {
 			continue
 		}
-		if use := scalarValue(mapValue(job, "uses")); use != "" {
+		if use := rawMapValue(job, "uses"); use != nil {
 			fn(use, false)
 		}
-		walkStepUses(job, jobSteps, fn)
+		walkStepUsesNodes(job, jobSteps, fn)
 	}
+}
+
+// stepUsesNodes returns the step-level `uses:` value nodes: the only `uses:`
+// values a lockfile rewrite may touch. Job-level `uses:` calls a reusable
+// workflow, which the lockfile doesn't lock (#179), and a `uses` key anywhere
+// else is data.
+func stepUsesNodes(node *yaml.Node) map[*yaml.Node]bool {
+	nodes := make(map[*yaml.Node]bool)
+	walkUsesNodes(node, func(valueNode *yaml.Node, stepLevel bool) {
+		if stepLevel {
+			nodes[valueNode] = true
+		}
+	})
+	return nodes
 }
 
 // stepsContext is where a `steps:` sequence appears.
@@ -429,15 +452,23 @@ const (
 // walkStepUses visits the `uses:` of each step in owner's `steps:` sequence.
 // A `parallel:` group is a flat list of steps; it is not walked recursively.
 func walkStepUses(owner *yaml.Node, ctx stepsContext, fn func(value string, stepLevel bool)) {
+	walkStepUsesNodes(owner, ctx, func(valueNode *yaml.Node, stepLevel bool) {
+		if use := scalarValue(resolveAlias(valueNode)); use != "" {
+			fn(use, stepLevel)
+		}
+	})
+}
+
+func walkStepUsesNodes(owner *yaml.Node, ctx stepsContext, fn func(valueNode *yaml.Node, stepLevel bool)) {
 	for _, step := range stepMappings(mapValue(owner, "steps")) {
-		if use := scalarValue(mapValue(step, "uses")); use != "" {
+		if use := rawMapValue(step, "uses"); use != nil {
 			fn(use, true)
 		}
 		if ctx != jobSteps {
 			continue
 		}
 		for _, inner := range stepMappings(mapValue(step, "parallel")) {
-			if use := scalarValue(mapValue(inner, "uses")); use != "" {
+			if use := rawMapValue(inner, "uses"); use != nil {
 				fn(use, true)
 			}
 		}
@@ -474,12 +505,16 @@ func resolveAlias(node *yaml.Node) *yaml.Node {
 }
 
 func mapValue(node *yaml.Node, key string) *yaml.Node {
+	return resolveAlias(rawMapValue(node, key))
+}
+
+func rawMapValue(node *yaml.Node, key string) *yaml.Node {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i < len(node.Content)-1; i += 2 {
 		if node.Content[i].Kind == yaml.ScalarNode && node.Content[i].Value == key {
-			return resolveAlias(node.Content[i+1])
+			return node.Content[i+1]
 		}
 	}
 	return nil
@@ -583,27 +618,40 @@ func ValidateInRepo(path string) error {
 }
 
 // LocalActionRemoteUses returns the remote actions that the composite at the
-// `./…` path localPath uses, read from the checkout containing workflowPath.
-// It returns nil when the action can't be read there: the runner workspace
-// may hold something else, so nothing is known about it.
+// `./…` path localPath uses, directly or through further `./…` actions, read
+// from the checkout containing workflowPath. It returns nil when the action
+// can't be read there: the runner workspace may hold something else, so
+// nothing is known about it.
 func LocalActionRemoteUses(workflowPath, localPath string) []string {
 	root, err := findRepoRoot(workflowPath)
 	if err != nil || root == "" {
 		return nil
 	}
-	actionDir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(localPath, "./")))
-	if !isWithinRoot(root, actionDir) {
-		return nil
-	}
-	actionUses, _, err := readActionUses(root, actionDir)
-	if err != nil {
-		return nil
-	}
 	var out []string
-	for _, use := range actionUses {
-		use = strings.TrimSpace(use)
-		if uses.Classify(use, uses.Step).Kind == uses.Action && !slices.Contains(out, use) {
-			out = append(out, use)
+	seen := map[string]bool{}
+	queue := []string{localPath}
+	for len(queue) > 0 {
+		local := queue[0]
+		queue = queue[1:]
+		actionDir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(local, "./")))
+		if seen[actionDir] || !isWithinRoot(root, actionDir) {
+			continue
+		}
+		seen[actionDir] = true
+		actionUses, _, err := readActionUses(root, actionDir)
+		if err != nil {
+			continue
+		}
+		for _, use := range actionUses {
+			use = strings.TrimSpace(use)
+			switch uses.Classify(use, uses.Step).Kind {
+			case uses.Action:
+				if !slices.Contains(out, use) {
+					out = append(out, use)
+				}
+			case uses.Local:
+				queue = append(queue, use)
+			}
 		}
 	}
 	return out
@@ -686,8 +734,7 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 	return uses, nil
 }
 
-// readActionUses returns the `uses:` values of an in-repo action definition
-// along with the file they were read from, so callers can rewrite that file.
+// readActionUses returns the `uses:` values of an in-repo action definition.
 func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
@@ -708,7 +755,7 @@ func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
 		if err != nil {
 			return nil, "", fmt.Errorf("parsing %s: %w", name, err)
 		}
-		return uses, actionPath, nil
+		return uses, name, nil
 	}
 	return nil, "", fmt.Errorf("reading action.yml or action.yaml: %w", lastErr)
 }

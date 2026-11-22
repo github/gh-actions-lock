@@ -16,6 +16,13 @@ To teach your AI coding agent the CLI:
 gh skill install github/gh-actions-lock
 ```
 
+On GHE.com, `gh` looks the shorthand up on your tenant, so install from the full URL instead:
+
+```bash
+gh extension install https://github.com/github/gh-actions-lock
+gh skill install https://github.com/github/gh-actions-lock
+```
+
 ## Quickstart
 
 From the repository checkout:
@@ -60,17 +67,19 @@ In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant,
 
 Other flags:
 
-- `<workflow-path>...` scopes a run to specific workflows. Only a full-directory run prunes entries for deleted workflows.
+- `<workflow-path>...` scopes a run to specific workflows. Only a full-directory run prunes entries for deleted workflows. An action file (`action.yml` or `action.yaml`) isn't accepted: composite actions can't carry their own lockfile yet, so lock the workflows that call it.
 - `--json [fields]` prints machine-readable output to stdout.
 - `--accept-moved` accepts pins whose locked commit is no longer upstream. Check why it moved first; never use it in automation.
 - `--no-narrow` keeps partial versions (`v4`) as written instead of narrowing to a full tag.
+- `--fail-on-warning` makes `--verify`, `--verify-local` and `--no-fix` exit `1` when any warning is reported.
 
 `gh actions-lock --help` is authoritative.
 
 ## Limitations
 
 - Reusable workflows called at `jobs.<id>.uses` from another repository are not locked ([#179](https://github.com/github/gh-actions-lock/issues/179)).
-- Local `./…` actions are never followed or locked, so one that uses remote actions is a blocking error until you pass `--migrate-local-actions` (rewrites same-repo `./…` to `$/…`) or `--ignore-local-actions`.
+- Local `./…` actions are never followed or locked, so one that uses remote actions is a blocking error until you pass `--migrate-local-actions` (rewrites same-repo `./…` in workflows to `$/…`) or `--ignore-local-actions`. Action files are never edited, so change a `./…` inside a same-repo action to `$/…` yourself.
+- A full commit SHA in a same-repo `$/…` action is never rewritten to a tag, since other repositories that use that action don't have your lockfile. It's locked under the SHA in every workflow that reaches it ([#264](https://github.com/github/gh-actions-lock/issues/264)).
 - Container images are not locked, and any image without an `@sha256:` digest, including one chosen by a `${{ }}` expression, is a warning ([#236](https://github.com/github/gh-actions-lock/issues/236)).
 - `--verify-local` is an offline coverage check that doesn't verify provenance; `--verify` checks provenance before merge, and the runner checks it again at job start.
 - A lockfile change that moves a floating ref (`v4`, `main`) back to an older commit in its history isn't detected, so review lockfile diffs or pin exact tags.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,10 @@ type Resolver struct {
 	releaseBranchCache syncmap.Map[ghapi.Repo, []ghapi.BranchHead]
 	releaseBranchSF    singleflight.Group
 	tagObjectCache     syncmap.Map[ghapi.NWOSha, tagPeel]
+
+	// writtenNames holds refs that resolve under the name they are written
+	// with even when the repository was renamed. Set before resolving.
+	writtenNames map[ghapi.ActionRef]bool
 
 	// Test overrides (injected via With* options).
 	nowFn   func() time.Time
@@ -169,11 +174,40 @@ func (r *Resolver) Seeded(ref parserlock.ActionRef) bool {
 	return ok && e.seeded
 }
 
+// KeepWrittenNames makes refs resolve under the name they are written with,
+// as a remote composite's do: nothing rewrites the files that hold them, and
+// the runner looks each one up as written. Call it before resolving.
+func (r *Resolver) KeepWrittenNames(refs []parserlock.ActionRef) {
+	if r.writtenNames == nil {
+		r.writtenNames = make(map[ghapi.ActionRef]bool, len(refs))
+	}
+	for _, ref := range refs {
+		r.writtenNames[ghapi.ForActionRef(ref.Owner, ref.Repo, "", ref.Ref)] = true
+	}
+}
+
+// keepsWrittenName reports whether ref, written as orig and resolving to
+// the canonical name, stays as written. That holds when an action file
+// writes either spelling of the repository at that ref, under any path:
+// lock entries are keyed by repository and ref, so redirecting an alias
+// onto the action file's name would merge the two, and narrowing the
+// merged entry would drop the key the action file needs.
+func (r *Resolver) keepsWrittenName(orig parserlock.ActionRef, canonical string) bool {
+	if r.writtenNames[ghapi.ForActionRef(orig.Owner, orig.Repo, "", orig.Ref)] {
+		return true
+	}
+	owner, repo, ok := strings.Cut(canonical, "/")
+	return ok && r.writtenNames[ghapi.ForActionRef(owner, repo, "", orig.Ref)]
+}
+
 // Redirect re-labels the entry seeded for owner/repo under its canonical
 // name, keeping the locked commit: a rename of the same repository is no
 // reason to advance. orig is the ref as written, which the rewrite must
 // match exactly. Unseeded refs are left to live resolution.
 func (r *Resolver) Redirect(owner, repo string, orig parserlock.ActionRef, canonical string) {
+	if r.keepsWrittenName(orig, canonical) {
+		return
+	}
 	for _, key := range []ghapi.ActionRef{ghapi.ForActionRef(owner, repo, "", orig.Ref), ghapi.ForActionRef(owner, repo, orig.Path, orig.Ref)} {
 		e, ok := r.cache.Get(key)
 		if !ok {

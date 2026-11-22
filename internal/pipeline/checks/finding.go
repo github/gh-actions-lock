@@ -32,6 +32,9 @@ type Finding struct {
 	ParentNWO string
 	// LocalPath is the `./…` value a LocalAction warning names.
 	LocalPath string
+	// ParentFile is the repo-relative action file of an in-repo `$/…`
+	// ParentNWO.
+	ParentFile string
 	// LocalRemoteUses are the remote actions the LocalPath composite uses in
 	// the checkout. The runner needs a pin for each, which the lockfile
 	// can't record, so the CLI blocks on them.
@@ -71,6 +74,10 @@ type Finding struct {
 	// sticky mutable ref, the terminal shows it; the JSON category is
 	// unchanged.
 	TagMoved bool
+	// KeptName marks a repo-renamed warning a fix run leaves as written,
+	// because an in-repo action file holds the name. The terminal shows it
+	// on fix runs too.
+	KeptName bool
 	// RecordedRef is the lock entry ref a parity finding on a recorded pin
 	// checked; empty for a ref this run resolved. FreshRef marks the
 	// latter, which the lockfile never recorded.
@@ -154,15 +161,13 @@ type WorkflowReport struct {
 	// ActionRefs are all remote dependency roots attributed to the workflow,
 	// including refs found inside in-repo `$/…` actions.
 	ActionRefs []parserlock.ActionRef
-	// RewriteRefs are the refs eligible for source rewriting: workflow YAML
-	// plus the in-repo `$/…` action files listed in SelfActionFiles.
+	// RewriteRefs are the refs eligible for rewriting in the workflow file:
+	// those no in-repo `$/…` action file also holds.
 	RewriteRefs []parserlock.ActionRef
 	// SHASpellings are the source spellings of uppercase full-SHA refs
 	// (see ParsedWorkflow).
 	SHASpellings map[string]string
-	// SelfActionFiles are in-repo action definition files reached via `$/…`.
-	SelfActionFiles []string
-	// SelfActionRefs are the remote refs found specifically inside SelfActionFiles.
+	// SelfActionRefs are the remote refs found inside in-repo `$/…` action files.
 	SelfActionRefs []parserlock.ActionRef
 	// Deps are the existing pinned dependencies (nil if not pinned).
 	Deps []dep.Dependency

@@ -232,6 +232,32 @@ func TestPresentResults_RemediateHints(t *testing.T) {
 			},
 		},
 		{
+			name:          "repo-renamed hidden on fix runs that rewrite it",
+			willRemediate: true,
+			findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     checks.RepoRenamed,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "old/name was renamed or transferred to new/name",
+			}},
+			notWanted: []string{"renamed or transferred"},
+		},
+		{
+			name:          "repo-renamed a fix run keeps as written still shows",
+			willRemediate: true,
+			findings: []checks.Finding{{
+				WorkflowPath: ".github/workflows/a.yml",
+				Category:     checks.RepoRenamed,
+				Severity:     checks.SeverityWarning,
+				Confidence:   checks.ConfidenceHigh,
+				Detail:       "old/name was renamed or transferred to new/name",
+				Remediation:  "change it to `uses: new/name@v1` in .github/actions/x/action.yml, then run `gh actions-lock`",
+				KeptName:     true,
+			}},
+			wantOutput: []string{"renamed or transferred", "↳ change it to `uses: new/name@v1` in .github/actions/x/action.yml"},
+		},
+		{
 			name:          "inconclusive warning surfaces ↳ remediation when set",
 			willRemediate: false,
 			findings: []checks.Finding{{
