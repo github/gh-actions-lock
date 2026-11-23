@@ -322,6 +322,8 @@ func TestParity_MovedExactTagFollowsHistory(t *testing.T) {
 		{"exact tag behind blocks verify", "v7.0.1", "ahead", parityTestSHA, []string{"--verify"}, "tag-commit-mismatch"},
 		{"exact tag behind blocks no-fix", "v7.0.1", "ahead", parityTestSHA, []string{"--no-fix"}, "tag-commit-mismatch"},
 		{"exact tag behind blocks a default run", "v7.0.1", "ahead", parityTestSHA, fix, "tag-commit-mismatch"},
+		{"prefixed exact tag behind blocks verify", "verify/v7.0.1", "ahead", parityTestSHA, []string{"--verify"}, "tag-commit-mismatch"},
+		{"prefixed floating ref behind passes verify", "verify/v7", "ahead", parityTestSHA, []string{"--verify"}, ""},
 		{"floating ref behind passes verify", "v7", "ahead", parityTestSHA, []string{"--verify"}, ""},
 		{"floating ref behind passes a default run", "v7", "ahead", parityTestSHA, fix, ""},
 		{"lost commit blocks verify", "v7.0.1", "diverged", lost, []string{"--verify"}, "unreachable-pin"},
@@ -387,7 +389,7 @@ jobs:
 			assert.Equal(t, "error", p.Findings[0].Severity)
 			if tt.want == "tag-commit-mismatch" {
 				assert.Equal(t, "high", p.Findings[0].Confidence)
-				assert.Equal(t, "tag v7.0.1 points at bbbbbbbbbbbb; the lockfile locks 9ddf35b71a48, an older commit in its history", p.Findings[0].Detail)
+				assert.Equal(t, "tag "+tt.ref+" points at bbbbbbbbbbbb; the lockfile locks 9ddf35b71a48, an older commit in its history", p.Findings[0].Detail)
 			}
 		})
 	}
