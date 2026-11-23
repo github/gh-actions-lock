@@ -491,6 +491,40 @@ func TestRenderVersionRefNudge_SkipsTransitiveDeps(t *testing.T) {
 	}
 }
 
+func TestRenderVersionRefNudge_StaysInTagPrefixFamily(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/tools", Ref: "verify/v0", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "v1", SHA: "bbb", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "repos/octo/tools/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "lint/v3.0.0", "commit": map[string]string{"sha": "ccc"}},
+		{"name": "verify/v0.6.0", "commit": map[string]string{"sha": "ddd"}},
+		{"name": "v1.2.0", "commit": map[string]string{"sha": "eee"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	renderVersionRefNudge(context.Background(), ui.NewPlain(&buf), record, r)
+	out := buf.String()
+
+	if !strings.Contains(out, "octo/tools@verify/v0 → latest: verify/v0.6.0") {
+		t.Errorf("expected prefixed ref nudged to its own family, got:\n%s", out)
+	}
+	if !strings.Contains(out, "octo/tools@v1 → latest: v1.2.0") {
+		t.Errorf("expected unprefixed ref nudged to an unprefixed tag, got:\n%s", out)
+	}
+	if strings.Contains(out, "lint/") {
+		t.Errorf("nudge crossed into another tag family, got:\n%s", out)
+	}
+}
+
 func TestRenderVersionRefNudge_AllTransitive_NoOutput(t *testing.T) {
 	record := &pin.Record{
 		Entries: []pin.Entry{

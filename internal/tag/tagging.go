@@ -16,22 +16,23 @@ type Suggestion struct {
 }
 
 // BestPatchTagForSHA returns the highest full-semver patch tag in ref's version
-// family pointing at the given SHA. An empty ref accepts any family.
+// family pointing at the given SHA. Tags never cross path-prefix families (see
+// Family); an empty ref accepts any unprefixed major/minor.
 func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha, ref string) (string, error) {
 	matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
 	if err != nil {
 		return "", err
 	}
 
-	refSV, restrictFamily := parserlock.ParseSemVer(ref)
+	refSV, restrictFamily := ParseVersion(ref)
 	var best parserlock.SemVer
 	bestFound := false
 	for _, t := range matching {
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := parserlock.ParseSemVer(t.Name)
-		if !ok || !sv.IsFull() {
+		sv, ok := ParseVersion(t.Name)
+		if !ok || !sv.IsFull() || Family(sv) != Family(refSV) {
 			continue
 		}
 		if restrictFamily && !sameVersionFamily(sv, refSV) {
@@ -57,7 +58,7 @@ func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha, ref 
 // This is used for auto-pinning: if there's exactly one obvious patch tag,
 // we can pin without prompting.
 func (tl *Lister) UniquePatchTagForRef(ctx context.Context, owner, repo, sha, ref string) (string, error) {
-	refSV, refOK := parserlock.ParseSemVer(ref)
+	refSV, refOK := ParseVersion(ref)
 	if !refOK {
 		return "", nil
 	}
@@ -72,7 +73,7 @@ func (tl *Lister) UniquePatchTagForRef(ctx context.Context, owner, repo, sha, re
 		if t.IsMajor {
 			continue
 		}
-		sv, ok := parserlock.ParseSemVer(t.Name)
+		sv, ok := ParseVersion(t.Name)
 		if !ok || !sv.IsFull() {
 			continue
 		}
@@ -90,7 +91,7 @@ func (tl *Lister) UniquePatchTagForRef(ctx context.Context, owner, repo, sha, re
 }
 
 func sameVersionFamily(candidate, ref parserlock.SemVer) bool {
-	return candidate.Major == ref.Major && (ref.IsMajorOnly() || candidate.Minor == ref.Minor)
+	return Family(candidate) == Family(ref) && candidate.Major == ref.Major && (ref.IsMajorOnly() || candidate.Minor == ref.Minor)
 }
 
 // TagsForSHA returns all tags whose commit SHA matches the given SHA.
@@ -127,7 +128,7 @@ func (tl *Lister) SuggestTagsForSHA(ctx context.Context, owner, repo, sha string
 	var bestSV parserlock.SemVer
 	bestFound := false
 	for _, t := range matching {
-		if sv, ok := parserlock.ParseSemVer(t.Name); ok && sv.Rest == "" && !t.IsMajor {
+		if sv, ok := ParseVersion(t.Name); ok && sv.Rest == "" && !t.IsMajor {
 			if !bestFound || sv.Major > bestSV.Major ||
 				(sv.Major == bestSV.Major && sv.Minor > bestSV.Minor) ||
 				(sv.Major == bestSV.Major && sv.Minor == bestSV.Minor && sv.Patch > bestSV.Patch) {

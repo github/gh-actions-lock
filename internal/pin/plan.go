@@ -481,16 +481,17 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		}
 
 		// Narrow to a full semver patch tag when the ref is already
-		// version-shaped but imprecise (v4, v3.1). Non-version refs like
-		// `main`, `canary`, or `releases/v4` are intentional — narrowing
-		// them risks picking up unrelated semver tags from the repo.
+		// version-shaped but imprecise (v4, v3.1, actions/verify/v0).
+		// Non-version refs like `main` or `canary` are intentional, and
+		// narrowing stays inside the ref's tag-prefix family so it never
+		// picks up unrelated semver tags from the repo.
 		// Skip if --no-narrow or if the lockfile already recorded this
 		// dep without a full semver ref (respect prior precision choice).
 		nwoLower := strings.ToLower(dep.NWO)
 		if opts.NoNarrow || opts.prevImpreciseNWO[nwoLower] {
 			continue
 		}
-		sv, ok := parserlock.ParseSemVer(dep.Ref)
+		sv, ok := tag.ParseVersion(dep.Ref)
 		if !ok {
 			continue
 		}
@@ -832,11 +833,11 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 			continue
 		}
 		// Only narrow refs that are already version-shaped but imprecise
-		// (e.g. v4, v4.2). Non-version refs like `main`, `canary`, or
-		// `releases/v4` are intentional choices — narrowing them could pick
-		// up unrelated semver tags from the repo (e.g. framework releases
-		// in a monorepo like vercel/next.js).
-		sv, ok := parserlock.ParseSemVer(e.Ref)
+		// (e.g. v4, v4.2, actions/verify/v0). Non-version refs like `main`
+		// or `canary` are intentional choices. BestPatchTagForSHA stays in
+		// the ref's tag-prefix family, so it never picks up unrelated semver
+		// tags (e.g. framework releases in a monorepo like vercel/next.js).
+		sv, ok := tag.ParseVersion(e.Ref)
 		if !ok {
 			continue
 		}
@@ -946,7 +947,7 @@ func impreciseDirectNWOs(store *lockfile.State) map[string]bool {
 			continue
 		}
 		for _, d := range deps {
-			if sv, ok := parserlock.ParseSemVer(d.Ref); ok && !sv.IsFull() {
+			if sv, ok := tag.ParseVersion(d.Ref); ok && !sv.IsFull() {
 				out[strings.ToLower(d.NWO)] = true
 			}
 		}

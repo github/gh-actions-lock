@@ -53,6 +53,45 @@ func TestNarrowDirectDeps_PreservesRefWhenExactTagIsFromAnotherFamily(t *testing
 	assert.Empty(t, rewrites)
 }
 
+func TestNarrowDirectDeps_PathPrefixedRefNarrowsWithinItsFamily(t *testing.T) {
+	const sha = "5555555555555555555555555555555555555555"
+
+	reg := &httpmock.Registry{}
+	reg.Register(
+		httpmock.REST("GET", `repos/octo/tools/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse(
+			"v2.0.0", sha,
+			"lint/v0.9.0", sha,
+			"verify/v0.5.1", sha,
+			"verify/v0.4.0", sha,
+		)),
+	)
+	reg.Register(
+		httpmock.REST("GET", `repos/octo/tools/releases`),
+		httpmock.JSONResponse([]map[string]any{}),
+	)
+
+	deps := []dep.Dependency{{NWO: "octo/tools", Path: "verify", Ref: "verify/v0", SHA: sha}}
+	direct := lockfile.NewDirectTracker(
+		[]parserlock.ActionRef{{Owner: "octo", Repo: "tools", Path: "verify", Ref: "verify/v0"}},
+		deps,
+	)
+	rewrites := make(map[string]string)
+
+	narrowDirectDeps(
+		context.Background(),
+		PlanOptions{Tagger: tag.NewListerForTest(t, reg)},
+		deps,
+		nil,
+		direct,
+		rewrites,
+		make(map[int]bool),
+	)
+
+	assert.Equal(t, "verify/v0.5.1", deps[0].Ref)
+	assert.Equal(t, map[string]string{"octo/tools@verify/v0": "octo/tools@verify/v0.5.1"}, rewrites)
+}
+
 func TestNarrowDirectDeps_SameNWOSiblingRefsNormalizeIndependently(t *testing.T) {
 	const (
 		patchSHA = "4444444444444444444444444444444444444444"

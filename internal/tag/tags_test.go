@@ -92,6 +92,18 @@ func TestBestPatchTagForSHA_RefFamily(t *testing.T) {
 			tags: httpmock.TagListResponse("v4.3.0", sha, "v4.2.1", sha),
 			want: "v4.2.1",
 		},
+		{
+			name: "prefixed ref stays in its prefix family",
+			ref:  "actions/verify/v0",
+			tags: httpmock.TagListResponse("v0.9.0", sha, "other/v0.6.0", sha, "actions/verify/v0.5.1", sha, "actions/verify/v0.4.0", sha),
+			want: "actions/verify/v0.5.1",
+		},
+		{
+			name: "unprefixed ref ignores prefixed tags",
+			ref:  "v0",
+			tags: httpmock.TagListResponse("actions/verify/v0.6.0", sha, "v0.1.0", sha),
+			want: "v0.1.0",
+		},
 	}
 
 	for _, tt := range tests {

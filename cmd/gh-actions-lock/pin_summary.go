@@ -13,6 +13,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/ui"
 )
 
@@ -725,7 +726,7 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 
 	seen := map[string]*nudgeEntry{}
 	// Cache per-repo so we don't call ListTags twice for the same repo.
-	repoLatest := map[string]string{} // NWO → latest full semver (or "" if none)
+	repoLatest := map[string]string{} // NWO + tag family → latest full semver (or "" if none)
 
 	for _, e := range record.Entries {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
@@ -734,7 +735,7 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 		if !e.Direct {
 			continue
 		}
-		sv, ok := parserlock.ParseSemVer(e.Ref)
+		sv, ok := tag.ParseVersion(e.Ref)
 		if ok && sv.IsFull() {
 			continue
 		}
@@ -752,17 +753,18 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 			continue
 		}
 
-		latest, cached := repoLatest[e.NWO]
+		family := tag.Family(sv)
+		latest, cached := repoLatest[e.NWO+"@"+family]
 		if !cached {
-			latest = latestFullSemverTag(ctx, r, e.NWO)
-			repoLatest[e.NWO] = latest
+			latest = latestFullSemverTag(ctx, r, e.NWO, family)
+			repoLatest[e.NWO+"@"+family] = latest
 		}
 		if latest == "" {
 			continue // no semver releases — nothing to suggest
 		}
 		// Don't suggest a downgrade: if the user is on v3.4, only nudge
 		// if the latest full semver is v3.4.x or higher.
-		if latestSV, latestOK := parserlock.ParseSemVer(latest); latestOK {
+		if latestSV, latestOK := tag.ParseVersion(latest); latestOK {
 			if !latestSV.Greater(sv) {
 				continue
 			}
@@ -791,10 +793,10 @@ func renderVersionRefNudge(ctx context.Context, console *ui.UI, record *pin.Reco
 	console.TermDetail("  Update the uses: line in your workflow to the full version to lock precisely.")
 }
 
-// latestFullSemverTag returns the highest full semver tag (vX.Y.Z) for
-// the given NWO, or "" if the repo has no semver releases or the lookup
-// fails.
-func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo string) string {
+// latestFullSemverTag returns the highest full semver tag (vX.Y.Z) in the
+// given tag-prefix family (see tag.Family) for nwo, or "" if there is none
+// or the lookup fails.
+func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo, family string) string {
 	if r == nil {
 		return ""
 	}
@@ -810,8 +812,8 @@ func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo string) s
 	var best semverTriple
 	bestTag := ""
 	for _, t := range tags {
-		sv, ok := parserlock.ParseSemVer(t.Name)
-		if !ok || !sv.IsFull() || !sv.IsStable() {
+		sv, ok := tag.ParseVersion(t.Name)
+		if !ok || !sv.IsFull() || !sv.IsStable() || tag.Family(sv) != family {
 			continue
 		}
 		cur := semverTriple{sv.Major, sv.Minor, sv.Patch}
