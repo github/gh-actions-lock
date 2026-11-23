@@ -88,9 +88,14 @@ open_stamp_pr() {
   gh run watch "$run" --exit-status --compact >&2 ||
     die "the release workflow for ${tag} failed; fix it, then rerun"
 
-  # Stamp off main every time, so an existing branch is reused only when it
-  # holds exactly the verified stamp.
-  local wt sha
+  # Stamp off main on every run. An earlier stamp branch is reused only when it
+  # changes nothing but checksums.json and holds the same verified checksums, so
+  # commits landing on main in the meantime don't break a rerun.
+  local file=actions/verify/checksums.json existing="" wt sha
+  if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+    git fetch --quiet --no-tags origin "refs/heads/${branch}:refs/remotes/origin/${branch}"
+    existing="refs/remotes/origin/${branch}"
+  fi
   wt="$(mktemp -d)"
   git worktree add --quiet --detach "$wt" refs/remotes/origin/main
   if ! (cd "$wt" &&
@@ -99,18 +104,17 @@ open_stamp_pr() {
     git worktree remove --force "$wt"
     die "couldn't stamp ${branch}"
   fi
-  if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
-    git fetch --quiet --no-tags origin "refs/heads/${branch}:refs/remotes/origin/${branch}"
-    if ! git -C "$wt" diff --quiet HEAD "refs/remotes/origin/${branch}"; then
+  if [ -n "$existing" ]; then
+    if [ "$(git -C "$wt" rev-parse "HEAD:${file}")" != "$(git rev-parse "${existing}:${file}" 2>/dev/null)" ] ||
+      [ "$(git diff --name-only "$(git merge-base refs/remotes/origin/main "$existing")" "$existing" 2>/dev/null)" != "$file" ]; then
       git worktree remove --force "$wt"
-      die "branch ${branch} doesn't match the verified stamp off main; delete it and rerun"
+      die "branch ${branch} isn't the verified stamp for ${tag}; delete it (which closes its pull request) and rerun"
     fi
-    sha="$(git rev-parse "refs/remotes/origin/${branch}")"
+    sha="$(git rev-parse "$existing")"
+  elif ! git -C "$wt" push --quiet origin "HEAD:refs/heads/${branch}"; then
+    git worktree remove --force "$wt"
+    die "couldn't push ${branch}"
   else
-    if ! git -C "$wt" push --quiet origin "HEAD:refs/heads/${branch}"; then
-      git worktree remove --force "$wt"
-      die "couldn't push ${branch}"
-    fi
     sha="$(git -C "$wt" rev-parse HEAD)"
   fi
   git worktree remove --force "$wt"
@@ -225,6 +229,10 @@ cut_tag() {
     return
   fi
 
+  if [ "$release_candidate" = "0" ]; then
+    gh auth status >/dev/null 2>&1 ||
+      die "sign in with gh first; it opens main's stamp pull request after the tag is pushed"
+  fi
   if [ "$reuse" = "1" ]; then
     echo "Reusing local tag ${tag}."
   else
