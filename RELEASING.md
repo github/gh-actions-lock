@@ -34,8 +34,9 @@ the release script again for the next RC.
 
 Rerunning a step is safe. If the push was held, rerun the same command: it
 pushes the local tag when that tag already points at `HEAD`, and stops if it
-points anywhere else. After a successful push, a rerun reuses the stamp branch
-and pull request below and stops until that pull request is merged. Rerunning
+points anywhere else. After a successful push, a rerun stamps again and reuses the
+stamp branch and pull request below only if they match, then stops until that
+pull request is merged. Rerunning
 the tag workflow checks the attestations again and skips tagging when
 `verify-vX.Y.Z` is already that same signed stamp on the release commit.
 

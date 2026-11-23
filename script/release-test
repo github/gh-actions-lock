@@ -100,6 +100,22 @@ output="$(script/release patch)"
 [ "$(grep -c '^pr create' "$GH_LOG")" = 1 ]
 [ "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)" ]
 
+# A stamp branch that differs from the verified stamp isn't reused.
+git checkout --quiet -b tampered "$stamp"
+printf '{"version": "v1.2.4", "sha256": {"linux-amd64": "00"}}\n' >actions/verify/checksums.json
+git commit --quiet -am "tampered stamp"
+git push --quiet --force origin tampered:verify-stamp-v1.2.4
+git checkout --quiet main
+git branch --quiet -D tampered
+if output="$(script/release patch 2>&1)"; then
+  echo "expected a tampered stamp branch to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"doesn't match the verified stamp off main"* ]]
+[ "$(grep -c '^pr create' "$GH_LOG")" = 1 ]
+[ -z "$(git worktree list | sed 1d)" ]
+git push --quiet --force origin "$stamp:refs/heads/verify-stamp-v1.2.4"
+
 # A leftover local tag at another commit still blocks the release.
 printf '{"version": "v1.2.4", "sha256": {}}\n' >actions/verify/checksums.json
 git commit --quiet -am "stamp v1.2.4"

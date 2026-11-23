@@ -88,26 +88,38 @@ open_stamp_pr() {
   gh run watch "$run" --exit-status --compact >&2 ||
     die "the release workflow for ${tag} failed; fix it, then rerun"
 
+  # Stamp off main every time, so an existing branch is reused only when it
+  # holds exactly the verified stamp.
+  local wt sha
+  wt="$(mktemp -d)"
+  git worktree add --quiet --detach "$wt" refs/remotes/origin/main
+  if ! (cd "$wt" &&
+    node script/verify-action-release.mjs --stamp-only "$tag" &&
+    git commit --quiet -am "Stamp actions/verify on main for ${tag}"); then
+    git worktree remove --force "$wt"
+    die "couldn't stamp ${branch}"
+  fi
   if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
     git fetch --quiet --no-tags origin "refs/heads/${branch}:refs/remotes/origin/${branch}"
-    [ "$(stamped_version "refs/remotes/origin/${branch}")" = "$tag" ] ||
-      die "branch ${branch} isn't stamped for ${tag}; delete it and rerun"
-  else
-    local wt
-    wt="$(mktemp -d)"
-    git worktree add --quiet --detach "$wt" refs/remotes/origin/main
-    if ! (cd "$wt" &&
-      node script/verify-action-release.mjs --stamp-only "$tag" &&
-      git commit --quiet -am "Stamp actions/verify on main for ${tag}" &&
-      git push --quiet origin "HEAD:refs/heads/${branch}"); then
+    if ! git -C "$wt" diff --quiet HEAD "refs/remotes/origin/${branch}"; then
       git worktree remove --force "$wt"
-      die "couldn't stamp ${branch}"
+      die "branch ${branch} doesn't match the verified stamp off main; delete it and rerun"
     fi
-    git worktree remove --force "$wt"
+    sha="$(git rev-parse "refs/remotes/origin/${branch}")"
+  else
+    if ! git -C "$wt" push --quiet origin "HEAD:refs/heads/${branch}"; then
+      git worktree remove --force "$wt"
+      die "couldn't push ${branch}"
+    fi
+    sha="$(git -C "$wt" rev-parse HEAD)"
   fi
+  git worktree remove --force "$wt"
 
+  # --head also matches fork branches, so only reuse this repository's branch.
   local url
-  url="$(gh pr list --head "$branch" --base main --state open --json url --jq '.[0].url // empty')"
+  url="$(gh pr list --head "$branch" --base main --state open \
+    --json url,isCrossRepository,headRefOid \
+    --jq "[.[] | select((.isCrossRepository | not) and .headRefOid == \"${sha}\")][0].url // empty")"
   [ -n "$url" ] || url="$(gh pr create --base main --head "$branch" \
     --title "Stamp actions/verify on main for ${tag}" \
     --body "Records ${tag} and its release binaries' checksums in \`actions/verify/checksums.json\`, so the next release can be cut.")"
