@@ -13,11 +13,13 @@ export const REPO = "github/gh-actions-lock";
 
 export class ActionError extends Error {}
 
+const versionPattern = /^v\d+\.\d+\.\d+(-rc\.\d+)?$/;
+
 export function checkVersion(version) {
   if (!version) {
     throw new ActionError(`set the version input, or use a verify-v* release tag of ${REPO}/actions/verify`);
   }
-  if (!/^v\d+\.\d+\.\d+(-rc\.\d+)?$/.test(version)) {
+  if (!versionPattern.test(version)) {
     throw new ActionError(`invalid version '${version}'; expected vX.Y.Z or vX.Y.Z-rc.N`);
   }
   return version;
@@ -42,9 +44,11 @@ export function splitArgs(input) {
   return (input ?? "").split(/\s+/).filter(Boolean);
 }
 
+const isMap = (o) => o !== null && typeof o === "object" && !Array.isArray(o);
+
 // parseChecksums reads checksums.json, which script/verify-action-release.mjs
-// writes: {"version": "vX.Y.Z", "sha256": {"<release asset>": "<hex digest>"}}.
-// Anything else fails.
+// writes: {"default": "vX.Y.Z", "versions": {"vX.Y.Z": {"<asset>": "<sha256 hex>"}}}.
+// default must be one of versions. Anything else fails.
 export function parseChecksums(text) {
   let sums;
   try {
@@ -52,25 +56,33 @@ export function parseChecksums(text) {
   } catch (err) {
     throw new ActionError(`checksums.json: ${err.message}`);
   }
-  const { version, sha256, ...extra } = sums ?? {};
+  const { default: def, versions, ...extra } = isMap(sums) ? sums : {};
   const shaped =
-    typeof version === "string" &&
-    sha256 !== null && typeof sha256 === "object" && !Array.isArray(sha256) &&
     Object.keys(extra).length === 0 &&
-    Object.entries(sha256).every(([k, v]) => /^[a-z0-9][a-z0-9.-]*$/.test(k) && /^[0-9a-f]{64}$/.test(v));
-  if (!shaped) throw new ActionError('checksums.json must be {"version": "vX.Y.Z", "sha256": {"<asset>": "<sha256 hex>"}}');
-  checkVersion(version);
-  return { version, sha256 };
+    isMap(versions) &&
+    Object.hasOwn(versions, def) &&
+    Object.entries(versions).every(
+      ([v, sha256]) =>
+        versionPattern.test(v) &&
+        isMap(sha256) &&
+        Object.keys(sha256).length > 0 &&
+        Object.entries(sha256).every(([k, h]) => /^[a-z0-9][a-z0-9.-]*$/.test(k) && /^[0-9a-f]{64}$/.test(h)),
+    );
+  if (!shaped) {
+    throw new ActionError('checksums.json must be {"default": "vX.Y.Z", "versions": {"vX.Y.Z": {"<asset>": "<sha256 hex>"}}}');
+  }
+  return { default: def, versions };
 }
 
-// selectCheck picks the version to run and how to check it: the checksum in
-// checksums.json when version is empty or the release it records, otherwise the
-// release's build attestation. sums is parsed checksums.json, or null.
-export function selectCheck(version, sums, asset) {
-  const v = checkVersion(version || sums?.version);
-  if (v !== sums?.version) return { version: v, kind: "attestation" };
-  if (!Object.hasOwn(sums.sha256, asset)) throw new ActionError(`no checksum for ${asset} in checksums.json`);
-  return { version: v, kind: "checksum", want: sums.sha256[asset] };
+// selectCheck picks the version to run and how to check it: its checksum when
+// checksums.json lists it, otherwise its build attestation. An empty version
+// runs the default. sums is parsed checksums.json, or null.
+export function selectCheck(v, sums, asset) {
+  v = checkVersion(v || sums?.default);
+  if (!sums || !Object.hasOwn(sums.versions, v)) return { version: v, kind: "attestation" };
+  const sha256 = sums.versions[v];
+  if (!Object.hasOwn(sha256, asset)) throw new ActionError(`no checksum for ${asset} ${v} in checksums.json`);
+  return { version: v, kind: "checksum", want: sha256[asset] };
 }
 
 // attestationEnv builds the environment for `gh attestation verify`. Attestations

@@ -15,8 +15,8 @@
 #                       tagging or pushing.
 #
 # After a stable tag, it waits for the tag workflow and opens the pull request
-# that stamps actions/verify on main for it, with your gh credentials so its
-# checks run. The next release waits for that pull request to merge.
+# that stamps actions/verify on main for it. The next release waits until that
+# pull request is merged and main is tagged verify-<tag>. See RELEASING.md.
 #
 # Requires: git, gh, go, make, node (see RELEASING.md).
 
@@ -54,7 +54,7 @@ require_current_main() {
 
 stamped_version() {
   (git show "$1:actions/verify/checksums.json" 2>/dev/null || true) |
-    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).version)); } catch {} });'
+    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).default)); } catch {} });'
 }
 
 # The verify action on main must carry the latest release's stamp before the
@@ -64,12 +64,10 @@ main_stamped_for() {
   [ "$(stamped_version refs/remotes/origin/main)" = "$1" ]
 }
 
-# open_stamp_pr waits for tag's release workflow, then commits the stamp on a
-# verify-stamp-<tag> branch off main and opens its pull request. Each step
-# reuses what an earlier run left.
+# open_stamp_pr waits for tag's release workflow, then opens the pull request
+# that stamps main for it.
 open_stamp_pr() {
   local tag="$1"
-  local branch="verify-stamp-${tag}"
   fetch_main
   if main_stamped_for "$tag"; then
     echo "main is already stamped for ${tag}."
@@ -87,46 +85,8 @@ open_stamp_pr() {
   gh run watch "$run" --exit-status --compact >&2 ||
     die "the release workflow for ${tag} failed; fix it, then rerun"
 
-  # Stamp off main on every run. An earlier stamp branch is reused only when it
-  # changes nothing but checksums.json and holds the same verified checksums, so
-  # commits landing on main in the meantime don't break a rerun.
-  local file=actions/verify/checksums.json existing="" wt sha
-  if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
-    git fetch --quiet --no-tags origin "refs/heads/${branch}:refs/remotes/origin/${branch}"
-    existing="refs/remotes/origin/${branch}"
-  fi
-  wt="$(mktemp -d)"
-  git worktree add --quiet --detach "$wt" refs/remotes/origin/main
-  if ! (cd "$wt" &&
-    node script/verify-action-release.mjs --stamp-only "$tag" &&
-    git commit --quiet -am "Stamp actions/verify on main for ${tag}"); then
-    git worktree remove --force "$wt"
-    die "couldn't stamp ${branch}"
-  fi
-  if [ -n "$existing" ]; then
-    if [ "$(git -C "$wt" rev-parse "HEAD:${file}")" != "$(git rev-parse "${existing}:${file}" 2>/dev/null)" ] ||
-      [ "$(git diff --name-only "$(git merge-base refs/remotes/origin/main "$existing")" "$existing" 2>/dev/null)" != "$file" ]; then
-      git worktree remove --force "$wt"
-      die "branch ${branch} isn't the verified stamp for ${tag}; delete it (which closes its pull request) and rerun"
-    fi
-    sha="$(git rev-parse "$existing")"
-  elif ! git -C "$wt" push --quiet origin "HEAD:refs/heads/${branch}"; then
-    git worktree remove --force "$wt"
-    die "couldn't push ${branch}"
-  else
-    sha="$(git -C "$wt" rev-parse HEAD)"
-  fi
-  git worktree remove --force "$wt"
-
-  # --head also matches fork branches, so only reuse this repository's branch.
-  local url
-  url="$(gh pr list --head "$branch" --base main --state open \
-    --json url,isCrossRepository,headRefOid \
-    --jq "[.[] | select((.isCrossRepository | not) and .headRefOid == \"${sha}\")][0].url // empty")"
-  [ -n "$url" ] || url="$(gh pr create --base main --head "$branch" \
-    --title "Stamp actions/verify on main for ${tag}" \
-    --body "Records ${tag} and its release binaries' checksums in \`actions/verify/checksums.json\`, so the next release can be cut.")"
-  echo "Stamp pull request: ${url}"
+  node script/verify-action-release.mjs "$tag" ||
+    die "couldn't open the stamp pull request for ${tag}; fix it, then rerun"
 }
 
 require_clean() {
@@ -183,9 +143,11 @@ cut_tag() {
       [ "${RELEASE_DRY_RUN:-}" != "1" ] ||
         die "actions/verify on main isn't stamped for ${latest}; rerun without RELEASE_DRY_RUN to open its stamp pull request"
       open_stamp_pr "$latest"
-      echo "Merge the stamp pull request, then rerun to cut the next release."
+      echo "Merge the stamp pull request and tag it, then rerun to cut the next release."
       return
     fi
+    git ls-remote --exit-code --tags origin "refs/tags/verify-${latest}" >/dev/null ||
+      die "verify-${latest} isn't tagged; run node script/verify-action-release.mjs --tag ${latest}"
     base="${latest#"$TAG_PREFIX"}"
   fi
 
@@ -246,7 +208,7 @@ cut_tag() {
   # main carries stable releases only.
   if [ "$release_candidate" = "0" ]; then
     open_stamp_pr "$tag"
-    echo "Merge the stamp pull request before the next release."
+    echo "After the stamp pull request merges, run node script/verify-action-release.mjs --tag ${tag}"
   fi
 }
 

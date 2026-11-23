@@ -16,46 +16,35 @@ cp "$root/script/release" script/release
 cp "$root/script/verify-release-tag" script/verify-release-tag
 touch tracked
 mkdir -p actions/verify
-printf '{"version": "v1.2.3", "sha256": {}}\n' >actions/verify/checksums.json
-# Stands in for the real stamp, which downloads the release binaries.
+printf '{"default": "v1.2.3", "versions": {}}\n' >actions/verify/checksums.json
+# Stands in for the real script, which calls the GitHub API.
 cat >script/verify-action-release.mjs <<'EOF2'
-import { writeFileSync } from "node:fs";
-writeFileSync("actions/verify/checksums.json", JSON.stringify({ version: process.argv[3], sha256: {} }) + "\n");
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.STAMP_LOG, process.argv.slice(2).join(" ") + "\n");
+console.log("Stamp pull request: https://example.test/pull/1");
 EOF2
 git add .
 git commit --quiet -m initial
 git push --quiet -u origin main
 git tag -a v1.2.3 -m v1.2.3
 git push --quiet origin refs/tags/v1.2.3
+git push --quiet origin HEAD:refs/tags/verify-v1.2.3
 git tag -a v99.0.0 -m v99.0.0
 
 mkdir "$tmp/bin"
 printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/make"
 chmod +x "$tmp/bin/make"
-export GH_LOG="$tmp/gh.log" GH_PR="$tmp/pr"
+export STAMP_LOG="$tmp/stamp.log"
 cat >"$tmp/bin/gh" <<'EOF2'
 #!/bin/sh
-echo "$*" >>"$GH_LOG"
 case "$1 $2" in
   "run list") echo 42 ;;
   "run watch") ;;
   "auth status") ;;
-  "pr list")
-    while [ "$#" -gt 0 ] && [ "$1" != --jq ]; do shift; done
-    jq -r "$2" "$GH_PR" ;;
-  "pr create")
-    while [ "$#" -gt 0 ] && [ "$1" != --head ]; do shift; done
-    sha="$(git ls-remote origin "refs/heads/$2" | cut -f1)"
-    jq --arg sha "$sha" '. + [{url: "https://example.test/pull/1", isCrossRepository: false, headRefOid: $sha}]' "$GH_PR" >"$GH_PR.new"
-    mv "$GH_PR.new" "$GH_PR"
-    echo https://example.test/pull/1 ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
 EOF2
 chmod +x "$tmp/bin/gh"
-# A fork pull request and a stale one on the same branch name are never reused.
-echo '[{"url": "https://example.test/fork/9", "isCrossRepository": true, "headRefOid": "any"},
-  {"url": "https://example.test/pull/8", "isCrossRepository": false, "headRefOid": "stale"}]' >"$GH_PR"
 export PATH="$tmp/bin:$PATH"
 
 output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
@@ -70,7 +59,7 @@ output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
 output="$(RELEASE_DRY_RUN=1 script/release patch)"
 [[ "$output" == *"Cutting v1.2.4 "* ]]
 
-printf '{"version": "v1.2.2", "sha256": {}}\n' >actions/verify/checksums.json
+printf '{"default": "v1.2.2", "versions": {}}\n' >actions/verify/checksums.json
 git commit --quiet -am "stale stamp"
 git push --quiet origin main
 if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
@@ -89,6 +78,15 @@ fi
 git reset --quiet --hard HEAD~2
 git push --quiet --force origin main
 
+# The next release also waits for main's verify tag.
+git push --quiet origin :refs/tags/verify-v1.2.3
+if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
+  echo "expected a missing verify tag to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"verify-v1.2.3 isn't tagged"* ]]
+git push --quiet origin HEAD:refs/tags/verify-v1.2.3
+
 # A rerun after a held push pushes the existing local tag, then opens the
 # pull request that stamps main.
 git tag -a v1.2.4 -m v1.2.4
@@ -96,65 +94,20 @@ output="$(script/release patch)"
 [[ "$output" == *"Reusing local tag v1.2.4."* ]]
 [[ "$output" == *"Pushed v1.2.4"* ]]
 [[ "$output" == *"Stamp pull request: https://example.test/pull/1"* ]]
+[[ "$output" == *"--tag v1.2.4"* ]]
 [ "$(git ls-remote --tags origin 'refs/tags/v1.2.4^{}' | awk '{ print $1 }')" = "$(git rev-parse HEAD)" ]
-git fetch --quiet origin verify-stamp-v1.2.4
-[ "$(git rev-parse FETCH_HEAD~1)" = "$(git rev-parse HEAD)" ]
-[[ "$(git show FETCH_HEAD:actions/verify/checksums.json)" == *'"version":"v1.2.4"'* ]]
-[ -z "$(git worktree list | sed 1d)" ]
+[ "$(cat "$STAMP_LOG")" = v1.2.4 ]
 
-# A rerun before the stamp merges reuses the branch and pull request.
-stamp="$(git rev-parse FETCH_HEAD)"
+# Until the stamp merges, a rerun reopens its pull request instead of cutting a release.
 output="$(script/release patch)"
-[[ "$output" == *"Stamp pull request: https://example.test/pull/1"* ]]
-[[ "$output" == *"Merge the stamp pull request, then rerun"* ]]
-[ "$(git ls-remote --heads origin verify-stamp-v1.2.4 | awk '{ print $1 }')" = "$stamp" ]
-[ "$(grep -c '^pr create' "$GH_LOG")" = 1 ]
-[ "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)" ]
-
-# A stamp branch that differs from the verified stamp isn't reused.
-git checkout --quiet -b tampered "$stamp"
-printf '{"version": "v1.2.4", "sha256": {"linux-amd64": "00"}}\n' >actions/verify/checksums.json
-git commit --quiet -am "tampered stamp"
-git push --quiet --force origin tampered:verify-stamp-v1.2.4
-git checkout --quiet main
-git branch --quiet -D tampered
-if output="$(script/release patch 2>&1)"; then
-  echo "expected a tampered stamp branch to block the release" >&2
-  exit 1
-fi
-[[ "$output" == *"isn't the verified stamp for v1.2.4"* ]]
-[ "$(grep -c '^pr create' "$GH_LOG")" = 1 ]
-[ -z "$(git worktree list | sed 1d)" ]
-
-# So isn't one that adds another change next to the right checksums.
-git checkout --quiet -b extra "$stamp"
-echo extra >extra.txt
-git add extra.txt
-git commit --quiet -m "extra change"
-git push --quiet --force origin extra:verify-stamp-v1.2.4
-git checkout --quiet main
-git branch --quiet -D extra
-if output="$(script/release patch 2>&1)"; then
-  echo "expected a stamp branch with another change to block the release" >&2
-  exit 1
-fi
-[[ "$output" == *"isn't the verified stamp for v1.2.4"* ]]
-git push --quiet --force origin "$stamp:refs/heads/verify-stamp-v1.2.4"
-
-# A rerun still reuses the stamp branch after main moves on.
-echo moved >moved.txt
-git add moved.txt
-git commit --quiet -m "main moves"
-git push --quiet origin main
-output="$(script/release patch)"
-[[ "$output" == *"Stamp pull request: https://example.test/pull/1"* ]]
-[ "$(git ls-remote --heads origin verify-stamp-v1.2.4 | awk '{ print $1 }')" = "$stamp" ]
-[ "$(grep -c '^pr create' "$GH_LOG")" = 1 ]
+[[ "$output" == *"Merge the stamp pull request and tag it, then rerun"* ]]
+[ "$(sed -n 2p "$STAMP_LOG")" = v1.2.4 ]
 
 # A leftover local tag at another commit still blocks the release.
-printf '{"version": "v1.2.4", "sha256": {}}\n' >actions/verify/checksums.json
+printf '{"default": "v1.2.4", "versions": {}}\n' >actions/verify/checksums.json
 git commit --quiet -am "stamp v1.2.4"
 git push --quiet origin main
+git push --quiet origin HEAD:refs/tags/verify-v1.2.4
 git tag -a v1.2.5 -m v1.2.5 HEAD~1
 if output="$(script/release patch 2>&1)"; then
   echo "expected a local tag at another commit to block the release" >&2

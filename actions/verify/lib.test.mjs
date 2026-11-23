@@ -47,21 +47,28 @@ describe("assetFor", () => {
 });
 
 describe("parseChecksums", () => {
-  const sums = { version: "v0.4.1", sha256: { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) } };
-  test("reads the version and checksums", () => {
+  const v041 = { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) };
+  const v040 = { "linux-amd64": "c".repeat(64) };
+  const sums = { default: "v0.4.1", versions: { "v0.4.1": v041, "v0.4.0": v040 } };
+  const one = (entry) => JSON.stringify({ ...sums, versions: { "v0.4.1": entry } });
+  test("reads the default and every version's checksums", () => {
     assert.deepEqual(parseChecksums(JSON.stringify(sums, null, 2)), sums);
   });
   const bad = {
-    "invalid JSON": "version: v0.4.1",
+    "invalid JSON": "default: v0.4.1",
     "null": "null",
     "an array": "[]",
-    "a missing version": JSON.stringify({ sha256: sums.sha256 }),
-    "an invalid version": JSON.stringify({ ...sums, version: "v0.4" }),
-    "a non-string version": JSON.stringify({ ...sums, version: 1 }),
-    "an array of checksums": JSON.stringify({ ...sums, sha256: [] }),
-    "a short digest": JSON.stringify({ ...sums, sha256: { "linux-amd64": "a".repeat(63) } }),
-    "an uppercase digest": JSON.stringify({ ...sums, sha256: { "linux-amd64": "A".repeat(64) } }),
-    "a bad asset name": JSON.stringify({ ...sums, sha256: { "../x": "a".repeat(64) } }),
+    "the single-version shape": JSON.stringify({ version: "v0.4.1", sha256: v041 }),
+    "a missing default": JSON.stringify({ versions: sums.versions }),
+    "a default that isn't listed": JSON.stringify({ ...sums, default: "v0.4.2" }),
+    "a non-string default": JSON.stringify({ ...sums, default: 1 }),
+    "an array of versions": JSON.stringify({ ...sums, versions: [] }),
+    "an invalid version key": JSON.stringify({ default: "v0.4", versions: { "v0.4": v041 } }),
+    "an empty entry": one({}),
+    "an array entry": one([]),
+    "a short digest": one({ "linux-amd64": "a".repeat(63) }),
+    "an uppercase digest": one({ "linux-amd64": "A".repeat(64) }),
+    "a bad asset name": one({ "../x": "a".repeat(64) }),
     "an unknown key": JSON.stringify({ ...sums, extra: 1 }),
   };
   for (const [name, t] of Object.entries(bad)) {
@@ -70,16 +77,25 @@ describe("parseChecksums", () => {
 });
 
 describe("selectCheck", () => {
-  const sums = { version: "v0.4.1", sha256: { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) } };
-  test("defaults to the recorded version and its checksum", () => {
+  const sums = {
+    default: "v0.4.1",
+    versions: {
+      "v0.4.1": { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) },
+      "v0.4.0": { "linux-amd64": "c".repeat(64) },
+    },
+  };
+  test("defaults to the default version and its checksum", () => {
     assert.deepEqual(selectCheck("", sums, "windows-amd64.exe"), { version: "v0.4.1", kind: "checksum", want: "b".repeat(64) });
     assert.deepEqual(selectCheck(undefined, sums, "linux-amd64"), { version: "v0.4.1", kind: "checksum", want: "a".repeat(64) });
   });
-  test("uses the checksum when the recorded version is set explicitly", () => {
-    assert.deepEqual(selectCheck("v0.4.1", sums, "linux-amd64"), { version: "v0.4.1", kind: "checksum", want: "a".repeat(64) });
+  test("uses the checksum of any listed version", () => {
+    assert.deepEqual(selectCheck("v0.4.0", sums, "linux-amd64"), { version: "v0.4.0", kind: "checksum", want: "c".repeat(64) });
   });
-  test("uses the attestation for any other version", () => {
+  test("uses the attestation for a version that isn't listed", () => {
     assert.deepEqual(selectCheck("v0.4.2", sums, "linux-amd64"), { version: "v0.4.2", kind: "attestation" });
+  });
+  test("doesn't treat inherited properties as listed versions", () => {
+    assert.throws(() => selectCheck("constructor", sums, "linux-amd64"), /invalid version/);
   });
   test("uses the attestation without checksums.json", () => {
     assert.deepEqual(selectCheck("v0.4.1", null, "linux-amd64"), { version: "v0.4.1", kind: "attestation" });
@@ -90,38 +106,8 @@ describe("selectCheck", () => {
   test("rejects an invalid version input", () => {
     assert.throws(() => selectCheck("v0.4", sums, "linux-amd64"), /invalid version/);
   });
-  test("fails when the recorded version lacks the asset", () => {
-    assert.throws(() => selectCheck("", sums, "darwin-arm64"), /no checksum for darwin-arm64/);
-  });
-  test("ignores inherited property names", () => {
-    assert.throws(() => selectCheck("", sums, "constructor"), /no checksum for constructor/);
-  });
-});
-
-describe("attestationEnv", () => {
-  const base = { INPUT_TOKEN: "job", INPUT_VERSION: "v0.4.2", GITHUB_TOKEN: "ambient", PATH: "/bin" };
-  test("on github.com uses the token input and drops GITHUB_TOKEN", () => {
-    const env = attestationEnv({ ...base, GITHUB_SERVER_URL: "https://github.com" });
-    assert.equal(env.GH_TOKEN, "job");
-    assert.equal(env.GH_HOST, "github.com");
-    assert.equal(env.PATH, "/bin");
-    assert.ok(!("GITHUB_TOKEN" in env));
-  });
-  test("off github.com uses GH_ACTIONS_LOCK_GITHUB_COM_TOKEN, never the tenant token", () => {
-    const env = attestationEnv({
-      ...base,
-      GITHUB_SERVER_URL: "https://tenant.ghe.com",
-      GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: "dotcom",
-    });
-    assert.equal(env.GH_TOKEN, "dotcom");
-    assert.equal(env.GH_HOST, "github.com");
-    assert.ok(!("GITHUB_TOKEN" in env));
-  });
-  test("off github.com fails without a github.com token", () => {
-    assert.throws(
-      () => attestationEnv({ ...base, GITHUB_SERVER_URL: "https://tenant.ghe.com" }),
-      /set GH_ACTIONS_LOCK_GITHUB_COM_TOKEN to check v0.4.2/,
-    );
+  test("fails when a listed version lacks the asset", () => {
+    assert.throws(() => selectCheck("v0.4.0", sums, "darwin-arm64"), /no checksum for darwin-arm64 v0.4.0/);
   });
 });
 
@@ -139,7 +125,7 @@ describe("install", () => {
   const quiet = () => {};
 
   async function stampedAction(version, asset, sum = sha(binary)) {
-    await writeFile(join(tmp, "checksums.json"), JSON.stringify({ version, sha256: { [asset]: sum } }));
+    await writeFile(join(tmp, "checksums.json"), JSON.stringify({ default: version, versions: { [version]: { [asset]: sum } } }));
     return tmp;
   }
 

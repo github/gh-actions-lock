@@ -34,10 +34,7 @@ the release script again for the next RC.
 
 Rerunning a step is safe. If the push was held, rerun the same command: it
 pushes the local tag when that tag already points at `HEAD`, and stops if it
-points anywhere else. After a successful push, a rerun reuses the stamp pull
-request below if it still matches a fresh stamp, then stops until it's merged.
-Rerunning the tag workflow skips tagging when `verify-vX.Y.Z` is already the
-same signed stamp on the release commit.
+points anywhere else.
 
 Use `patch` for compatible fixes, `minor` for compatible additions, and `major`
 for breaking changes.
@@ -48,21 +45,29 @@ then pushes and verifies an annotated `vX.Y.Z` or `vX.Y.Z-rc.N` tag.
 The tag workflow verifies the tag, then publishes the binaries, attestations,
 and GitHub release.
 
-It then stamps the [verify action](actions/verify/README.md):
-`script/verify-action-release.mjs` checks the binaries' attestations, writes
-the tag and the binaries' checksums to `actions/verify/checksums.json`, commits
-that on top of the release commit and tags it `verify-vX.Y.Z`. Users pin
-`verify-vX.Y.Z`; the `vX.Y.Z` commit still holds the previous release's stamp.
-Don't edit `checksums.json` by hand.
+## Verify action
 
-`main` carries a stamp too, so this repository's `verify-lockfile` workflow runs
-the action the way other repositories do. That stamp can only land after the
-release, because the binaries embed the commit they're built from. After a
-stable tag, `script/release` waits for the tag workflow, stamps a
-`verify-stamp-vX.Y.Z` branch off `main` with `--stamp-only`, and opens its pull
-request with your `gh` credentials so its checks run. Release candidates don't
-stamp `main`. The next release, including a release candidate, waits until that
-pull request is merged.
+Each stable release also gets a [verify action](actions/verify/README.md) tag,
+`verify-vX.Y.Z`, after the release:
+
+1. After the tag workflow finishes, `script/release` runs
+   `node script/verify-action-release.mjs vX.Y.Z` with your `gh` credentials. It
+   checks the release binaries' attestations, adds their checksums to
+   `actions/verify/checksums.json` as the new default, and opens that change
+   from `verify-stamp-vX.Y.Z` as a pull request to `main`, in a commit GitHub
+   signs.
+2. Merge that pull request.
+3. Run `node script/verify-action-release.mjs --tag vX.Y.Z`. It tags `main`
+   `verify-vX.Y.Z` once `main`'s `checksums.json` defaults to `vX.Y.Z`.
+
+The stamp can't land with its own release, because the binaries embed the
+commit they're built from, so users pin `verify-vX.Y.Z`, not `vX.Y.Z`.
+`checksums.json` keeps every stamped release; stamping never changes an
+existing entry. Don't edit it by hand. Both steps are safe to rerun: the first
+reuses its branch and pull request when they still match a fresh stamp, and the
+second accepts an existing tag on a commit stamped for `vX.Y.Z`. Release
+candidates get no verify tag. The next release, including a release candidate,
+waits until `main` is stamped and tagged.
 
 ## Dependabot compatibility
 

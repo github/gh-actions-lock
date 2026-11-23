@@ -35,22 +35,3 @@ jobs:
           generate_attestations: true
           go_version_file: go.mod
           go_build_options: ./cmd/gh-actions-lock
-
-  stamp-verify-action:
-    name: Stamp verify action
-    needs: publish
-    permissions:
-      contents: write
-      attestations: read
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
-      REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Stamp and tag verify-${{ github.ref_name }}
-        run: node script/verify-action-release.mjs "$TAG"
