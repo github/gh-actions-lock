@@ -36,8 +36,8 @@ jobs:
           go_version_file: go.mod
           go_build_options: ./cmd/gh-actions-lock
 
-  stamp-action:
-    name: Publish verify action
+  stamp-verify-action:
+    name: Stamp verify action
     needs: publish
     permissions:
       contents: write
@@ -52,5 +52,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Publish verify-${{ github.ref_name }}
+      - name: Stamp and tag verify-${{ github.ref_name }}
         run: node script/verify-action-release.mjs "$TAG"

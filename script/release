@@ -16,8 +16,7 @@
 #
 # After a stable tag, it waits for the tag workflow and opens the pull request
 # that stamps actions/verify on main for it, with your gh credentials so its
-# checks run. The next release waits for that pull request to merge; a rerun
-# before then reopens or reuses it.
+# checks run. The next release waits for that pull request to merge.
 #
 # Requires: git, gh, go, make, node (see RELEASING.md).
 

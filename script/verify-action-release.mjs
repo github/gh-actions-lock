@@ -1,6 +1,7 @@
-// Publishes verify-<tag> for a CLI release: checks the release binaries'
-// attestations, records the tag and their checksums in actions/verify/checksums.json,
-// and tags a GitHub-signed commit on top of the release commit.
+// Stamps the verify action for a CLI release: checks the release binaries'
+// attestations, writes the tag and their checksums to actions/verify/checksums.json,
+// commits that on top of the release commit and tags it verify-<tag>. Users pin
+// verify-<tag>; the release commit itself still holds the previous stamp.
 //
 // Usage (release workflow, with GH_TOKEN and REPO set):
 //   node script/verify-action-release.mjs <vX.Y.Z[-rc.N]>

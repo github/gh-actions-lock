@@ -10,7 +10,7 @@ steps:
   - uses: github/gh-actions-lock/actions/verify@verify-vX.Y.Z
 ```
 
-Use the [latest `verify-v*` tag](https://github.com/github/gh-actions-lock/tags). Every CLI release `vX.Y.Z` publishes `verify-vX.Y.Z`, which runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Check out the repository before this step.
+Use the [latest `verify-v*` tag](https://github.com/github/gh-actions-lock/tags). Every CLI release `vX.Y.Z` adds `verify-vX.Y.Z`, which runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Pin `verify-vX.Y.Z`, not `vX.Y.Z`: the plain release tag still carries the previous release's checksums. Check out the repository before this step.
 
 It's a Node action (`node24`) that uses only Node built-ins, so it runs on the runner's own Node on Linux, macOS and Windows, x64 and arm64. Self-hosted runners need [runner v2.327.1](https://github.com/actions/runner/releases/tag/v2.327.1) or later for `node24` actions. Downloads honor `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
 
