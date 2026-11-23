@@ -804,7 +804,13 @@ func latestFullSemverTag(ctx context.Context, r *resolve.Resolver, nwo, family s
 	if owner == "" {
 		return ""
 	}
-	tags, err := r.ListTagsForRepo(ctx, owner, repo)
+	list := r.ListTagsForRepo
+	if family != "" {
+		// A multi-action repository's family can sort past the first page
+		// of tags, so read every page.
+		list = r.ListAllTagsForRepo
+	}
+	tags, err := list(ctx, owner, repo)
 	if err != nil {
 		return ""
 	}

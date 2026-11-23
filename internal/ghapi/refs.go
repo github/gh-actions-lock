@@ -194,6 +194,16 @@ func (c *Client) TagsAtCommit(ctx context.Context, owner, repo, sha string) ([]s
 	return names, nil
 }
 
+// AllTags returns every tag in owner/repo, reading every page of the tag
+// listing. The result is cached per repository and shared with TagsAtCommit.
+func (c *Client) AllTags(ctx context.Context, owner, repo string) ([]TagEntry, error) {
+	c, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
+	return c.allTags(ctx, owner, repo)
+}
+
 func (c *Client) allTags(ctx context.Context, owner, repo string) ([]TagEntry, error) {
 	key := ForRepo(owner, repo)
 	if cached, ok := c.allTagsCache.Get(key); ok {

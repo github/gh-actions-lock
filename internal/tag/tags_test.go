@@ -2,6 +2,7 @@ package tag
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/github/gh-actions-lock/internal/ghapi/httpmock"
@@ -127,5 +128,28 @@ func TestBestPatchTagForSHA_RefFamily(t *testing.T) {
 				t.Fatalf("BestPatchTagForSHA() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// A multi-action repository's family can sort entirely past the first page of
+// tags, so narrowing a prefixed ref reads every page.
+func TestBestPatchTagForSHA_PrefixedFamilyOnLaterPage(t *testing.T) {
+	const sha = "ffffffffffffffffffffffffffffffffffffffff"
+	var first []string
+	for i := range 100 {
+		first = append(first, fmt.Sprintf("zeta/v1.0.%d", i), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	}
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.RESTWithQuery("GET", `^/repos/o/r/tags$`, "&page=1"), httpmock.JSONResponse(httpmock.TagListResponse(first...)))
+	reg.Register(httpmock.RESTWithQuery("GET", `^/repos/o/r/tags$`, "&page=2"), httpmock.JSONResponse(httpmock.TagListResponse("verify/v0", sha, "verify/v0.5.1", sha)))
+
+	tl := NewListerForTest(t, reg)
+	got, err := tl.BestPatchTagForSHA(context.Background(), "o", "r", sha, "verify/v0")
+	if err != nil {
+		t.Fatalf("BestPatchTagForSHA: %v", err)
+	}
+	if got != "verify/v0.5.1" {
+		t.Fatalf("BestPatchTagForSHA() = %q, want %q", got, "verify/v0.5.1")
 	}
 }

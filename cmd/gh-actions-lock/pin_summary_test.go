@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -500,7 +501,7 @@ func TestRenderVersionRefNudge_StaysInTagPrefixFamily(t *testing.T) {
 	}
 
 	reg := &httpmock.Registry{}
-	reg.Register(httpmock.REST("GET", "repos/octo/tools/tags"), httpmock.JSONResponse([]map[string]any{
+	reg.RegisterReusable(httpmock.REST("GET", "repos/octo/tools/tags"), httpmock.JSONResponse([]map[string]any{
 		{"name": "lint/v3.0.0", "commit": map[string]string{"sha": "ccc"}},
 		{"name": "verify/v0.6.0", "commit": map[string]string{"sha": "ddd"}},
 		{"name": "v1.2.0", "commit": map[string]string{"sha": "eee"}},
@@ -522,6 +523,36 @@ func TestRenderVersionRefNudge_StaysInTagPrefixFamily(t *testing.T) {
 	}
 	if strings.Contains(out, "lint/") {
 		t.Errorf("nudge crossed into another tag family, got:\n%s", out)
+	}
+}
+
+// A multi-action repository can have more than one page of tags, and a
+// family can sort entirely past the first page.
+func TestRenderVersionRefNudge_PrefixedFamilyOnLaterPage(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/tools", Ref: "verify/v0", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	var first []string
+	for i := range 100 {
+		first = append(first, fmt.Sprintf("zeta/v1.0.%d", i), "ccc")
+	}
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.RESTWithQuery("GET", `^/repos/octo/tools/tags$`, "&page=1"), httpmock.JSONResponse(httpmock.TagListResponse(first...)))
+	reg.Register(httpmock.RESTWithQuery("GET", `^/repos/octo/tools/tags$`, "&page=2"), httpmock.JSONResponse(httpmock.TagListResponse("verify/v0.6.0", "ddd")))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	renderVersionRefNudge(context.Background(), ui.NewPlain(&buf), record, r)
+
+	if out := buf.String(); !strings.Contains(out, "octo/tools@verify/v0 → latest: verify/v0.6.0") {
+		t.Errorf("expected nudge to the family's tag on page 2, got:\n%s", out)
 	}
 }
 

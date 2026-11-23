@@ -19,19 +19,30 @@ type Suggestion struct {
 // family pointing at the given SHA. Tags never cross path-prefix families (see
 // Family); an empty ref accepts any unprefixed major/minor.
 func (tl *Lister) BestPatchTagForSHA(ctx context.Context, owner, repo, sha, ref string) (string, error) {
-	matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
-	if err != nil {
-		return "", err
+	refSV, restrictFamily := ParseVersion(ref)
+	var names []string
+	if restrictFamily && Family(refSV) != "" {
+		// A multi-action repository's family can sort past the first page
+		// of tags, so read every page.
+		all, err := tl.client.TagsAtCommit(ctx, owner, repo, sha)
+		if err != nil {
+			return "", err
+		}
+		names = all
+	} else {
+		matching, err := tl.TagsForSHA(ctx, owner, repo, sha)
+		if err != nil {
+			return "", err
+		}
+		for _, t := range matching {
+			names = append(names, t.Name)
+		}
 	}
 
-	refSV, restrictFamily := ParseVersion(ref)
 	var best parserlock.SemVer
 	bestFound := false
-	for _, t := range matching {
-		if t.IsMajor {
-			continue
-		}
-		sv, ok := ParseVersion(t.Name)
+	for _, name := range names {
+		sv, ok := ParseVersion(name)
 		if !ok || !sv.IsFull() || Family(sv) != Family(refSV) {
 			continue
 		}
