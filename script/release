@@ -16,7 +16,7 @@
 #
 # After a stable tag, it waits for the tag workflow and opens the pull request
 # that stamps actions/verify on main for it. The next release waits until that
-# pull request is merged and main is tagged verify-<tag>. See RELEASING.md.
+# pull request is merged and main is tagged actions/verify/<tag>. See RELEASING.md.
 #
 # Requires: git, gh, go, make, node (see RELEASING.md).
 
@@ -146,8 +146,8 @@ cut_tag() {
       echo "Merge the stamp pull request and tag it, then rerun to cut the next release."
       return
     fi
-    git ls-remote --exit-code --tags origin "refs/tags/verify-${latest}" >/dev/null ||
-      die "verify-${latest} isn't tagged; run node script/verify-action-release.mjs --tag ${latest}"
+    git ls-remote --exit-code --tags origin "refs/tags/actions/verify/${latest}" >/dev/null ||
+      die "actions/verify/${latest} isn't tagged; run node script/verify-action-release.mjs --tag ${latest}"
     base="${latest#"$TAG_PREFIX"}"
   fi
 

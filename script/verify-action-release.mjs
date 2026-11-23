@@ -6,10 +6,11 @@
 //     actions/verify/checksums.json as the new default, and opens that change
 //     against main as a pull request from verify-stamp-vX.Y.Z.
 //   node script/verify-action-release.mjs --tag vX.Y.Z
-//     After that pull request merges, tags main verify-vX.Y.Z.
+//     After that pull request merges, tags main actions/verify/vX.Y.Z.
 //
-// Users pin verify-vX.Y.Z. The vX.Y.Z release commit predates its own stamp, so
-// it doesn't list vX.Y.Z. Rerunning either step after a partial run is safe.
+// Users pin actions/verify/vX.Y.Z. The vX.Y.Z release commit predates its own
+// stamp, so it doesn't list vX.Y.Z. Rerunning either step after a partial run
+// is safe.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -159,11 +160,11 @@ export async function openStampPR({ api, repo, tag, verifiedSHA256, log = consol
   return pr.html_url;
 }
 
-// tagRelease tags main verify-<tag> once main's checksums.json defaults to tag.
+// tagRelease tags main actions/verify/<tag> once main's checksums.json defaults to tag.
 // GitHub signs merges, so main's tip is a signed commit.
 export async function tagRelease({ api, repo, tag, log = console.log }) {
   checkTag(tag);
-  const name = `verify-${tag}`;
+  const name = `actions/verify/${tag}`;
   const existing = await api("GET", `repos/${repo}/git/ref/tags/${name}`);
   if (existing) {
     const sha = existing.object.sha;

@@ -14,7 +14,7 @@ const quiet = () => {};
 
 describe("checkTag", () => {
   for (const t of ["v1.2.3", "v0.0.1"]) test(`accepts ${t}`, () => assert.equal(checkTag(t), t));
-  for (const t of ["1.2.3", "v1.2.3;x", "v01.2.3", "v1.2.3-rc.1", "verify-v1.2.3", undefined]) {
+  for (const t of ["1.2.3", "v1.2.3;x", "v01.2.3", "v1.2.3-rc.1", "actions/verify/v1.2.3", undefined]) {
     test(`rejects ${t}`, () => assert.throws(() => checkTag(t), /invalid tag/));
   }
 });
@@ -197,7 +197,7 @@ describe("openStampPR", () => {
 describe("tagRelease", () => {
   const stamped = file({ default: "v1.3.0", versions: { "v1.3.0": sums("c") } });
   const base = {
-    [`GET repos/${repo}/git/ref/tags/verify-v1.3.0`]: null,
+    [`GET repos/${repo}/git/ref/tags/actions/verify/v1.3.0`]: null,
     [`GET repos/${repo}/git/ref/heads/main`]: { object: { sha: "main2" } },
     [`GET repos/${repo}/contents/${CHECKSUMS}?ref=main2`]: contents(stamped),
     [`GET repos/${repo}/git/commits/main2`]: signed(),
@@ -208,7 +208,7 @@ describe("tagRelease", () => {
   test("tags main once its stamp has merged", async () => {
     const f = fakeAPI(base);
     assert.equal(await tag(f.api), "main2");
-    assert.deepEqual(f.calls.at(-1), [`POST repos/${repo}/git/refs`, { ref: "refs/tags/verify-v1.3.0", sha: "main2" }]);
+    assert.deepEqual(f.calls.at(-1), [`POST repos/${repo}/git/refs`, { ref: "refs/tags/actions/verify/v1.3.0", sha: "main2" }]);
   });
 
   test("refuses until main is stamped for the release", async () => {
@@ -227,7 +227,7 @@ describe("tagRelease", () => {
 
   test("accepts an existing tag on a stamped commit", async () => {
     const f = fakeAPI({
-      [`GET repos/${repo}/git/ref/tags/verify-v1.3.0`]: { object: { sha: "old2", type: "commit" } },
+      [`GET repos/${repo}/git/ref/tags/actions/verify/v1.3.0`]: { object: { sha: "old2", type: "commit" } },
       [`GET repos/${repo}/contents/${CHECKSUMS}?ref=old2`]: contents(stamped),
     });
     assert.equal(await tag(f.api), "old2");
@@ -235,9 +235,9 @@ describe("tagRelease", () => {
 
   test("refuses an existing tag elsewhere", async () => {
     const f = fakeAPI({
-      [`GET repos/${repo}/git/ref/tags/verify-v1.3.0`]: { object: { sha: "old2", type: "commit" } },
+      [`GET repos/${repo}/git/ref/tags/actions/verify/v1.3.0`]: { object: { sha: "old2", type: "commit" } },
       [`GET repos/${repo}/contents/${CHECKSUMS}?ref=old2`]: contents(file({ default: "v1.2.3", versions: { "v1.2.3": sums("a") } })),
     });
-    await assert.rejects(tag(f.api), /verify-v1.3.0 already exists at old2, which isn't stamped for v1.3.0/);
+    await assert.rejects(tag(f.api), /actions\/verify\/v1.3.0 already exists at old2, which isn't stamped for v1.3.0/);
   });
 });

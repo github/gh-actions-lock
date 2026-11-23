@@ -2,7 +2,7 @@
 # workflows or a locked pin no longer verifies upstream.
 #
 # This repository runs actions/verify from its own commit. Other repositories
-# pin a verify-v* tag; see actions/verify/README.md.
+# pin an actions/verify/v* tag; see actions/verify/README.md.
 
 name: verify-lockfile
 

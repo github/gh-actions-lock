@@ -17,7 +17,7 @@ const versionPattern = /^v\d+\.\d+\.\d+(-rc\.\d+)?$/;
 
 export function checkVersion(version) {
   if (!version) {
-    throw new ActionError(`set the version input, or use a verify-v* release tag of ${REPO}/actions/verify`);
+    throw new ActionError(`set the version input, or pin an actions/verify/v* tag of ${REPO}`);
   }
   if (!versionPattern.test(version)) {
     throw new ActionError(`invalid version '${version}'; expected vX.Y.Z or vX.Y.Z-rc.N`);

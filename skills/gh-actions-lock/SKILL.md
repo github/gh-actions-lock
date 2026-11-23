@@ -140,7 +140,7 @@ on pull requests and pushes to `main`, then run `gh actions-lock` once so the ne
 - uses: actions/checkout@v7.0.1
   with:
     persist-credentials: false
-- uses: github/gh-actions-lock/actions/verify@verify-vX.Y.Z  # latest verify-v* tag
+- uses: github/gh-actions-lock/actions/verify@actions/verify/vX.Y.Z  # latest actions/verify/v* tag
 ```
 
 It runs `gh actions-lock --verify`. The job's `GITHUB_TOKEN` reads public actions and the repository
