@@ -17,6 +17,11 @@ cp "$root/script/verify-release-tag" script/verify-release-tag
 touch tracked
 mkdir -p actions/verify
 printf '{"version": "v1.2.3", "sha256": {}}\n' >actions/verify/checksums.json
+# Stands in for the real stamp, which downloads the release binaries.
+cat >script/verify-action-release.mjs <<'EOF2'
+import { writeFileSync } from "node:fs";
+writeFileSync("actions/verify/checksums.json", JSON.stringify({ version: process.argv[3], sha256: {} }) + "\n");
+EOF2
 git add .
 git commit --quiet -m initial
 git push --quiet -u origin main
@@ -27,6 +32,19 @@ git tag -a v99.0.0 -m v99.0.0
 mkdir "$tmp/bin"
 printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/make"
 chmod +x "$tmp/bin/make"
+export GH_LOG="$tmp/gh.log" GH_PR="$tmp/pr"
+cat >"$tmp/bin/gh" <<'EOF2'
+#!/bin/sh
+echo "$*" >>"$GH_LOG"
+case "$1 $2" in
+  "run list") echo 42 ;;
+  "run watch") ;;
+  "pr list") cat "$GH_PR" 2>/dev/null || true ;;
+  "pr create") echo https://example.test/pull/1 | tee "$GH_PR" ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+EOF2
+chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH"
 
 output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
@@ -60,19 +78,27 @@ fi
 git reset --quiet --hard HEAD~2
 git push --quiet --force origin main
 
-# A rerun after a held push pushes the existing local tag.
+# A rerun after a held push pushes the existing local tag, then opens the
+# pull request that stamps main.
 git tag -a v1.2.4 -m v1.2.4
 output="$(script/release patch)"
 [[ "$output" == *"Reusing local tag v1.2.4."* ]]
 [[ "$output" == *"Pushed v1.2.4"* ]]
+[[ "$output" == *"Stamp pull request: https://example.test/pull/1"* ]]
 [ "$(git ls-remote --tags origin 'refs/tags/v1.2.4^{}' | awk '{ print $1 }')" = "$(git rev-parse HEAD)" ]
+git fetch --quiet origin verify-stamp-v1.2.4
+[ "$(git rev-parse FETCH_HEAD~1)" = "$(git rev-parse HEAD)" ]
+[[ "$(git show FETCH_HEAD:actions/verify/checksums.json)" == *'"version":"v1.2.4"'* ]]
+[ -z "$(git worktree list | sed 1d)" ]
 
-# A rerun after a successful push stops at the next step: stamping main.
-if output="$(script/release patch 2>&1)"; then
-  echo "expected a rerun after a successful push to require the stamp" >&2
-  exit 1
-fi
-[[ "$output" == *"isn't stamped for v1.2.4"* ]]
+# A rerun before the stamp merges reuses the branch and pull request.
+stamp="$(git rev-parse FETCH_HEAD)"
+output="$(script/release patch)"
+[[ "$output" == *"Stamp pull request: https://example.test/pull/1"* ]]
+[[ "$output" == *"Merge the stamp pull request, then rerun"* ]]
+[ "$(git ls-remote --heads origin verify-stamp-v1.2.4 | awk '{ print $1 }')" = "$stamp" ]
+[ "$(grep -c '^pr create' "$GH_LOG")" = 1 ]
+[ "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)" ]
 
 # A leftover local tag at another commit still blocks the release.
 printf '{"version": "v1.2.4", "sha256": {}}\n' >actions/verify/checksums.json

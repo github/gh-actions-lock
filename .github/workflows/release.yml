@@ -42,8 +42,6 @@ jobs:
     permissions:
       contents: write
       attestations: read
-      pull-requests: write
-      actions: write
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}

@@ -14,8 +14,12 @@
 #   RELEASE_DRY_RUN=1   Compute and print the next version, then stop before
 #                       tagging or pushing.
 #
-# Requires: git, go, make, node, and actions/verify on main stamped for the latest
-# release (see RELEASING.md).
+# After a stable tag, it waits for the tag workflow and opens the pull request
+# that stamps actions/verify on main for it, with your gh credentials so its
+# checks run. The next release waits for that pull request to merge; a rerun
+# before then reopens or reuses it.
+#
+# Requires: git, gh, go, make, node (see RELEASING.md).
 
 set -euo pipefail
 
@@ -49,16 +53,65 @@ require_current_main() {
     die "release commit ${commit} is not current main ${main}"
 }
 
+stamped_version() {
+  (git show "$1:actions/verify/checksums.json" 2>/dev/null || true) |
+    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).version)); } catch {} });'
+}
+
 # The verify action on main must carry the latest release's stamp before the
 # next release. The stamp can't land with its own release: the binaries embed the
 # commit they're built from, so their checksums only exist after the tag.
-require_current_stamp() {
-  local latest="$1"
-  local stamped
-  stamped="$( (git show refs/remotes/origin/main:actions/verify/checksums.json 2>/dev/null || true) |
-    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).version)); } catch {} });')"
-  [ "$stamped" = "${latest}" ] ||
-    die "actions/verify on main isn't stamped for ${latest} (got '${stamped}'); merge the release workflow's stamp pull request first (see RELEASING.md)"
+main_stamped_for() {
+  [ "$(stamped_version refs/remotes/origin/main)" = "$1" ]
+}
+
+# open_stamp_pr waits for tag's release workflow, then commits the stamp on a
+# verify-stamp-<tag> branch off main and opens its pull request. Each step
+# reuses what an earlier run left.
+open_stamp_pr() {
+  local tag="$1"
+  local branch="verify-stamp-${tag}"
+  fetch_main
+  if main_stamped_for "$tag"; then
+    echo "main is already stamped for ${tag}."
+    return
+  fi
+
+  local run="" _
+  for _ in $(seq 30); do
+    run="$(gh run list --workflow release.yml --branch "$tag" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+    [ -n "$run" ] && break
+    sleep 10
+  done
+  [ -n "$run" ] || die "no release workflow run found for ${tag}"
+  echo "Waiting for the release workflow for ${tag}..."
+  gh run watch "$run" --exit-status --compact >&2 ||
+    die "the release workflow for ${tag} failed; fix it, then rerun"
+
+  if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+    git fetch --quiet --no-tags origin "refs/heads/${branch}:refs/remotes/origin/${branch}"
+    [ "$(stamped_version "refs/remotes/origin/${branch}")" = "$tag" ] ||
+      die "branch ${branch} isn't stamped for ${tag}; delete it and rerun"
+  else
+    local wt
+    wt="$(mktemp -d)"
+    git worktree add --quiet --detach "$wt" refs/remotes/origin/main
+    if ! (cd "$wt" &&
+      node script/verify-action-release.mjs --stamp-only "$tag" &&
+      git commit --quiet -am "Stamp actions/verify on main for ${tag}" &&
+      git push --quiet origin "HEAD:refs/heads/${branch}"); then
+      git worktree remove --force "$wt"
+      die "couldn't stamp ${branch}"
+    fi
+    git worktree remove --force "$wt"
+  fi
+
+  local url
+  url="$(gh pr list --head "$branch" --base main --state open --json url --jq '.[0].url // empty')"
+  [ -n "$url" ] || url="$(gh pr create --base main --head "$branch" \
+    --title "Stamp actions/verify on main for ${tag}" \
+    --body "Records ${tag} and its release binaries' checksums in \`actions/verify/checksums.json\`, so the next release can be cut.")"
+  echo "Stamp pull request: ${url}"
 }
 
 require_clean() {
@@ -111,7 +164,13 @@ cut_tag() {
     base="0.0.0"
     echo "No existing ${TAG_PREFIX}* release tag; basing bump on v0.0.0."
   else
-    require_current_stamp "$latest"
+    if ! main_stamped_for "$latest"; then
+      [ "${RELEASE_DRY_RUN:-}" != "1" ] ||
+        die "actions/verify on main isn't stamped for ${latest}; rerun without RELEASE_DRY_RUN to open its stamp pull request"
+      open_stamp_pr "$latest"
+      echo "Merge the stamp pull request, then rerun to cut the next release."
+      return
+    fi
     base="${latest#"$TAG_PREFIX"}"
   fi
 
@@ -165,6 +224,11 @@ cut_tag() {
   git push origin "refs/tags/${tag}"
   require_remote_annotated_tag "$tag" "$commit"
   echo "Pushed ${tag}; the tag workflow will create the release."
+  # main carries stable releases only.
+  if [ "$release_candidate" = "0" ]; then
+    open_stamp_pr "$tag"
+    echo "Merge the stamp pull request before the next release."
+  fi
 }
 
 case "${1:-}" in
