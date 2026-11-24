@@ -27,7 +27,7 @@ git add .github/workflows/ # check into source
 
 Rerun `gh actions-lock` after adding a workflow or changing any `uses:`.
 
-Make sure you don't check in a corrupt lockfile. Add a workflow that runs the [verify action](actions/verify/README.md) on every pull request, then run `gh actions-lock` once so that workflow is locked too:
+Make sure you don't check in a corrupt lockfile. Add a workflow that runs the [verify action](verify/README.md) on every pull request, then run `gh actions-lock` once so that workflow is locked too:
 
 ```yaml
 name: verify-lockfile
@@ -44,12 +44,12 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: github/gh-actions-lock/actions/verify@actions/verify/vX.Y.Z
+      - uses: github/gh-actions-lock@verify/vX.Y.Z
 ```
 
-Replace `actions/verify/vX.Y.Z` with the [latest `actions/verify/v*` tag](https://github.com/github/gh-actions-lock/tags). Dependabot's `github-actions` updates bump it with each CLI release.
+Replace `verify/vX.Y.Z` with the [latest `verify/v*` tag](https://github.com/github/gh-actions-lock/tags). Dependabot's `github-actions` updates bump it with each CLI release.
 
-The job's `GITHUB_TOKEN` can only read the repository the workflow runs in, so `--verify` fails on private or internal actions from other repositories even when the runner is allowed to use them. Pass a GitHub App installation token with read access to those repositories as the action's `token` input; see [Private and internal actions](actions/verify/README.md#private-and-internal-actions).
+The job's `GITHUB_TOKEN` can only read the repository the workflow runs in, so `--verify` fails on private or internal actions from other repositories even when the runner is allowed to use them. Pass a GitHub App installation token with read access to those repositories as the action's `token` input; see [Private and internal actions](verify/README.md#private-and-internal-actions).
 
 ### GitHub Enterprise Cloud with data residency
 
@@ -64,7 +64,7 @@ Actions that aren't on the tenant, such as `actions/checkout`, are read from pub
 In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant, so github.com doesn't accept it. Create a [fine-grained personal access token](https://docs.github.com/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token) on github.com with public repository access only and no permissions, save it as a secret on the tenant, and pass it in:
 
 ```yaml
-- uses: github/gh-actions-lock/actions/verify@actions/verify/vX.Y.Z
+- uses: github/gh-actions-lock@verify/vX.Y.Z
   env:
     GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ secrets.ACTIONS_LOCK_GITHUB_COM_TOKEN }}
 ```

@@ -133,14 +133,14 @@ category name alone.
 
 ## CI
 
-Add a workflow that runs the [verify action](https://github.com/github/gh-actions-lock/blob/main/actions/verify/README.md)
+Add a workflow that runs the [verify action](https://github.com/github/gh-actions-lock/blob/main/verify/README.md)
 on pull requests and pushes to `main`, then run `gh actions-lock` once so the new workflow is locked too:
 
 ```yaml
 - uses: actions/checkout@v7.0.1
   with:
     persist-credentials: false
-- uses: github/gh-actions-lock/actions/verify@actions/verify/vX.Y.Z  # latest actions/verify/v* tag
+- uses: github/gh-actions-lock@verify/vX.Y.Z  # latest verify/v* tag
 ```
 
 It runs `gh actions-lock --verify`. The job's `GITHUB_TOKEN` reads public actions and the repository

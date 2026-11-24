@@ -7,10 +7,10 @@ steps:
   - uses: actions/checkout@v7.0.1
     with:
       persist-credentials: false
-  - uses: github/gh-actions-lock/actions/verify@actions/verify/vX.Y.Z
+  - uses: github/gh-actions-lock@verify/vX.Y.Z
 ```
 
-Use the [latest `actions/verify/v*` tag](https://github.com/github/gh-actions-lock/tags). Each stable CLI release `vX.Y.Z` gets an `actions/verify/vX.Y.Z` tag that runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Pin `actions/verify/vX.Y.Z`, not `vX.Y.Z`: the plain release tag still defaults to the previous release. Check out the repository before this step.
+Use the [latest `verify/v*` tag](https://github.com/github/gh-actions-lock/tags). Each stable CLI release `vX.Y.Z` gets a `verify/vX.Y.Z` tag that runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Pin `verify/vX.Y.Z`, not `vX.Y.Z`: the plain release tag still defaults to the previous release. Check out the repository before this step.
 
 It's a Node action (`node24`) that uses only Node built-ins, so it runs on the runner's own Node on Linux, macOS and Windows, x64 and arm64. Self-hosted runners need [runner v2.327.1](https://github.com/actions/runner/releases/tag/v2.327.1) or later for `node24` actions. Downloads honor `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
 
@@ -19,7 +19,7 @@ It's a Node action (`node24`) that uses only Node built-ins, so it runs on the r
 | Input | Default | Description |
 |---|---|---|
 | `token` | `${{ github.token }}` | Token the CLI uses to read action repositories. |
-| `version` | the `default` in the action's `checksums.json`, which is `vX.Y.Z` on `actions/verify/vX.Y.Z` | `gh-actions-lock` release to run, such as `v0.5.1`. |
+| `version` | the `default` in the action's `checksums.json`, which is `vX.Y.Z` on `verify/vX.Y.Z` | `gh-actions-lock` release to run, such as `v0.5.1`. |
 | `args` | `--verify` | Arguments passed to `gh-actions-lock`, split on whitespace and newlines. For example, `--verify --fail-on-warning`. |
 
 A `version` listed in `checksums.json` is checked against the checksums recorded there. Any other `version` is checked against the release's build attestation on github.com using `token`, which needs the GitHub CLI (`gh`) on `PATH`. GitHub-hosted runners have it; self-hosted runners may not. On GHE.com, that check uses `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` instead, so your tenant token never leaves the tenant.
@@ -37,7 +37,7 @@ To verify those actions, pass a GitHub App installation token with read access t
     app-id: ${{ vars.LOCKFILE_APP_ID }}
     private-key: ${{ secrets.LOCKFILE_APP_PRIVATE_KEY }}
     owner: ${{ github.repository_owner }}
-- uses: github/gh-actions-lock/actions/verify@actions/verify/vX.Y.Z
+- uses: github/gh-actions-lock@verify/vX.Y.Z
   with:
     token: ${{ steps.app-token.outputs.token }}
 ```
@@ -46,4 +46,4 @@ The app needs **Contents: read** on this repository and on every repository whos
 
 ## GitHub Enterprise Cloud with data residency
 
-Set `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` on the step or job for actions read from github.com; see the [main README](../../README.md#github-enterprise-cloud-with-data-residency).
+Set `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` on the step or job for actions read from github.com; see the [main README](../README.md#github-enterprise-cloud-with-data-residency).

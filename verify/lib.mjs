@@ -1,4 +1,4 @@
-// Logic for actions/verify. verify.mjs is the entry point; tests import this.
+// Logic for the verify action. verify.mjs is the entry point; tests import this.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -17,7 +17,7 @@ const versionPattern = /^v\d+\.\d+\.\d+(-rc\.\d+)?$/;
 
 export function checkVersion(version) {
   if (!version) {
-    throw new ActionError(`set the version input, or pin an actions/verify/v* tag of ${REPO}`);
+    throw new ActionError(`set the version input, or pin a verify/v* tag of ${REPO}`);
   }
   if (!versionPattern.test(version)) {
     throw new ActionError(`invalid version '${version}'; expected vX.Y.Z or vX.Y.Z-rc.N`);

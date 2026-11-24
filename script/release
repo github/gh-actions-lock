@@ -15,8 +15,8 @@
 #                       tagging or pushing.
 #
 # After a stable tag, it waits for the tag workflow and opens the pull request
-# that stamps actions/verify on main for it. The next release waits until that
-# pull request is merged and main is tagged actions/verify/<tag>. See RELEASING.md.
+# that stamps the verify action on main for it. The next release waits until that
+# pull request is merged and main is tagged verify/<tag>. See RELEASING.md.
 #
 # Requires: git, gh, go, make, node (see RELEASING.md).
 
@@ -53,7 +53,7 @@ require_current_main() {
 }
 
 stamped_version() {
-  (git show "$1:actions/verify/checksums.json" 2>/dev/null || true) |
+  (git show "$1:verify/checksums.json" 2>/dev/null || true) |
     node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).default)); } catch {} });'
 }
 
@@ -141,13 +141,13 @@ cut_tag() {
   else
     if ! main_stamped_for "$latest"; then
       [ "${RELEASE_DRY_RUN:-}" != "1" ] ||
-        die "actions/verify on main isn't stamped for ${latest}; rerun without RELEASE_DRY_RUN to open its stamp pull request"
+        die "the verify action on main isn't stamped for ${latest}; rerun without RELEASE_DRY_RUN to open its stamp pull request"
       open_stamp_pr "$latest"
       echo "Merge the stamp pull request and tag it, then rerun to cut the next release."
       return
     fi
-    git ls-remote --exit-code --tags origin "refs/tags/actions/verify/${latest}" >/dev/null ||
-      die "actions/verify/${latest} isn't tagged; run node script/verify-action-release.mjs --tag ${latest}"
+    git ls-remote --exit-code --tags origin "refs/tags/verify/${latest}" >/dev/null ||
+      die "verify/${latest} isn't tagged; run node script/verify-action-release.mjs --tag ${latest}"
     base="${latest#"$TAG_PREFIX"}"
   fi
 

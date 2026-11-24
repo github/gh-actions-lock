@@ -3,12 +3,12 @@
 //
 //   node script/verify-action-release.mjs vX.Y.Z
 //     Checks the release binaries' attestations, adds their checksums to
-//     actions/verify/checksums.json as the new default, and opens that change
+//     verify/checksums.json as the new default, and opens that change
 //     against main as a pull request from verify-stamp-vX.Y.Z.
 //   node script/verify-action-release.mjs --tag vX.Y.Z
-//     After that pull request merges, tags main actions/verify/vX.Y.Z.
+//     After that pull request merges, tags main verify/vX.Y.Z.
 //
-// Users pin actions/verify/vX.Y.Z. The vX.Y.Z release commit predates its own
+// Users pin verify/vX.Y.Z. The vX.Y.Z release commit predates its own
 // stamp, so it doesn't list vX.Y.Z. Rerunning either step after a partial run
 // is safe.
 
@@ -18,7 +18,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseChecksums } from "../actions/verify/lib.mjs";
+import { parseChecksums } from "../verify/lib.mjs";
 
 export const ASSETS = [
   "linux-amd64",
@@ -28,7 +28,7 @@ export const ASSETS = [
   "windows-amd64.exe",
   "windows-arm64.exe",
 ];
-export const CHECKSUMS = "actions/verify/checksums.json";
+export const CHECKSUMS = "verify/checksums.json";
 
 export function checkTag(tag) {
   if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag ?? "")) {
@@ -134,7 +134,7 @@ export async function openStampPR({ api, repo, tag, verifiedSHA256, log = consol
       variables: {
         input: {
           branch: { repositoryNameWithOwner: repo, branchName: branch },
-          message: { headline: `Stamp actions/verify for ${tag}` },
+          message: { headline: `Stamp the verify action for ${tag}` },
           expectedHeadOid: head,
           fileChanges: { additions: [{ path: CHECKSUMS, contents: Buffer.from(stamped).toString("base64") }] },
         },
@@ -151,7 +151,7 @@ export async function openStampPR({ api, repo, tag, verifiedSHA256, log = consol
   const pulls = await api("GET", `repos/${repo}/pulls?state=open&base=main&head=${owner}:${branch}`);
   let pr = pulls.find((p) => p.head.repo?.full_name === repo && p.head.sha === head);
   pr ??= await api("POST", `repos/${repo}/pulls`, {
-    title: `Stamp actions/verify for ${tag}`,
+    title: `Stamp the verify action for ${tag}`,
     head: branch,
     base: "main",
     body: `Adds ${tag} and its release binaries' checksums to \`${CHECKSUMS}\` as the default. After it merges, tag it with \`node script/verify-action-release.mjs --tag ${tag}\`.`,
@@ -160,11 +160,11 @@ export async function openStampPR({ api, repo, tag, verifiedSHA256, log = consol
   return pr.html_url;
 }
 
-// tagRelease tags main actions/verify/<tag> once main's checksums.json defaults to tag.
+// tagRelease tags main verify/<tag> once main's checksums.json defaults to tag.
 // GitHub signs merges, so main's tip is a signed commit.
 export async function tagRelease({ api, repo, tag, log = console.log }) {
   checkTag(tag);
-  const name = `actions/verify/${tag}`;
+  const name = `verify/${tag}`;
   const existing = await api("GET", `repos/${repo}/git/ref/tags/${name}`);
   if (existing) {
     const sha = existing.object.sha;

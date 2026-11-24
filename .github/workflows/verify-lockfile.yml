@@ -1,8 +1,8 @@
 # Fails when .github/workflows/actions.lock is out of sync with the
 # workflows or a locked pin no longer verifies upstream.
 #
-# This repository runs actions/verify from its own commit. Other repositories
-# pin an actions/verify/v* tag; see actions/verify/README.md.
+# This repository runs the verify action from its own checkout. Other
+# repositories pin a verify/v* tag; see verify/README.md.
 
 name: verify-lockfile
 
@@ -22,4 +22,4 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: $/actions/verify
+      - uses: ./
