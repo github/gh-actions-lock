@@ -432,9 +432,9 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	t.Run("imprecise v4 marked sticky is left as v4", func(t *testing.T) {
 		tagger, _ := newTagger(t)
 		opts := PlanOptions{
-			Tagger:           tagger,
-			Resolver:         tagResolver(t, "actions", "checkout", "v4.2.1", sha),
-			prevImpreciseNWO: map[string]bool{"actions/checkout": true},
+			Tagger:              tagger,
+			Resolver:            tagResolver(t, "actions", "checkout", "v4.2.1", sha),
+			prevImpreciseFamily: map[string]bool{"actions/checkout@": true},
 		}
 
 		result, err := planWorkflow(context.Background(), fastPathReport("v4"), opts, func(string) {})
@@ -447,6 +447,31 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 		assert.Empty(t, result.wplans[0].Rewrites, "no workflow rewrite for a sticky entry")
 	})
 
+	t.Run("sticky tag family does not block another family in the same repo", func(t *testing.T) {
+		reg := &httpmock.Registry{}
+		reg.RegisterReusable(
+			httpmock.REST("GET", `repos/actions/checkout/tags`),
+			httpmock.JSONResponse([]any{
+				map[string]any{"name": "build/v0", "commit": map[string]any{"sha": sha}},
+				map[string]any{"name": "build/v0.5.1", "commit": map[string]any{"sha": sha}},
+			}),
+		)
+		opts := PlanOptions{
+			Tagger:              tag.NewListerForTest(t, reg),
+			Resolver:            tagResolver(t, "actions", "checkout", "build/v0.5.1", sha),
+			prevImpreciseFamily: map[string]bool{"actions/checkout@verify/": true},
+		}
+		report := fastPathReport("build/v0")
+		report.ActionRefs = []parserlock.ActionRef{{Owner: "actions", Repo: "checkout", Ref: "build/v0"}}
+
+		result, err := planWorkflow(context.Background(), report, opts, func(string) {})
+		require.NoError(t, err)
+
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "build/v0.5.1", result.entries[0].Ref)
+		assert.Equal(t, "build/v0", result.entries[0].AutoFixedRef)
+	})
+
 	t.Run("sticky sibling does not suppress SHA metadata repair", func(t *testing.T) {
 		tagger, _ := newTagger(t)
 		report := fastPathReport(sha)
@@ -457,9 +482,9 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 			Ref:   sha,
 		}}
 		opts := PlanOptions{
-			Tagger:           tagger,
-			Resolver:         tagResolver(t, "actions", "checkout", "v4.2.1", sha),
-			prevImpreciseNWO: map[string]bool{"actions/checkout": true},
+			Tagger:              tagger,
+			Resolver:            tagResolver(t, "actions", "checkout", "v4.2.1", sha),
+			prevImpreciseFamily: map[string]bool{"actions/checkout@": true},
 		}
 
 		result, err := planWorkflow(context.Background(), report, opts, func(string) {})
@@ -616,7 +641,7 @@ func TestNarrowVerifiedEntries_StickyPrecision(t *testing.T) {
 	t.Run("branch ref main is NOT narrowed", func(t *testing.T) {
 		// main is not version-shaped, so narrowing must not touch it.
 		// Non-version refs are intentional choices (e.g. vercel/next.js@canary).
-		opts := PlanOptions{Tagger: nil, prevImpreciseNWO: map[string]bool{}}
+		opts := PlanOptions{Tagger: nil, prevImpreciseFamily: map[string]bool{}}
 
 		result, err := planWorkflow(context.Background(), fastPathReport("main"), opts, func(string) {})
 		require.NoError(t, err)

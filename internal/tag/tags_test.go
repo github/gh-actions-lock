@@ -153,3 +153,50 @@ func TestBestPatchTagForSHA_PrefixedFamilyOnLaterPage(t *testing.T) {
 		t.Fatalf("BestPatchTagForSHA() = %q, want %q", got, "verify/v0.5.1")
 	}
 }
+
+func TestListTags_PrefixedFloatingMajor(t *testing.T) {
+	const sha = "ffffffffffffffffffffffffffffffffffffffff"
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", `^/repos/o/r/tags$`),
+		httpmock.JSONResponse(httpmock.TagListResponse("verify/v2", sha, "verify/v1.2.3", sha)))
+	reg.Register(httpmock.REST("GET", `^/repos/o/r/releases$`), httpmock.JSONResponse([]any{}))
+	tl := NewListerForTest(t, reg)
+
+	tags, err := tl.ListTags(context.Background(), "o", "r")
+	if err != nil {
+		t.Fatalf("ListTags: %v", err)
+	}
+	if len(tags) != 2 || tags[0].Name != "verify/v1.2.3" || tags[1].Name != "verify/v2" {
+		t.Fatalf("ListTags order = %+v, want verify/v1.2.3 before the floating verify/v2", tags)
+	}
+	if !tags[1].IsMajor {
+		t.Errorf("verify/v2 IsMajor = false, want true")
+	}
+
+	sugg, err := tl.SuggestTagsForSHA(context.Background(), "o", "r", sha)
+	if err != nil {
+		t.Fatalf("SuggestTagsForSHA: %v", err)
+	}
+	for _, s := range sugg {
+		if s.Tag.Name == "verify/v2" && s.Preferred {
+			t.Errorf("floating verify/v2 marked preferred: %+v", sugg)
+		}
+	}
+}
+
+func TestListTags_UnprefixedFamilyFirst(t *testing.T) {
+	const sha = "ffffffffffffffffffffffffffffffffffffffff"
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", `^/repos/o/r/tags$`),
+		httpmock.JSONResponse(httpmock.TagListResponse("build/v9.0.0", sha, "verify/v8.0.0", sha, "lint/v7.0.0", sha, "v4.2.1", sha)))
+	reg.Register(httpmock.REST("GET", `^/repos/o/r/releases$`), httpmock.JSONResponse([]any{}))
+	tl := NewListerForTest(t, reg)
+
+	sugg, err := tl.SuggestTagsForSHA(context.Background(), "o", "r", sha)
+	if err != nil {
+		t.Fatalf("SuggestTagsForSHA: %v", err)
+	}
+	if len(sugg) == 0 || sugg[0].Tag.Name != "v4.2.1" {
+		t.Fatalf("suggestions = %+v, want v4.2.1 first", sugg)
+	}
+}

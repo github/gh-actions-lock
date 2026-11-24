@@ -611,7 +611,7 @@ func TestInjectVersionRefFindings_SkipsTransitiveDeps(t *testing.T) {
 		},
 	}
 
-	injectVersionRefFindings(report, record)
+	injectVersionRefFindings(context.Background(), report, record, nil)
 
 	findings := report.Workflows[0].Findings
 	if len(findings) != 1 {
@@ -622,6 +622,38 @@ func TestInjectVersionRefFindings_SkipsTransitiveDeps(t *testing.T) {
 	}
 	if strings.Contains(findings[0].Detail, "actions/setup-go") {
 		t.Errorf("transitive dep should not produce a finding, got: %s", findings[0].Detail)
+	}
+}
+
+func TestInjectVersionRefFindings_PrefixedPartialRef(t *testing.T) {
+	report := &checks.Report{Workflows: []checks.WorkflowReport{{Path: "ci.yml"}}}
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/tools", Ref: "verify/v0", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "build/v0.5.1", SHA: "bbb", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "feature/2fa", SHA: "ccc", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "releases/v4", SHA: "ddd", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.REST("GET", "repos/octo/tools/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "verify/v0.5.1", "commit": map[string]string{"sha": "aaa"}},
+		{"name": "build/v0.5.1", "commit": map[string]string{"sha": "bbb"}},
+		{"name": "v4.0.0", "commit": map[string]string{"sha": "ddd"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	injectVersionRefFindings(context.Background(), report, record, r)
+
+	findings := report.Workflows[0].Findings
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for the partial prefixed ref (releases/v4 has no family tags), got %d: %+v", len(findings), findings)
+	}
+	if !strings.Contains(findings[0].Detail, "octo/tools@verify/v0:") {
+		t.Errorf("expected finding for octo/tools@verify/v0, got: %s", findings[0].Detail)
 	}
 }
 

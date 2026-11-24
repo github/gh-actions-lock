@@ -36,8 +36,27 @@ func TestPlan_impreciseTransitivePinDoesNotBlockDirectNarrowing(t *testing.T) {
 	require.NoError(t, store.Set(context.Background(), wfKey, deps, parents, directKeys))
 	require.NoError(t, store.Save())
 
-	imprecise := impreciseDirectNWOs(store)
+	imprecise := impreciseDirectFamilies(store)
 
-	assert.False(t, imprecise["actions/checkout"], "transitive-only imprecise pin must not block narrowing")
-	assert.True(t, imprecise["actions/setup-go"], "a direct imprecise pin still records the user's precision choice")
+	assert.False(t, imprecise["actions/checkout@"], "transitive-only imprecise pin must not block narrowing")
+	assert.True(t, imprecise["actions/setup-go@"], "a direct imprecise pin still records the user's precision choice")
+}
+
+func TestImpreciseDirectFamilies_KeysByTagFamily(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	wfKey := workflowfile.KeyFromPath(filepath.Join(dir, ".github", "workflows", "ci.yml"))
+	store, err := lockfile.LoadState(dir, fakeMeta{})
+	require.NoError(t, err)
+
+	deps := []dep.Dependency{
+		{NWO: "Octo/Tools", Path: "verify", Ref: "verify/v0", Tag: "verify/v0", Branch: "main", SHA: "1111111111111111111111111111111111111111", HashAlgo: "sha1"},
+	}
+	require.NoError(t, store.Set(context.Background(), wfKey, deps, nil, map[string]bool{"Octo/Tools@verify/v0": true}))
+
+	imprecise := impreciseDirectFamilies(store)
+
+	assert.True(t, imprecise["octo/tools@verify/"])
+	assert.False(t, imprecise["octo/tools@build/"], "another family in the same repo stays free to narrow")
+	assert.False(t, imprecise["octo/tools@"], "the unprefixed family stays free to narrow")
 }

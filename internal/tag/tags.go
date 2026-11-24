@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/syncmap"
 	"golang.org/x/sync/singleflight"
@@ -95,7 +94,7 @@ func (tl *Lister) ListTags(ctx context.Context, owner, repo string) ([]Info, err
 				tags[i].IsRelease = ri.IsRelease
 				tags[i].IsImmutable = ri.IsImmutable
 			}
-			if sv, ok := parserlock.ParseSemVer(tags[i].Name); ok {
+			if sv, ok := ParseVersion(tags[i].Name); ok {
 				tags[i].IsMajor = sv.IsMajorOnly()
 			}
 		}
@@ -108,9 +107,15 @@ func (tl *Lister) ListTags(ctx context.Context, owner, repo string) ([]Info, err
 			// Semver-aware ordering so v10 sorts ahead of v9 (string
 			// compare would invert them). Non-semver tags fall back to
 			// lexical and sort after semver tags.
-			svi, oki := parserlock.ParseSemVer(tags[i].Name)
-			svj, okj := parserlock.ParseSemVer(tags[j].Name)
+			svi, oki := ParseVersion(tags[i].Name)
+			svj, okj := ParseVersion(tags[j].Name)
 			if oki && okj {
+				// Keep each family together, unprefixed first, so another
+				// family's higher numbers can't push it out of the
+				// three-suggestion cap.
+				if fi, fj := Family(svi), Family(svj); fi != fj {
+					return fi < fj
+				}
 				if svi.Greater(svj) {
 					return true
 				}

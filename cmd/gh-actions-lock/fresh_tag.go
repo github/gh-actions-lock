@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/config"
 	"github.com/github/gh-actions-lock/internal/pin"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -62,7 +61,7 @@ func injectFreshTagFindings(ctx context.Context, report *checks.Report, record *
 		if tagName == "" {
 			tagName = e.Ref
 		}
-		if _, isSemver := parserlock.ParseSemVer(tagName); !isSemver {
+		if _, isSemver := tag.ParseVersion(tagName); !isSemver {
 			continue // branch or bare SHA — not a release tag
 		}
 		key := e.NWO + "@" + tagName
