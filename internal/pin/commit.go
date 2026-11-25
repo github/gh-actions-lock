@@ -23,30 +23,41 @@ type CommitOptions struct {
 	OnProgress func(phase string)
 	// SkipNewWorkflowEntries forces the Commit phase to skip workflows with no existing lockfile entry.
 	SkipNewWorkflowEntries bool
+	// ReadFile and WriteFile override checkout I/O. SaveLockfile must also
+	// be set for a store opened from a remote snapshot.
+	ReadFile     workflowfile.ReadFile
+	WriteFile    func(string, []byte) error
+	SaveLockfile func(*lockfile.State) error
 }
 
-// Commit writes a planned Record to disk: rewrites workflow files and
-// updates the lockfile store. All-or-nothing semantics — if any write
-// fails, previously written files are not rolled back (best-effort),
-// but the error is returned immediately.
+// Commit applies a planned Record to the source files and lockfile.
 func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *CommitOptions) error {
-	progress := func(string) {}
-	if copts != nil && copts.OnProgress != nil {
-		progress = copts.OnProgress
+	opts := CommitOptions{}
+	if copts != nil {
+		opts = *copts
+	}
+	if opts.OnProgress == nil {
+		opts.OnProgress = func(string) {}
+	}
+	if opts.WriteFile == nil {
+		opts.WriteFile = func(path string, data []byte) error { return os.WriteFile(path, data, 0o644) }
+	}
+	if opts.SaveLockfile == nil {
+		opts.SaveLockfile = (*lockfile.State).Save
 	}
 	rec.Workflows = committedWorkflows(rec, store, copts)
-	if err := validateRequiredRewrites(rec.Workflows); err != nil {
+	if err := validateRequiredRewrites(rec.Workflows, opts.ReadFile); err != nil {
 		return err
 	}
 	selfRewrites := mergeSelfActionRewrites(rec.Workflows)
-	if err := adoptSharedRewrites(rec, selfRewrites); err != nil {
+	if err := adoptSharedRewrites(rec, selfRewrites, opts.ReadFile); err != nil {
 		return err
 	}
 
 	// Phase 1: Update lockfile entries in memory. It runs before any file is
 	// rewritten, so an entry the lockfile refuses leaves every file as it was.
 	if len(rec.Workflows) > 0 {
-		progress("Updating lockfile")
+		opts.OnProgress("Updating lockfile")
 	}
 	if err := updateLockfile(ctx, rec, rec.Workflows, store); err != nil {
 		return err
@@ -54,7 +65,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 
 	// Phase 2: Rewrite workflow files (uses: line changes).
 	if len(rec.Workflows) > 0 {
-		progress("Rewriting workflows")
+		opts.OnProgress("Rewriting workflows")
 	}
 
 	// Rewrite workflow files in parallel. Uses errgroup rather than pinpool
@@ -64,7 +75,7 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 	g.SetLimit(runtime.GOMAXPROCS(0))
 	for _, wp := range rec.Workflows {
 		g.Go(func() error {
-			if err := rewriteWorkflow(wp); err != nil {
+			if err := opts.rewriteWorkflow(wp); err != nil {
 				return fmt.Errorf("rewriting %s: %w", wp.Path, err)
 			}
 			return nil
@@ -76,12 +87,12 @@ func Commit(ctx context.Context, rec *Record, store *lockfile.State, copts *Comm
 
 	// Action files can be shared by several workflows, so merge their
 	// rewrites and write each file once, serially.
-	if err := rewriteSelfActionFiles(selfRewrites); err != nil {
+	if err := opts.rewriteSelfActionFiles(selfRewrites); err != nil {
 		return err
 	}
 
 	// Phase 3: Persist lockfile to disk.
-	if err := store.Save(); err != nil {
+	if err := opts.SaveLockfile(store); err != nil {
 		return fmt.Errorf("saving lockfile: %w", err)
 	}
 
@@ -170,8 +181,8 @@ func describeCycle(cycle []string) string {
 	return b.String()
 }
 
-func rewriteWorkflow(wp WorkflowPlan) error {
-	wf, err := workflowfile.Load(wp.Path)
+func (opts CommitOptions) rewriteWorkflow(wp WorkflowPlan) error {
+	wf, err := opts.ReadFile.Load(wp.Path)
 	if err != nil {
 		return err
 	}
@@ -187,7 +198,7 @@ func rewriteWorkflow(wp WorkflowPlan) error {
 	if bytes.Equal(content, wf.Content) {
 		return nil
 	}
-	return os.WriteFile(wp.Path, content, 0o644)
+	return opts.WriteFile(wp.Path, content)
 }
 
 // mergeSelfActionRewrites merges, per in-repo action file reached via `$/…`,
@@ -216,7 +227,7 @@ func mergeSelfActionRewrites(plans []WorkflowPlan) map[string]map[string]string 
 // runner looks up each `uses:` in a `$/…` action as written, so the workflow
 // must lock both. Rewriting both to one ref would rename the composite's
 // declared edge instead.
-func adoptSharedRewrites(rec *Record, merged map[string]map[string]string) error {
+func adoptSharedRewrites(rec *Record, merged map[string]map[string]string, read workflowfile.ReadFile) error {
 	type pinKey struct{ wf, key string }
 	adopted := map[pinKey]bool{}
 	displaced := map[string][]*parserlock.ActionRef{}
@@ -231,7 +242,7 @@ func adoptSharedRewrites(rec *Record, merged map[string]map[string]string) error
 			if len(foreign) == 0 {
 				continue
 			}
-			wf, err := workflowfile.Load(path)
+			wf, err := read.Load(path)
 			if err != nil {
 				return fmt.Errorf("loading %s: %w", path, err)
 			}
@@ -266,7 +277,7 @@ func adoptSharedRewrites(rec *Record, merged map[string]map[string]string) error
 		}
 	}
 	for _, wp := range rec.Workflows {
-		if err := demoteDisplacedRoots(rec, wp, merged, displaced[wp.Path]); err != nil {
+		if err := demoteDisplacedRoots(rec, wp, merged, displaced[wp.Path], read); err != nil {
 			return err
 		}
 	}
@@ -276,7 +287,7 @@ func adoptSharedRewrites(rec *Record, merged map[string]map[string]string) error
 // demoteDisplacedRoots stops recording as a root of wp each displaced ref
 // that wp no longer uses directly once every rewrite is applied. Its pin
 // stays, with the edges of the composites that require it.
-func demoteDisplacedRoots(rec *Record, wp WorkflowPlan, merged map[string]map[string]string, displaced []*parserlock.ActionRef) error {
+func demoteDisplacedRoots(rec *Record, wp WorkflowPlan, merged map[string]map[string]string, displaced []*parserlock.ActionRef, read workflowfile.ReadFile) error {
 	if len(displaced) == 0 {
 		return nil
 	}
@@ -286,7 +297,7 @@ func demoteDisplacedRoots(rec *Record, wp WorkflowPlan, merged map[string]map[st
 		files[path] = merged[path]
 	}
 	for path, rewrites := range files {
-		wf, err := workflowfile.Load(path)
+		wf, err := read.Load(path)
 		if err != nil {
 			return fmt.Errorf("loading %s: %w", path, err)
 		}
@@ -344,9 +355,9 @@ func pinnedEntry(rec *Record, nwo, ref string) (Entry, bool) {
 
 // rewriteSelfActionFiles applies the merged rewrites to the in-repo action
 // files workflows reach via `$/…`, writing each file once.
-func rewriteSelfActionFiles(merged map[string]map[string]string) error {
+func (opts CommitOptions) rewriteSelfActionFiles(merged map[string]map[string]string) error {
 	for path, rewrites := range merged {
-		wf, err := workflowfile.Load(path)
+		wf, err := opts.ReadFile.Load(path)
 		if err != nil {
 			return fmt.Errorf("loading %s: %w", path, err)
 		}
@@ -357,7 +368,7 @@ func rewriteSelfActionFiles(merged map[string]map[string]string) error {
 		if changed == 0 || bytes.Equal(content, wf.Content) {
 			continue
 		}
-		if err := os.WriteFile(path, content, 0o644); err != nil {
+		if err := opts.WriteFile(path, content); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
@@ -463,7 +474,7 @@ func buildDirectKeys(rec *Record, wfPath string) map[string]bool {
 	return keys
 }
 
-func validateRequiredRewrites(plans []WorkflowPlan) error {
+func validateRequiredRewrites(plans []WorkflowPlan, read workflowfile.ReadFile) error {
 	for i := range plans {
 		wp := &plans[i]
 		if len(wp.RequiredRewrites) == 0 {
@@ -472,7 +483,7 @@ func validateRequiredRewrites(plans []WorkflowPlan) error {
 		found := make(map[string]int)
 		wp.RewrittenIn = make(map[string][]string)
 		for _, path := range append([]string{wp.Path}, wp.SelfActionFiles...) {
-			wf, err := workflowfile.Load(path)
+			wf, err := read.Load(path)
 			if err != nil {
 				return fmt.Errorf("validating required rewrites in %s: %w", path, err)
 			}

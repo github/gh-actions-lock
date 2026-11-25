@@ -213,7 +213,7 @@ func TestValidateRequiredRewritesRecordsFiles(t *testing.T) {
 		SelfActionFiles:  []string{actionPath},
 		RequiredRewrites: map[string]string{"old/action@v1": "new/action@v1"},
 	}}
-	require.NoError(t, validateRequiredRewrites(plans))
+	require.NoError(t, validateRequiredRewrites(plans, nil))
 	assert.Equal(t, []string{actionPath}, plans[0].RewrittenIn["old/action@v1"])
 }
 

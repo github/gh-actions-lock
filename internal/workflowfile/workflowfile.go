@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -42,7 +43,18 @@ type File struct {
 
 // Load reads and parses a workflow file.
 func Load(path string) (*File, error) {
-	content, err := os.ReadFile(path)
+	return ReadFile(nil).Load(path)
+}
+
+// ReadFile reads a repository-relative path when set; nil uses the checkout.
+type ReadFile func(string) ([]byte, error)
+
+// Load parses a workflow or composite definition from the selected source.
+func (read ReadFile) Load(path string) (*File, error) {
+	if read == nil {
+		read = os.ReadFile
+	}
+	content, err := read(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading workflow: %w", err)
 	}
@@ -202,19 +214,28 @@ type LocalUse struct {
 // inherently pinned; only remote dependencies found inside them are returned
 // in Refs.
 func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRepositoryActionScan {
+	return ReadFile(nil).ScanSelfRepositoryActions(workflowPath, actionRefs)
+}
+
+// ScanSelfRepositoryActions follows step-level `$/…` refs in the selected source.
+func (read ReadFile) ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRepositoryActionScan {
 	var scan SelfRepositoryActionScan
 	if len(actionRefs) == 0 {
 		return scan
 	}
 
-	repoRoot, err := findRepoRoot(workflowPath)
-	if err != nil {
-		scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository actions: %v", err))
-		return scan
-	}
-	if repoRoot == "" {
-		scan.Errors = append(scan.Errors, "can't inspect self repository actions: not in a git repository (set "+RepoRootEnv+" to override)")
-		return scan
+	repoRoot := ""
+	if read == nil {
+		var err error
+		repoRoot, err = findRepoRoot(workflowPath)
+		if err != nil {
+			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository actions: %v", err))
+			return scan
+		}
+		if repoRoot == "" {
+			scan.Errors = append(scan.Errors, "can't inspect self repository actions: not in a git repository (set "+RepoRootEnv+" to override)")
+			return scan
+		}
 	}
 
 	type pendingAction struct {
@@ -253,13 +274,13 @@ func ScanSelfRepositoryActions(workflowPath string, actionRefs []string) SelfRep
 		}
 
 		relPath := strings.TrimPrefix(current.ref, selfRepositoryPrefix)
-		actionDir := filepath.Join(repoRoot, filepath.FromSlash(relPath))
-		if !isWithinRoot(repoRoot, actionDir) {
+		actionDir, ok := actionDirectory(repoRoot, relPath)
+		if !ok {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("refusing to read self repository action outside repo root: %s", current.ref))
 			continue
 		}
 
-		actionUses, actionPath, err := readActionUses(repoRoot, actionDir)
+		actionUses, actionPath, err := read.actionUses(repoRoot, actionDir)
 		if err != nil {
 			scan.Errors = append(scan.Errors, fmt.Sprintf("can't inspect self repository action %s: %v", current.ref, err))
 			continue
@@ -587,15 +608,24 @@ func ValidateInRepo(path string) error {
 // It returns nil when the action can't be read there: the runner workspace
 // may hold something else, so nothing is known about it.
 func LocalActionRemoteUses(workflowPath, localPath string) []string {
-	root, err := findRepoRoot(workflowPath)
-	if err != nil || root == "" {
+	return ReadFile(nil).LocalActionRemoteUses(workflowPath, localPath)
+}
+
+// LocalActionRemoteUses samples the committed action for diagnostics only.
+func (read ReadFile) LocalActionRemoteUses(workflowPath, localPath string) []string {
+	root := ""
+	if read == nil {
+		var err error
+		root, err = findRepoRoot(workflowPath)
+		if err != nil || root == "" {
+			return nil
+		}
+	}
+	actionDir, ok := actionDirectory(root, strings.TrimPrefix(localPath, "./"))
+	if !ok {
 		return nil
 	}
-	actionDir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(localPath, "./")))
-	if !isWithinRoot(root, actionDir) {
-		return nil
-	}
-	actionUses, _, err := readActionUses(root, actionDir)
+	actionUses, _, err := read.actionUses(root, actionDir)
 	if err != nil {
 		return nil
 	}
@@ -607,6 +637,15 @@ func LocalActionRemoteUses(workflowPath, localPath string) []string {
 		}
 	}
 	return out
+}
+
+func actionDirectory(root, rel string) (string, bool) {
+	if root == "" {
+		dir := path.Clean(rel)
+		return dir, !path.IsAbs(rel) && !strings.Contains(rel, `\`) && fs.ValidPath(dir)
+	}
+	dir := filepath.Join(root, filepath.FromSlash(rel))
+	return dir, isWithinRoot(root, dir)
 }
 
 func isWithinRoot(root, candidate string) bool {
@@ -686,21 +725,25 @@ func parseActionYAMLForUses(content []byte) ([]string, error) {
 	return uses, nil
 }
 
-// readActionUses returns the `uses:` values of an in-repo action definition
-// along with the file they were read from, so callers can rewrite that file.
-func readActionUses(repoRoot, actionDir string) ([]string, string, error) {
+func (read ReadFile) actionUses(repoRoot, actionDir string) ([]string, string, error) {
+	join := path.Join
+	if read == nil {
+		join = filepath.Join
+		read = func(p string) ([]byte, error) {
+			if err := ValidatePathWithinRoot(repoRoot, p); err != nil {
+				return nil, err
+			}
+			return os.ReadFile(p)
+		}
+	}
 	var lastErr error
 	for _, name := range []string{"action.yml", "action.yaml"} {
-		actionPath := filepath.Join(actionDir, name)
-		if err := ValidatePathWithinRoot(repoRoot, actionPath); err != nil {
-			if errors.Is(err, errPathOutsideRoot) {
+		actionPath := join(actionDir, name)
+		content, err := read(actionPath)
+		if err != nil {
+			if errors.Is(err, errPathOutsideRoot) || repoRoot == "" && !errors.Is(err, fs.ErrNotExist) {
 				return nil, "", err
 			}
-			lastErr = err
-			continue
-		}
-		content, err := os.ReadFile(actionPath)
-		if err != nil {
 			lastErr = err
 			continue
 		}

@@ -33,6 +33,7 @@ type runLog struct {
 	report   *checks.Report
 	record   *pin.Record
 	valid    bool
+	repo     string
 }
 
 // save writes the log for a run that returned runErr. A failed run is never
@@ -42,15 +43,18 @@ func (l *runLog) save(runErr error) string {
 	if report == nil {
 		report = &checks.Report{}
 	}
-	var lockfileVersion, homeHost, repo string
+	var lockfileVersion, homeHost string
 	if l.store != nil {
 		lockfileVersion = l.store.File().Version
 	}
 	if l.resolver != nil {
 		homeHost = l.resolver.Hostname()
 	}
-	if cur, err := repository.Current(); err == nil {
-		repo = cur.Host + "/" + cur.Owner + "/" + cur.Name
+	repo := l.repo
+	if repo == "" {
+		if cur, err := repository.Current(); err == nil {
+			repo = cur.Host + "/" + cur.Owner + "/" + cur.Name
+		}
 	}
 	return writeRunLog(runLogDir(), report, l.record, l.valid && runErr == nil, lockfileVersion, homeHost, repo, runErr)
 }

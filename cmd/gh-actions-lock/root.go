@@ -72,7 +72,7 @@ func newRootCmd(newResolver resolverFunc) *cobra.Command {
 	opts := &checkOptions{}
 
 	cmd := &cobra.Command{
-		Use:           "actions-lock [<workflow-path>...]",
+		Use:           "actions-lock [<workflow-path>... | <remote-target>]",
 		Args:          cobra.ArbitraryArgs,
 		Short:         "Lock and verify GitHub Actions dependencies",
 		SilenceErrors: true,
@@ -90,6 +90,14 @@ actions are caught before they run.
 Scans all workflows under .github/workflows/ by default and fixes
 what it can — pinning every resolvable action and updating the
 lockfile. Pass --no-fix for a read-only check that writes nothing.
+
+REMOTE REPOSITORIES
+
+Pass OWNER/REPO or a GitHub repository, workflow directory, or workflow
+file URL to check it without a checkout. Remote checks are read-only by
+default. Pass --commit to update the selected branch, or --pr to commit
+to a new branch and open a pull request. Use --ref to select a branch or
+ref when the URL does not already specify one.
 
 HOST AND AUTHENTICATION
 
@@ -166,6 +174,12 @@ $ gh actions-lock
 # Verify a specific workflow
 $ gh actions-lock .github/workflows/ci.yml
 
+# Check a repository without a checkout
+$ gh actions-lock owner/repo
+
+# Commit fixes for one remote workflow on a new branch and open a PR
+$ gh actions-lock --pr https://github.com/owner/repo/blob/main/.github/workflows/ci.yml
+
 # Read-only check for CI integration (writes nothing, exits 1 if invalid)
 $ gh actions-lock --no-fix --json=valid,findings
 
@@ -177,7 +191,10 @@ $ gh actions-lock --json
 			if len(args) > 0 {
 				opts.workflowPaths = args
 			}
-			return opts.validateOutputFlags()
+			if err := opts.validateOutputFlags(); err != nil {
+				return err
+			}
+			return opts.selectRemote()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCheck(cmd, opts, newResolver)

@@ -190,6 +190,7 @@ func newRetryTransport(inner http.RoundTripper, budget *retryBudget) *retryTrans
 }
 
 func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	noRetry, _ := req.Context().Value(noRetryKey{}).(bool)
 	// Snapshot the body so POST requests can be replayed on retry.
 	var body []byte
 	if req.Body != nil {
@@ -216,7 +217,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if !retryableTransportErr(err) {
 				return nil, err
 			}
-			if !rt.wait(req.Context(), attempt, time.Time{}, "GitHub API unreachable ("+transportReason(err)+")") {
+			if noRetry || !rt.wait(req.Context(), attempt, time.Time{}, "GitHub API unreachable ("+transportReason(err)+")") {
 				return nil, &UnknownOutcomeError{Cause: err}
 			}
 			continue
@@ -229,7 +230,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if resp.StatusCode < 500 {
 				reason = "GitHub API rate limit"
 			}
-			if rt.wait(req.Context(), attempt, retryAt, reason) {
+			if !noRetry && rt.wait(req.Context(), attempt, retryAt, reason) {
 				drain(resp.Body)
 				cancel()
 				continue

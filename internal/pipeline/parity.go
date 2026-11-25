@@ -43,7 +43,7 @@ import (
 //
 // Under the Dependabot proxy any inconclusive check is an error: the run
 // aborts so Dependabot retries rather than shipping an unverified lock.
-func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, resolved []dep.Dependency, parents map[string][]string, mode parityMode) error {
+func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.ParsedWorkflow, store *lockfile.State, report *checks.Report, recordedKeys map[string]bool, resolved []dep.Dependency, parents map[string][]string, mode parityMode, read workflowfile.ReadFile) error {
 	gh := r.GHClient()
 	if gh == nil || store == nil {
 		return nil
@@ -343,7 +343,7 @@ func checkParity(ctx context.Context, r *resolve.Resolver, parsed []checks.Parse
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return checkManifests(store.File(), report, roots, unhealthy, reads)
+	return checkManifests(store.File(), report, roots, unhealthy, reads, read)
 }
 
 // rootPaths are the sub-action paths through which a workflow's recorded

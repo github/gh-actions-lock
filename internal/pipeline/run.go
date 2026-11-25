@@ -12,11 +12,13 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/profile"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // RunOptions configures the Run pipeline.
 type RunOptions struct {
 	WorkflowPaths []string
+	ReadFile      workflowfile.ReadFile
 	Resolver      *resolve.Resolver
 	Store         *lockfile.State
 	Pool          *pinpool.Pool
@@ -52,7 +54,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 	// Phase 1: Parse.
 	endParse := prof.Phase("  parse workflows")
-	parsed := ParseAll(opts.WorkflowPaths, opts.Store)
+	parsed := ParseFiles(opts.WorkflowPaths, opts.Store, opts.ReadFile)
 	endParse()
 
 	if ctx.Err() != nil {
@@ -143,7 +145,7 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	if r != nil {
 		mode := parityMode{verify: opts.Verify, relock: opts.Relock, acceptMoved: opts.AcceptMoved, readOnly: opts.ReadOnly}
 		endParity := prof.Phase("  parity check")
-		err := checkParity(ctx, r, parsed, opts.Store, report, recordedKeys, resolved, parents, mode)
+		err := checkParity(ctx, r, parsed, opts.Store, report, recordedKeys, resolved, parents, mode, opts.ReadFile)
 		endParity()
 		// A cancelled request surfaces as an inconclusive lookup; report the
 		// cancellation, not the failure it caused.

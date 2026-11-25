@@ -13,7 +13,8 @@ import (
 // LoadErr / DepsErr capture early failures so DiagnoseParsed can surface them
 // as findings without re-loading the file.
 type ParsedWorkflow struct {
-	Path string
+	Path     string
+	ReadFile workflowfile.ReadFile
 	// Refs are all remote dependency roots attributed to the workflow. This
 	// includes refs found inside in-repo `$/…` actions.
 	Refs []parserlock.ActionRef

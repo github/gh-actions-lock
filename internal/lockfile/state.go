@@ -120,7 +120,19 @@ func LoadState(repoRoot string, meta MetadataResolver) (*State, error) {
 // lives outside the standard .github/workflows/ location.
 func LoadStateAt(lockfilePath string, meta MetadataResolver) (*State, error) {
 	contents, err := os.ReadFile(lockfilePath)
+	return loadState(lockfilePath, meta, contents, err)
+}
 
+// LoadContents opens a remote snapshot. A nil slice denotes a missing lockfile.
+func LoadContents(contents []byte, meta MetadataResolver) (*State, error) {
+	var err error
+	if contents == nil {
+		err = os.ErrNotExist
+	}
+	return loadState("", meta, contents, err)
+}
+
+func loadState(lockfilePath string, meta MetadataResolver, contents []byte, err error) (*State, error) {
 	var file parserlock.File
 	var originalVersion string
 	switch {
@@ -946,30 +958,18 @@ func (s *State) admitUses(key string, fromLock bool, children map[string]bool) m
 // entries (pins referenced by no workflow). When the in-memory file is empty
 // after GC, the on-disk file is removed.
 func (s *State) Save() error {
-	if s.preview {
-		return errPreview
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pruneOrphans()
-	if err := s.checkOneHostPerRepo(); err != nil {
+	out, err := s.Contents()
+	if err != nil {
 		return err
 	}
-
 	full := s.lockPath
-
-	if len(s.file.Dependencies) == 0 && len(s.file.Workflows) == 0 {
+	if out == nil {
 		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	}
 
-	out, err := marshalDeterministic(s.file, s.hostname)
-	if err != nil {
-		return err
-	}
-	out = append([]byte(lockfileHeader), out...)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
@@ -978,6 +978,28 @@ func (s *State) Save() error {
 		return err
 	}
 	return os.Rename(tmp, full)
+}
+
+// Contents runs the same cleanup as Save and returns nil for a lockfile that
+// should be removed.
+func (s *State) Contents() ([]byte, error) {
+	if s.preview {
+		return nil, errPreview
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneOrphans()
+	if err := s.checkOneHostPerRepo(); err != nil {
+		return nil, err
+	}
+	if len(s.file.Dependencies) == 0 && len(s.file.Workflows) == 0 {
+		return nil, nil
+	}
+	out, err := marshalDeterministic(s.file, s.hostname)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(lockfileHeader), out...), nil
 }
 
 // pruneOrphans requires s.mu to be held.

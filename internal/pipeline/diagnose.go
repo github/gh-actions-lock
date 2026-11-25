@@ -74,7 +74,7 @@ func diagnoseOneParsed(ctx context.Context, pw checks.ParsedWorkflow, r *resolve
 		var nestedLocal []*resolve.CompositeLocalPathError
 		liveDeps, resolvedParents, resolveErr = r.ResolveAllRecursive(ctx, pw.Refs)
 		nestedLocal, resolveErr = resolve.SplitLocalPaths(resolveErr)
-		wr.Findings = append(wr.Findings, nestedLocalActionFindings(pw.Path, nestedLocal)...)
+		wr.Findings = append(wr.Findings, nestedLocalActionFindings(pw.Path, nestedLocal, pw.ReadFile)...)
 		for _, img := range r.ContainerImages(pw.Refs) {
 			checks.AddContainerImage(&wr, img)
 		}
@@ -333,7 +333,7 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 			Severity:        checks.SeverityWarning,
 			Confidence:      checks.ConfidenceHigh,
 			LocalPath:       p,
-			LocalRemoteUses: workflowfile.LocalActionRemoteUses(pw.Path, p),
+			LocalRemoteUses: pw.ReadFile.LocalActionRemoteUses(pw.Path, p),
 			Detail:          "cannot follow workspace-local action " + p,
 		})
 	}
@@ -345,7 +345,7 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 			Confidence:      checks.ConfidenceHigh,
 			ParentNWO:       lu.Parent,
 			LocalPath:       lu.Path,
-			LocalRemoteUses: workflowfile.LocalActionRemoteUses(pw.Path, lu.Path),
+			LocalRemoteUses: pw.ReadFile.LocalActionRemoteUses(pw.Path, lu.Path),
 			Detail:          fmt.Sprintf("cannot follow workspace-local action %s used by %s", lu.Path, lu.Parent),
 		})
 	}
@@ -354,7 +354,7 @@ func localActionFindings(pw checks.ParsedWorkflow) []checks.Finding {
 
 // nestedLocalActionFindings warns about `./…` actions used inside remote
 // composites, once per composite and path.
-func nestedLocalActionFindings(path string, local []*resolve.CompositeLocalPathError) []checks.Finding {
+func nestedLocalActionFindings(path string, local []*resolve.CompositeLocalPathError, read workflowfile.ReadFile) []checks.Finding {
 	var out []checks.Finding
 	seen := map[[2]string]bool{}
 	for _, l := range local {
@@ -370,7 +370,7 @@ func nestedLocalActionFindings(path string, local []*resolve.CompositeLocalPathE
 			Confidence:      checks.ConfidenceHigh,
 			ParentNWO:       l.Parent,
 			LocalPath:       l.LocalPath,
-			LocalRemoteUses: workflowfile.LocalActionRemoteUses(path, l.LocalPath),
+			LocalRemoteUses: read.LocalActionRemoteUses(path, l.LocalPath),
 			Detail:          fmt.Sprintf("cannot follow workspace-local action %s used by %s", l.LocalPath, l.Parent),
 		})
 	}

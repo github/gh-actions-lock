@@ -14,6 +14,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
 	"github.com/github/gh-actions-lock/internal/uses"
+	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
 // manifestNode is one action a recorded entry provides: the entry's key and
@@ -111,7 +112,7 @@ func readManifestGraph(ctx context.Context, r manifestReader, file parserlock.Fi
 // where its workflow enters the recorded graph. unhealthy holds the pins
 // parity already reported (pinKey of NWO and commit); they and anything
 // reached only through them are treated as unread.
-func checkManifests(file parserlock.File, report *checks.Report, roots map[int][]manifestNode, unhealthy map[string]bool, reads map[manifestNode]*manifestRead) error {
+func checkManifests(file parserlock.File, report *checks.Report, roots map[int][]manifestNode, unhealthy map[string]bool, reads map[manifestNode]*manifestRead, read workflowfile.ReadFile) error {
 	skip := func(n manifestNode) bool {
 		p, _ := parserlock.ParsePin(n.key)
 		return unhealthy[pinKey(p.NWO, lockedSHA(file.Dependencies[n.key].Commit))]
@@ -141,7 +142,7 @@ func checkManifests(file parserlock.File, report *checks.Report, roots map[int][
 			if rd == nil {
 				continue
 			}
-			for _, f := range nestedLocalActionFindings(wr.Path, rd.local) {
+			for _, f := range nestedLocalActionFindings(wr.Path, rd.local, read) {
 				if !slices.ContainsFunc(wr.Findings, func(g checks.Finding) bool { return g.Detail == f.Detail }) {
 					wr.Findings = append(wr.Findings, f)
 				}

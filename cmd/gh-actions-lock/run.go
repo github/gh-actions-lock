@@ -17,6 +17,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/repository"
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/cmd/gh-actions-lock/format"
+	"github.com/github/gh-actions-lock/internal/config"
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
@@ -36,6 +37,10 @@ type checkOptions struct {
 	workflowPaths []string
 	jsonFields    string
 	hostname      string
+	repo, ref     string
+	remote        *remoteTarget
+	remoteCommit  bool
+	remotePR      bool
 	// profileDir, when non-empty, enables profiling: execution trace,
 	// CPU profile, and HTTP request log are written to files in this dir.
 	profileDir string
@@ -82,6 +87,10 @@ func bindCheckFlags(cmd *cobra.Command, opts *checkOptions) {
 	cmd.Flags().StringVar(&opts.jsonFields, "json", "", "Output JSON with the specified `fields` (valid,findings,workflows,dependencies,pins)")
 	cmd.Flags().Lookup("json").NoOptDefVal = "valid,findings,workflows"
 	cmd.Flags().StringVar(&opts.hostname, "hostname", "", "GitHub hostname to query (defaults to GH_HOST, current repo host, or github.com)")
+	cmd.Flags().StringVarP(&opts.repo, "repo", "R", "", "Remote OWNER/REPO or GitHub repository or workflow URL")
+	cmd.Flags().StringVar(&opts.ref, "ref", "", "Ref to read in a remote repository (defaults to its default branch)")
+	cmd.Flags().BoolVar(&opts.remoteCommit, "commit", false, "Commit fixes directly to the selected remote branch")
+	cmd.Flags().BoolVar(&opts.remotePR, "pr", false, "Commit fixes to a new remote branch and open a pull request")
 	cmd.Flags().BoolVar(&opts.noFix, "no-fix", false, "Read-only: report findings without modifying workflows or the lockfile")
 	cmd.Flags().BoolVar(&opts.noNarrow, "no-narrow", false,
 		"Keep mutable version refs (e.g. v4) instead of narrowing to full semver (e.g. v4.2.1).\n"+
@@ -185,21 +194,35 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Shared worker pool for all concurrent phases.
 	pool := pinpool.New(0, console) // 0 → DefaultWorkers
 
-	// If profiling, use a profiled resolver that logs HTTP calls.
-	if prof != nil && newResolver == nil {
+	if newResolver == nil {
 		newResolver = func(hostname string, pool *pinpool.Pool) (*resolve.Resolver, error) {
 			return resolve.New(hostname, pool, resolve.WithProfile(prof))
 		}
 	}
 
 	endSetup := prof.Phase("setup (discover + lockfile)")
-	// A full-directory scan (no explicit workflow-path args) is the only
-	// invocation with the authority to declare a workflow deleted. Capture
-	// this before newRun overwrites opts.workflowPaths with the discovered
-	// set.
+	// Only a full-directory scan can declare a workflow deleted.
 	fullScan := len(opts.workflowPaths) == 0
-	recoverLock := newLockRecovery()
-	paths, r, store, err := newRun(opts.workflowPaths, opts.hostname, pool, newResolver, recoverLock)
+	var paths []string
+	var r *resolve.Resolver
+	var store *lockfile.State
+	var remote *remoteSnapshot
+	var read workflowfile.ReadFile
+	var err error
+	if t := opts.remote; t != nil {
+		rl.repo = t.host + "/" + t.nwo()
+		fullScan = t.workflow == ""
+		r, err = newResolver(t.host, pool)
+		if err != nil {
+			return err
+		}
+		remote, paths, store, err = loadRemote(ctx, *t, r, !opts.noFix)
+		if err == nil {
+			read = func(name string) ([]byte, error) { return remote.read(ctx, name) }
+		}
+	} else {
+		paths, r, store, err = newRun(opts.workflowPaths, opts.hostname, pool, newResolver, newLockRecovery())
+	}
 	if err != nil {
 		return err
 	}
@@ -218,7 +241,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		sort.Strings(staleWorkflows)
 		if !opts.noFix && len(staleWorkflows) > 0 {
 			var refs []parserlock.ActionRef
-			for _, pw := range pipeline.ParseAll(paths, nil) {
+			for _, pw := range pipeline.ParseFiles(paths, nil, read) {
 				if pw.LoadErr != nil {
 					return fmt.Errorf("scanning %s: %w", pw.Path, pw.LoadErr)
 				}
@@ -306,12 +329,17 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	var cooldownCfg tag.CooldownConfig
 	var cooldownWarnings []string
 	if gc := r.GHClient(); gc != nil && !opts.noFix {
-		cooldownCfg, _, cooldownWarnings = ResolveCooldown(".")
+		if remote != nil {
+			cooldownCfg, _, cooldownWarnings = fallbackCooldown(config.DependabotCooldownFrom(read))
+		} else {
+			cooldownCfg, _, cooldownWarnings = ResolveCooldown(".")
+		}
 		tagger = tag.NewLister(gc)
 	}
 
 	runOpts := pipeline.RunOptions{
 		WorkflowPaths: opts.workflowPaths,
+		ReadFile:      read,
 		Resolver:      r,
 		Store:         store,
 		Pool:          pool,
@@ -423,7 +451,11 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 					if opts.verify {
 						flag = "--verify"
 					}
-					console.TermDetail("Re-run without %s to apply fixes.", flag)
+					if remote != nil {
+						console.TermDetail("Re-run with --commit or --pr instead of %s to apply fixes.", flag)
+					} else {
+						console.TermDetail("Re-run without %s to apply fixes.", flag)
+					}
 				}
 			}
 			return errSilent
@@ -438,7 +470,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// Plan: build the complete pin record (resolution, reachability,
 	// narrowing, reverse lookup — all computation, no disk writes).
 	var repoOwner, repoName string
-	if currentRepo, err := repository.Current(); err == nil {
+	if remote != nil {
+		repoOwner, repoName = remote.target.owner, remote.target.repo
+	} else if currentRepo, err := repository.Current(); err == nil {
 		repoOwner = currentRepo.Owner
 		repoName = currentRepo.Name
 	}
@@ -462,6 +496,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endPlan()
 	rl.record = record
 	copts := &pin.CommitOptions{SkipNewWorkflowEntries: noOnboardFlag(cmd)}
+	if remote != nil {
+		remote.commitOptions(ctx, copts)
+	}
 	if planErr == nil {
 		planErr = pin.PlanEntryRepairs(ctx, record, store, r, report, copts)
 	}
@@ -523,9 +560,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		return errSilent
 	}
 
-	// Commit: write all changes to disk atomically (fast local I/O, no
-	// spinner label — it finishes before the user could read one).
-	endCommit := prof.Phase("pin.Commit (disk writes)")
+	endCommit := prof.Phase("pin.Commit")
 	if err := pin.Commit(ctx, record, store, copts); err != nil {
 		console.StopProgress()
 		return fmt.Errorf("committing pins: %w", err)
@@ -534,6 +569,19 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	endCommit()
 
 	console.StopProgress()
+	if remote != nil {
+		commitURL, prURL, err := remote.publish(ctx, opts.remotePR)
+		if err != nil {
+			return err
+		}
+		if prURL != "" {
+			console.TermSuccess("Opened pull request: %s", prURL)
+		} else if commitURL != "" {
+			console.TermSuccess("Committed changes: %s", commitURL)
+		} else {
+			console.TermDetail("No remote changes to commit.")
+		}
+	}
 	if migrated > 0 && opts.jsonFields == "" {
 		console.TermSuccess("Migrated %d local %s to `$/…`", migrated, ui.Pluralize(migrated, "action", "actions"))
 	}

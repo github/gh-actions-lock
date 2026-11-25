@@ -18,7 +18,10 @@ import (
 // (only when default-days > 0, so a repo can't downgrade a stricter file policy),
 // then the user's config file, then none.
 func ResolveCooldown(repoRoot string) (cfg tag.CooldownConfig, configured bool, warnings []string) {
-	cfg, ok, warnings := config.DependabotCooldown(repoRoot)
+	return fallbackCooldown(config.DependabotCooldown(repoRoot))
+}
+
+func fallbackCooldown(cfg tag.CooldownConfig, ok bool, warnings []string) (tag.CooldownConfig, bool, []string) {
 	if ok {
 		return cfg, true, warnings
 	}

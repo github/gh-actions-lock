@@ -31,14 +31,17 @@ func Diagnose(ctx context.Context, paths []string, r *resolve.Resolver, store *l
 	return DiagnoseParsed(ctx, parsed, r, store, pool)
 }
 
-// ParseAll loads and parses every workflow path, returning a slice in input
-// order. onScan, if non-nil, fires with 1-based progress before each workflow
-// is parsed so the UI can render [i/N] without leaking resolver detail.
+// ParseAll loads workflows from the checkout in input order.
 func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
+	return ParseFiles(paths, store, nil)
+}
+
+// ParseFiles loads workflows and their same-repository actions from read.
+func ParseFiles(paths []string, store *lockfile.State, read workflowfile.ReadFile) []checks.ParsedWorkflow {
 	total := len(paths)
 	out := make([]checks.ParsedWorkflow, 0, total)
 	for _, path := range paths {
-		pw := checks.ParsedWorkflow{Path: path}
+		pw := checks.ParsedWorkflow{Path: path, ReadFile: read}
 		if store != nil {
 			wfKey := workflowfile.KeyFromPath(path)
 			deps, depsErr := store.Get(wfKey)
@@ -48,14 +51,14 @@ func ParseAll(paths []string, store *lockfile.State) []checks.ParsedWorkflow {
 				pw.ExistingDeps = deps
 			}
 		}
-		wf, err := workflowfile.Load(path)
+		wf, err := read.Load(path)
 		if err != nil {
 			pw.LoadErr = err
 			out = append(out, pw)
 			continue
 		}
 		scan := wf.ExtractActionRefs()
-		selfScan := workflowfile.ScanSelfRepositoryActions(path, scan.SelfRepositoryActionRefs)
+		selfScan := read.ScanSelfRepositoryActions(path, scan.SelfRepositoryActionRefs)
 		// A reference that can't be parsed is never skipped: the workflow
 		// would lock without it.
 		if bad := mergeStrings(scan.MalformedRefs, selfScan.MalformedRefs); len(bad) > 0 {

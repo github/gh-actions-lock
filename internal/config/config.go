@@ -22,10 +22,22 @@ import (
 // is never silently ignored. An absent or malformed config yields ok=false and
 // never blocks.
 func DependabotCooldown(repoRoot string) (cfg tag.CooldownConfig, ok bool, warnings []string) {
-	data, found := readDependabotFile(repoRoot)
-	if !found {
-		return tag.CooldownConfig{}, false, nil
+	return DependabotCooldownFrom(func(name string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(name)))
+	})
+}
+
+// DependabotCooldownFrom applies the same cooldown policy to snapshot contents.
+func DependabotCooldownFrom(read func(string) ([]byte, error)) (cfg tag.CooldownConfig, ok bool, warnings []string) {
+	for _, name := range []string{".github/dependabot.yml", ".github/dependabot.yaml"} {
+		if data, err := read(name); err == nil {
+			return parseDependabotCooldown(data)
+		}
 	}
+	return tag.CooldownConfig{}, false, nil
+}
+
+func parseDependabotCooldown(data []byte) (tag.CooldownConfig, bool, []string) {
 	var file dependabotConfig
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return tag.CooldownConfig{}, false, []string{
@@ -37,15 +49,6 @@ func DependabotCooldown(repoRoot string) (cfg tag.CooldownConfig, ok bool, warni
 		return tag.CooldownConfig{}, false, nil
 	}
 	return tag.CooldownConfig{DefaultDays: cd.DefaultDays}, cd.DefaultDays > 0, cd.unsupportedWarnings()
-}
-
-func readDependabotFile(repoRoot string) ([]byte, bool) {
-	for _, name := range []string{"dependabot.yml", "dependabot.yaml"} {
-		if data, err := os.ReadFile(filepath.Join(repoRoot, ".github", name)); err == nil {
-			return data, true
-		}
-	}
-	return nil, false
 }
 
 // FileCooldown reads the user's ~/.config/gh-actions-lock/config.yml cooldown

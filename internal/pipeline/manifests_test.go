@@ -236,7 +236,7 @@ func TestCheckManifests_RejectedPins(t *testing.T) {
 			}
 			reads := readManifestGraph(context.Background(), &fakeManifests{yml: yml}, file, byKey, roots, nil)
 
-			require.NoError(t, checkManifests(file, report, roots, unhealthy, reads))
+			require.NoError(t, checkManifests(file, report, roots, unhealthy, reads, nil))
 
 			for ri, wr := range report.Workflows {
 				var got []string

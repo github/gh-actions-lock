@@ -29,6 +29,28 @@ Rerun `gh actions-lock` after adding a workflow or changing any `uses:`.
 
 Make sure you don't check in a corrupt lockfile. Copy [`.github/workflows/verify-lockfile.yml`](.github/workflows/verify-lockfile.yml) into your repository, modify it for your needs, then run `gh actions-lock` once so that workflow is locked too.
 
+### Without a checkout
+
+Remote checks read workflows and `actions.lock` from a single commit through the GitHub Contents API. Pass `OWNER/REPO` (or `-R OWNER/REPO`), a repository URL, a workflow directory URL, or a single workflow URL:
+
+```bash
+gh actions-lock octo/project
+gh actions-lock https://github.com/octo/project
+gh actions-lock https://github.com/octo/project/tree/main/.github/workflows
+gh actions-lock https://github.com/octo/project/blob/main/.github/workflows/ci.yml
+```
+
+Remote targets are read-only by default. The scan uses the repository's default branch unless the URL specifies a ref or you pass `--ref`. A single workflow URL does not prune entries for other workflows. Use `-R` to disambiguate `OWNER/REPO` from an existing local path.
+
+```bash
+gh actions-lock -R octo/project --ref release --commit
+gh actions-lock -R octo/project --pr
+```
+
+`--commit` writes the fixes directly to the selected branch. `--pr` puts the same fixes on a new branch and opens a pull request against the selected branch, which is not changed. Both require a branch rather than a tag or commit SHA. Publishing uses GitHub's GraphQL API to write the generated changes in one commit; if nothing changed, neither mode writes anything.
+
+Use an authenticated account with permission to read the repository. Publishing also requires permission to write contents, update workflows when a workflow file changes, and create pull requests for `--pr`. With a classic token, rewriting a workflow requires the `workflow` scope. `--verify-local` and `--migrate-local-actions` require a checkout.
+
 ### GitHub Enterprise Cloud with data residency
 
 Run `gh auth login --hostname TENANT.ghe.com`, then run `gh actions-lock` from the tenant repository checkout. The host comes from the repository remote; you don't need `--hostname` or an exported token.

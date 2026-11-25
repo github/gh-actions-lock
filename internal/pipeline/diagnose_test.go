@@ -49,7 +49,7 @@ func TestDiagnoseOneParsed_LocalActionWarnsWithoutBlocking(t *testing.T) {
 
 func TestNestedLocalActionFindings(t *testing.T) {
 	l := &resolve.CompositeLocalPathError{Parent: "octo/tool@v2", LocalPath: "./helper"}
-	got := nestedLocalActionFindings("ci.yml", []*resolve.CompositeLocalPathError{l, l})
+	got := nestedLocalActionFindings("ci.yml", []*resolve.CompositeLocalPathError{l, l}, nil)
 
 	require.Len(t, got, 1, "one warning per composite and path")
 	assert.Equal(t, checks.LocalAction, got[0].Category)
