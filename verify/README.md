@@ -12,7 +12,9 @@ steps:
 
 Use the [latest `verify/v*` tag](https://github.com/github/gh-actions-lock/tags). Each stable CLI release `vX.Y.Z` gets a `verify/vX.Y.Z` tag that runs that CLI version by default, so a Dependabot bump of this action is also a CLI bump. Pin `verify/vX.Y.Z`, not `vX.Y.Z`: the plain release tag still defaults to the previous release. Check out the repository before this step.
 
-It's a Node action (`node24`) that uses only Node built-ins, so it runs on the runner's own Node on Linux, macOS and Windows, x64 and arm64. Self-hosted runners need [runner v2.327.1](https://github.com/actions/runner/releases/tag/v2.327.1) or later for `node24` actions. Downloads honor `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
+It's a Node action (`node24`) that uses only Node built-ins, so it runs on the runner's own Node on Linux, macOS and Windows, x64 and arm64. Self-hosted runners need [runner v2.327.1](https://github.com/actions/runner/releases/tag/v2.327.1) or later for `node24` actions.
+
+On a runner behind a proxy, set `NODE_USE_ENV_PROXY=1` in the runner environment along with `HTTPS_PROXY` and `NO_PROXY`. On Node before 24.15, a `NO_PROXY` entry such as `github.com` doesn't cover its subdomains, so also list `.github.com` and `.githubusercontent.com`.
 
 ## Inputs
 

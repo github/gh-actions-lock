@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { ActionError, assetFor, attestationEnv, checkVersion, downloadFile, install, parseChecksums, selectCheck, splitArgs, useEnvProxy, withSubdomainNoProxy } from "./lib.mjs";
+import { ActionError, assetFor, attestationEnv, checkVersion, downloadFile, install, parseChecksums, selectCheck, splitArgs } from "./lib.mjs";
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 
@@ -271,41 +271,5 @@ describe("downloadFile", () => {
       /failed: getaddrinfo ENOTFOUND/,
     );
     assert.equal(calls, 4);
-  });
-});
-
-describe("useEnvProxy", () => {
-  test("does nothing without a proxy", () => {
-    const http = { setGlobalProxyFromEnv: () => assert.fail("set proxy") };
-    assert.equal(useEnvProxy({ NO_PROXY: "example.test" }, http), false);
-  });
-  for (const key of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
-    test(`applies ${key} in process when Node supports it`, () => {
-      const env = { [key]: "http://proxy.test:3128" };
-      let got;
-      assert.equal(useEnvProxy(env, { setGlobalProxyFromEnv: (e) => (got = e) }), false);
-      assert.equal(got, env);
-    });
-  }
-  test("asks for a re-run with NODE_USE_ENV_PROXY on older Node", () => {
-    assert.equal(useEnvProxy({ https_proxy: "http://proxy.test:3128" }, {}), true);
-  });
-  test("does not re-run twice", () => {
-    assert.equal(useEnvProxy({ https_proxy: "http://proxy.test:3128", NODE_USE_ENV_PROXY: "1" }, {}), false);
-  });
-});
-
-describe("withSubdomainNoProxy", () => {
-  test("adds a subdomain entry for each bare host, in both cases", () => {
-    const env = withSubdomainNoProxy({ NO_PROXY: "github.com, .example.test,*.corp,10.0.0.0/8", no_proxy: "githubusercontent.com" });
-    assert.equal(env.NO_PROXY, "github.com,.example.test,*.corp,10.0.0.0/8,.github.com");
-    assert.equal(env.no_proxy, "githubusercontent.com,.githubusercontent.com");
-  });
-  test("is idempotent across the proxy re-run", () => {
-    const once = withSubdomainNoProxy({ no_proxy: "github.com" });
-    assert.deepEqual(withSubdomainNoProxy(once), once);
-  });
-  test("leaves env without NO_PROXY alone", () => {
-    assert.deepEqual(withSubdomainNoProxy({ HTTPS_PROXY: "http://p:1" }), { HTTPS_PROXY: "http://p:1" });
   });
 });

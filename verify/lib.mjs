@@ -129,35 +129,6 @@ export async function downloadFile(url, dest, { fetch: get = fetch, retries = 3,
   }
 }
 
-// withSubdomainNoProxy adds .example.com for each bare NO_PROXY entry example.com.
-// curl and node 24.22 let a bare entry match subdomains too, but node24 before that
-// matches it exactly, so release-assets.githubusercontent.com would go through the
-// proxy despite NO_PROXY=githubusercontent.com.
-export function withSubdomainNoProxy(env) {
-  const out = { ...env };
-  for (const key of ["NO_PROXY", "no_proxy"]) {
-    if (!out[key]) continue;
-    const entries = out[key].split(",").map((e) => e.trim()).filter(Boolean);
-    const extra = entries.filter((e) => !/^[.*]/.test(e) && !e.includes("/") && !entries.includes(`.${e}`)).map((e) => `.${e}`);
-    out[key] = [...entries, ...extra].join(",");
-  }
-  return out;
-}
-
-// useEnvProxy routes fetch through the runner's HTTPS_PROXY or HTTP_PROXY, honoring
-// NO_PROXY. http.setGlobalProxyFromEnv needs Node 24.14; older node24 runners
-// re-run this script with NODE_USE_ENV_PROXY=1 instead. Returns true when the
-// caller must re-run.
-export function useEnvProxy(env, http) {
-  const proxied = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((k) => env[k]);
-  if (!proxied) return false;
-  if (typeof http.setGlobalProxyFromEnv === "function") {
-    http.setGlobalProxyFromEnv(env);
-    return false;
-  }
-  return env.NODE_USE_ENV_PROXY !== "1";
-}
-
 function runGh(args, env) {
   const r = spawnSync("gh", args, { env, stdio: ["ignore", "ignore", "inherit"] });
   if (r.error?.code === "ENOENT") {
