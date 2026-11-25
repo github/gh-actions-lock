@@ -11,7 +11,7 @@ workflows:
         - 'cli/gh-extension-precompile@v2.2.0'
     '.github/workflows/test.yml':
         - 'actions/checkout@v7.0.1'
-        - 'actions/setup-go@v7.0.0'
+        - 'actions/setup-go@v7.1.0'
     '.github/workflows/verify-lockfile.yml':
         - 'actions/checkout@v7.0.1'
 dependencies:
@@ -42,9 +42,9 @@ dependencies:
         commit: 'sha1-4a3601121dd01d1626a1e23e37211e3254c1c06c'
         owner_id: 44036562
         repo_id: 192624594
-    'actions/setup-go@v7.0.0':
-        ref: 'v7.0.0'
-        commit: 'sha1-b7ad1dad31e06c5925ef5d2fc7ad053ef454303e'
+    'actions/setup-go@v7.1.0':
+        ref: 'v7.1.0'
+        commit: 'sha1-d8cbb8045d7f43706b9177cceb36c1f91a6644d5'
         owner_id: 44036562
         repo_id: 192624594
     'cli/gh-extension-precompile@v2.2.0':
