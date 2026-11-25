@@ -308,11 +308,13 @@ A dependency was locked to a recently released version tag. This is a notice. Re
 
 If your Dependabot configuration sets a `cooldown` for `github-actions`, the notice covers tags released within that cooldown. Otherwise, it covers tags released in the last three days, unless you set a cooldown in `~/.config/gh-actions-lock/config.yml`. Tags without a GitHub release aren't checked. See [Dependabot `cooldown`](https://docs.github.com/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown-).
 
-`gh actions-lock` doesn't hold back a release because of the cooldown setting. It only uses the setting for this notice.
+When `gh actions-lock` narrows a floating version ref such as `@v4` or `@v4.2` to an exact release for the first time, it holds back to the newest stable release in the same major or minor line that's older than the cooldown. For example, if `v4.3.0` came out yesterday and `v4.2.0` came out last month, `@v4` becomes `@v4.2.0`. Cooldown `include` and `exclude` choose which actions this applies to.
+
+The cooldown never changes a ref that's already in the lockfile, a ref you wrote as an exact version, a ref inside a composite action, or a run with `--no-narrow`. Only releases that have a GitHub release date count. If no older release in the same line clears the cooldown, the newest release is pinned and you see this notice.
 
 ### `cooldown-config-ignored`
 
-Your Dependabot cooldown settings include options that the extension doesn't use, such as `semver-major-days` or `include`, or the Dependabot configuration file can't be parsed. The rest of the run is unaffected.
+Your Dependabot cooldown settings include options that the extension doesn't use, such as `semver-major-days`, or the Dependabot configuration file can't be parsed. The rest of the run is unaffected.
 
 ### `version-ref`
 

@@ -28,8 +28,17 @@ func TestDependabotCooldown_RealWorldFixture(t *testing.T) {
 	if cfg.DefaultDays != 5 {
 		t.Errorf("DefaultDays = %d, want 5 (github-actions entry, not the npm 7)", cfg.DefaultDays)
 	}
-	if len(warnings) != 2 {
-		t.Fatalf("warnings = %v, want 2 (semver-* and include/exclude)", warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want 1 (semver-*)", warnings)
+	}
+	if got := cfg.CooldownDays("actions", "setup-go"); got != 5 {
+		t.Errorf("included action cooldown = %d, want 5", got)
+	}
+	if got := cfg.CooldownDays("actions", "checkout"); got != 0 {
+		t.Errorf("excluded action cooldown = %d, want 0", got)
+	}
+	if got := cfg.CooldownDays("github", "codeql-action"); got != 0 {
+		t.Errorf("action outside include cooldown = %d, want 0", got)
 	}
 }
 
@@ -72,7 +81,7 @@ func TestDependabotCooldown_Table(t *testing.T) {
 		{
 			name:     "unsupported keys warn",
 			yaml:     "version: 2\nupdates:\n  - package-ecosystem: \"github-actions\"\n    cooldown:\n      default-days: 3\n      semver-major-days: 30\n      include:\n        - \"actions/*\"\n",
-			wantDays: 3, wantOK: true, wantWarn: 2,
+			wantDays: 3, wantOK: true, wantWarn: 1,
 		},
 		{
 			name: "explicit zero is not configured",
@@ -114,8 +123,7 @@ func TestDependabotCooldown_Table(t *testing.T) {
 
 // TestDependabotCooldown_KeyTagsAreDistinct pins each YAML tag independently so a
 // single mistyped struct tag can't hide behind a sibling key. semver-minor-days
-// alone must trip the semver warning; exclude alone must trip the filter
-// warning.
+// alone must trip the semver warning; exclude alone must reach the config.
 func TestDependabotCooldown_KeyTagsAreDistinct(t *testing.T) {
 	semverOnly := writeDependabot(t, "dependabot.yml", `
 version: 2
@@ -136,7 +144,7 @@ updates:
       exclude:
         - "actions/checkout"
 `)
-	if _, _, w := DependabotCooldown(excludeOnly); len(w) != 1 {
-		t.Errorf("exclude alone: warnings = %v, want 1", w)
+	if cfg, _, _ := DependabotCooldown(excludeOnly); len(cfg.Exclude) != 1 {
+		t.Errorf("exclude alone: Exclude = %v, want 1 pattern", cfg.Exclude)
 	}
 }

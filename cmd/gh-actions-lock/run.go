@@ -307,9 +307,9 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		console.StartProgress(fmt.Sprintf("Scanning %d %s", total, ui.Pluralize(total, "workflow", "workflows")))
 	}
 
-	// Cooldown sets the fresh-tag warning window for pins this run makes; it
-	// doesn't filter pin selection. Only fix runs need its policy,
-	// diagnostics, and the tag lister.
+	// Cooldown holds back floating refs this run narrows and sets the
+	// fresh-tag warning window for pins it makes. Only fix runs need its
+	// policy, diagnostics, and the tag lister.
 	var tagger *tag.Lister
 	var cooldownCfg tag.CooldownConfig
 	var cooldownWarnings []string
@@ -466,6 +466,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 		RepoOwner:   repoOwner,
 		RepoName:    repoName,
 		NoNarrow:    opts.noNarrow,
+		Cooldown:    cooldownCfg,
 		AcceptMoved: opts.acceptMoved,
 		Relock:      opts.relock,
 		PartialScan: !fullScan,
