@@ -1,0 +1,275 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, test } from "node:test";
+import { ActionError, assetFor, attestationEnv, checkVersion, downloadFile, install, parseChecksums, selectCheck, splitArgs } from "./lib.mjs";
+
+const sha = (s) => createHash("sha256").update(s).digest("hex");
+
+describe("splitArgs", () => {
+  test("splits on spaces, tabs and newlines", () => {
+    assert.deepEqual(splitArgs("--verify\n--fail-on-warning\t --json\r\n"), ["--verify", "--fail-on-warning", "--json"]);
+  });
+  test("passes glob characters through unexpanded", () => {
+    assert.deepEqual(splitArgs("--verify *"), ["--verify", "*"]);
+  });
+  test("empty input gives no args", () => {
+    assert.deepEqual(splitArgs(""), []);
+    assert.deepEqual(splitArgs(undefined), []);
+  });
+});
+
+describe("checkVersion", () => {
+  test("accepts releases and release candidates", () => {
+    assert.equal(checkVersion("v0.4.1"), "v0.4.1");
+    assert.equal(checkVersion("v1.2.3-rc.4"), "v1.2.3-rc.4");
+  });
+  test("asks for a version when empty", () => {
+    assert.throws(() => checkVersion(""), /set the version input/);
+  });
+  for (const v of ["0.4.1", "v0.4", "v0.4.1;rm", "../v0.4.1", "v0.4.1-beta"]) {
+    test(`rejects ${v}`, () => assert.throws(() => checkVersion(v), /invalid version/));
+  }
+});
+
+describe("assetFor", () => {
+  test("maps runners to release assets", () => {
+    assert.deepEqual(assetFor("Linux", "X64"), { asset: "linux-amd64", ext: "" });
+    assert.deepEqual(assetFor("macOS", "ARM64"), { asset: "darwin-arm64", ext: "" });
+    assert.deepEqual(assetFor("Windows", "X64"), { asset: "windows-amd64.exe", ext: ".exe" });
+  });
+  test("rejects unsupported runners", () => {
+    assert.throws(() => assetFor("FreeBSD", "X64"), /unsupported runner OS/);
+    assert.throws(() => assetFor("Linux", "X86"), /unsupported runner architecture/);
+  });
+});
+
+describe("parseChecksums", () => {
+  const v041 = { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) };
+  const v040 = { "linux-amd64": "c".repeat(64) };
+  const sums = { default: "v0.4.1", versions: { "v0.4.1": v041, "v0.4.0": v040 } };
+  const one = (entry) => JSON.stringify({ ...sums, versions: { "v0.4.1": entry } });
+  test("reads the default and every version's checksums", () => {
+    assert.deepEqual(parseChecksums(JSON.stringify(sums, null, 2)), sums);
+  });
+  const bad = {
+    "invalid JSON": "default: v0.4.1",
+    "null": "null",
+    "an array": "[]",
+    "the single-version shape": JSON.stringify({ version: "v0.4.1", sha256: v041 }),
+    "a missing default": JSON.stringify({ versions: sums.versions }),
+    "a default that isn't listed": JSON.stringify({ ...sums, default: "v0.4.2" }),
+    "a non-string default": JSON.stringify({ ...sums, default: 1 }),
+    "an array of versions": JSON.stringify({ ...sums, versions: [] }),
+    "an invalid version key": JSON.stringify({ default: "v0.4", versions: { "v0.4": v041 } }),
+    "an empty entry": one({}),
+    "an array entry": one([]),
+    "a short digest": one({ "linux-amd64": "a".repeat(63) }),
+    "an uppercase digest": one({ "linux-amd64": "A".repeat(64) }),
+    "a bad asset name": one({ "../x": "a".repeat(64) }),
+    "an unknown key": JSON.stringify({ ...sums, extra: 1 }),
+  };
+  for (const [name, t] of Object.entries(bad)) {
+    test(`rejects ${name}`, () => assert.throws(() => parseChecksums(t), ActionError));
+  }
+});
+
+describe("selectCheck", () => {
+  const sums = {
+    default: "v0.4.1",
+    versions: {
+      "v0.4.1": { "linux-amd64": "a".repeat(64), "windows-amd64.exe": "b".repeat(64) },
+      "v0.4.0": { "linux-amd64": "c".repeat(64) },
+    },
+  };
+  test("defaults to the default version and its checksum", () => {
+    assert.deepEqual(selectCheck("", sums, "windows-amd64.exe"), { version: "v0.4.1", kind: "checksum", want: "b".repeat(64) });
+    assert.deepEqual(selectCheck(undefined, sums, "linux-amd64"), { version: "v0.4.1", kind: "checksum", want: "a".repeat(64) });
+  });
+  test("uses the checksum of any listed version", () => {
+    assert.deepEqual(selectCheck("v0.4.0", sums, "linux-amd64"), { version: "v0.4.0", kind: "checksum", want: "c".repeat(64) });
+  });
+  test("uses the attestation for a version that isn't listed", () => {
+    assert.deepEqual(selectCheck("v0.4.2", sums, "linux-amd64"), { version: "v0.4.2", kind: "attestation" });
+  });
+  test("doesn't treat inherited properties as listed versions", () => {
+    assert.throws(() => selectCheck("constructor", sums, "linux-amd64"), /invalid version/);
+  });
+  test("uses the attestation without checksums.json", () => {
+    assert.deepEqual(selectCheck("v0.4.1", null, "linux-amd64"), { version: "v0.4.1", kind: "attestation" });
+  });
+  test("asks for a version with neither input nor checksums.json", () => {
+    assert.throws(() => selectCheck("", null, "linux-amd64"), /set the version input/);
+  });
+  test("rejects an invalid version input", () => {
+    assert.throws(() => selectCheck("v0.4", sums, "linux-amd64"), /invalid version/);
+  });
+  test("fails when a listed version lacks the asset", () => {
+    assert.throws(() => selectCheck("v0.4.0", sums, "darwin-arm64"), /no checksum for darwin-arm64 v0.4.0/);
+  });
+});
+
+describe("install", () => {
+  let tmp;
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), "verify-action-"));
+  });
+  afterEach(async () => {
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  const binary = "fake gh-actions-lock";
+  const okDownload = (url, dest) => writeFile(dest, binary);
+  const quiet = () => {};
+
+  async function stampedAction(version, asset, sum = sha(binary)) {
+    await writeFile(join(tmp, "checksums.json"), JSON.stringify({ default: version, versions: { [version]: { [asset]: sum } } }));
+    return tmp;
+  }
+
+  test("checks the stamped checksum, with backslashes in the path", async () => {
+    // GNU sha256sum escaped backslash paths; hashing in-process must not care.
+    const env = {
+      INPUT_VERSION: "v0.4.1",
+      RUNNER_OS: "Windows",
+      RUNNER_ARCH: "X64",
+      RUNNER_TEMP: join(tmp, "runner\\temp"),
+    };
+    const actionDir = await stampedAction("v0.4.1", "windows-amd64.exe");
+    let fetched;
+    const bin = await install({
+      env,
+      actionDir,
+      download: async (url, dest) => ((fetched = url), okDownload(url, dest)),
+      gh: () => assert.fail("attestation should not run"),
+      log: quiet,
+    });
+    assert.equal(fetched, "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/windows-amd64.exe");
+    assert.equal(bin, join(env.RUNNER_TEMP, "gh-actions-lock", "gh-actions-lock.exe"));
+    assert.equal(await readFile(bin, "utf8"), binary);
+  });
+
+  test("runs the recorded version when the version input is empty", async () => {
+    const env = { INPUT_VERSION: "", RUNNER_OS: "Linux", RUNNER_ARCH: "ARM64", RUNNER_TEMP: tmp };
+    const actionDir = await stampedAction("v0.4.1", "linux-arm64");
+    let fetched;
+    await install({
+      env,
+      actionDir,
+      download: async (url, dest) => ((fetched = url), okDownload(url, dest)),
+      gh: () => assert.fail("attestation should not run"),
+      log: quiet,
+    });
+    assert.equal(fetched, "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-arm64");
+  });
+
+  test("fails on a checksum mismatch", async () => {
+    const env = { INPUT_VERSION: "v0.4.1", RUNNER_OS: "Linux", RUNNER_ARCH: "X64", RUNNER_TEMP: tmp };
+    const actionDir = await stampedAction("v0.4.1", "linux-amd64", "0".repeat(64));
+    await assert.rejects(
+      install({ env, actionDir, download: okDownload, gh: () => true, log: quiet }),
+      (err) => err instanceof ActionError && /checksum mismatch for linux-amd64 v0.4.1/.test(err.message),
+    );
+  });
+
+  test("checks other versions against the attestation with a scoped token", async () => {
+    const env = {
+      INPUT_VERSION: "v0.4.2",
+      INPUT_TOKEN: "tenant",
+      GITHUB_TOKEN: "ambient",
+      GITHUB_SERVER_URL: "https://tenant.ghe.com",
+      GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: "dotcom",
+      RUNNER_OS: "macOS",
+      RUNNER_ARCH: "ARM64",
+      RUNNER_TEMP: tmp,
+    };
+    const actionDir = await stampedAction("v0.4.1", "darwin-arm64");
+    let call;
+    const bin = await install({ env, actionDir, download: okDownload, gh: (args, e) => ((call = { args, e }), true), log: quiet });
+    assert.deepEqual(call.args, [
+      "attestation", "verify", bin,
+      "--repo", "github/gh-actions-lock",
+      "--signer-workflow", "github/gh-actions-lock/.github/workflows/release.yml",
+      "--source-ref", "refs/tags/v0.4.2",
+    ]);
+    assert.equal(call.e.GH_TOKEN, "dotcom");
+    assert.ok(!("GITHUB_TOKEN" in call.e));
+  });
+
+  test("fails when the attestation check fails", async () => {
+    const env = { INPUT_VERSION: "v0.4.2", RUNNER_OS: "Linux", RUNNER_ARCH: "X64", RUNNER_TEMP: tmp };
+    await assert.rejects(
+      install({ env, actionDir: tmp, download: okDownload, gh: () => false, log: quiet }),
+      /attestation check failed for linux-amd64 v0.4.2/,
+    );
+  });
+
+  test("names gh when it's missing for an attestation check", async () => {
+    const env = { INPUT_VERSION: "v0.4.2", RUNNER_OS: "Linux", RUNNER_ARCH: "X64", RUNNER_TEMP: tmp, PATH: "", Path: "" };
+    await assert.rejects(install({ env, actionDir: tmp, download: okDownload, log: quiet }), /gh is not on PATH/);
+  });
+
+  test("checks the token scope before downloading", async () => {
+    const env = {
+      INPUT_VERSION: "v0.4.2",
+      GITHUB_SERVER_URL: "https://tenant.ghe.com",
+      RUNNER_OS: "Linux",
+      RUNNER_ARCH: "X64",
+      RUNNER_TEMP: tmp,
+    };
+    await assert.rejects(
+      install({ env, actionDir: tmp, download: () => assert.fail("downloaded"), gh: () => true, log: quiet }),
+      /GH_ACTIONS_LOCK_GITHUB_COM_TOKEN/,
+    );
+  });
+});
+
+describe("downloadFile", () => {
+  let tmp;
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), "verify-download-"));
+  });
+  afterEach(async () => {
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  const respond = (status, body = "") => new Response(status === 200 ? body : null, { status });
+
+  test("retries transient failures with backoff, then streams the body to disk", async () => {
+    const dest = join(tmp, "bin");
+    const replies = [() => { throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") }); }, () => respond(503), () => respond(200, "binary")];
+    const waits = [];
+    await downloadFile("https://example.test/a", dest, {
+      fetch: async () => replies.shift()(),
+      wait: async (ms) => waits.push(ms),
+    });
+    assert.equal(await readFile(dest, "utf8"), "binary");
+    assert.deepEqual(waits, [1000, 2000]);
+  });
+
+  test("does not retry a missing release", async () => {
+    let calls = 0;
+    await assert.rejects(
+      downloadFile("https://example.test/v9.9.9/linux-amd64", join(tmp, "bin"), {
+        fetch: async () => (calls++, respond(404)),
+        wait: async () => assert.fail("retried"),
+      }),
+      (err) => err instanceof ActionError && /download https:\/\/example.test\/v9.9.9\/linux-amd64 failed: HTTP 404/.test(err.message),
+    );
+    assert.equal(calls, 1);
+  });
+
+  test("gives up after three retries and reports the cause", async () => {
+    let calls = 0;
+    await assert.rejects(
+      downloadFile("https://example.test/a", join(tmp, "bin"), {
+        fetch: async () => { calls++; throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND") }); },
+        wait: async () => {},
+      }),
+      /failed: getaddrinfo ENOTFOUND/,
+    );
+    assert.equal(calls, 4);
+  });
+});

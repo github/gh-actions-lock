@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -r "$tmp"' EXIT
+trap 'rm -rf "$tmp"' EXIT
 
 git init --quiet --bare "$tmp/origin.git"
 git clone --quiet "$tmp/origin.git" "$tmp/repo"
@@ -15,16 +15,36 @@ mkdir script
 cp "$root/script/release" script/release
 cp "$root/script/verify-release-tag" script/verify-release-tag
 touch tracked
+mkdir -p verify
+printf '{"default": "v1.2.3", "versions": {}}\n' >verify/checksums.json
+# Stands in for the real script, which calls the GitHub API.
+cat >script/verify-action-release.mjs <<'EOF2'
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.STAMP_LOG, process.argv.slice(2).join(" ") + "\n");
+console.log("Stamp pull request: https://example.test/pull/1");
+EOF2
 git add .
 git commit --quiet -m initial
 git push --quiet -u origin main
 git tag -a v1.2.3 -m v1.2.3
 git push --quiet origin refs/tags/v1.2.3
+git push --quiet origin HEAD:refs/tags/verify/v1.2.3
 git tag -a v99.0.0 -m v99.0.0
 
 mkdir "$tmp/bin"
 printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/make"
 chmod +x "$tmp/bin/make"
+export STAMP_LOG="$tmp/stamp.log"
+cat >"$tmp/bin/gh" <<'EOF2'
+#!/bin/sh
+case "$1 $2" in
+  "run list") echo 42 ;;
+  "run watch") ;;
+  "auth status") ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+EOF2
+chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH"
 
 output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
@@ -38,6 +58,63 @@ output="$(RELEASE_DRY_RUN=1 script/release patch --rc)"
 
 output="$(RELEASE_DRY_RUN=1 script/release patch)"
 [[ "$output" == *"Cutting v1.2.4 "* ]]
+
+printf '{"default": "v1.2.2", "versions": {}}\n' >verify/checksums.json
+git commit --quiet -am "stale stamp"
+git push --quiet origin main
+if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
+  echo "expected a stale verify action stamp to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"isn't stamped for v1.2.3"* ]]
+git rm --quiet verify/checksums.json
+git commit --quiet -m "no stamp"
+git push --quiet origin main
+if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
+  echo "expected a missing verify action stamp to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"isn't stamped for v1.2.3"* ]]
+git reset --quiet --hard HEAD~2
+git push --quiet --force origin main
+
+# The next release also waits for main's verify tag.
+git push --quiet origin :refs/tags/verify/v1.2.3
+if output="$(RELEASE_DRY_RUN=1 script/release patch 2>&1)"; then
+  echo "expected a missing verify tag to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"verify/v1.2.3 isn't tagged"* ]]
+git push --quiet origin HEAD:refs/tags/verify/v1.2.3
+
+# A rerun after a held push pushes the existing local tag, then opens the
+# pull request that stamps main.
+git tag -a v1.2.4 -m v1.2.4
+output="$(script/release patch)"
+[[ "$output" == *"Reusing local tag v1.2.4."* ]]
+[[ "$output" == *"Pushed v1.2.4"* ]]
+[[ "$output" == *"Stamp pull request: https://example.test/pull/1"* ]]
+[[ "$output" == *"--tag v1.2.4"* ]]
+[ "$(git ls-remote --tags origin 'refs/tags/v1.2.4^{}' | awk '{ print $1 }')" = "$(git rev-parse HEAD)" ]
+[ "$(cat "$STAMP_LOG")" = v1.2.4 ]
+
+# Until the stamp merges, a rerun reopens its pull request instead of cutting a release.
+output="$(script/release patch)"
+[[ "$output" == *"Merge the stamp pull request and tag it, then rerun"* ]]
+[ "$(sed -n 2p "$STAMP_LOG")" = v1.2.4 ]
+
+# A leftover local tag at another commit still blocks the release.
+printf '{"default": "v1.2.4", "versions": {}}\n' >verify/checksums.json
+git commit --quiet -am "stamp v1.2.4"
+git push --quiet origin main
+git push --quiet origin HEAD:refs/tags/verify/v1.2.4
+git tag -a v1.2.5 -m v1.2.5 HEAD~1
+if output="$(script/release patch 2>&1)"; then
+  echo "expected a local tag at another commit to block the release" >&2
+  exit 1
+fi
+[[ "$output" == *"local tag v1.2.5 points at "* ]]
+git tag -d v1.2.5 >/dev/null
 
 ancestor="$(git rev-parse HEAD)"
 tree="$(git rev-parse "${ancestor}^{tree}")"

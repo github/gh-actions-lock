@@ -14,7 +14,11 @@
 #   RELEASE_DRY_RUN=1   Compute and print the next version, then stop before
 #                       tagging or pushing.
 #
-# Requires: git, go, make.
+# After a stable tag, it waits for the tag workflow and opens the pull request
+# that stamps the verify action on main for it. The next release waits until that
+# pull request is merged and main is tagged verify/<tag>. See RELEASING.md.
+#
+# Requires: git, gh, go, make, node (see RELEASING.md).
 
 set -euo pipefail
 
@@ -48,6 +52,43 @@ require_current_main() {
     die "release commit ${commit} is not current main ${main}"
 }
 
+stamped_version() {
+  (git show "$1:verify/checksums.json" 2>/dev/null || true) |
+    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { process.stdout.write(String(JSON.parse(s).default)); } catch {} });'
+}
+
+# The verify action on main must carry the latest release's stamp before the
+# next release. The stamp can't land with its own release: the binaries embed the
+# commit they're built from, so their checksums only exist after the tag.
+main_stamped_for() {
+  [ "$(stamped_version refs/remotes/origin/main)" = "$1" ]
+}
+
+# open_stamp_pr waits for tag's release workflow, then opens the pull request
+# that stamps main for it.
+open_stamp_pr() {
+  local tag="$1"
+  fetch_main
+  if main_stamped_for "$tag"; then
+    echo "main is already stamped for ${tag}."
+    return
+  fi
+
+  local run="" _
+  for _ in $(seq 30); do
+    run="$(gh run list --workflow release.yml --branch "$tag" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+    [ -n "$run" ] && break
+    sleep 10
+  done
+  [ -n "$run" ] || die "no release workflow run found for ${tag}"
+  echo "Waiting for the release workflow for ${tag}..."
+  gh run watch "$run" --exit-status --compact >&2 ||
+    die "the release workflow for ${tag} failed; fix it, then rerun"
+
+  node script/verify-action-release.mjs "$tag" ||
+    die "couldn't open the stamp pull request for ${tag}; fix it, then rerun"
+}
+
 require_clean() {
   if [ -n "$(git status --porcelain)" ]; then
     git --no-pager status --short >&2
@@ -78,7 +119,9 @@ cut_tag() {
   branch="$(git symbolic-ref --quiet --short HEAD || true)"
   [ "$branch" = "main" ] || die "releases must be cut from main (got ${branch:-detached HEAD})"
   require_clean
-  require_current_main "$(git rev-parse HEAD)"
+  local head
+  head="$(git rev-parse HEAD)"
+  require_current_main "$head"
 
   make fmt-check vet test test-stub
 
@@ -96,6 +139,15 @@ cut_tag() {
     base="0.0.0"
     echo "No existing ${TAG_PREFIX}* release tag; basing bump on v0.0.0."
   else
+    if ! main_stamped_for "$latest"; then
+      [ "${RELEASE_DRY_RUN:-}" != "1" ] ||
+        die "the verify action on main isn't stamped for ${latest}; rerun without RELEASE_DRY_RUN to open its stamp pull request"
+      open_stamp_pr "$latest"
+      echo "Merge the stamp pull request and tag it, then rerun to cut the next release."
+      return
+    fi
+    git ls-remote --exit-code --tags origin "refs/tags/verify/${latest}" >/dev/null ||
+      die "verify/${latest} isn't tagged; run node script/verify-action-release.mjs --tag ${latest}"
     base="${latest#"$TAG_PREFIX"}"
   fi
 
@@ -122,8 +174,15 @@ cut_tag() {
     tag="${tag}-rc.$((rc + 1))"
   fi
   validate_tag "$tag"
-  git rev-parse -q --verify "refs/tags/${tag}" >/dev/null &&
-    die "tag ${tag} already exists"
+  # A rerun after a held push reuses the local tag if it's the one it would create.
+  local reuse=0
+  if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    [ "$(git cat-file -t "refs/tags/${tag}")" = tag ] ||
+      die "local tag ${tag} is not annotated; delete it and rerun"
+    [ "$(git rev-parse "${tag}^{commit}")" = "$head" ] ||
+      die "local tag ${tag} points at $(git rev-parse --short "${tag}^{commit}"), not HEAD; delete it and rerun"
+    reuse=1
+  fi
 
   echo "Cutting ${tag} (module version ${version}) at $(git rev-parse --short HEAD)"
   if [ "${RELEASE_DRY_RUN:-}" = "1" ]; then
@@ -131,13 +190,26 @@ cut_tag() {
     return
   fi
 
-  git tag -a "$tag" -m "$tag"
+  if [ "$release_candidate" = "0" ]; then
+    gh auth status >/dev/null 2>&1 ||
+      die "sign in with gh first; it opens main's stamp pull request after the tag is pushed"
+  fi
+  if [ "$reuse" = "1" ]; then
+    echo "Reusing local tag ${tag}."
+  else
+    git tag -a "$tag" -m "$tag"
+  fi
   local commit
   commit="$(git rev-parse "${tag}^{commit}")"
   require_current_main "$commit"
   git push origin "refs/tags/${tag}"
   require_remote_annotated_tag "$tag" "$commit"
   echo "Pushed ${tag}; the tag workflow will create the release."
+  # main carries stable releases only.
+  if [ "$release_candidate" = "0" ]; then
+    open_stamp_pr "$tag"
+    echo "After the stamp pull request merges, run node script/verify-action-release.mjs --tag ${tag}"
+  fi
 }
 
 case "${1:-}" in

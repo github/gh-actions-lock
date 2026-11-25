@@ -34,7 +34,31 @@ git add .github/workflows/ # check into source
 
 Rerun `gh actions-lock` after adding a workflow or changing any `uses:`.
 
-Make sure you don't check in a corrupt lockfile. Copy [`.github/workflows/verify-lockfile.yml`](.github/workflows/verify-lockfile.yml) into your repository, modify it for your needs, then run `gh actions-lock` once so that workflow is locked too.
+Make sure you don't check in a corrupt lockfile. Add a workflow that runs the [verify action](verify/README.md) on every pull request, then run `gh actions-lock` once so that workflow is locked too:
+
+```yaml
+name: verify-lockfile
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/gh-actions-lock@verify/vX.Y.Z
+```
+
+Replace `verify/vX.Y.Z` with the [latest `verify/v*` tag](https://github.com/github/gh-actions-lock/tags). Dependabot's `github-actions` updates bump it with each CLI release.
+
+The job's `GITHUB_TOKEN` can only read the repository the workflow runs in, so `--verify` fails on private or internal actions from other repositories even when the runner is allowed to use them. Pass a GitHub App installation token with read access to those repositories as the action's `token` input; see [Private and internal actions](verify/README.md#private-and-internal-actions).
+
+Without such a token, or on GHE.com without a github.com token, set `args: --verify-local` for an offline check. It catches a lockfile that's out of sync with the workflows, but not a tag that moved upstream or a locked commit that no longer exists; see [Offline check](verify/README.md#offline-check).
 
 ### GitHub Enterprise Cloud with data residency
 
@@ -47,6 +71,14 @@ Actions that aren't on the tenant, such as `actions/checkout`, are read from pub
 3. Otherwise they're anonymous and share GitHub's limit of 60 requests an hour per IP address, which a shared proxy or runner pool can exhaust quickly.
 
 In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant, so github.com doesn't accept it. Create a [fine-grained personal access token](https://docs.github.com/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token) on github.com with public repository access only and no permissions, save it as a secret on the tenant, and pass it in:
+
+```yaml
+- uses: github/gh-actions-lock@verify/vX.Y.Z
+  env:
+    GH_ACTIONS_LOCK_GITHUB_COM_TOKEN: ${{ secrets.ACTIONS_LOCK_GITHUB_COM_TOKEN }}
+```
+
+Or, running the CLI directly:
 
 ```yaml
 - run: gh actions-lock --verify
@@ -62,7 +94,7 @@ In GitHub Actions on GHE.com, the job's `GITHUB_TOKEN` is issued by your tenant,
 | `gh actions-lock` | yes | yes | Onboarding and fixing the lockfile |
 | `gh actions-lock --relock` | yes | yes | Advancing moved refs (`main`, `v4`) to current upstream commits |
 | `gh actions-lock --verify` | no | yes | CI: the same checks as a fix run |
-| `gh actions-lock --verify-local` | no | no | Pre-commit: every `uses:` has a lockfile entry (coverage only, not provenance) |
+| `gh actions-lock --verify-local` | no | no | Pre-commit, or CI without a token: every `uses:` has a lockfile entry (coverage only, not provenance) |
 | `gh actions-lock --no-fix` | no | yes | Read-only report |
 
 Other flags:
