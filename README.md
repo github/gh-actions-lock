@@ -23,6 +23,12 @@ gh extension install https://github.com/github/gh-actions-lock
 gh skill install https://github.com/github/gh-actions-lock
 ```
 
+To upgrade to the latest release:
+
+```bash
+gh extension upgrade actions-lock
+```
+
 ## Quickstart
 
 From the repository checkout:
