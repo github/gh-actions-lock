@@ -51,6 +51,8 @@ Replace `verify/vX.Y.Z` with the [latest `verify/v*` tag](https://github.com/git
 
 The job's `GITHUB_TOKEN` can only read the repository the workflow runs in, so `--verify` fails on private or internal actions from other repositories even when the runner is allowed to use them. Pass a GitHub App installation token with read access to those repositories as the action's `token` input; see [Private and internal actions](verify/README.md#private-and-internal-actions).
 
+Without such a token, or on GHE.com without a github.com token, set `args: --verify-local` for an offline check. It catches a lockfile that's out of sync with the workflows, but not a tag that moved upstream or a locked commit that no longer exists; see [Offline check](verify/README.md#offline-check).
+
 ### GitHub Enterprise Cloud with data residency
 
 Run `gh auth login --hostname TENANT.ghe.com`, then run `gh actions-lock` from the tenant repository checkout. The host comes from the repository remote; you don't need `--hostname` or an exported token.
@@ -85,7 +87,7 @@ Or, running the CLI directly:
 | `gh actions-lock` | yes | yes | Onboarding and fixing the lockfile |
 | `gh actions-lock --relock` | yes | yes | Advancing moved refs (`main`, `v4`) to current upstream commits |
 | `gh actions-lock --verify` | no | yes | CI: the same checks as a fix run |
-| `gh actions-lock --verify-local` | no | no | Pre-commit: every `uses:` has a lockfile entry (coverage only, not provenance) |
+| `gh actions-lock --verify-local` | no | no | Pre-commit, or CI without a token: every `uses:` has a lockfile entry (coverage only, not provenance) |
 | `gh actions-lock --no-fix` | no | yes | Read-only report |
 
 Other flags:

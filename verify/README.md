@@ -44,6 +44,22 @@ To verify those actions, pass a GitHub App installation token with read access t
 
 The app needs **Contents: read** on this repository and on every repository whose actions your workflows use.
 
+If you can't provide such a token, run the offline check instead.
+
+## Offline check
+
+`--verify-local` reads only the checkout. It never contacts the action repositories, so it needs no token:
+
+```yaml
+- uses: github/gh-actions-lock@verify/vX.Y.Z
+  with:
+    args: --verify-local
+```
+
+It fails when a `uses:` has no lockfile entry, a lockfile entry doesn't match its `uses:` ref, or an entry is stale. It can't tell when a locked tag has moved upstream, when a locked commit no longer exists or exists only in a fork, or when an action's repository was deleted or replaced. It also can't check a locked action's own dependencies against its `action.yml`. So it won't catch a pull request that points a lockfile entry at a commit outside the action's repository; review lockfile diffs yourself. The runner runs only the locked commits: a missing commit fails the job, and a tag that moved upstream goes unnoticed. Use `--verify` with a token wherever you can.
+
+On GHE.com, the offline check with the default `version` needs no github.com token: the CLI download is public and checked against `checksums.json`.
+
 ## GitHub Enterprise Cloud with data residency
 
 Set `GH_ACTIONS_LOCK_GITHUB_COM_TOKEN` on the step or job for actions read from github.com; see the [main README](../README.md#github-enterprise-cloud-with-data-residency).

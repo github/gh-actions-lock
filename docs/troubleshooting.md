@@ -176,6 +176,8 @@ Don't trust the new repository. Find the action's current, verified location, po
 
 The extension can't find the action's repository. Either the repository was deleted, or your token can't read it. For a private or internal repository, check that you have access and that your token is authorized for single sign-on if your organization requires it. Then run the command again.
 
+In CI, the verify action's default `GITHUB_TOKEN` can't read private or internal actions in other repositories. Pass a token that can, or run the [offline check](../verify/README.md#offline-check).
+
 ### `incomplete-lockfile`
 
 **Headline:** Lockfile doesn't match locked manifest

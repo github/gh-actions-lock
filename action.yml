@@ -10,7 +10,7 @@ inputs:
     description: gh-actions-lock release to run, such as v0.5.1. Defaults to checksums.json's default.
     required: false
   args:
-    description: Arguments passed to gh-actions-lock, split on whitespace.
+    description: Arguments passed to gh-actions-lock, split on whitespace. --verify-local runs an offline check that needs no token but doesn't check locked pins upstream.
     required: false
     default: --verify
 
