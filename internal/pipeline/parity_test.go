@@ -30,7 +30,7 @@ var refused = &url.Error{Op: "Post", URL: "https://api.github.com/graphql", Err:
 func TestParityFinding_RetryWording(t *testing.T) {
 	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	reset := time.Date(2026, 1, 2, 14, 5, 0, 0, time.UTC)
-	limited := &api.HTTPError{StatusCode: http.StatusForbidden, Headers: http.Header{
+	limited := &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusForbidden, Headers: http.Header{
 		"X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {"1767362699"},
 	}}
 	tests := []struct {
@@ -42,7 +42,7 @@ func TestParityFinding_RetryWording(t *testing.T) {
 	}{
 		{"connection refused", refused, "couldn't verify; re-run this check once the GitHub API is reachable", "GitHub API unreachable (connection refused)", false},
 		{"rate limit", &ghapi.UnknownOutcomeError{Cause: limited, RetryAt: reset}, "couldn't verify; re-run after 14:05 UTC, or use a token with a higher rate limit", "GitHub API rate limit exhausted", true},
-		{"server error", &api.HTTPError{StatusCode: http.StatusServiceUnavailable}, "couldn't verify; re-run this check once the GitHub API is reachable", "GitHub API returned 503 Service Unavailable", false},
+		{"server error", &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusServiceUnavailable}, "couldn't verify; re-run this check once the GitHub API is reachable", "GitHub API returned 503 Service Unavailable", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

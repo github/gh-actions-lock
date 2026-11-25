@@ -449,7 +449,7 @@ func (c *Client) anonGetFileContent(ctx context.Context, base, owner, repo, ref,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", c.publicErr(&api.HTTPError{StatusCode: resp.StatusCode, Message: fmt.Sprintf("fetching %s", path), Headers: resp.Header})
+		return "", c.publicErr(&api.HTTPError{StatusCode: resp.StatusCode, Message: fmt.Sprintf("fetching %s", path), Headers: resp.Header, RequestURL: req.URL})
 	}
 
 	body, err := io.ReadAll(resp.Body)

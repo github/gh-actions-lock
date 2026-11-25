@@ -5,10 +5,16 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -16,7 +22,7 @@ import (
 )
 
 func httpErr(status int, headers http.Header) error {
-	return &api.HTTPError{StatusCode: status, Headers: headers}
+	return &api.HTTPError{RequestURL: &url.URL{}, StatusCode: status, Headers: headers}
 }
 
 func TestStatusCode(t *testing.T) {
@@ -150,5 +156,58 @@ func TestConfigError(t *testing.T) {
 				t.Errorf("ConfigError = %v, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestHTTPErrorLiteralsSetRequestURL: api.HTTPError.Error formats a nil
+// RequestURL by faulting inside url.URL.String, which fmt recovers. On
+// windows/amd64 a recovered hardware fault can corrupt the heap
+// (golang/go#81238), so no literal may leave RequestURL nil.
+func TestHTTPErrorLiteralsSetRequestURL(t *testing.T) {
+	root := filepath.Join("..", "..")
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != root && (d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			sel, ok := lit.Type.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "HTTPError" {
+				return true
+			}
+			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "api" {
+				return true
+			}
+			for _, e := range lit.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "RequestURL" {
+						return true
+					}
+				}
+			}
+			t.Errorf("%s: api.HTTPError literal without RequestURL", fset.Position(lit.Pos()))
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
