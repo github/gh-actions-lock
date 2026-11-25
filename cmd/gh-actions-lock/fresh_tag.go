@@ -46,9 +46,9 @@ func appendCooldownConfigFindings(report *checks.Report, warnings []string) {
 
 // injectFreshTagFindings flags tags pinned this run that are younger than the
 // action's freshness window: its configured cooldown when positive, otherwise
-// freshTagWindow. Cooldown never filters what gets pinned, so this warning is
-// the only place it takes effect. Tags without a GitHub Release have no date
-// and aren't flagged.
+// freshTagWindow. Cooldown holds back only floating refs this run narrows,
+// and only when an older release clears it, so a pin can still land inside
+// the window. Tags without a GitHub Release have no date and aren't flagged.
 func injectFreshTagFindings(ctx context.Context, report *checks.Report, record *pin.Record, tagger *tag.Lister, cooldownCfg tag.CooldownConfig) {
 	seen := map[string]bool{} // NWO@tag → already flagged
 	now := time.Now()
@@ -110,7 +110,7 @@ func freshTagFinding(nwo, tagName, iso string, cooldownDays int, now time.Time) 
 	)
 	if cooldownDays > 0 {
 		detail = fmt.Sprintf(
-			"pinned tag %s@%s was released %s, newer than your configured cooldown (%d %s); cooldown only warns and does not hold back fresh releases, so review this release before merging",
+			"pinned tag %s@%s was released %s, newer than your configured cooldown (%d %s); cooldown only holds back floating version refs that have an older release to fall back to, so review this release before merging",
 			nwo, tagName, tag.FormatAge(age), cooldownDays, ui.Pluralize(cooldownDays, "day", "days"),
 		)
 	}

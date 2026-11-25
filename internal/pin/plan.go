@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	parserlock "github.com/github/actions-lockfile/go/pkg/lockfile"
 	"github.com/github/gh-actions-lock/internal/dep"
+	"github.com/github/gh-actions-lock/internal/ghapi"
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pinpool"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -28,6 +30,10 @@ type PlanOptions struct {
 	// are kept as the lock comment instead of being resolved to full
 	// patch tags (v4.2.1). Bare-SHA reverse lookup still applies.
 	NoNarrow bool
+
+	// Cooldown holds back floating version refs this run narrows for the
+	// first time when their current release is too new; see coolRefs.
+	Cooldown tag.CooldownConfig
 
 	// AcceptMoved treats ref-moved and unreachable-pin findings as
 	// resolvable: affected deps are pruned from the inventory and
@@ -201,6 +207,10 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 		return planResult{entries: entries, wplans: wplans}, nil
 	}
 
+	cooled := coolRefs(ctx, opts, unrecordedRefs, rewriteRefs)
+	unrecordedRefs = cooled.apply(unrecordedRefs)
+	rewriteRefs = cooled.apply(rewriteRefs)
+
 	// Resolve live state for unrecorded refs only.
 	status("resolving " + wr.Path)
 	deps, parentMap, resolveErr := opts.Resolver.ResolveAllRecursive(ctx, unrecordedRefs)
@@ -321,7 +331,8 @@ func planWorkflow(ctx context.Context, wr checks.WorkflowReport, opts PlanOption
 	}
 	// Renames follow repository identity, not SHA: the resolver already kept
 	// the written name of any repository an action file spells either way.
-	required := transferRewrites(deps, rootTracker, wr.ActionRefs, rewrites)
+	required := transferRewrites(deps, rootTracker, cooled.apply(wr.ActionRefs), rewrites)
+	cooled.addRewrites(wr.ActionRefs, rewrites, required)
 
 	// Build entries for all pinned deps (skip any already emitted from inventory).
 	pinned := buildPinnedEntries(opts, wr, deps, parentMap, rootTracker, inventorySHA)
@@ -513,6 +524,90 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		rewrites[oldUses] = newUses
 		dep.Ref = patchTag
 		preservedDeps[i] = true
+	}
+}
+
+// cooledRefs maps a floating ref's lowercased owner/repo@ref to the release
+// tag cooldown holds it back to.
+type cooledRefs map[string]string
+
+func cooledKey(ref parserlock.ActionRef) string {
+	return strings.ToLower(ref.NWO()) + "@" + ref.Ref
+}
+
+// coolRefs picks, for each floating version ref the workflow writes that
+// this run narrows from live state, the release cooldown holds it back to.
+// It is a version choice, so it applies only where narrowing could rewrite
+// the workflow: never to recorded pins, composite action refs, refs kept
+// imprecise, --no-narrow runs, or Dependabot, which applies its own cooldown
+// and reads back only actions.lock.
+func coolRefs(ctx context.Context, opts PlanOptions, unrecorded, rewriteRefs []parserlock.ActionRef) cooledRefs {
+	if opts.Tagger == nil || opts.NoNarrow || ghapi.DependabotProxy() {
+		return nil
+	}
+	written := make(map[string]bool, len(rewriteRefs))
+	for _, ref := range rewriteRefs {
+		written[cooledKey(ref)] = true
+	}
+	var out cooledRefs
+	now := time.Now()
+	for _, ref := range unrecorded {
+		key := cooledKey(ref)
+		if !written[key] {
+			continue
+		}
+		if _, done := out[key]; done {
+			continue
+		}
+		sv, ok := tag.ParseVersion(ref.Ref)
+		if !ok || sv.IsFull() || opts.prevImpreciseFamily[familyKey(ref.NWO(), sv)] {
+			continue
+		}
+		days := opts.Cooldown.CooldownDays(ref.Owner, ref.Repo)
+		if cooledTag, ok := opts.Tagger.CooledTag(ctx, ref.Owner, ref.Repo, ref.Ref, days, now); ok {
+			if out == nil {
+				out = cooledRefs{}
+			}
+			out[key] = cooledTag
+		}
+	}
+	return out
+}
+
+// apply returns refs with each cooled ref swapped for its held-back tag, so
+// resolution, directness, and rename transfers all see the chosen release.
+func (c cooledRefs) apply(refs []parserlock.ActionRef) []parserlock.ActionRef {
+	if len(c) == 0 {
+		return refs
+	}
+	out := make([]parserlock.ActionRef, len(refs))
+	for i, ref := range refs {
+		if tagName, ok := c[cooledKey(ref)]; ok {
+			ref.Ref = tagName
+		}
+		out[i] = ref
+	}
+	return out
+}
+
+// addRewrites rewrites each cooled `uses:` in the workflow source to its
+// held-back tag. A rename transfer was planned against the held-back form,
+// so it moves to the key the source actually has.
+func (c cooledRefs) addRewrites(sources []parserlock.ActionRef, rewrites, required map[string]string) {
+	for _, ref := range sources {
+		tagName, ok := c[cooledKey(ref)]
+		if !ok {
+			continue
+		}
+		written := ref.FullName() + "@" + ref.Ref
+		transferred := ref.FullName() + "@" + tagName
+		if target, ok := required[transferred]; ok {
+			rewrites[written], required[written] = target, target
+			delete(rewrites, transferred)
+			delete(required, transferred)
+			continue
+		}
+		rewrites[ref.NWO()+"@"+ref.Ref] = ref.NWO() + "@" + tagName
 	}
 }
 

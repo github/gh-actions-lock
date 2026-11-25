@@ -2,9 +2,11 @@ package pin
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/github/gh-actions-lock/internal/dep"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
@@ -1367,4 +1369,74 @@ func TestMergeMakesCycle(t *testing.T) {
 			assert.Equal(t, tc.want, mergeMakesCycle(tc.pm, "o/kit@v1", "o/kit@v1.2.3"))
 		})
 	}
+}
+
+func TestPlanWorkflow_CooldownHoldsBackFreshFloatingRef(t *testing.T) {
+	const (
+		freshSHA = "1111111111111111111111111111111111111111"
+		oldSHA   = "3333333333333333333333333333333333333333"
+	)
+	daysAgo := func(d int) string { return time.Now().Add(-time.Duration(d) * 24 * time.Hour).Format(time.RFC3339) }
+
+	plan := func(t *testing.T, noNarrow bool) (planResult, []string) {
+		t.Helper()
+		reg := &httpmock.Registry{}
+		var queried []string
+		reg.RegisterReusable(
+			httpmock.GraphQLForRepo("actions", "setup-go"),
+			httpmock.GraphQLQuery(`{"data":{"a0":{"nameWithOwner":"actions/setup-go","object":{"oid":"`+oldSHA+`","file":{"object":{"text":"runs:\n  using: node20\n"}}}}}}`,
+				func(query string, vars map[string]any) { queried = append(queried, query+fmt.Sprint(vars)) }),
+		)
+		reg.RegisterReusable(httpmock.REST("GET", `repos/actions/setup-go/tags`),
+			httpmock.JSONResponse(httpmock.TagListResponse("v4", freshSHA, "v4.3.0", freshSHA, "v4.1.0", oldSHA)))
+		reg.RegisterReusable(httpmock.REST("GET", `repos/actions/setup-go/releases`),
+			httpmock.JSONResponse([]map[string]any{
+				{"tag_name": "v4.3.0", "published_at": daysAgo(1)},
+				{"tag_name": "v4.1.0", "published_at": daysAgo(30)},
+			}))
+
+		resolver, err := resolve.New("github.com", pinpool.New(2, nil), resolve.WithTransport(reg))
+		require.NoError(t, err)
+		ref := parserlock.ActionRef{Owner: "actions", Repo: "setup-go", Ref: "v4"}
+		wr := checks.WorkflowReport{
+			Path: ".github/workflows/ci.yml",
+			Findings: []checks.Finding{{
+				ActionRef: &ref, Category: "unpinned",
+				Severity: checks.SeverityWarning, Confidence: checks.ConfidenceHigh,
+			}},
+			ActionRefs: []parserlock.ActionRef{ref},
+		}
+		result, err := planWorkflow(context.Background(), wr, PlanOptions{
+			Resolver: resolver,
+			Tagger:   tag.NewListerForTest(t, reg),
+			Pool:     pinpool.New(2, nil),
+			NoNarrow: noNarrow,
+			Cooldown: tag.CooldownConfig{DefaultDays: 7},
+		}, func(string) {})
+		require.NoError(t, err)
+		return result, queried
+	}
+
+	t.Run("pins the newest release older than the cooldown", func(t *testing.T) {
+		result, queried := plan(t, false)
+
+		require.Len(t, result.wplans, 1)
+		assert.Equal(t, map[string]string{"actions/setup-go@v4": "actions/setup-go@v4.1.0"}, result.wplans[0].Rewrites)
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, "v4.1.0", result.entries[0].Ref)
+		assert.Equal(t, oldSHA, result.entries[0].SHA)
+		require.NotEmpty(t, queried)
+		for _, q := range queried {
+			assert.Contains(t, q, "v4.1.0", "resolution must fetch the held-back release")
+		}
+	})
+
+	t.Run("no-narrow keeps the floating ref", func(t *testing.T) {
+		result, queried := plan(t, true)
+
+		require.Len(t, result.wplans, 1)
+		assert.Empty(t, result.wplans[0].Rewrites)
+		require.NotEmpty(t, queried)
+		assert.NotContains(t, queried[0], "v4.1.0")
+	})
 }
