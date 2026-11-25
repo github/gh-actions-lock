@@ -106,7 +106,7 @@ func disposeParity(m parityMode, f *checks.Finding, s paritySubject) (parityVerd
 	if s.inconclusive && s.head != "" && (!excused || fullSHA) {
 		return verdictKeep, *f
 	}
-	if excused && !(c == checks.RepoRenamed || c == checks.RepoReplaced || c == checks.RepoUnavailable ||
+	if excused && !(c == checks.RepoRenamed || c == checks.RepoReplaced || c == checks.OwnerIDChanged || c == checks.RepoUnavailable ||
 		c == checks.UnreachablePin) {
 		return verdictExcuse, *f
 	}
