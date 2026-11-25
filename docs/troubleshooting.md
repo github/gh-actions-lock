@@ -316,7 +316,7 @@ Your Dependabot cooldown settings include options that the extension doesn't use
 
 **Headline:** N actions pinned without a full semver tag
 
-A workflow uses a partial version, such as `v4` or `v3.1`. A full version tag, such as `v4.2.1`, names one commit. Consider changing the `uses:` line to a full version tag. When you first lock a workflow, the extension narrows partial versions to full version tags; to keep partial versions, pass `--no-narrow`. Partial versions inside your repository's `$/` actions are locked as written, because the extension never edits action files.
+A workflow uses a partial version, such as `v4` or `v3.1`. A full version tag, such as `v4.2.1`, names one commit. Consider changing the `uses:` line to a full version tag. When you first lock a workflow, the extension narrows partial versions to full version tags; to keep partial versions, pass `--no-narrow`. A path-prefixed version, such as `verify/v0`, only narrows to a tag with the same prefix, such as `verify/v0.5.1`. Partial versions inside your repository's `$/` actions are locked as written, because the extension never edits action files.
 
 ### `stale-workflow`
 

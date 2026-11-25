@@ -1328,3 +1328,33 @@ func TestRun_BumpedDirectUseDropsStaleRootACompositeStillUses(t *testing.T) {
 	_, stderr, err = runCommandWithHTTP(t, reg, "--verify", path)
 	require.NoError(t, err, stderr)
 }
+
+// TestRun_PathPrefixedTagNarrowsWithinItsFamily: a multi-action repository
+// tags each action as <path>/vX.Y.Z. A partial prefixed ref locks, narrows
+// to the full tag in its own family rather than the repository's unprefixed
+// or other-prefix tags on the same commit, and verifies.
+func TestRun_PathPrefixedTagNarrowsWithinItsFamily(t *testing.T) {
+	const toolsSHA = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	commits := map[string]string{"octo/tools": toolsSHA}
+	reg := &httpmock.Registry{}
+	registerLockedManifests(reg, nil)
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/tools/tags`), httpmock.JSONResponse(httpmock.TagListResponse(
+		"v9.9.9", toolsSHA, "build/v0.7.0", toolsSHA, "verify/v0.5.1", toolsSHA, "verify/v0", toolsSHA)))
+	reg.RegisterReusable(httpmock.REST("GET", `repos/octo/tools$`), httpmock.JSONResponse(map[string]any{"id": 1, "owner": map[string]any{"id": 1}}))
+	registerLive(reg, nil, commits)
+	stubGraph(t, reg, nil, commits, nil)
+	useDefaultTransport(t, reg)
+	path := writeTempWorkflow(t, "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: octo/tools/verify@verify/v0\n")
+
+	_, stderr, err := runCommandWithHTTP(t, reg, "--no-interactive", path)
+	require.NoError(t, err, stderr)
+	workflow, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(workflow), "uses: octo/tools/verify@verify/v0.5.1\n")
+	lock := readTempLockfilePins(t)
+	assert.Contains(t, lock, "'octo/tools@verify/v0.5.1':\n        ref: 'verify/v0.5.1'\n        commit: 'sha1-"+toolsSHA+"'\n")
+	for _, mode := range []string{"--verify-local", "--verify"} {
+		_, stderr, err := runCommandWithHTTP(t, reg, mode, path)
+		require.NoError(t, err, "%s: %s\n%s", mode, stderr, lock)
+	}
+}

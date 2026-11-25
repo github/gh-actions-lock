@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -491,6 +492,70 @@ func TestRenderVersionRefNudge_SkipsTransitiveDeps(t *testing.T) {
 	}
 }
 
+func TestRenderVersionRefNudge_StaysInTagPrefixFamily(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/tools", Ref: "verify/v0", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "v1", SHA: "bbb", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.REST("GET", "repos/octo/tools/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "lint/v3.0.0", "commit": map[string]string{"sha": "ccc"}},
+		{"name": "verify/v0.6.0", "commit": map[string]string{"sha": "ddd"}},
+		{"name": "v1.2.0", "commit": map[string]string{"sha": "eee"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	renderVersionRefNudge(context.Background(), ui.NewPlain(&buf), record, r)
+	out := buf.String()
+
+	if !strings.Contains(out, "octo/tools@verify/v0 → latest: verify/v0.6.0") {
+		t.Errorf("expected prefixed ref nudged to its own family, got:\n%s", out)
+	}
+	if !strings.Contains(out, "octo/tools@v1 → latest: v1.2.0") {
+		t.Errorf("expected unprefixed ref nudged to an unprefixed tag, got:\n%s", out)
+	}
+	if strings.Contains(out, "lint/") {
+		t.Errorf("nudge crossed into another tag family, got:\n%s", out)
+	}
+}
+
+// A multi-action repository can have more than one page of tags, and a
+// family can sort entirely past the first page.
+func TestRenderVersionRefNudge_PrefixedFamilyOnLaterPage(t *testing.T) {
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/tools", Ref: "verify/v0", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+
+	var first []string
+	for i := range 100 {
+		first = append(first, fmt.Sprintf("zeta/v1.0.%d", i), "ccc")
+	}
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.RESTWithQuery("GET", `^/repos/octo/tools/tags$`, "&page=1"), httpmock.JSONResponse(httpmock.TagListResponse(first...)))
+	reg.Register(httpmock.RESTWithQuery("GET", `^/repos/octo/tools/tags$`, "&page=2"), httpmock.JSONResponse(httpmock.TagListResponse("verify/v0.6.0", "ddd")))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	renderVersionRefNudge(context.Background(), ui.NewPlain(&buf), record, r)
+
+	if out := buf.String(); !strings.Contains(out, "octo/tools@verify/v0 → latest: verify/v0.6.0") {
+		t.Errorf("expected nudge to the family's tag on page 2, got:\n%s", out)
+	}
+}
+
 func TestRenderVersionRefNudge_AllTransitive_NoOutput(t *testing.T) {
 	record := &pin.Record{
 		Entries: []pin.Entry{
@@ -546,7 +611,7 @@ func TestInjectVersionRefFindings_SkipsTransitiveDeps(t *testing.T) {
 		},
 	}
 
-	injectVersionRefFindings(report, record)
+	injectVersionRefFindings(context.Background(), report, record, nil)
 
 	findings := report.Workflows[0].Findings
 	if len(findings) != 1 {
@@ -557,6 +622,38 @@ func TestInjectVersionRefFindings_SkipsTransitiveDeps(t *testing.T) {
 	}
 	if strings.Contains(findings[0].Detail, "actions/setup-go") {
 		t.Errorf("transitive dep should not produce a finding, got: %s", findings[0].Detail)
+	}
+}
+
+func TestInjectVersionRefFindings_PrefixedPartialRef(t *testing.T) {
+	report := &checks.Report{Workflows: []checks.WorkflowReport{{Path: "ci.yml"}}}
+	record := &pin.Record{
+		Entries: []pin.Entry{
+			{NWO: "octo/tools", Ref: "verify/v0", SHA: "aaa", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "build/v0.5.1", SHA: "bbb", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "feature/2fa", SHA: "ccc", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+			{NWO: "octo/tools", Ref: "releases/v4", SHA: "ddd", Resolution: pin.Pinned, Direct: true, Workflows: []string{"ci.yml"}},
+		},
+	}
+	reg := &httpmock.Registry{}
+	reg.RegisterReusable(httpmock.REST("GET", "repos/octo/tools/tags"), httpmock.JSONResponse([]map[string]any{
+		{"name": "verify/v0.5.1", "commit": map[string]string{"sha": "aaa"}},
+		{"name": "build/v0.5.1", "commit": map[string]string{"sha": "bbb"}},
+		{"name": "v4.0.0", "commit": map[string]string{"sha": "ddd"}},
+	}))
+	r, err := resolve.New("github.com", nil, resolve.WithTransport(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	injectVersionRefFindings(context.Background(), report, record, r)
+
+	findings := report.Workflows[0].Findings
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for the partial prefixed ref (releases/v4 has no family tags), got %d: %+v", len(findings), findings)
+	}
+	if !strings.Contains(findings[0].Detail, "octo/tools@verify/v0:") {
+		t.Errorf("expected finding for octo/tools@verify/v0, got: %s", findings[0].Detail)
 	}
 }
 

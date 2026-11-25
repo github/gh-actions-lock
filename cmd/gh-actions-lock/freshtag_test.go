@@ -168,3 +168,23 @@ func TestInjectFreshTagFindings(t *testing.T) {
 		t.Errorf("category = %s, want fresh-tag", got.Category)
 	}
 }
+
+func TestInjectFreshTagFindings_PrefixedTag(t *testing.T) {
+	fresh := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", `(?i)repos/octo/tools/tags`),
+		httpmock.JSONResponse(httpmock.TagListResponse("verify/v0.5.1", "abc123")))
+	reg.Register(httpmock.REST("GET", `(?i)repos/octo/tools/releases`),
+		httpmock.JSONResponse([]map[string]any{{"tag_name": "verify/v0.5.1", "published_at": fresh}}))
+	tagger := tag.NewListerForTest(t, reg)
+
+	record := &pin.Record{Entries: []pin.Entry{
+		{NWO: "octo/tools", Ref: "verify/v0.5.1", SHA: "abc123", Resolution: pin.Pinned},
+	}}
+	report := &checks.Report{}
+	injectFreshTagFindings(context.Background(), report, record, tagger, tag.CooldownConfig{})
+
+	if len(report.RepoFindings) != 1 || report.RepoFindings[0].Category != checks.FreshTag {
+		t.Fatalf("RepoFindings = %+v, want one fresh-tag finding", report.RepoFindings)
+	}
+}

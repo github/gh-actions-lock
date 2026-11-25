@@ -67,6 +67,8 @@ func TestPickPreferredTag(t *testing.T) {
 		{"mixed semver and non-semver", []string{"latest", "v1.0.0", "v2.0.0"}, "", "v2.0.0"},
 		{"single candidate", []string{"v1.0.0"}, "", "v1.0.0"},
 		{"empty candidates", nil, "v1.0.0", ""},
+		{"prefixed hint ranks within its family", []string{"v1.0.0", "other/v9.0.0", "actions/verify/v0.4.0", "actions/verify/v0.5.1"}, "actions/verify/v0", "actions/verify/v0.5.1"},
+		{"unprefixed hint ignores prefixed tags", []string{"actions/verify/v9.0.0", "v1.0.0"}, "v1", "v1.0.0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

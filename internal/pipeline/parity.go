@@ -15,6 +15,7 @@ import (
 	"github.com/github/gh-actions-lock/internal/lockfile"
 	"github.com/github/gh-actions-lock/internal/pipeline/checks"
 	"github.com/github/gh-actions-lock/internal/resolve"
+	"github.com/github/gh-actions-lock/internal/tag"
 	"github.com/github/gh-actions-lock/internal/workflowfile"
 )
 
@@ -593,9 +594,10 @@ func verbose(err error) string {
 	return err.Error()
 }
 
-// exactTag reports whether ref is a full semver release tag (v4.2.1).
+// exactTag reports whether ref is a full semver release tag (v4.2.1 or
+// verify/v4.2.1).
 func exactTag(ref string) bool {
-	sv, ok := parserlock.ParseSemVer(ref)
+	sv, ok := tag.ParseVersion(ref)
 	return ok && sv.IsFull()
 }
 

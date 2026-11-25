@@ -44,12 +44,12 @@ type PlanOptions struct {
 	// workflow directory, define this run's mutation authority.
 	PartialScan bool
 
-	// prevImpreciseNWO is computed once in Plan() from the global lockfile
-	// state. It holds lowercased NWOs that are already recorded with a
-	// non-full-semver ref anywhere in the lockfile. Narrowing is skipped
+	// prevImpreciseFamily is computed once in Plan() from the global
+	// lockfile state. It holds the familyKeys already recorded with a
+	// non-full-semver direct ref anywhere in the lockfile. Narrowing is skipped
 	// for these to respect the user's prior precision choice and avoid
 	// creating duplicate dep entries at different ref granularities.
-	prevImpreciseNWO map[string]bool
+	prevImpreciseFamily map[string]bool
 
 	// retainedLockTargets excludes pins orphaned by this run's stale-ref
 	// pruning, while retaining pins needed by unscanned or skipped workflows.
@@ -75,14 +75,15 @@ func Plan(ctx context.Context, report *checks.Report, opts PlanOptions) (*Record
 		items[i] = indexedWR{idx: i, wr: wr}
 	}
 
-	// Build set of NWOs recorded with a non-semver ref as a *direct* pin.
+	// Build the set of repo tag families recorded with a non-semver ref as
+	// a *direct* pin.
 	// Checked across all workflows (not per-WF) so two workflows referencing
 	// the same action settle on the same ref precision — avoiding duplicate
 	// dep entries in the lockfile. Transitive pins are excluded: their ref is
 	// the composite author's choice, is never narrowed, and would otherwise
 	// permanently veto narrowing every direct use of the same NWO.
-	if opts.prevImpreciseNWO == nil && opts.Store != nil {
-		opts.prevImpreciseNWO = impreciseDirectNWOs(opts.Store)
+	if opts.prevImpreciseFamily == nil && opts.Store != nil {
+		opts.prevImpreciseFamily = impreciseDirectFamilies(opts.Store)
 	}
 	opts.retainedLockTargets = retainedLockTargets(report, opts)
 	results := make([]planResult, len(report.Workflows))
@@ -481,20 +482,20 @@ func narrowDirectDeps(ctx context.Context, opts PlanOptions, deps []dep.Dependen
 		}
 
 		// Narrow to a full semver patch tag when the ref is already
-		// version-shaped but imprecise (v4, v3.1). Non-version refs like
-		// `main`, `canary`, or `releases/v4` are intentional — narrowing
-		// them risks picking up unrelated semver tags from the repo.
+		// version-shaped but imprecise (v4, v3.1, actions/verify/v0).
+		// Non-version refs like `main` or `canary` are intentional, and
+		// narrowing stays inside the ref's tag-prefix family so it never
+		// picks up unrelated semver tags from the repo.
 		// Skip if --no-narrow or if the lockfile already recorded this
 		// dep without a full semver ref (respect prior precision choice).
-		nwoLower := strings.ToLower(dep.NWO)
-		if opts.NoNarrow || opts.prevImpreciseNWO[nwoLower] {
+		if opts.NoNarrow {
 			continue
 		}
-		sv, ok := parserlock.ParseSemVer(dep.Ref)
+		sv, ok := tag.ParseVersion(dep.Ref)
 		if !ok {
 			continue
 		}
-		if sv.IsFull() {
+		if sv.IsFull() || opts.prevImpreciseFamily[familyKey(dep.NWO, sv)] {
 			continue
 		}
 
@@ -825,22 +826,19 @@ func narrowVerifiedEntries(ctx context.Context, entries []Entry, opts PlanOption
 		if owner == "" {
 			continue
 		}
-		// Respect a prior imprecise precision choice, mirroring the
-		// slow-path guard in narrowDirectDeps: a verified v4 entry the
-		// user kept as v4 must not be narrowed on a no-op re-pin.
-		if opts.prevImpreciseNWO[strings.ToLower(e.NWO)] {
-			continue
-		}
 		// Only narrow refs that are already version-shaped but imprecise
-		// (e.g. v4, v4.2). Non-version refs like `main`, `canary`, or
-		// `releases/v4` are intentional choices — narrowing them could pick
-		// up unrelated semver tags from the repo (e.g. framework releases
-		// in a monorepo like vercel/next.js).
-		sv, ok := parserlock.ParseSemVer(e.Ref)
+		// (e.g. v4, v4.2, actions/verify/v0). Non-version refs like `main`
+		// or `canary` are intentional choices. BestPatchTagForSHA stays in
+		// the ref's tag-prefix family, so it never picks up unrelated semver
+		// tags (e.g. framework releases in a monorepo like vercel/next.js).
+		sv, ok := tag.ParseVersion(e.Ref)
 		if !ok {
 			continue
 		}
-		if sv.IsFull() {
+		// Respect a prior imprecise precision choice, mirroring the
+		// slow-path guard in narrowDirectDeps: a verified v4 entry the
+		// user kept as v4 must not be narrowed on a no-op re-pin.
+		if sv.IsFull() || opts.prevImpreciseFamily[familyKey(e.NWO, sv)] {
 			continue
 		}
 		patchTag, err := opts.Tagger.BestPatchTagForSHA(ctx, owner, repo, e.SHA, e.Ref)
@@ -936,9 +934,9 @@ func splitNWO(nwo string) (string, string) {
 	return parts[0], parts[1]
 }
 
-// impreciseDirectNWOs returns lowercased NWOs recorded with a non-full-semver
-// ref as a direct pin of some workflow.
-func impreciseDirectNWOs(store *lockfile.State) map[string]bool {
+// impreciseDirectFamilies returns the familyKeys recorded with a
+// non-full-semver ref as a direct pin of some workflow.
+func impreciseDirectFamilies(store *lockfile.State) map[string]bool {
 	out := make(map[string]bool)
 	for _, wfKey := range store.WorkflowKeys() {
 		deps, err := store.Get(wfKey)
@@ -946,10 +944,16 @@ func impreciseDirectNWOs(store *lockfile.State) map[string]bool {
 			continue
 		}
 		for _, d := range deps {
-			if sv, ok := parserlock.ParseSemVer(d.Ref); ok && !sv.IsFull() {
-				out[strings.ToLower(d.NWO)] = true
+			if sv, ok := tag.ParseVersion(d.Ref); ok && !sv.IsFull() {
+				out[familyKey(d.NWO, sv)] = true
 			}
 		}
 	}
 	return out
+}
+
+// familyKey scopes a ref's precision choice to its repository and tag family,
+// so a sticky "verify/v0" doesn't stop "build/v0" in the same repo narrowing.
+func familyKey(nwo string, sv parserlock.SemVer) string {
+	return strings.ToLower(nwo) + "@" + tag.Family(sv)
 }

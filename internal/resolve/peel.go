@@ -58,6 +58,11 @@ func (r *Resolver) ListTagsForRepo(ctx context.Context, owner, repo string) ([]g
 	return r.gh.ListTags(ctx, owner, repo)
 }
 
+// ListAllTagsForRepo returns every tag for owner/repo, across all pages.
+func (r *Resolver) ListAllTagsForRepo(ctx context.Context, owner, repo string) ([]ghapi.TagEntry, error) {
+	return r.gh.AllTags(ctx, owner, repo)
+}
+
 // GetDefaultBranch returns the default branch name for owner/repo.
 func (r *Resolver) GetDefaultBranch(ctx context.Context, owner, repo string) string {
 	return r.gh.GetDefaultBranch(ctx, owner, repo)

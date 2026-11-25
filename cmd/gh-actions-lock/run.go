@@ -561,7 +561,7 @@ func runCheck(cmd *cobra.Command, opts *checkOptions, newResolver resolverFunc) 
 	// in --json output. Suppressed when --no-narrow is set (user chose
 	// this deliberately).
 	if !opts.noNarrow {
-		injectVersionRefFindings(report, record)
+		injectVersionRefFindings(ctx, report, record, r)
 	}
 
 	// Nudge on freshly pinned tags, using each action's effective cooldown
@@ -661,14 +661,15 @@ func committedUses(path string) map[string]bool {
 // injectVersionRefFindings appends info-severity findings for entries pinned
 // with a non-full-semver ref (v4, v3.1, main, etc.). These surface in --json
 // output so machine consumers can detect imprecise refs.
-func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
+func injectVersionRefFindings(ctx context.Context, report *checks.Report, record *pin.Record, r *resolve.Resolver) {
 	// Index which workflows each non-semver dep appears in.
 	type depInfo struct {
 		nwo string
 		ref string
 		wfs map[string]bool
 	}
-	seen := map[string]*depInfo{} // NWO@Ref → info
+	seen := map[string]*depInfo{}      // NWO@Ref → info
+	familyHasFull := map[string]bool{} // NWO@family → has a full semver tag
 	for _, e := range record.Entries {
 		if e.Resolution != pin.Pinned && e.Resolution != pin.Verified {
 			continue
@@ -678,7 +679,7 @@ func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
 		if !e.Direct {
 			continue
 		}
-		sv, ok := parserlock.ParseSemVer(e.Ref)
+		sv, ok := tag.ParseVersion(e.Ref)
 		if ok && sv.IsFull() {
 			continue
 		}
@@ -686,6 +687,19 @@ func injectVersionRefFindings(report *checks.Report, record *pin.Record) {
 		// like canary, main, nightly which are intentional.
 		if !ok {
 			continue
+		}
+		// A prefixed ref such as releases/v4 is often a branch with no
+		// tags in its family; there is no full tag to suggest.
+		if family := tag.Family(sv); family != "" {
+			fk := e.NWO + "@" + family
+			has, cached := familyHasFull[fk]
+			if !cached {
+				has = latestFullSemverTag(ctx, r, e.NWO, family) != ""
+				familyHasFull[fk] = has
+			}
+			if !has {
+				continue
+			}
 		}
 		key := e.NWO + "@" + e.Ref
 		di, exists := seen[key]
