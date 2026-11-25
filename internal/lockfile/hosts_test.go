@@ -3,6 +3,7 @@ package lockfile
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,7 +171,7 @@ func TestLegacyAndOmittedHostnames(t *testing.T) {
 type failingMetadata struct{}
 
 func (failingMetadata) RepoIDs(context.Context, string, string, string) (int64, int64, error) {
-	return 0, 0, &api.HTTPError{StatusCode: 503}
+	return 0, 0, &api.HTTPError{RequestURL: &url.URL{}, StatusCode: 503}
 }
 
 func TestSaveRejectsForeignTenant(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +182,7 @@ func TestPublicFallbackTokenOnlyForTenants(t *testing.T) {
 }
 
 func publicLimited(auth string) error {
-	err := &api.HTTPError{StatusCode: http.StatusForbidden, Headers: http.Header{"X-Ratelimit-Remaining": {"0"}}}
+	err := &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusForbidden, Headers: http.Header{"X-Ratelimit-Remaining": {"0"}}}
 	if auth == "" {
 		return err
 	}
@@ -199,7 +200,7 @@ func TestAnonymousFallbackLimited(t *testing.T) {
 		{"anonymous fallback, wrapped", &UnknownOutcomeError{Cause: publicLimited(publicAnonymous)}, true, "github.com rate limit for anonymous public lookups exhausted"},
 		{"stored login", publicLimited(publicStored), false, "GitHub API rate limit exhausted"},
 		{"tenant or proxied", publicLimited(""), false, "GitHub API rate limit exhausted"},
-		{"anonymous but not limited", &publicError{auth: publicAnonymous, err: &api.HTTPError{StatusCode: 500}}, false, "GitHub API returned 500 Internal Server Error"},
+		{"anonymous but not limited", &publicError{auth: publicAnonymous, err: &api.HTTPError{RequestURL: &url.URL{}, StatusCode: 500}}, false, "GitHub API returned 500 Internal Server Error"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, AnonymousFallbackLimited(tt.err))

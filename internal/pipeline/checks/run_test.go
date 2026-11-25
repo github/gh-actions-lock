@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -433,7 +434,7 @@ func TestRunChecks(t *testing.T) {
 					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: resolve.AncestryNotAncestor,
 				},
 				ancestryErrs: map[stubAncestryKey]error{
-					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: &api.HTTPError{StatusCode: http.StatusForbidden},
+					{"actions", "checkout", shaCheckoutV3, shaCheckoutV4}: &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusForbidden},
 				},
 			},
 			wantCategories: []Category{RepoUnavailable},

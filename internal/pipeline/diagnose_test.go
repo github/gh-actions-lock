@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -140,7 +141,7 @@ func TestDiagnoseOneParsed_LoadErrorIsInvalidWorkflow(t *testing.T) {
 }
 
 func TestResolveErrFinding(t *testing.T) {
-	outage := &api.HTTPError{StatusCode: http.StatusServiceUnavailable}
+	outage := &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusServiceUnavailable}
 	tests := []struct {
 		name          string
 		err           error
@@ -148,7 +149,7 @@ func TestResolveErrFinding(t *testing.T) {
 		wantRetryable bool
 	}{
 		{"an outage is retryable", fmt.Errorf("actions/checkout@v4: %w", outage), checks.ReachabilityUnknown, true},
-		{"an answer is not", fmt.Errorf("actions/checkout@v4: %w", &api.HTTPError{StatusCode: http.StatusForbidden}), checks.RepoUnavailable, false},
+		{"an answer is not", fmt.Errorf("actions/checkout@v4: %w", &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusForbidden}), checks.RepoUnavailable, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

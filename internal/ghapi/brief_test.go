@@ -86,8 +86,8 @@ func TestOutage(t *testing.T) {
 		rateLimited bool
 	}{
 		{"connection refused", &UnknownOutcomeError{Cause: refused}, "GitHub API unreachable (connection refused)", false},
-		{"server error", &api.HTTPError{StatusCode: http.StatusBadGateway}, "GitHub API returned 502 Bad Gateway", false},
-		{"rate limit", &api.HTTPError{StatusCode: http.StatusTooManyRequests}, "GitHub API rate limit exhausted", true},
+		{"server error", &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusBadGateway}, "GitHub API returned 502 Bad Gateway", false},
+		{"rate limit", &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusTooManyRequests}, "GitHub API rate limit exhausted", true},
 		{"graphql rate limit", &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Type: "RATE_LIMITED"}}}, "GitHub API rate limit exhausted", true},
 	}
 	for _, tt := range tests {
@@ -107,9 +107,9 @@ func TestOutage_PicksCause(t *testing.T) {
 	early := time.Date(2026, 1, 2, 14, 0, 0, 0, time.UTC)
 	late := early.Add(5 * time.Minute)
 	limited := func(at time.Time) error {
-		return &UnknownOutcomeError{Cause: &api.HTTPError{StatusCode: http.StatusTooManyRequests}, RetryAt: at}
+		return &UnknownOutcomeError{Cause: &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusTooManyRequests}, RetryAt: at}
 	}
-	forbidden := &api.HTTPError{StatusCode: http.StatusForbidden}
+	forbidden := &api.HTTPError{RequestURL: &url.URL{}, StatusCode: http.StatusForbidden}
 	tests := []struct {
 		name        string
 		err         error
