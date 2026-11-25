@@ -36,7 +36,8 @@ func DependabotCooldown(repoRoot string) (cfg tag.CooldownConfig, ok bool, warni
 	if !has {
 		return tag.CooldownConfig{}, false, nil
 	}
-	return tag.CooldownConfig{DefaultDays: cd.DefaultDays}, cd.DefaultDays > 0, cd.unsupportedWarnings()
+	cfg = tag.CooldownConfig{DefaultDays: cd.DefaultDays, Include: cd.Include, Exclude: cd.Exclude}
+	return cfg, cd.DefaultDays > 0, cd.unsupportedWarnings()
 }
 
 func readDependabotFile(repoRoot string) ([]byte, bool) {

@@ -60,7 +60,7 @@ updates:
     directory: /
     cooldown:
       default-days: 7
-      exclude: ["example/*"]
+      semver-major-days: 3
 `), 0o644))
 				before, err := os.ReadFile(path)
 				require.NoError(t, err)
@@ -86,7 +86,7 @@ updates:
 				}
 				stdout, stderr, err := runCommandWithHTTP(t, reg, append(args, path)...)
 				require.NoError(t, err, "stdout:\n%s\nstderr:\n%s", stdout, stderr)
-				const warning = "Dependabot cooldown include/exclude filters are not supported and were ignored"
+				const warning = "Dependabot cooldown semver-major/minor/patch-days are not supported and were ignored"
 				if jsonOut {
 					var payload struct {
 						Valid    bool             `json:"valid"`
