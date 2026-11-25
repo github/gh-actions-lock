@@ -58,17 +58,18 @@ func matchesAny(patterns []string, name string) bool {
 // CooledTag holds back a floating version ref (v4, v4.2) whose current
 // release is younger than days. It returns the newest stable release in the
 // ref's version family that is older than the current one and at least days
-// old. ok is false when ref is not a floating version tag, its current
-// release clears the cooldown or has no release date, or no older release
-// qualifies; the caller then keeps the ref's current target.
-func (tl *Lister) CooledTag(ctx context.Context, owner, repo, ref string, days int, now time.Time) (string, bool) {
+// old, with the commit its tag points at. ok is false when ref is not a
+// floating version tag, its current release clears the cooldown or has no
+// release date, or no older release qualifies; the caller then keeps the
+// ref's current target.
+func (tl *Lister) CooledTag(ctx context.Context, owner, repo, ref string, days int, now time.Time) (Info, bool) {
 	refSV, ok := ParseVersion(ref)
 	if days <= 0 || !ok || refSV.IsFull() {
-		return "", false
+		return Info{}, false
 	}
 	all, err := tl.ListTags(ctx, owner, repo)
 	if err != nil {
-		return "", false
+		return Info{}, false
 	}
 	sha := ""
 	for _, t := range all {
@@ -78,11 +79,11 @@ func (tl *Lister) CooledTag(ctx context.Context, owner, repo, ref string, days i
 		}
 	}
 	if sha == "" {
-		return "", false
+		return Info{}, false
 	}
 	current, err := tl.BestPatchTagForSHA(ctx, owner, repo, sha, ref)
 	if err != nil || current == "" {
-		return "", false
+		return Info{}, false
 	}
 	window := time.Duration(days) * 24 * time.Hour
 	released := func(name string) (time.Time, bool) {
@@ -90,10 +91,11 @@ func (tl *Lister) CooledTag(ctx context.Context, owner, repo, ref string, days i
 		return t, err == nil
 	}
 	if at, ok := released(current); !ok || now.Sub(at) >= window {
-		return "", false
+		return Info{}, false
 	}
 	currentSV, _ := ParseVersion(current)
 	var best parserlock.SemVer
+	var bestTag Info
 	found := false
 	for _, t := range all {
 		sv, ok := ParseVersion(t.Name)
@@ -104,8 +106,8 @@ func (tl *Lister) CooledTag(ctx context.Context, owner, repo, ref string, days i
 			continue
 		}
 		if !found || sv.Greater(best) {
-			best, found = sv, true
+			best, bestTag, found = sv, t, true
 		}
 	}
-	return best.Raw, found
+	return bestTag, found
 }

@@ -32,6 +32,7 @@ func TestCooledTag(t *testing.T) {
 		days     int
 		releases []map[string]any
 		want     string
+		wantSHA  string
 		wantOK   bool
 	}{
 		{
@@ -44,7 +45,7 @@ func TestCooledTag(t *testing.T) {
 				{"tag_name": "v4.1.0", "published_at": daysAgo(20)},
 				{"tag_name": "v3.9.0", "published_at": daysAgo(8)},
 			},
-			want: "v4.1.0", wantOK: true,
+			want: "v4.1.0", wantSHA: oldSHA, wantOK: true,
 		},
 		{
 			name: "current release that clears the cooldown is kept",
@@ -109,7 +110,8 @@ func TestCooledTag(t *testing.T) {
 			got, ok := NewListerForTest(t, reg).CooledTag(context.Background(), "o", "r", tt.ref, tt.days, now)
 
 			assert.Equal(t, tt.wantOK, ok)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, got.Name)
+			assert.Equal(t, tt.wantSHA, got.SHA)
 		})
 	}
 }

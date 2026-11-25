@@ -2,7 +2,10 @@ package pin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -1378,14 +1381,32 @@ func TestPlanWorkflow_CooldownHoldsBackFreshFloatingRef(t *testing.T) {
 	)
 	daysAgo := func(d int) string { return time.Now().Add(-time.Duration(d) * 24 * time.Hour).Format(time.RFC3339) }
 
-	plan := func(t *testing.T, noNarrow bool) (planResult, []string) {
+	plan := func(t *testing.T, noNarrow, heldBackHasAction bool) (planResult, []string) {
 		t.Helper()
 		reg := &httpmock.Registry{}
 		var queried []string
 		reg.RegisterReusable(
 			httpmock.GraphQLForRepo("actions", "setup-go"),
-			httpmock.GraphQLQuery(`{"data":{"a0":{"nameWithOwner":"actions/setup-go","object":{"oid":"`+oldSHA+`","file":{"object":{"text":"runs:\n  using: node20\n"}}}}}}`,
-				func(query string, vars map[string]any) { queried = append(queried, query+fmt.Sprint(vars)) }),
+			func(req *http.Request) (*http.Response, error) {
+				var payload struct {
+					Query     string         `json:"query"`
+					Variables map[string]any `json:"variables"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+					return nil, err
+				}
+				queried = append(queried, payload.Query+fmt.Sprint(payload.Variables))
+				sha, file := freshSHA, `{"object":{"text":"runs:\n  using: node20\n"}}`
+				if strings.HasPrefix(fmt.Sprint(payload.Variables["expr0"]), "v4.1.0") {
+					sha = oldSHA
+					if !heldBackHasAction {
+						file = "null"
+					}
+				}
+				body := `{"data":{"a0":{"nameWithOwner":"actions/setup-go","object":{"oid":"` + sha + `","file":` + file + `}}}}`
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+			},
 		)
 		reg.RegisterReusable(httpmock.REST("GET", `repos/actions/setup-go/tags`),
 			httpmock.JSONResponse(httpmock.TagListResponse("v4", freshSHA, "v4.3.0", freshSHA, "v4.1.0", oldSHA)))
@@ -1418,7 +1439,7 @@ func TestPlanWorkflow_CooldownHoldsBackFreshFloatingRef(t *testing.T) {
 	}
 
 	t.Run("pins the newest release older than the cooldown", func(t *testing.T) {
-		result, queried := plan(t, false)
+		result, queried := plan(t, false, true)
 
 		require.Len(t, result.wplans, 1)
 		assert.Equal(t, map[string]string{"actions/setup-go@v4": "actions/setup-go@v4.1.0"}, result.wplans[0].Rewrites)
@@ -1431,12 +1452,48 @@ func TestPlanWorkflow_CooldownHoldsBackFreshFloatingRef(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps the newest release when the held-back one lacks the action", func(t *testing.T) {
+		result, _ := plan(t, false, false)
+
+		require.Len(t, result.wplans, 1)
+		assert.Equal(t, map[string]string{"actions/setup-go@v4": "actions/setup-go@v4.3.0"}, result.wplans[0].Rewrites)
+		require.Len(t, result.entries, 1)
+		assert.Equal(t, freshSHA, result.entries[0].SHA)
+	})
+
 	t.Run("no-narrow keeps the floating ref", func(t *testing.T) {
-		result, queried := plan(t, true)
+		result, queried := plan(t, true, true)
 
 		require.Len(t, result.wplans, 1)
 		assert.Empty(t, result.wplans[0].Rewrites)
 		require.NotEmpty(t, queried)
 		assert.NotContains(t, queried[0], "v4.1.0")
+	})
+}
+
+func TestCooledRefsAddRewrites_RenameTransfer(t *testing.T) {
+	floating := parserlock.ActionRef{Owner: "old", Repo: "tool", Ref: "v4"}
+	exact := parserlock.ActionRef{Owner: "old", Repo: "tool", Ref: "v4.1.0"}
+	cooled := cooledRefs{"old/tool@v4": "v4.1.0"}
+
+	t.Run("floating ref follows the renamed held-back release", func(t *testing.T) {
+		rewrites := map[string]string{"old/tool@v4.1.0": "new/tool@v4.1.0"}
+		required := map[string]string{"old/tool@v4.1.0": "new/tool@v4.1.0"}
+
+		cooled.addRewrites([]parserlock.ActionRef{floating}, rewrites, required)
+
+		assert.Equal(t, map[string]string{"old/tool@v4": "new/tool@v4.1.0"}, rewrites)
+		assert.Equal(t, map[string]string{"old/tool@v4": "new/tool@v4.1.0"}, required)
+	})
+
+	t.Run("literal held-back ref keeps its own rename", func(t *testing.T) {
+		rewrites := map[string]string{"old/tool@v4.1.0": "new/tool@v4.1.0"}
+		required := map[string]string{"old/tool@v4.1.0": "new/tool@v4.1.0"}
+
+		cooled.addRewrites([]parserlock.ActionRef{floating, exact}, rewrites, required)
+
+		want := map[string]string{"old/tool@v4": "new/tool@v4.1.0", "old/tool@v4.1.0": "new/tool@v4.1.0"}
+		assert.Equal(t, want, rewrites)
+		assert.Equal(t, want, required)
 	})
 }

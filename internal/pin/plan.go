@@ -540,35 +540,50 @@ func cooledKey(ref parserlock.ActionRef) string {
 // It is a version choice, so it applies only where narrowing could rewrite
 // the workflow: never to recorded pins, composite action refs, refs kept
 // imprecise, --no-narrow runs, or Dependabot, which applies its own cooldown
-// and reads back only actions.lock.
+// and reads back only actions.lock. A held-back release that conflicts with
+// a lockfile entry or lacks one of the requested actions is not used.
 func coolRefs(ctx context.Context, opts PlanOptions, unrecorded, rewriteRefs []parserlock.ActionRef) cooledRefs {
-	if opts.Tagger == nil || opts.NoNarrow || ghapi.DependabotProxy() {
+	if opts.Tagger == nil || opts.Resolver == nil || opts.NoNarrow || ghapi.DependabotProxy() {
 		return nil
 	}
 	written := make(map[string]bool, len(rewriteRefs))
 	for _, ref := range rewriteRefs {
 		written[cooledKey(ref)] = true
 	}
-	var out cooledRefs
+	out := cooledRefs{}
+	checked := map[string]bool{}
+	var reqs []ghapi.ActionFileRequest
+	var reqKeys []string
 	now := time.Now()
 	for _, ref := range unrecorded {
 		key := cooledKey(ref)
 		if !written[key] {
 			continue
 		}
-		if _, done := out[key]; done {
-			continue
-		}
-		sv, ok := tag.ParseVersion(ref.Ref)
-		if !ok || sv.IsFull() || opts.prevImpreciseFamily[familyKey(ref.NWO(), sv)] {
-			continue
-		}
-		days := opts.Cooldown.CooldownDays(ref.Owner, ref.Repo)
-		if cooledTag, ok := opts.Tagger.CooledTag(ctx, ref.Owner, ref.Repo, ref.Ref, days, now); ok {
-			if out == nil {
-				out = cooledRefs{}
+		if !checked[key] {
+			checked[key] = true
+			sv, ok := tag.ParseVersion(ref.Ref)
+			if !ok || sv.IsFull() || opts.prevImpreciseFamily[familyKey(ref.NWO(), sv)] {
+				continue
 			}
-			out[key] = cooledTag
+			days := opts.Cooldown.CooldownDays(ref.Owner, ref.Repo)
+			held, ok := opts.Tagger.CooledTag(ctx, ref.Owner, ref.Repo, ref.Ref, days, now)
+			if !ok || hasConflictingLockTarget(opts, ref.NWO(), held.Name, held.SHA) {
+				continue
+			}
+			out[key] = held.Name
+		}
+		if tagName, ok := out[key]; ok {
+			reqs = append(reqs, ghapi.ActionFileRequest{Owner: ref.Owner, Repo: ref.Repo, Path: ref.Path, Ref: tagName, Dockerfile: true})
+			reqKeys = append(reqKeys, key)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	for i, res := range opts.Resolver.ReadManifests(ctx, reqs) {
+		if res.Err != nil || (res.ActionYML == "" && !res.Dockerfile) {
+			delete(out, reqKeys[i])
 		}
 	}
 	return out
@@ -592,22 +607,36 @@ func (c cooledRefs) apply(refs []parserlock.ActionRef) []parserlock.ActionRef {
 
 // addRewrites rewrites each cooled `uses:` in the workflow source to its
 // held-back tag. A rename transfer was planned against the held-back form,
-// so it moves to the key the source actually has.
+// so it also applies to the form the source actually has; the held-back
+// form keeps its transfer only where the source writes it too.
 func (c cooledRefs) addRewrites(sources []parserlock.ActionRef, rewrites, required map[string]string) {
+	if len(c) == 0 {
+		return
+	}
+	literal := make(map[string]bool, len(sources))
+	for _, ref := range sources {
+		literal[ref.FullName()+"@"+ref.Ref] = true
+	}
+	transferred := map[string]bool{}
 	for _, ref := range sources {
 		tagName, ok := c[cooledKey(ref)]
 		if !ok {
 			continue
 		}
-		written := ref.FullName() + "@" + ref.Ref
-		transferred := ref.FullName() + "@" + tagName
-		if target, ok := required[transferred]; ok {
-			rewrites[written], required[written] = target, target
-			delete(rewrites, transferred)
-			delete(required, transferred)
+		held := ref.FullName() + "@" + tagName
+		if target, ok := required[held]; ok {
+			rewrites[ref.FullName()+"@"+ref.Ref] = target
+			required[ref.FullName()+"@"+ref.Ref] = target
+			transferred[held] = true
 			continue
 		}
 		rewrites[ref.NWO()+"@"+ref.Ref] = ref.NWO() + "@" + tagName
+	}
+	for held := range transferred {
+		if !literal[held] {
+			delete(rewrites, held)
+			delete(required, held)
+		}
 	}
 }
 
