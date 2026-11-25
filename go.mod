@@ -32,6 +32,6 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/thlib/go-timezone-local v0.0.9 // indirect
 	golang.org/x/sync v0.25.0
-	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.43.0 // indirect
 )
