@@ -161,8 +161,8 @@ that can read them, passed as the action's `token` input.
 
 ## Learn more
 
-`gh actions-lock --help` is authoritative for flags. Failed runs print the path of a saved run
-log; attach it to bug reports. Start from these, plus each finding's `doc_url`:
+`gh actions-lock --help` is authoritative for flags. When a failed run prints a run-log path,
+attach that log to bug reports. Start from these, plus each finding's `doc_url`:
 
 - [Workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)
 - [Lock workflow dependencies](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies)
