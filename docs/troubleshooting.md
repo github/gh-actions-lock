@@ -377,4 +377,4 @@ To fix a problem, restore the lockfile from version control instead, and let the
 
 ## Getting help
 
-See [SUPPORT.md](../SUPPORT.md). When you report a bug, attach the run log that a failed run prints the path to.
+See [SUPPORT.md](../SUPPORT.md). When a failed run prints a run-log path, attach that log to bug reports.
