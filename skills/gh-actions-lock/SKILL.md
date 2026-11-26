@@ -107,7 +107,7 @@ gh actions-lock --verify --json 2>/dev/null
 
 JSON goes to stdout and progress to stderr; parse only stdout. `--json` alone selects
 `valid,findings,workflows`. Pass a list to choose from `valid`, `findings`, `workflows`,
-`dependencies`, and `pins`. Each finding has:
+`dependencies`, and `pins`. Finding fields (some are omitted when empty):
 
 ```
 workflow, category, severity ("error" | "warning" | "info"), confidence,
@@ -161,8 +161,8 @@ that can read them, passed as the action's `token` input.
 
 ## Learn more
 
-`gh actions-lock --help` is authoritative for flags. Failed runs print the path of a saved run
-log; attach it to bug reports. Start from these, plus each finding's `doc_url`:
+`gh actions-lock --help` is authoritative for flags. When a failed run prints a run-log path,
+attach that log to bug reports. Start from these, plus each finding's `doc_url`:
 
 - [Workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)
 - [Lock workflow dependencies](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies)

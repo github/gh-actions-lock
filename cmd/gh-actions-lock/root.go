@@ -233,8 +233,8 @@ RUN LOGS
 Every run except --verify-local saves its full --json output, plus the
 repository and whether the run succeeded (with its error, if any), to
 <user cache dir>/gh-actions-lock/logs/ (on macOS,
-~/Library/Caches/gh-actions-lock/logs). Failed runs print the path.
-Logs are kept for 14 days, up to 50. Attach the log to bug reports.
+~/Library/Caches/gh-actions-lock/logs). When a failed run prints a log path,
+attach that log to bug reports. Logs are kept for 14 days, up to 50.
 `),
 		Example: heredoc.Doc(`
 # Verify all workflows and fix what's fixable
